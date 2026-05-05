@@ -18,6 +18,9 @@ desktop.ini
 *.swp
 *.swo
 *~
+# Editor / OS temp files (e.g., VSCode autosave, Dropbox conflict-copy artifacts)
+*.tmp
+*.tmp.*
 
 # Coverage
 *.profraw
