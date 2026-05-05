@@ -348,7 +348,11 @@ impl CapabilityProfile {
 // `cargo test --workspace` job from being a false-green during Phase 0.
 // ---------------------------------------------------------------------------
 
+// `expect`/`unwrap` are idiomatic in tests where panics double as assertions.
+// The workspace lints deny them in production code; relax for the test module
+// only.
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
