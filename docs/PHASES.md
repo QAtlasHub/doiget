@@ -80,7 +80,7 @@ Phase 0 is complete when **all** of the following are committed.
 - [ ] `.github/workflows/codeql.yml` (Phase 0 onward)
 - [ ] `.github/workflows/safekey-vectors.yml` (vector-set parity)
 - [ ] `.github/workflows/cross-tool-compat.yml` (BiblioFetch.jl round-trip; placeholder until Phase 2)
-- [ ] `.github/workflows/dependabot.yml` (auto-merge disabled)
+- [x] `.github/dependabot.yml` (auto-merge disabled)
 
 ### Repo-level settings (manual; cannot be committed)
 
