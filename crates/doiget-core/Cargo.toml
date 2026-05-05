@@ -1,0 +1,53 @@
+[package]
+name          = "doiget-core"
+description   = "Core library: Source/Store traits, CapabilityProfile, safekey, provenance log"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+keywords.workspace     = true
+categories.workspace   = true
+readme                 = "../../README.md"
+
+[lints]
+workspace = true
+
+[features]
+default  = ["oa-only"]
+oa-only  = []
+metadata = []
+citation = ["metadata"]
+
+# Tier 3 — opt-in build only, never published. See ADR-0002.
+tdm-elsevier = ["dep:secrecy"]
+tdm-aps      = ["dep:secrecy"]
+tdm-springer = ["dep:secrecy"]
+
+[dependencies]
+tokio       = { workspace = true }
+thiserror   = { workspace = true }
+tracing     = { workspace = true }
+secrecy     = { workspace = true, optional = true }
+reqwest     = { workspace = true }
+camino      = { workspace = true }
+fs2         = { workspace = true }
+tempfile    = { workspace = true }
+parking_lot = { workspace = true }
+once_cell   = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+toml        = { workspace = true }
+toml_edit   = { workspace = true }
+chrono      = { workspace = true }
+sha2        = { workspace = true }
+hex         = { workspace = true }
+uuid        = { workspace = true }
+ulid        = { workspace = true }
+url         = { workspace = true }
+
+[dev-dependencies]
+wiremock   = { workspace = true }
+proptest   = { workspace = true }

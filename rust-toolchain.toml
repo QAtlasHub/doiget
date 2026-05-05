@@ -1,0 +1,7 @@
+# Pinned toolchain. MSRV is documented in README and Cargo.toml as well.
+# A minor bump here is a minor semver bump for doiget-core; see docs/PUBLIC_API.md §7.
+
+[toolchain]
+channel    = "1.83"
+components = ["rustfmt", "clippy"]
+profile    = "minimal"

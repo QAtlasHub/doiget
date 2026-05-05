@@ -1,0 +1,71 @@
+# cargo-deny configuration
+# Run: cargo deny check
+# Schema: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = false
+
+[advisories]
+db-urls    = ["https://github.com/rustsec/advisory-db"]
+yanked     = "deny"
+ignore     = []
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+]
+confidence-threshold = 0.9
+
+# ----------------------------------------------------------------------
+# Banned crates — see docs/SCOPE.md and ADR-0001 / ADR-0015.
+# Removing entries from this list requires a scope-reopening Discussion
+# and an ADR.
+# ----------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"
+wildcards         = "deny"
+
+deny = [
+    # Telemetry / phone-home (ADR-0015)
+    { name = "sentry" },
+    { name = "sentry-anyhow" },
+    { name = "sentry-tracing" },
+    { name = "posthog" },
+    { name = "google-analytics" },
+
+    # HTTP server (ADR-0001 — MCP transport is stdio only)
+    { name = "axum" },
+    { name = "actix-web" },
+    { name = "warp" },
+    { name = "tide" },
+    { name = "rocket" },
+    { name = "poem" },
+    { name = "salvo" },
+
+    # Self-update (ADR-0015)
+    { name = "self_update" },
+    { name = "self-update" },
+
+    # OpenSSL family — TLS is via rustls only (docs/SECURITY.md §1.9)
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "native-tls" },
+]
+
+# `hyper` (client) is allowed via reqwest. We do NOT generally allow `hyper::server`,
+# but cargo-deny's coarse banning of the whole crate would break the client path.
+# The posture-lint workflow greps source for `hyper::Server` and similar imports.
+
+[sources]
+unknown-registry = "deny"
+unknown-git      = "deny"
+allow-registry   = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,133 @@
+# Contributing to doiget
+
+Thank you for your interest in contributing. doiget is a deliberately small-scope project,
+and this document describes both **how** to contribute and **what changes are out of scope**.
+
+## Before you open a PR
+
+1. Read [docs/SCOPE.md](docs/SCOPE.md) for the **Permanent non-goals** list. PRs that move
+   doiget toward a non-goal will be closed without merge regardless of code quality.
+2. Read the relevant ADR(s) in [docs/DECISIONS/](docs/DECISIONS/) for the area you're
+   touching. Decisions are normative; deviation requires a new ADR.
+3. Check that an issue or discussion exists. For non-trivial changes, please open a
+   [Discussion](https://github.com/sotashimozono/doiget/discussions) first.
+
+## Scope-reopening meta-rule
+
+A `Permanent non-goal` listed in [docs/SCOPE.md](docs/SCOPE.md) cannot be reversed by a PR
+description, an issue comment, or an inline rationale. To re-open scope on an item, file a
+new GitHub Discussion titled `[scope-reopening] <topic>` and obtain explicit maintainer
+approval **before** writing any code. PRs that effectively reverse a non-goal without this
+process will be closed.
+
+## Doc rules
+
+doiget's docs are split into **NORMATIVE** and **INFORMATIVE** classes (see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the index). The header of each doc states
+its class.
+
+- **NORMATIVE** docs define binding contracts. Changes to NORMATIVE content require a
+  matching ADR PR.
+- **INFORMATIVE** docs explain context and rationale. Changes are merge-on-review.
+
+When writing or editing docs:
+
+- Use ATX headings (`#`, `##`, …) only — no Setext (`====`).
+- Use **relative links only** for repo-internal references; reserve absolute URLs for
+  external resources.
+- Place images under `docs/_images/` and reference them with relative paths.
+- Keep lines under ~100 chars where it does not harm readability.
+- Localization: English is canonical for all NORMATIVE docs. A `docs/ja/` may exist as
+  informative supplement (Phase 6+).
+
+## Code rules
+
+### Layout
+
+The Cargo workspace structure is locked by ADR-0008 (see
+[docs/DECISIONS/](docs/DECISIONS/)). New crates require an ADR.
+
+### Style
+
+- `cargo fmt` (rustfmt with default settings) is enforced by CI.
+- `cargo clippy --workspace --all-targets -- -D warnings` is enforced by CI.
+- `unsafe_code` is forbidden workspace-wide.
+- `print_stdout` is denied in `doiget-mcp` (MCP stdio safety; see ADR-0001).
+- Public items in `doiget-core` require doc comments (`#![warn(missing_docs)]`).
+
+### Tests
+
+A PR is expected to include tests for the code it touches. Test layers (see ADR-0008):
+
+- **Unit:** `#[cfg(test)] mod tests` colocated with the code under test.
+- **Integration:** `tests/*.rs` at the workspace root.
+- **Golden:** `tests/fixtures/golden/*` with the expected serialized output (BibTeX, CSL,
+  TOML normalization, MCP tool response shapes).
+- **Property:** `proptest` for the `safekey` algorithm and TOML round-trip.
+
+Coverage target: **80%+ on `doiget-core`** (measured via `cargo-llvm-cov`).
+
+### Forbidden imports
+
+The following crates are denied workspace-wide via `deny.toml`:
+
+- HTTP server frameworks (`axum`, `actix-web`, `warp`, `tide`, `hyper` server) — MCP HTTP
+  transport is a permanent non-goal (ADR-0001).
+- Telemetry SDKs (`sentry`, `posthog`, `google_analytics`) — telemetry is a permanent
+  non-goal (ADR-0015).
+- Self-update crates (`self_update`, etc.) — self-update is a permanent non-goal.
+- `openssl` family — TLS is via `rustls` only.
+
+## Commit and PR conventions
+
+- Branch from `main`. Branch name format: `<type>/<short-slug>`, e.g.
+  `fix/safekey-collision`, `feat/citation-graph`, `docs/clarify-store-spec`.
+- Commit messages follow Conventional Commits: `feat:`, `fix:`, `docs:`, `chore:`,
+  `refactor:`, `test:`, `ci:`, `perf:`.
+- Sign your commits (`git commit -S`) — verified signatures are required on `main`.
+- Each PR has a single, well-scoped purpose. Multi-purpose PRs will be asked to split.
+- The PR description must reference any related ADR, Discussion, or issue.
+
+## ADR workflow
+
+When proposing a binding decision:
+
+1. Create `docs/DECISIONS/NNNN-<slug>.md` using the existing ADRs as a template
+   (Context / Decision / Consequences / Status).
+2. Append the entry to `docs/DECISIONS/INDEX.md`.
+3. Reference the ADR number in the PR title (e.g. `feat: implement ADR-0007 safekey`).
+
+Do not edit accepted ADRs in place. To revise a decision, write a new ADR that supersedes
+the old one (the old ADR's `Status:` becomes `Superseded by NNNN`).
+
+## Posture lint
+
+A CI workflow (`.github/workflows/posture-lint.yml`) scans the repository for:
+
+- Forbidden marketing terms ("bypass", "circumvent", "free papers", "Sci-Hub alternative").
+- Imports of forbidden HTTP server / telemetry / self-update crates.
+- Author-controlled telemetry endpoints in source.
+
+PRs that introduce any of these will fail CI. If you believe your PR has been
+false-flagged, please add a justification in the PR description and the maintainer will
+review.
+
+## Security and responsible disclosure
+
+If your PR touches authentication, credential handling, log integrity, or any source
+adapter that handles publisher API keys, please CC the security threat model
+([docs/SECURITY.md](docs/SECURITY.md)) and walk through the relevant threat surfaces in
+the PR description.
+
+For vulnerability reports, **do not file a public issue**. See [CONTACT.md](CONTACT.md).
+
+## Code of Conduct
+
+By participating in this project, you agree to abide by the
+[Contributor Covenant](https://www.contributor-covenant.org/) v2.1. Reports of
+unacceptable behavior may be sent to the maintainer at the contact email above.
+
+## License
+
+By submitting a PR, you agree that your contribution is licensed under the MIT License
+(see [LICENSE](LICENSE)).

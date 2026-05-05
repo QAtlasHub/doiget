@@ -1,0 +1,16 @@
+{
+  "_comment": "Reference test vectors for the safekey algorithm (docs/SAFEKEY.md). Phase 0 ships 10 vectors as a placeholder; the full set of 100 is a Phase 0 deliverable per docs/PHASES.md and is generated in coordination with BiblioFetch.jl. Format: { input: <ref string>, expected: <safekey> }. Both Rust and Julia implementations MUST produce identical output for every entry.",
+  "version": "1.0",
+  "vectors": [
+    { "input": "doi:10.1234/example",                    "expected": "doi_10.1234_example" },
+    { "input": "doi:10.1103/PhysRevLett.130.200601",     "expected": "doi_10.1103_PhysRevLett.130.200601" },
+    { "input": "doi:10.1016/S0370-1573(98)00122-3",      "expected": "doi_10.1016_S0370-1573_98_00122-3" },
+    { "input": "doi:10.1234/foo bar",                    "expected": "doi_10.1234_foo_bar" },
+    { "input": "doi:10.1234/foo  bar",                   "expected": "doi_10.1234_foo_bar" },
+    { "input": "doi:10.1234/_leading",                   "expected": "doi_10.1234_leading" },
+    { "input": "doi:10.1234/trailing_",                  "expected": "doi_10.1234_trailing" },
+    { "input": "arxiv:2401.12345",                       "expected": "arxiv_2401.12345" },
+    { "input": "arxiv:2401.12345v2",                     "expected": "arxiv_2401.12345v2" },
+    { "input": "arxiv:cond-mat/9501001",                 "expected": "arxiv_cond-mat_9501001" }
+  ]
+}

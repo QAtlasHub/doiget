@@ -1,0 +1,16 @@
+# Reproducible-build settings. See docs/SECURITY.md §1.9.
+# Per-developer overrides may go in .cargo/config.local.toml (gitignored).
+
+[build]
+# Default to the host triple. CI overrides per matrix entry.
+
+[net]
+git-fetch-with-cli = false
+retry              = 3
+
+[term]
+quiet = false
+
+# Linker / RUSTFLAGS — keep release artifacts portable.
+[target.'cfg(target_env = "musl")']
+rustflags = ["-C", "target-feature=+crt-static"]
