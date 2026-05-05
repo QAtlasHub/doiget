@@ -1,0 +1,59 @@
+# mcp-smoke — MCP server stdio smoke test
+#
+# STATUS (Phase 0): placeholder. Reserves the workflow slot referenced by
+# docs/MCP_TOOLS.md §9 ("A CI workflow `mcp-smoke.yml` (Phase 3) spawns the
+# server, sends a minimal sequence ...") so the path filter below already
+# triggers on changes that will matter once the real check lands.
+#
+# PHASE 3 SCOPE (the work this file will do once doiget-mcp exists):
+#   1. Install the rust toolchain pinned by rust-toolchain.toml.
+#   2. `cargo build -p doiget-mcp` (default features = oa-only).
+#   3. Spawn the resulting binary as a child process.
+#   4. Write a minimal JSON-RPC sequence to its stdin per ADR-0001
+#      (stdio only, no network transport): `initialize` then `tools/list`
+#      then `tools/call doiget_health`.
+#   5. Assert the `tools/list` response shape: exactly the 9 Phase 3
+#      tools enumerated in docs/MCP_TOOLS.md §1, all snake_case with the
+#      `doiget_` prefix per ADR-0012.
+#   6. Assert that no stray bytes appear on stdout outside JSON-RPC frames
+#      (per docs/SECURITY.md §3 — banner / log / progress on stdout is
+#      forbidden; tracing must go to stderr).
+#   7. Assert no telemetry / outbound network calls during the smoke run
+#      per ADR-0015 (no-telemetry posture).
+#
+# Until Phase 3, this workflow only prints a placeholder line and exits 0
+# so the path-filter trigger and required-check wiring can be validated
+# end-to-end without blocking unrelated PRs.
+
+name: mcp-smoke
+
+on:
+  pull_request:
+    paths:
+      - "crates/doiget-mcp/**"
+      - "docs/MCP_TOOLS.md"
+      - ".github/workflows/mcp-smoke.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/doiget-mcp/**"
+      - "docs/MCP_TOOLS.md"
+      - ".github/workflows/mcp-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  placeholder:
+    name: placeholder (Phase 0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11   # v4.1.1
+      - name: Announce placeholder
+        run: |
+          echo "mcp-smoke: Phase 0 placeholder — no MCP server invocation."
+          echo "Phase 3 will pipe a JSON-RPC initialize request to doiget-mcp and assert the tools/list response per ADR-0001 (stdio only) and ADR-0012 (tool naming)."
