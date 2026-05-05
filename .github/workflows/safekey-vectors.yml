@@ -1,0 +1,116 @@
+name: safekey-vectors
+
+# Phase 0 scope: validate that `tests/fixtures/safekey/vectors.json` is
+# well-formed and matches the entry schema declared in `docs/SAFEKEY.md` §3.
+# The actual cross-tool parity check (Rust `cargo test --test safekey_vectors`
+# vs. BiblioFetch.jl) lands in Phase 1, gated on the BiblioFetch.jl pre-flight
+# item under `docs/PHASES.md` §2 ("Pre-flight items"). The placeholder step
+# below reserves the workflow contract so Phase 1 only has to flip a flag.
+
+on:
+  pull_request:
+    paths:
+      - "tests/fixtures/safekey/**"
+      - ".github/workflows/safekey-vectors.yml"
+      - "crates/doiget-core/src/safekey/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  push:
+    branches: [main]
+    paths:
+      - "tests/fixtures/safekey/**"
+      - ".github/workflows/safekey-vectors.yml"
+      - "crates/doiget-core/src/safekey/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: safekey-vectors-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate vectors.json schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11   # v4.1.1
+
+      - name: Validate vectors.json schema
+        shell: bash
+        env:
+          VECTORS: tests/fixtures/safekey/vectors.json
+        run: |
+          set -euo pipefail
+
+          # `jq` is preinstalled on ubuntu-latest runners; assert that to keep
+          # the failure mode obvious if GitHub ever changes the image.
+          command -v jq >/dev/null || { echo "::error::jq not available on runner"; exit 1; }
+
+          if [[ ! -f "$VECTORS" ]]; then
+            echo "::error::missing fixture: $VECTORS"
+            exit 1
+          fi
+
+          # 1. File must be parseable JSON.
+          if ! jq -e . "$VECTORS" >/dev/null; then
+            echo "::error::$VECTORS is not valid JSON"
+            exit 1
+          fi
+
+          # 2. Root must be an object containing a non-empty `vectors` array.
+          #    Schema reflects the actual shape of the Phase 0 fixture
+          #    (top-level keys: _comment, version, notes, vectors).
+          if ! jq -e 'type == "object" and (.vectors | type == "array") and (.vectors | length > 0)' \
+                "$VECTORS" >/dev/null; then
+            echo "::error::$VECTORS root must be an object with a non-empty 'vectors' array"
+            exit 1
+          fi
+
+          # 3. Every entry must have exactly the keys declared in
+          #    docs/SAFEKEY.md §3: { input: <string>, expected: <string> }.
+          #    Extra keys are rejected so drift in the fixture surfaces here
+          #    rather than silently breaking the Phase 1 parity test.
+          BAD=$(jq -r '
+            .vectors
+            | to_entries[]
+            | select(
+                (.value | type != "object")
+                or (.value.input    | type != "string")
+                or (.value.expected | type != "string")
+                or ((.value | keys | sort) != ["expected", "input"])
+              )
+            | .key
+          ' "$VECTORS")
+          if [[ -n "$BAD" ]]; then
+            echo "::error::$VECTORS has malformed entries at indices: $BAD"
+            echo "          required schema per docs/SAFEKEY.md §3:"
+            echo "            { \"input\": <string>, \"expected\": <string> }"
+            exit 1
+          fi
+
+          # 4. Report entry count for visibility in the run log + step summary.
+          COUNT=$(jq '.vectors | length' "$VECTORS")
+          echo "vectors.json: $COUNT entries OK"
+          {
+            echo "## safekey vectors"
+            echo
+            echo "- file: \`$VECTORS\`"
+            echo "- entries: **$COUNT**"
+            echo "- schema: \`{ input: string, expected: string }\` per docs/SAFEKEY.md §3"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run safekey vector tests
+        # Phase 0 placeholder. Enable in Phase 1 once
+        # `cargo test --test safekey_vectors` lands in `crates/doiget-core`
+        # and the BiblioFetch.jl pre-flight item under docs/PHASES.md §2
+        # ("Pre-flight items") is closed. This slot reserves the contract so
+        # Phase 1 only has to flip `if: false` -> `if: true` (and add the
+        # toolchain setup) without renaming or restructuring the workflow.
+        if: false
+        run: |
+          # cargo test --workspace --no-default-features --features oa-only \
+          #   --test safekey_vectors
+          echo "Phase 1 contract slot — intentionally skipped in Phase 0"
