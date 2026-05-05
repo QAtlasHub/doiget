@@ -35,6 +35,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      # rustsec/audit-check requires Cargo.lock; Phase 0 keeps it uncommitted
+      # (see PR description), so generate it on the runner. Drop this step
+      # once Cargo.lock lands in-tree.
+      - name: Generate Cargo.lock
+        run: cargo generate-lockfile
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
