@@ -2,6 +2,8 @@
 # A minor bump here is a minor semver bump for doiget-core; see docs/PUBLIC_API.md §7.
 
 [toolchain]
-channel    = "1.83"
+channel    = "1.85"
+# 1.85 is the minimum that can parse `clap_derive 4.6+` and install
+# `cargo-audit 0.22+`. Bumped from 1.83 in the round-3 CI fix.
 components = ["rustfmt", "clippy"]
 profile    = "minimal"

@@ -143,5 +143,5 @@ See [`CAPABILITY.md`](CAPABILITY.md) for the full type definition and resolution
 
 ## 7. MSRV
 
-`doiget-core` builds on Rust **stable - 2** (currently 1.83). MSRV bumps are minor
+`doiget-core` builds on Rust **stable - 2** (currently 1.85). MSRV bumps are minor
 version bumps and require a CHANGELOG entry.

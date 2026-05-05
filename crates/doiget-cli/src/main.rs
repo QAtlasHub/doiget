@@ -7,9 +7,9 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
-    name    = "doiget",
+    name = "doiget",
     version,
-    about   = "Fetch academic papers via official Open Access APIs.",
+    about = "Fetch academic papers via official Open Access APIs.",
     long_about = "doiget is an OA-first paper fetcher and stdio MCP server.\n\
                   See README.md and docs/ for the full specification.\n\
                   This is the Phase 0 skeleton; subcommands are not yet implemented."

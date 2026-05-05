@@ -14,8 +14,8 @@ By design, doiget only attempts retrieval through:
 1. Public Open Access sources (default — Crossref, Unpaywall, arXiv).
 2. Credentials the user has personally configured for their own institutional or personal subscriptions (opt-in, compile-time gated).
 
-**doiget does not** bypass any access control mechanism, redistribute papers, host content,
-operate as a SaaS, or bundle any publisher API keys.
+**doiget does not** work around any access control mechanism, redistribute papers, host
+content, operate as a SaaS, or bundle any publisher API keys.
 
 Users are responsible for ensuring they have the right to access the content they request and
 for compliance with each source's Terms of Service.

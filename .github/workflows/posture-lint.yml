@@ -21,11 +21,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Scope: README.md only. The LEGAL / SCOPE / CONTACT / CONTRIBUTING
+          # docs legitimately need to use these words to describe the policy
+          # (e.g., "doiget does not bypass paywalls"). README is the front-page
+          # marketing surface where positive uses must be caught. Rephrase any
+          # flagged term in README rather than relaxing this rule.
           PATTERN='\b(bypass|circumvent|free papers|sci-?hub)\b'
-          if grep -r -i -n -E "$PATTERN" \
-              --include='*.md' --include='*.toml' \
-              README.md docs/ CONTACT.md CONTRIBUTING.md CHANGELOG.md ; then
-            echo "::error::posture-lint: forbidden marketing term detected"
+          if grep -i -n -E "$PATTERN" README.md ; then
+            echo "::error::posture-lint: forbidden marketing term detected in README.md"
             exit 1
           fi
 
