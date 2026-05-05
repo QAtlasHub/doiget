@@ -58,7 +58,11 @@ anyhow    = "1"
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 
-# Secrets — see docs/CAPABILITY.md
+# Secrets — see docs/CAPABILITY.md.
+# IMPORTANT: any member crate inheriting this dep MUST also write
+# `optional = true` in its own [dependencies], or `secrecy` becomes
+# unconditionally compiled in (defeating the `tdm-*` feature gate from
+# ADR-0002). `doiget-core/Cargo.toml` does this correctly.
 secrecy = { version = "0.10", features = ["serde"] }
 
 # HTTP client (rustls only — no openssl by deny.toml)

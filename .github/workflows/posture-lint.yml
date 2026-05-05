@@ -33,7 +33,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PATTERN='use[[:space:]]+(axum|actix_web|warp|tide|rocket|poem|salvo)|use[[:space:]]+hyper::server'
+          # Case-insensitive: idiomatic Rust imports `hyper::Server` (capital S);
+          # we must catch that as well as `hyper::server` (module form).
+          PATTERN='use[[:space:]]+(axum|actix_web|warp|tide|rocket|poem|salvo)|use[[:space:]]+hyper::[Ss]erver'
           if grep -r -E "$PATTERN" --include='*.rs' crates/ ; then
             echo "::error::posture-lint: HTTP server crate imported (ADR-0001)"
             exit 1

@@ -34,7 +34,6 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         features:
           - "oa-only"
-          - ""
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
       - uses: dtolnay/rust-toolchain@1482605bfc5719782e1267fd0c0cc350fe7646b8
@@ -43,13 +42,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2d8b9e26a0bf1a7  # v2.7.3
       - name: clippy
-        shell: bash
-        run: |
-          if [ -z "${{ matrix.features }}" ]; then
-            cargo clippy --workspace --all-targets --no-default-features -- -D warnings
-          else
-            cargo clippy --workspace --all-targets --features "${{ matrix.features }}" -- -D warnings
-          fi
+        run: cargo clippy --workspace --all-targets --no-default-features --features "${{ matrix.features }}" -- -D warnings
 
   test:
     name: test (${{ matrix.os }})

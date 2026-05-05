@@ -28,6 +28,14 @@ pub const MAX_FETCHES_PER_SECOND: f32 = 5.0;
 /// Maximum batch size for `doiget batch` and `doiget_batch_fetch`.
 pub const MCP_BATCH_MAX_SIZE: usize = 100;
 
+/// Maximum queued MCP requests beyond `MAX_CONCURRENT_FETCHES`. Excess returns
+/// `ErrorCode::RateLimited`. See `docs/SECURITY.md` §1.4 / `docs/MCP_TOOLS.md`.
+pub const MCP_QUEUE_DEPTH_MAX: usize = 100;
+
+/// MCP server stdin-EOF graceful-shutdown deadline, in seconds. See ADR-0001
+/// and `docs/MCP_TOOLS.md` §8.
+pub const MCP_STDIN_EOF_SHUTDOWN_SEC: u64 = 5;
+
 /// Maximum DOI suffix length accepted at validation. See `docs/SECURITY.md` §1.1.
 pub const DOI_SUFFIX_MAX_LEN: usize = 256;
 
@@ -48,12 +56,18 @@ pub enum Ref {
 }
 
 /// A validated DOI string.
+///
+/// Construct via `Doi::parse(s)` (Phase 1+). The inner field is intentionally
+/// `pub(crate)` to forbid bypass construction; tests inside `doiget-core` may
+/// still use `Doi(s)` for fixture purposes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Doi(String);
+pub struct Doi(pub(crate) String);
 
 /// A validated arXiv id string.
+///
+/// Construct via `ArxivId::parse(s)` (Phase 1+). Inner field is `pub(crate)`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ArxivId(String);
+pub struct ArxivId(pub(crate) String);
 
 impl Doi {
     /// Returns the DOI as a string slice.
@@ -76,8 +90,9 @@ impl ArxivId {
 /// A filesystem-safe key derived deterministically from a `Ref`.
 ///
 /// See `docs/SAFEKEY.md` for the full algorithm and reference test vectors.
+/// Construct via `Ref::safekey()` (Phase 1+); inner field is `pub(crate)`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Safekey(String);
+pub struct Safekey(pub(crate) String);
 
 impl Safekey {
     /// Returns the safekey as a string slice.
@@ -93,8 +108,12 @@ impl Safekey {
 /// The closed set of error codes doiget surfaces.
 ///
 /// See `docs/ERRORS.md` for the persona × code matrix.
+///
+/// Marked `#[non_exhaustive]` so adding new variants is a minor (not major)
+/// version bump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
 pub enum ErrorCode {
     /// DOI / arXiv id failed validation.
     InvalidRef,
@@ -130,6 +149,7 @@ pub struct AlwaysOn;
 
 /// Which Tier 2 metadata sources are enabled this session. See `docs/CAPABILITY.md`.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct MetadataAccess {
     /// Phase 4+; enabled by `DOIGET_ENABLE_OPENALEX`.
     pub openalex: bool,
@@ -141,41 +161,67 @@ pub struct MetadataAccess {
 
 /// Process-wide rate limits. Hard-coded; not configurable.
 ///
-/// See `docs/LEGAL.md` §6 safeguard 8.
+/// Construct only via [`RateLimits::HARD_CODED`]. The struct fields are
+/// `pub(crate)` so downstream code cannot synthesize a `RateLimits` with
+/// different values, which would weaken `docs/LEGAL.md` §6 safeguard 8.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct RateLimits {
-    /// Maximum concurrent fetches.
-    pub max_concurrent_fetches: u32,
-    /// Maximum fetches per second.
-    pub max_fetches_per_second: f32,
-    /// Per-source backoff between consecutive requests, in milliseconds.
-    pub per_source_backoff_ms: u64,
+    pub(crate) max_concurrent_fetches: u32,
+    pub(crate) max_fetches_per_second: f32,
+    pub(crate) per_source_backoff_ms: u64,
 }
 
 impl RateLimits {
-    /// The single, hard-coded set of rate limits. There is no other constructor.
+    /// The single, hard-coded set of rate limits. There is no other public
+    /// constructor — see the type-level docs.
     pub const HARD_CODED: Self = Self {
         max_concurrent_fetches: MAX_CONCURRENT_FETCHES,
         max_fetches_per_second: MAX_FETCHES_PER_SECOND,
         per_source_backoff_ms: 200,
     };
+
+    /// Maximum number of concurrent fetches in flight.
+    pub const fn max_concurrent_fetches(&self) -> u32 {
+        self.max_concurrent_fetches
+    }
+
+    /// Maximum fetch attempts per second across all sources.
+    pub const fn max_fetches_per_second(&self) -> f32 {
+        self.max_fetches_per_second
+    }
+
+    /// Per-source backoff in milliseconds between consecutive requests.
+    pub const fn per_source_backoff_ms(&self) -> u64 {
+        self.per_source_backoff_ms
+    }
 }
 
-/// A successful TDM grant — the user has both agreed to the publisher's TDM ToS
-/// (via env var) and provided an API key. See `docs/CAPABILITY.md` §3.
+/// A successful TDM grant.
+///
+/// In Phase 0, the struct does not yet carry the `api_key` field that
+/// `docs/CAPABILITY.md` §1 defines for Phase 1+ — but the type is marked
+/// `#[non_exhaustive]` so adding `api_key: secrecy::Secret<String>` later
+/// is a non-breaking change. Phase 0 callers should not construct this type
+/// directly; use `CapabilityProfile::from_env()` (which today never produces
+/// `Some(TdmGrant)`).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TdmGrant {
     /// Which env var the user used to acknowledge the publisher's ToS.
     pub agree_env_var: String,
     /// When the agreement env var was first observed at startup.
     pub agreed_at: chrono::DateTime<chrono::Utc>,
-    // Note: `api_key: secrecy::Secret<String>` is added when the relevant `tdm-*`
-    // feature is enabled. Phase 0 does not compile any TDM source, so the field
-    // type is private to the future per-feature impl.
 }
 
 /// Runtime gate for which sources may be invoked. See `docs/CAPABILITY.md`.
+///
+/// Marked `#[non_exhaustive]` so adding new capability classes is non-breaking.
+/// Pattern-match only against the documented variants and use a wildcard arm.
+/// Tests may construct profiles via field syntax with `..Default::default()`
+/// once `Default` is implemented.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CapabilityProfile {
     /// Tier 1 OA sources are always permitted.
     pub oa: AlwaysOn,
@@ -213,9 +259,35 @@ pub enum CapabilityError {
 impl CapabilityProfile {
     /// Read the runtime profile from environment variables.
     ///
-    /// Phase 0 returns a default profile (Tier 1 only) for skeleton purposes.
-    /// Phase 1 will implement full env resolution per `docs/CAPABILITY.md`.
+    /// **Phase 0 stub.** Returns a Tier-1-only profile and emits a `tracing::warn!`
+    /// breadcrumb so that any environment with TDM env vars set will surface
+    /// loudly in CI / logs as "Phase 0 stub did not honor your TDM env vars".
+    /// Phase 1 must replace this body with the resolution algorithm specified
+    /// in `docs/CAPABILITY.md` §2 and exercise both `CapabilityError` variants
+    /// in tests.
     pub fn from_env() -> Result<Self, CapabilityError> {
+        // Detect any Phase-1-relevant env var and warn loudly. This is
+        // intentionally not a hard error in Phase 0 so that local development
+        // and CI can run before Phase 1 resolution lands.
+        for var in [
+            "DOIGET_AGREE_TDM_ELSEVIER",
+            "DOIGET_AGREE_TDM_APS",
+            "DOIGET_AGREE_TDM_SPRINGER",
+            "DOIGET_KEY_ELSEVIER",
+            "DOIGET_KEY_APS",
+            "DOIGET_KEY_SPRINGER",
+        ] {
+            if std::env::var_os(var).is_some() {
+                tracing::warn!(
+                    env_var = var,
+                    "doiget-core Phase 0 stub: {} is set but env-driven \
+                     CapabilityProfile resolution is not implemented yet. \
+                     The TDM source will be silently disabled. Track in \
+                     docs/PHASES.md and ADR-0005.",
+                    var
+                );
+            }
+        }
         Ok(Self {
             oa: AlwaysOn,
             metadata: MetadataAccess::default(),
@@ -224,5 +296,51 @@ impl CapabilityProfile {
             tdm_springer: None,
             rate_limits: RateLimits::HARD_CODED,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — one smoke test per legally-load-bearing constant. See
+// `docs/LEGAL.md` §6 safeguard 8 and `docs/PHASES.md` §4. These also keep the
+// `cargo test --workspace` job from being a false-green during Phase 0.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_limits_hard_coded_match_legal_safeguards() {
+        // docs/LEGAL.md §6 safeguard 8 names these exact values.
+        assert_eq!(RateLimits::HARD_CODED.max_concurrent_fetches(), 5);
+        assert!((RateLimits::HARD_CODED.max_fetches_per_second() - 5.0).abs() < f32::EPSILON);
+        assert_eq!(RateLimits::HARD_CODED.per_source_backoff_ms(), 200);
+    }
+
+    #[test]
+    fn batch_size_caps_match_security_doc() {
+        // docs/SECURITY.md §1.4 + docs/MCP_TOOLS.md.
+        assert_eq!(MCP_BATCH_MAX_SIZE, 100);
+        assert_eq!(MCP_QUEUE_DEPTH_MAX, 100);
+        assert_eq!(DOI_SUFFIX_MAX_LEN, 256);
+        assert_eq!(MCP_STDIN_EOF_SHUTDOWN_SEC, 5);
+    }
+
+    #[test]
+    fn schema_version_is_1_x() {
+        // docs/STORE.md §3 — Phase 0/1 writes 1.x only.
+        assert!(SCHEMA_VERSION.starts_with("1."));
+    }
+
+    #[test]
+    fn capability_profile_from_env_is_tier_1_only_in_phase_0() {
+        // Phase 0 stub guarantee: TDM is never enabled regardless of env vars.
+        // Phase 1 must update this test to cover the real resolution algorithm
+        // (including AgreedButNoKey / KeyButNotAgreed Err branches).
+        let p = CapabilityProfile::from_env().expect("Phase 0 stub never errors");
+        assert!(p.tdm_elsevier.is_none());
+        assert!(p.tdm_aps.is_none());
+        assert!(p.tdm_springer.is_none());
+        assert_eq!(p.rate_limits.max_concurrent_fetches(), 5);
     }
 }

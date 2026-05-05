@@ -24,7 +24,11 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@e2f4ede4a4e60ea15ff31bc0647485d80c66cfba # v2.0.4
         with:
           command: check
-          arguments: --workspace --all-features
+          # Audit only the published surface (oa-only). TDM features are
+          # opt-in user builds per ADR-0002 and never published; they pull in
+          # extra deps that would falsely pass through this audit.
+          # Aligns with `[graph] all-features = false` in deny.toml.
+          arguments: --workspace --no-default-features --features oa-only
 
   cargo-audit:
     name: cargo audit
