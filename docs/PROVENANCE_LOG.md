@@ -67,15 +67,24 @@ prev_hash[N] = this_hash[N-1]  (chain)
 Tampering is detected by `doiget audit-log --verify`, which recomputes every row's
 `this_hash` and validates the chain.
 
-## 5. Failure mode (fail-closed)
+## 5. Failure mode (fail-closed at the operation boundary)
 
-If the log writer cannot append a row (disk full, permission denied, fsync error), the
-caller MUST receive `Err(LogError)` and the surrounding fetch MUST NOT proceed. This is
-load-bearing for the [`LEGAL.md`](LEGAL.md) posture: fail-open would let a user delete
-the log to obscure intent.
+If the log writer cannot append a row (disk full, permission denied, fsync error),
+the caller MUST receive `Err(LogError)` and the surrounding fetch MUST NOT proceed.
+The user can recover by clearing the obstruction (free disk, fix permissions) and
+retrying — `LogError` is classified as recoverable in
+[`ERRORS.md`](ERRORS.md) §2.
 
-If the log directory is missing at startup, doiget creates it (`mkdir -p`, `0700` on
-POSIX) and writes a `session_start` row.
+This makes the log a **best-effort tamper-evident local audit record**, not a
+cryptographic enforcement mechanism: a determined local attacker with write access
+to `~/.config/doiget/` can still modify or replay the log (see §8 below). The
+fail-closed behavior closes the easiest evasion path (silently dropping rows
+without the user noticing), but the legal posture in
+[`LEGAL.md`](LEGAL.md) does not depend on the log being unforgeable. The log is
+documentary evidence of intent and operation, evaluated as such.
+
+If the log directory is missing at startup, doiget creates it (`mkdir -p`, `0700`
+on POSIX) and writes a `session_start` row.
 
 ## 6. Rotation and retention
 

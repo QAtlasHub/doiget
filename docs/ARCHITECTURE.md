@@ -120,6 +120,7 @@ pub trait Store: Send + Sync {
     fn read(&self, key: &Safekey) -> Result<Option<Metadata>, StoreError>;
     fn write(&self, key: &Safekey, m: &Metadata, pdf: Option<&Path>) -> Result<(), StoreError>;
     fn list_recent(&self, limit: usize) -> Result<Vec<EntryInfo>, StoreError>;
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<EntryInfo>, StoreError>;
 }
 
 pub enum Ref { Doi(Doi), Arxiv(ArxivId) }

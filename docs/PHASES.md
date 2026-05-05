@@ -31,8 +31,8 @@ Phase 0 is complete when **all** of the following are committed.
 ### Code
 
 - [ ] Cargo workspace with members `doiget-core`, `doiget-cli`, `doiget-mcp`.
-- [ ] `cargo build --features oa-only` succeeds (default).
-- [ ] `cargo build` (no features) succeeds.
+- [ ] `cargo build` succeeds (default features = `oa-only`).
+- [ ] `cargo build --no-default-features` succeeds (sanity: nothing under `oa-only` is actually load-bearing for compilation in Phase 0).
 - [ ] `doiget --help` runs (no subcommands implemented yet).
 
 ### Configuration files

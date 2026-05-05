@@ -26,13 +26,13 @@ See [docs/LEGAL.md](docs/LEGAL.md) and [docs/SCOPE.md](docs/SCOPE.md).
 
 | Reader | Entry point |
 |---|---|
-| CLI user | This README, then `doiget --help` |
-| Agent / MCP host integrator | [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md) + [docs/INTEGRATION/](docs/INTEGRATION/) |
+| CLI user | This README, then `doiget --help`, then [docs/CONFIG.md](docs/CONFIG.md) and [docs/ERRORS.md](docs/ERRORS.md) for non-trivial flags / exit codes |
+| Agent / MCP host integrator | [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md) + [docs/INTEGRATION/README.md](docs/INTEGRATION/README.md) |
 | Library user (Rust) | [docs/PUBLIC_API.md](docs/PUBLIC_API.md) + crates.io rustdoc |
 | Contributor | [CONTRIBUTING.md](CONTRIBUTING.md) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) → [docs/DECISIONS/](docs/DECISIONS/) |
 | Publisher legal team | [docs/LEGAL.md](docs/LEGAL.md) + [CONTACT.md](CONTACT.md) |
-| Security researcher | [docs/SECURITY.md](docs/SECURITY.md) |
-| BiblioFetch.jl user | [docs/MIGRATION.md](docs/MIGRATION.md) + [docs/STORE.md](docs/STORE.md) |
+| Security researcher | [docs/SECURITY.md](docs/SECURITY.md) + [docs/PROVENANCE_LOG.md](docs/PROVENANCE_LOG.md) + [docs/CAPABILITY.md](docs/CAPABILITY.md) |
+| BiblioFetch.jl user | [docs/MIGRATION.md](docs/MIGRATION.md) + [docs/STORE.md](docs/STORE.md) + [docs/SAFEKEY.md](docs/SAFEKEY.md) |
 
 Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 Threat model: [docs/SECURITY.md](docs/SECURITY.md)

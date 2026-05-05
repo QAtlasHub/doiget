@@ -8,7 +8,7 @@
 ## 1. Type definition
 
 ```rust
-// crates/doiget-core/src/capability.rs
+// Phase 1+ target module path; Phase 0 ships these types in monolithic lib.rs.
 
 use secrecy::Secret;
 use chrono::{DateTime, Utc};

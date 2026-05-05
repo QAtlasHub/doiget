@@ -14,7 +14,19 @@ NORMATIVE specs to resolve.
 
 ## Decision
 
-Every Source::fetch implementation must accept a &CapabilityProfile parameter. Sources whose capability is not granted at startup cannot be invoked at the type level. Resolution from environment variables (CapabilityProfile::from_env) hard-fails on (agreed=1, no key) and (key set, no agreement) per docs/CAPABILITY.md §2.
+Every `Source::fetch` implementation must accept a `&CapabilityProfile` parameter.
+Sources whose capability is not granted at startup cannot be invoked at the type
+level. Resolution from environment variables (`CapabilityProfile::from_env`)
+hard-fails on `(agreed=1, no key)` and `(key set, no agreement)` per
+`docs/CAPABILITY.md` §2.
+
+**Phase 0 status:** the type-level gate (`Source` trait signature, `CapabilityProfile`
+shape with `#[non_exhaustive]`, `RateLimits::HARD_CODED` discipline) is already in
+place in `lib.rs`. The env-resolution algorithm itself is a Phase 1 deliverable:
+Phase 0 ships a stub `from_env()` that returns a Tier-1-only profile and emits a
+`tracing::warn!` breadcrumb if any `DOIGET_AGREE_TDM_*` / `DOIGET_KEY_*` env var is
+detected. Phase 1 must replace the stub with the full algorithm and exercise both
+`CapabilityError` variants in tests.
 
 ## Consequences
 

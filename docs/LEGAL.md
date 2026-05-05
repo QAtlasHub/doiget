@@ -51,9 +51,17 @@ held liable for the feeds a user subscribes to.
 
 doiget likewise:
 
-- Performs no content interpretation, summarization, or republication.
+- **Performs no PDF content interpretation, summarization, or republication.**
+  PDFs are stored as opaque blobs; doiget does not extract text, run OCR,
+  generate summaries, or parse citations from PDF content. Bibliographic
+  metadata (title / authors / venue / abstract / keywords) is consumed from
+  publisher APIs and stored in the local TOML metadata for `bib` / `csl` /
+  `search_local` operations — that is bibliographic indexing, distinct from
+  content interpretation. The PDF content boundary is documented as a
+  Permanent Non-Goal in [`SCOPE.md`](SCOPE.md) and ADR-0003.
 - Receives all access credentials from the running user, not from the maintainer.
-- Records every fetch in a local provenance log under user control.
+- Records every fetch in a local provenance log under user control (best-effort
+  tamper-evident; see [`PROVENANCE_LOG.md`](PROVENANCE_LOG.md) §8).
 - Operates only on the local user's behalf, with no network listening surface.
 
 Tool-neutrality is a framing principle, not a guarantee against any specific legal
@@ -92,47 +100,87 @@ doiget makes no claim that the posture above will prevail in any specific case i
 specific jurisdiction. The posture is offered in good faith and is operationally
 defended by the safeguards in §6.
 
-## 6. The eight safeguards
+## 6. Safeguards
 
-### Social safeguards
+doiget's posture is defended by two distinct kinds of safeguard. The distinction
+matters: the first kind is a control the codebase or CI pipeline mechanically
+enforces; the second is a policy commitment the maintainer makes and intends to
+honor but which a determined contributor or future maintainer could weaken
+without machine-checkable resistance.
 
-1. **No bundled credentials.** No publisher API key is shipped in any doiget binary.
-   Credentials are read at runtime from environment variables or
+### 6a. Enforced controls (5)
+
+These are mechanically enforced by code, type system, Cargo, or CI. Removing
+them requires changing source files that are gated by branch protection.
+
+1. **No bundled credentials.** No publisher API key is shipped in any doiget
+   binary. Credentials are read at runtime from environment variables or
    `~/.config/doiget/credentials.toml`, wrapped in `secrecy::Secret`, and never
-   logged in raw form.
+   logged in raw form. *Enforced by:* `secrecy::Secret` types in
+   `doiget-core`; `tracing` redactor; CI grep for embedded key patterns.
 
-2. **Opt-in TDM agreement.** Each TDM-class source requires the user to set
-   `DOIGET_AGREE_TDM_<PUBLISHER>=1` as an explicit acknowledgement of the publisher's
-   ToS. Missing or stale agreements fail closed.
+2. **Opt-in TDM agreement (per-publisher).** Each TDM-class source requires
+   the user to set `DOIGET_AGREE_TDM_<PUBLISHER>=1` AND provide
+   `DOIGET_KEY_<PUBLISHER>`. Missing or partial configurations fail closed at
+   `CapabilityProfile::from_env`. *Enforced by:* `CapabilityProfile`
+   resolution algorithm ([`CAPABILITY.md`](CAPABILITY.md) §2 rules 2 and 3).
 
-3. **User responsibility documented.** [`SOURCES.md`](SOURCES.md) lists every source's
-   official ToS link and explicitly states the user's responsibility for compliance. The
-   README front-loads this point in the Posture section.
+3. **Compile-time feature gating.** Each TDM source is behind a Cargo feature
+   (`tdm-elsevier`, `tdm-aps`, `tdm-springer`). Default builds and crates.io
+   artifacts contain no TDM source code. *Enforced by:* `Cargo.toml`
+   `[features]` declarations; `posture-lint.yml` import-pattern grep;
+   ADR-0002.
 
-4. **Takedown contact.** [`../CONTACT.md`](../CONTACT.md) defines an SLA-bound channel
-   (7 days first response, 30 days substantive response) for publisher legal teams or
-   other parties with concerns.
-
-5. **Marketing language self-policing.** A CI workflow
-   (`.github/workflows/posture-lint.yml`) scans `README.md`, `docs/`, and any blog draft
-   for prohibited terms ("bypass", "circumvent", "free papers", "Sci-Hub alternative")
-   and fails any PR that introduces them.
-
-### Technical safeguards
-
-6. **Compile-time feature gating.** Each TDM source is behind a Cargo feature
-   (`tdm-elsevier`, `tdm-aps`, `tdm-springer`). Default builds and crates.io artifacts
-   contain no TDM source code. See ADR-0002.
-
-7. **Runtime CapabilityProfile.** All `Source` implementations require a
-   `&CapabilityProfile` parameter at the type level. A source whose capability is not
-   granted at startup cannot be invoked. See [`CAPABILITY.md`](CAPABILITY.md) and
+4. **Runtime CapabilityProfile.** All `Source` implementations require a
+   `&CapabilityProfile` parameter at the type level. A source whose capability
+   is not granted at startup cannot be invoked. *Enforced by:* `Source` trait
+   signature in `doiget-core`; `#[non_exhaustive]` on `CapabilityProfile`;
    ADR-0005.
 
-8. **Hard-coded rate limit.** `MAX_CONCURRENT_FETCHES = 5` and
-   `MAX_FETCHES_PER_SECOND = 5.0` are library constants, not configuration values. A user
-   cannot override them by flag, env var, or configuration file. This prevents
-   bulk-scraper recognition by any source.
+5. **Hard-coded rate limit.** `MAX_CONCURRENT_FETCHES = 5` and
+   `MAX_FETCHES_PER_SECOND = 5.0` are library constants. The struct
+   `RateLimits` exposes only `HARD_CODED`; field visibility is `pub(crate)`,
+   so external callers cannot synthesize a `RateLimits` with different
+   values. *Enforced by:* `pub(crate)` field visibility,
+   `#[non_exhaustive]` on `RateLimits`, smoke tests in `lib.rs::tests`.
+
+### 6b. Policy commitments (3)
+
+These are commitments the maintainer makes, but a future contributor could
+violate them without the type system or CI reliably catching it. They are
+real safeguards in the sense that the maintainer intends to keep them and
+will reject contradicting PRs, but they rely on human review.
+
+6. **User responsibility documented.** [`SOURCES.md`](SOURCES.md) lists every
+   source's official ToS link and explicitly states the user's responsibility
+   for compliance. The README front-loads this point in the Posture section.
+   *Mechanism:* documentation; CI does not assert that the wording remains in
+   place over time.
+
+7. **Takedown contact with SLA.** [`../CONTACT.md`](../CONTACT.md) defines an
+   SLA-bound channel (7 days first response, 30 days substantive response)
+   for publisher legal teams or other parties with concerns. *Mechanism:*
+   maintainer commitment; the SLA itself is not machine-asserted.
+
+8. **Marketing-language self-policing.** A CI workflow
+   (`.github/workflows/posture-lint.yml`) scans **`README.md` only** for
+   prohibited terms (`bypass`, `circumvent`, `free papers`, `sci-hub`) and
+   fails any PR that introduces them in the README. *Scope deliberately
+   narrow:* the policy / legal docs (LEGAL, SCOPE, CONTACT, CONTRIBUTING)
+   legitimately need to use these words to describe what doiget does **not**
+   do. README is the front-page marketing surface where positive uses are
+   the actual concern. The other steps in `posture-lint.yml` (forbidden HTTP
+   server / telemetry / TLS-backend imports) scan source code and ARE
+   enforced controls; they belong in §6a above and are listed there
+   indirectly via #3.
+
+### Why the split matters
+
+A reader (publisher legal team, security researcher, future maintainer) who
+reads "safeguards" and assumes mechanical controls will be over-confident if
+items 6–8 are presented identically to 1–5. The wording in §1 (and in
+README's Posture section) intentionally uses neutral language; this section
+spells the distinction out so the picture stays honest.
 
 ## 7. Risk planning
 

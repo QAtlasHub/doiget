@@ -25,6 +25,13 @@ and across both Rust and Julia implementations.
 
 ```rust
 pub fn safekey(ref_: &Ref) -> Safekey {
+    // Step 0: normalize. `Doi::as_str()` and `ArxivId::as_str()` return the
+    // identifier WITHOUT a `doi:` / `arxiv:` URI scheme prefix — `Ref::parse`
+    // is responsible for stripping those at construction time. The vectors
+    // in §5 ("doi:..." / "arxiv:..." in the input column) document the
+    // user-facing input form; by the time we reach `safekey`, the scheme
+    // has already been removed. The single `doi_` / `arxiv_` prefix is
+    // added here, exactly once, in step 0.
     let raw = match ref_ {
         Ref::Doi(d)   => format!("doi_{}",   d.as_str()),
         Ref::Arxiv(a) => format!("arxiv_{}", a.as_str()),

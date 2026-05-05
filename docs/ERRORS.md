@@ -7,7 +7,7 @@
 ## 1. ErrorCode enum
 
 ```rust
-// crates/doiget-core/src/error.rs
+// Phase 1+ target module path; Phase 0 ships ErrorCode in monolithic lib.rs.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]

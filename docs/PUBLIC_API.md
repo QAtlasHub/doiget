@@ -9,6 +9,14 @@ binaries / servers and may evolve more freely.
 
 ## 1. Re-exports (top of `lib.rs`)
 
+> **Phase 0 note:** the module paths shown below (`crate::ref_`,
+> `crate::capability`, `crate::source`, `crate::store`, `crate::error`,
+> `crate::provenance`) describe the **Phase 1+ target layout**. At Phase 0
+> HEAD, `doiget-core` is a single `lib.rs` and the same items are visible
+> directly from the crate root. The semver-locked surface is the public
+> identifier set, not the submodule layout — Phase 1 may split files
+> without a major bump.
+
 ```rust
 pub use crate::ref_::{Ref, Doi, ArxivId};
 pub use crate::safekey::Safekey;
@@ -57,14 +65,17 @@ pub enum Ref {
     Arxiv(ArxivId),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Doi(String);
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Doi(pub(crate) String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ArxivId(String);
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct ArxivId(pub(crate) String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Safekey(String);
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Safekey(pub(crate) String);
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Metadata {

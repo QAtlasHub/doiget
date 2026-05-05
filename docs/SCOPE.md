@@ -21,77 +21,123 @@ A single-binary CLI plus stdio MCP server that:
 That is the totality of doiget's intended scope. All other functionality is either
 explicitly out of scope below or requires a new ADR.
 
-## Permanent non-goals
+## Two classes of non-goal
 
-These items are **permanent non-goals**. Their inclusion in doiget will be refused.
+doiget's non-goals split into two classes:
 
-A non-goal can be re-evaluated only by opening a new GitHub Discussion titled
-`[scope-reopening] <topic>` and obtaining explicit maintainer approval before any code
-is written. PRs that effectively reverse a non-goal without this process will be closed.
+- **Permanent non-goals.** Reversing one would weaken the
+  [`LEGAL.md`](LEGAL.md) posture, the [`SECURITY.md`](SECURITY.md) threat
+  model, or the contract-party structure that makes doiget a user-driven
+  local tool. They can be re-evaluated **only** by opening a GitHub
+  Discussion titled `[scope-reopening] <topic>` and obtaining explicit
+  maintainer approval before any code is written. PRs that effectively
+  reverse one will be closed.
+- **Current design choices.** Operational / UX preferences that are
+  *currently* out of scope, but whose reversal does not threaten the posture
+  or threat model. They can be changed by a regular ADR (no
+  scope-reopening Discussion required).
 
-### Content / processing non-goals
+The first class is the disciplined heart of doiget; the second class is here
+so contributors know the maintainer's preferences without needing to ask.
 
-1. **PDF content processing.** doiget does not extract text, perform OCR, summarize,
-   parse citations from PDF text, or extract annotations. PDFs are treated as opaque
-   blobs. (ADR-0003; see also [`MCP_TOOLS.md`](MCP_TOOLS.md): `paper_pdf_path` returns
-   only a path.)
-2. **Bibliographic enrichment from PDF.** doiget does not read bibliographic information
-   from PDF metadata streams. Metadata comes only from publisher APIs.
+A future ADR may freely move an item from "Current design choices" to
+"Permanent non-goals" — that direction tightens scope and never requires a
+scope-reopening Discussion. Moving the other way (Permanent → Current →
+Removed) requires the full meta-rule.
 
-### Distribution / hosting non-goals
+## Permanent non-goals (14)
 
-3. **No SaaS / hosted service.** doiget does not operate `doiget.example`, a hosted MCP
-   endpoint, a public proxy, or any maintainer-controlled service that fetches on behalf
-   of users.
-4. **No paper hosting or redistribution.** doiget does not redistribute fetched PDFs.
-   The `Store` is local-only.
-5. **No `share-vault` feature.** doiget does not provide a mechanism for one user to
-   share their `~/papers/` store with another user as a doiget-supported feature.
+### Content / processing
 
-### Network / transport non-goals
+1. **PDF content processing.** doiget does not extract text, perform OCR,
+   summarize, parse citations from PDF text, extract annotations, or read
+   bibliographic data from PDF metadata streams. PDFs are treated as opaque
+   blobs. (ADR-0003; see also [`MCP_TOOLS.md`](MCP_TOOLS.md): `paper_pdf_path`
+   returns only a path.) Bibliographic indexing from publisher API responses
+   (title / authors / venue / abstract for `search_local`) is in scope and
+   distinct from PDF content interpretation; see [`LEGAL.md`](LEGAL.md) §3.
 
-6. **No MCP HTTP / SSE / WebSocket transport.** doiget supports MCP via stdio only.
-   This is intentional, not a TODO. (ADR-0001) A multi-tenant network-exposed doiget
-   would shift the user's role from contract party to service consumer, which conflicts
-   with the [`LEGAL.md`](LEGAL.md) posture.
-7. **No `doiget_fetch_url(url: ...)` MCP tool.** Tools accept DOI / arXiv id input only,
-   never arbitrary URLs (SSRF surface; see [`SECURITY.md`](SECURITY.md) §threat 2).
+### Distribution / hosting
 
-### Credential / safety non-goals
+2. **No SaaS / hosted service.** doiget does not operate `doiget.example`, a
+   hosted MCP endpoint, a public proxy, or any maintainer-controlled service
+   that fetches on behalf of users.
+3. **No paper hosting, redistribution, or "share-vault".** doiget does not
+   redistribute fetched PDFs and does not provide any mechanism for one user
+   to share their `~/papers/` store with another. The `Store` is local-only.
 
-8. **No bundled API keys.** No publisher API key is shipped in any doiget binary.
-9. **No credential sharing feature.** doiget does not provide a mechanism for sharing
-   API keys, sessions, or institutional access between users.
-10. **No `doiget_set_credentials(...)` MCP tool.** Credentials are read from env or
-    `credentials.toml` only; the MCP surface does not accept credential writes.
-11. **No `doiget_delete_paper(...)` MCP tool.** Destructive store operations are CLI-only,
-    never agent-invokable.
-12. **No generic shell / exec MCP tool.** doiget never exposes a tool that lets an agent
-    run arbitrary commands.
+### Network / transport
 
-### Operational non-goals
+4. **No MCP HTTP / SSE / WebSocket transport.** doiget supports MCP via stdio
+   only. This is intentional, not a TODO. (ADR-0001.) A multi-tenant
+   network-exposed doiget would shift the user's role from contract party to
+   service consumer, which conflicts with the [`LEGAL.md`](LEGAL.md) posture.
+5. **No `doiget_fetch_url(url: ...)` MCP tool.** Tools accept DOI / arXiv id
+   input only, never arbitrary URLs (SSRF surface; see
+   [`SECURITY.md`](SECURITY.md) §1.4).
 
-13. **No bulk download mode.** Rate limiting (`MAX_CONCURRENT_FETCHES = 5`,
-    `MAX_FETCHES_PER_SECOND = 5.0`) is hard-coded as library constants. There is no flag
-    or config to raise these.
-14. **No telemetry / phone-home / crash reporting / version check.** doiget makes no
-    network connection that is not the result of a user-initiated fetch. (ADR-0015)
-15. **No self-update / `doiget upgrade`.** doiget does not modify its own binary. (ADR-0015)
+### Credential / safety
 
-### Build / distribution non-goals
+6. **No bundled API keys.** No publisher API key is shipped in any doiget
+   binary.
+7. **No credential sharing feature.** doiget does not provide a mechanism for
+   sharing API keys, sessions, or institutional access between users.
+8. **No `doiget_set_credentials(...)` MCP tool.** Credentials are read from
+   env or `credentials.toml` only; the MCP surface does not accept credential
+   writes.
 
-16. **No `tdm-all` umbrella feature flag.** Each TDM source must be opted in
-    individually. (ADR-0002)
-17. **No public binary release that includes any TDM source code.** TDM features are
-    available only by user-driven `cargo install` / `cargo build` with the appropriate
-    `--features tdm-<publisher>` flag.
+### Operational
 
-### Integration non-goals (Obsidian)
+9.  **No bulk download mode.** Rate limiting
+    (`MAX_CONCURRENT_FETCHES = 5`, `MAX_FETCHES_PER_SECOND = 5.0`) is hard-coded
+    as library constants. There is no flag or config to raise these.
+10. **No telemetry / phone-home / crash reporting / version check.** doiget
+    makes no network connection that is not the result of a user-initiated
+    fetch. (ADR-0015.)
+11. **No self-update / `doiget upgrade`.** doiget does not modify its own
+    binary. (ADR-0015.)
 
-18. **No bidirectional Obsidian sync.** Obsidian export, when available (Phase 7), writes
-    only one direction: store → vault. The vault is not read back as a source of truth.
-19. **No Obsidian vault auto-discovery.** The vault path is always passed explicitly by
-    the user.
+### Build / distribution
+
+12. **No `tdm-all` umbrella feature flag.** Each TDM source must be opted in
+    individually. (ADR-0002.) Removing the per-publisher friction is the same
+    kind of LEGAL-posture weakening as bundling keys.
+13. **No public binary release that includes any TDM source code.** TDM
+    features are available only by user-driven `cargo install` / `cargo build`
+    with the appropriate `--features tdm-<publisher>` flag.
+
+### Posture interpretation
+
+14. **No re-classification of bibliographic indexing as "PDF content
+    processing".** Implementing `search_local` over title/authors/venue is
+    explicitly in scope and is **not** governed by item #1 above. This is the
+    same boundary [`LEGAL.md`](LEGAL.md) §3 documents.
+
+## Current design choices (5)
+
+These are out of scope **today** because the maintainer judges them more
+trouble than they're worth at the current Phase, but they do not threaten the
+LEGAL posture or threat model. Reversing one is a regular ADR, not a
+scope-reopening Discussion.
+
+15. **No `doiget_delete_paper(...)` MCP tool.** Destructive store operations
+    are CLI-only. *Why current-only:* the operational caution (agents
+    shouldn't delete user data accidentally) is real, but a future agent
+    workflow with explicit user confirmation could revisit this.
+16. **No generic shell / exec MCP tool.** doiget never exposes a tool that
+    lets an agent run arbitrary commands. *Why current-only:* the security
+    boundary is correct today, but composability with sandboxed shells could
+    be revisited in Phase 5+.
+17. **No bidirectional Obsidian sync.** Obsidian export, when available
+    (Phase 7), writes only one direction: store → vault. *Why current-only:*
+    conflict resolution complexity is the only reason; if a clean
+    last-writer-wins or three-way-merge design surfaces, this can change.
+18. **No Obsidian vault auto-discovery.** The vault path is always passed
+    explicitly by the user. *Why current-only:* false-positive scanning is
+    the only concern; a workspace-style `.doiget/vault.toml` could
+    legitimately revisit this.
+19. **No `INTEGRATION/` host snippets at Phase 0.** Phase 3 ships them
+    alongside `doiget serve`. *Why current-only:* sequencing, not principle.
 
 ## Boundaries with adjacent tools
 

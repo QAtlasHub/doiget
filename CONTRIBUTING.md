@@ -3,6 +3,41 @@
 Thank you for your interest in contributing. doiget is a deliberately small-scope project,
 and this document describes both **how** to contribute and **what changes are out of scope**.
 
+## Local dev setup
+
+doiget targets **Rust stable**. The active toolchain is pinned via
+`rust-toolchain.toml` (`channel = "stable"`); the declared MSRV is **1.86**
+(see [`docs/PUBLIC_API.md`](docs/PUBLIC_API.md) §7).
+
+```sh
+# 1. Install rustup if you don't have it.
+#    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+#    Or:  winget install Rustlang.Rustup    (Windows)
+#    Or:  brew install rustup                (macOS via Homebrew)
+
+# 2. Clone and build.
+git clone https://github.com/sotashimozono/doiget.git
+cd doiget
+cargo build                                # default features = oa-only
+cargo build --no-default-features          # sanity: minimal features
+
+# 3. Run the local checks CI runs (in this order; fix as you go).
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --no-default-features --features oa-only -- -D warnings
+cargo test  --workspace --all-targets --no-default-features --features oa-only
+
+# 4. Optional but recommended: install the audit tooling once.
+cargo install cargo-deny
+cargo install cargo-audit
+cargo deny  check --workspace --no-default-features --features oa-only
+cargo audit
+```
+
+**Phase 0 expected behavior:** `cargo build` succeeds, `doiget --help` prints the
+subcommand list, and any `doiget <subcommand>` returns a `Phase 0 stub` error.
+`cargo test` runs the four smoke tests in
+`crates/doiget-core/src/lib.rs::tests`.
+
 ## Before you open a PR
 
 1. Read [docs/SCOPE.md](docs/SCOPE.md) for the **Permanent non-goals** list. PRs that move

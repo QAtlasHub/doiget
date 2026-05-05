@@ -39,6 +39,18 @@ pub const MCP_STDIN_EOF_SHUTDOWN_SEC: u64 = 5;
 /// Maximum DOI suffix length accepted at validation. See `docs/SECURITY.md` §1.1.
 pub const DOI_SUFFIX_MAX_LEN: usize = 256;
 
+/// Maximum PDF body size accepted by the fetcher, in bytes. See
+/// `docs/SECURITY.md` §1.2 (Oversized PDF).
+pub const PDF_MAX_BYTES: u64 = 100_000_000;
+
+/// Time-to-live for entries in `~/.cache/doiget/resolver/`. See
+/// `docs/CACHE.md` §3.
+pub const RESOLVER_CACHE_TTL_DAYS: u32 = 7;
+
+/// Time-to-live for entries in `~/.cache/doiget/citations/`. See
+/// `docs/CACHE.md` §3.
+pub const CITATION_CACHE_TTL_DAYS: u32 = 30;
+
 // ---------------------------------------------------------------------------
 // Ref
 // ---------------------------------------------------------------------------
