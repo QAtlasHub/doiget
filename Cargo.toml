@@ -89,7 +89,7 @@ toml_edit   = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock", "std"] }
 
 # Hashing — provenance log hash chain
-sha2 = "0.10"
+sha2 = "0.11"
 hex  = "0.4"
 
 # UUIDs / ULIDs (mcp_call_id, session_id)
