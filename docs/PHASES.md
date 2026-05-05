@@ -18,8 +18,14 @@
 | 5a | TDM Springer Nature OA — author opt-in to start | 1 week + 1–2 wk cooldown |
 | 5b | TDM APS Harvest — author opt-in to start | 1 week + 1–2 wk cooldown |
 | 5c | TDM Elsevier ScienceDirect — author re-decision required | 1 week |
-| 6 | Release: OIDC + sigstore + SBOM + landing page polish | 1 week |
+| 6 | Release: OIDC + sigstore + SBOM + landing page polish + auto-tag (`release-plz`) | 1 week |
 | 7 | Optional features (`vault`, `obsidian`) | per feature |
+
+> **Phase 6 auto-tag note.** Version bumps and tags are deferred to Phase 6 via
+> [`release-plz`](https://release-plz.dev) — Conventional Commits drive a
+> Cargo.toml version bump PR, which when merged tags and (with OIDC trusted
+> publishing) ships to crates.io. Phase 0 carries no `release-plz.toml` yet;
+> until Phase 6 the version stays `0.0.0` and tags are not minted.
 
 **Phase 5 may be skipped or deferred indefinitely**; the decision is data-driven from
 Phase 0–4 production usage and any publisher-side correspondence.
@@ -80,6 +86,7 @@ Phase 0 is complete when **all** of the following are committed.
 - [ ] `.github/workflows/codeql.yml` (Phase 0 onward)
 - [ ] `.github/workflows/safekey-vectors.yml` (vector-set parity)
 - [ ] `.github/workflows/cross-tool-compat.yml` (BiblioFetch.jl round-trip; placeholder until Phase 2)
+- [x] `.github/workflows/msrv-drift.yml` (weekly: detect transitive-dep MSRV bumps past declared 1.86)
 - [x] `.github/dependabot.yml` (auto-merge disabled)
 
 ### Repo-level settings (manual; cannot be committed)
