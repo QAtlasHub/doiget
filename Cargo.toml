@@ -1,0 +1,136 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/doiget-core",
+    "crates/doiget-cli",
+    "crates/doiget-mcp",
+]
+exclude = [
+    # Phase 7 optional, default OFF (see ADR-0008 / docs/SCOPE.md)
+    "crates/doiget-obsidian",
+]
+
+[workspace.package]
+version       = "0.0.0"
+edition       = "2021"
+rust-version  = "1.86"
+license       = "MIT"
+repository    = "https://github.com/sotashimozono/doiget"
+homepage      = "https://github.com/sotashimozono/doiget"
+authors       = ["Sota Shimozono"]
+keywords      = ["doi", "arxiv", "mcp", "academic", "openaccess"]
+categories    = ["command-line-utilities", "science"]
+readme        = "README.md"
+
+# ---------------------------------------------------------------------
+# Top-level features. The default release binary contains Tier 1 only.
+#
+# - Tier 1 (Open Access)            : always compiled in.
+# - Tier 2 metadata (Phase 4)       : `metadata`.
+# - Tier 3 TDM (Phase 5, opt-in build, never in published binaries):
+#     `tdm-elsevier`, `tdm-aps`, `tdm-springer`. No `tdm-all` umbrella.
+#
+# See docs/SCOPE.md and docs/SOURCES.md.
+# ---------------------------------------------------------------------
+[workspace.metadata.doiget]
+features-doc-link = "docs/SOURCES.md"
+
+[workspace.dependencies]
+# Core
+doiget-core = { path = "crates/doiget-core", version = "0.0.0" }
+doiget-cli  = { path = "crates/doiget-cli",  version = "0.0.0" }
+doiget-mcp  = { path = "crates/doiget-mcp",  version = "0.0.0" }
+
+# Async runtime — features are deliberately limited (avoid `full`).
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread", "macros", "fs", "process", "signal",
+    "io-util", "sync", "time",
+] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env", "string"] }
+
+# Errors
+thiserror = "1"
+anyhow    = "1"
+
+# Logging
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+
+# Secrets — see docs/CAPABILITY.md.
+# IMPORTANT: any member crate inheriting this dep MUST also write
+# `optional = true` in its own [dependencies], or `secrecy` becomes
+# unconditionally compiled in (defeating the `tdm-*` feature gate from
+# ADR-0002). `doiget-core/Cargo.toml` does this correctly.
+secrecy = { version = "0.10", features = ["serde"] }
+
+# HTTP client (rustls only — no openssl by deny.toml)
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls", "json", "gzip", "brotli", "stream",
+] }
+
+# Filesystem
+camino    = "1"
+fs2       = "0.4"
+tempfile  = "3"
+
+# Concurrency
+parking_lot = "0.12"
+once_cell   = "1"
+
+# Serialization
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+toml        = "0.8"
+toml_edit   = "0.22"
+
+# Time (always UTC; see docs/PROVENANCE_LOG.md)
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock", "std"] }
+
+# Hashing — provenance log hash chain
+sha2 = "0.10"
+hex  = "0.4"
+
+# UUIDs / ULIDs (mcp_call_id, session_id)
+uuid = { version = "1", features = ["v4", "serde"] }
+ulid = { version = "1", features = ["serde"] }
+
+# URL parsing — required, see docs/SECURITY.md §1.4
+url = "2"
+
+# Test fixtures
+wiremock    = "0.6"
+assert_cmd  = "2"
+predicates  = "3"
+proptest    = "1"
+
+# Phase 4 (citation graph)
+petgraph = "0.6"
+
+[workspace.lints.rust]
+unsafe_code   = "forbid"
+missing_docs  = "warn"
+
+[workspace.lints.clippy]
+print_stdout       = "deny"   # MCP stdio safety; see ADR-0001 / docs/SECURITY.md §3
+print_stderr       = "warn"
+unwrap_used        = "warn"
+expect_used        = "warn"
+panic              = "warn"
+todo               = "warn"
+unimplemented      = "warn"
+dbg_macro          = "warn"
+
+[profile.release]
+lto             = "thin"
+codegen-units   = 1
+strip           = "symbols"
+panic           = "abort"      # see ADR-0008
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.bench]
+debug = false
+lto   = "thin"

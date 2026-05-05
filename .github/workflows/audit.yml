@@ -1,0 +1,69 @@
+name: audit
+
+on:
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "deny.toml"
+      - ".github/workflows/audit.yml"
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 7 * * 1"   # weekly on Monday 07:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11   # v4.1.1
+      - uses: EmbarkStudios/cargo-deny-action@91bf2b620e09e18d6eb78b92e7861937469acedb # v2.0.17
+        with:
+          command: check
+          # Audit only the published surface (oa-only). TDM features are
+          # opt-in user builds per ADR-0002 and never published; they pull in
+          # extra deps that would falsely pass through this audit.
+          # Aligns with `[graph] all-features = false` in deny.toml.
+          arguments: --workspace --no-default-features --features oa-only
+
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      # rustsec/audit-check requires Cargo.lock; Phase 0 keeps it uncommitted
+      # (see PR description), so generate it on the runner. Drop this step
+      # once Cargo.lock lands in-tree.
+      - name: Generate Cargo.lock
+        run: cargo generate-lockfile
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # When the weekly cron fails, GitHub Actions does not email by default for
+  # scheduled-only failures on inactive repos. Open a tracking issue instead
+  # so the failure is visible and durable. PR / push failures already surface
+  # in the normal Checks UI; this job is gated on schedule events only.
+  notify-cron-failure:
+    name: notify (cron failure)
+    needs: [cargo-deny, cargo-audit]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --title "audit: scheduled run failed ($(date -u +%Y-%m-%d))" \
+            --label "ci,audit,automated" \
+            --body "The scheduled \`audit\` workflow failed. See ${RUN_URL} for details. This issue was opened automatically; close it once the underlying advisory is triaged or resolved." \
+            --repo "${{ github.repository }}"

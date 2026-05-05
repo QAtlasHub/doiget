@@ -1,0 +1,65 @@
+name: posture-lint
+
+# Enforces docs/LEGAL.md §6 safeguard 5 (no marketing-violation language) and
+# ADR-0001 / ADR-0015 (no HTTP server / telemetry / self-update imports).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11   # v4.1.1
+
+      - name: Forbidden marketing terms in user-facing copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Scope: README.md only. The LEGAL / SCOPE / CONTACT / CONTRIBUTING
+          # docs legitimately need to use these words to describe the policy
+          # (e.g., "doiget does not bypass paywalls"). README is the front-page
+          # marketing surface where positive uses must be caught. Rephrase any
+          # flagged term in README rather than relaxing this rule.
+          PATTERN='\b(bypass|circumvent|free papers|sci-?hub)\b'
+          if grep -i -n -E "$PATTERN" README.md ; then
+            echo "::error::posture-lint: forbidden marketing term detected in README.md"
+            exit 1
+          fi
+
+      - name: Forbidden HTTP server imports
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Case-insensitive: idiomatic Rust imports `hyper::Server` (capital S);
+          # we must catch that as well as `hyper::server` (module form).
+          PATTERN='use[[:space:]]+(axum|actix_web|warp|tide|rocket|poem|salvo)|use[[:space:]]+hyper::[Ss]erver'
+          if grep -r -E "$PATTERN" --include='*.rs' crates/ ; then
+            echo "::error::posture-lint: HTTP server crate imported (ADR-0001)"
+            exit 1
+          fi
+
+      - name: Forbidden telemetry / self-update imports
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATTERN='use[[:space:]]+(sentry|posthog|self_update|google_analytics)'
+          if grep -r -E "$PATTERN" --include='*.rs' crates/ ; then
+            echo "::error::posture-lint: telemetry / self-update crate imported (ADR-0015)"
+            exit 1
+          fi
+
+      - name: Forbidden TLS backend imports (rustls only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATTERN='use[[:space:]]+(openssl|native_tls)'
+          if grep -r -E "$PATTERN" --include='*.rs' crates/ ; then
+            echo "::error::posture-lint: openssl/native_tls imported; use rustls (deny.toml)"
+            exit 1
+          fi

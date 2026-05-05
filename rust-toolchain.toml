@@ -1,0 +1,12 @@
+# Track latest stable. The declared MSRV in Cargo.toml / clippy.toml is the
+# floor the library and CLI promise to support; the `msrv` CI job pins to
+# that floor explicitly. This file pins the *active* toolchain to whatever
+# is currently stable, so transitive crate-MSRV bumps (icu_*, etc.) do not
+# break the workspace as ecosystem floors rise.
+#
+# Changing this away from "stable" requires an ADR — see docs/PUBLIC_API.md §7.
+
+[toolchain]
+channel    = "stable"
+components = ["rustfmt", "clippy"]
+profile    = "minimal"

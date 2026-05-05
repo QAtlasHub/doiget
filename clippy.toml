@@ -1,0 +1,13 @@
+# MSRV — keeps clippy from suggesting newer-than-MSRV idioms.
+# Bumping this is a minor semver bump for doiget-core; see docs/PUBLIC_API.md §7.
+msrv = "1.86"
+
+# User-facing paths must be UTF-8 — we depend on `camino::Utf8PathBuf` for
+# this purpose. `std::path::PathBuf` is BANNED workspace-wide; clippy's
+# `disallowed-types` has no per-module scoping. If a future contributor has a
+# legitimate OS-boundary need (e.g. interfacing with an OS API that genuinely
+# requires `OsString` semantics), they must surface that case in a PR
+# discussion before introducing a localized `#[allow(clippy::disallowed_types)]`.
+disallowed-types = [
+    { path = "std::path::PathBuf", reason = "Use camino::Utf8PathBuf for user-facing paths." },
+]

@@ -1,0 +1,45 @@
+[package]
+name          = "doiget-cli"
+description   = "doiget CLI binary"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+keywords.workspace     = true
+categories.workspace   = true
+readme                 = "../../README.md"
+
+[[bin]]
+name = "doiget"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+default  = ["oa-only"]
+oa-only  = ["doiget-core/oa-only"]
+metadata = ["doiget-core/metadata"]
+citation = ["doiget-core/citation"]
+tdm-elsevier = ["doiget-core/tdm-elsevier"]
+tdm-aps      = ["doiget-core/tdm-aps"]
+tdm-springer = ["doiget-core/tdm-springer"]
+
+[dependencies]
+doiget-core        = { workspace = true }
+clap               = { workspace = true }
+anyhow             = { workspace = true }
+tokio              = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+camino             = { workspace = true }
+chrono             = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }

@@ -1,0 +1,24 @@
+{
+  "_comment": "Reference test vectors for the safekey algorithm (docs/SAFEKEY.md). Phase 0 ships 13 vectors as a placeholder; the full set of 100 is a Phase 0 deliverable per docs/PHASES.md and is generated in coordination with BiblioFetch.jl. Format: each entry of `vectors[]` is { input: <ref string>, expected: <safekey> }. Both Rust and Julia implementations MUST produce identical output for every entry.",
+  "version": "1.0",
+  "notes": [
+    "Vectors are grouped by purpose: (1) basic DOI / arXiv mapping; (2) escape-collapse and trim-edge edge cases; (3) non-ASCII inputs.",
+    "Non-ASCII handling: algorithm step 1 replaces every char outside [A-Za-z0-9._-] with '_'. Since the result is pure ASCII before the byte-slice in the truncation branch, multibyte input cannot panic at `&trimmed[..192]`.",
+    "Collision caveat: refs that differ only in their non-ASCII suffix WILL collide on safekey output. This is a known consequence of the algorithm and a Phase-1 caller responsibility (cf. docs/SAFEKEY.md §6 property tests). The non-ASCII vectors below use distinct ASCII prefixes to keep the test suite collision-free."
+  ],
+  "vectors": [
+    { "input": "doi:10.1234/example",                    "expected": "doi_10.1234_example" },
+    { "input": "doi:10.1103/PhysRevLett.130.200601",     "expected": "doi_10.1103_PhysRevLett.130.200601" },
+    { "input": "doi:10.1016/S0370-1573(98)00122-3",      "expected": "doi_10.1016_S0370-1573_98_00122-3" },
+    { "input": "doi:10.1234/foo bar",                    "expected": "doi_10.1234_foo_bar" },
+    { "input": "doi:10.1234/foo  bar",                   "expected": "doi_10.1234_foo_bar" },
+    { "input": "doi:10.1234/_leading",                   "expected": "doi_10.1234_leading" },
+    { "input": "doi:10.1234/trailing_",                  "expected": "doi_10.1234_trailing" },
+    { "input": "arxiv:2401.12345",                       "expected": "arxiv_2401.12345" },
+    { "input": "arxiv:2401.12345v2",                     "expected": "arxiv_2401.12345v2" },
+    { "input": "arxiv:cond-mat/9501001",                 "expected": "arxiv_cond-mat_9501001" },
+    { "input": "doi:10.2001/物理学",                       "expected": "doi_10.2001" },
+    { "input": "doi:10.2002/μετρον",                       "expected": "doi_10.2002" },
+    { "input": "doi:10.2003/プレプリント",                 "expected": "doi_10.2003" }
+  ]
+}

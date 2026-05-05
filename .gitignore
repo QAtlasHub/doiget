@@ -1,0 +1,48 @@
+# Rust / Cargo
+target/
+Cargo.lock.bak
+*.rs.bk
+**/*.rs.bk
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+*.swp
+*.swo
+*~
+# Editor / OS temp files (e.g., VSCode autosave, Dropbox conflict-copy artifacts)
+*.tmp
+*.tmp.*
+
+# Coverage
+*.profraw
+*.profdata
+tarpaulin-report.html
+lcov.info
+
+# SBOM / release artifacts (generated locally during release dry-runs)
+/dist/
+*.sbom.json
+*.spdx.json
+
+# Sigstore signatures (committed only via release.yml)
+*.sig
+*.crt
+
+# Local config (per-developer)
+.cargo/config.local.toml
+.envrc
+.env
+.env.local
+
+# Test scratch
+/tmp/
+/scratch/
