@@ -1,7 +1,7 @@
 # 0016 - Common foundation crates + deny list
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #13
 

@@ -1,7 +1,7 @@
 # 0011 - Phase plan v1 — MVP at 5 weeks, Phase 5 deferred-by-default
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #7
 

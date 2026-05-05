@@ -13,7 +13,14 @@
 use secrecy::Secret;
 use chrono::{DateTime, Utc};
 
+// All structs below are #[non_exhaustive] in the Rust source. External crates
+// cannot construct them via struct-literal syntax — go through
+// `CapabilityProfile::from_env()` (see §2). The shapes shown are the Phase 1+
+// target; the Phase 0 stub omits `TdmGrant::api_key` (added non-breakingly
+// later via `#[non_exhaustive]`).
+
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CapabilityProfile {
     pub oa: AlwaysOn,
     pub metadata: MetadataAccess,
@@ -26,7 +33,8 @@ pub struct CapabilityProfile {
 #[derive(Debug, Clone, Copy)]
 pub struct AlwaysOn;   // unit struct — Tier 1 OA is always permitted
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct MetadataAccess {
     pub openalex: bool,            // Phase 4+
     pub semantic_scholar: bool,
@@ -34,27 +42,50 @@ pub struct MetadataAccess {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TdmGrant {
-    pub api_key:       Secret<String>,
+    pub api_key:       Secret<String>,    // added in Phase 1
     pub agreed_at:     DateTime<Utc>,
-    pub agree_env_var: String,        // e.g. "DOIGET_AGREE_TDM_ELSEVIER"
+    pub agree_env_var: String,            // e.g. "DOIGET_AGREE_TDM_ELSEVIER"
 }
 
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct RateLimits {
-    pub max_concurrent_fetches:  u32, // hard-coded 5 (LEGAL §6 safeguard 8)
-    pub max_fetches_per_second:  f32, // hard-coded 5.0
-    pub per_source_backoff_ms:   u64, // hard-coded 200
+    pub(crate) max_concurrent_fetches: u32, // hard-coded 5 (LEGAL §6 safeguard 8)
+    pub(crate) max_fetches_per_second: f32, // hard-coded 5.0
+    pub(crate) per_source_backoff_ms:  u64, // hard-coded 200
 }
 
 impl RateLimits {
+    /// Sole public constructor. There is no other way to obtain a
+    /// `RateLimits` outside of `doiget-core`: fields are `pub(crate)`, the
+    /// struct is `#[non_exhaustive]`, and no public `new`-style function
+    /// exists. This closes the legal-safeguard loophole that bare `pub`
+    /// fields would create (cf. `docs/LEGAL.md` §6 safeguard 8).
     pub const HARD_CODED: Self = Self {
         max_concurrent_fetches: 5,
         max_fetches_per_second: 5.0,
         per_source_backoff_ms:  200,
     };
+
+    pub const fn max_concurrent_fetches(&self) -> u32 { self.max_concurrent_fetches }
+    pub const fn max_fetches_per_second(&self) -> f32 { self.max_fetches_per_second }
+    pub const fn per_source_backoff_ms(&self)  -> u64 { self.per_source_backoff_ms }
 }
 ```
+
+### External construction
+
+External crates always go through:
+
+```rust
+let profile = CapabilityProfile::from_env()?;
+```
+
+Struct-literal construction (`CapabilityProfile { oa: ..., ... }`) is blocked
+outside `doiget-core` by `#[non_exhaustive]`. Tests inside `doiget-core` may
+still construct profiles directly for fixture purposes.
 
 `api_key` is wrapped in `secrecy::Secret<String>` so that `Display` and `Debug` print
 `****`. Logs use a redactor for known sensitive field names.

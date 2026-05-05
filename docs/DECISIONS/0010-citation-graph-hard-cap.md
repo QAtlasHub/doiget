@@ -1,7 +1,7 @@
 # 0010 - Citation graph hard-cap (depth=3, total=100, per-paper=20)
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #6
 

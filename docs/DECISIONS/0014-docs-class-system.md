@@ -1,7 +1,7 @@
 # 0014 - Docs split into NORMATIVE / INFORMATIVE with ADR change-control
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #11
 

@@ -1,7 +1,7 @@
 # 0017 - Output mode resolution (flag > env > implicit > TTY > quiet)
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #14
 

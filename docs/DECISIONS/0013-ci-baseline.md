@@ -1,7 +1,7 @@
 # 0013 - CI baseline (workflows, OIDC publish, sigstore signing)
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #10
 

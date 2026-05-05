@@ -38,3 +38,27 @@ jobs:
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  # When the weekly cron fails, GitHub Actions does not email by default for
+  # scheduled-only failures on inactive repos. Open a tracking issue instead
+  # so the failure is visible and durable. PR / push failures already surface
+  # in the normal Checks UI; this job is gated on schedule events only.
+  notify-cron-failure:
+    name: notify (cron failure)
+    needs: [cargo-deny, cargo-audit]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --title "audit: scheduled run failed ($(date -u +%Y-%m-%d))" \
+            --label "ci,audit,automated" \
+            --body "The scheduled \`audit\` workflow failed. See ${RUN_URL} for details. This issue was opened automatically; close it once the underlying advisory is triaged or resolved." \
+            --repo "${{ github.repository }}"

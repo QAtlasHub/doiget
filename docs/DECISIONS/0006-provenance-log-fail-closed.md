@@ -1,7 +1,7 @@
 # 0006 - Provenance log is JSON Lines + SHA-256 hash chain (fail-closed)
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #12 / #17
 

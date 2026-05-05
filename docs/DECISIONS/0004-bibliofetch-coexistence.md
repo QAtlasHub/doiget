@@ -1,7 +1,7 @@
 # 0004 - BiblioFetch.jl coexistence — shared store contract
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #1 / #2
 

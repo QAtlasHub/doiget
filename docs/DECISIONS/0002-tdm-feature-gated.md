@@ -1,7 +1,7 @@
 # 0002 - TDM sources are compile-time feature-gated
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #5
 

@@ -57,10 +57,14 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2d8b9e26a0bf1a7
-      - run: cargo test --workspace --all-targets --features oa-only
+      # Aligned with clippy job: --no-default-features --features oa-only,
+      # so test and clippy exercise an identical feature surface.
+      - run: cargo test --workspace --all-targets --no-default-features --features oa-only
 
   msrv:
-    name: msrv (1.83)
+    # MSRV is pinned in rust-toolchain.toml / Cargo.toml; the job name
+    # deliberately omits the version literal so the label cannot drift.
+    name: msrv
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
@@ -68,7 +72,7 @@ jobs:
         with:
           toolchain: "1.83"
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2d8b9e26a0bf1a7
-      - run: cargo build --workspace --features oa-only
+      - run: cargo build --workspace --no-default-features --features oa-only
 
   docs:
     name: rustdoc
@@ -81,4 +85,4 @@ jobs:
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2d8b9e26a0bf1a7
       - env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --workspace --no-deps --features oa-only
+        run: cargo doc --workspace --no-deps --no-default-features --features oa-only

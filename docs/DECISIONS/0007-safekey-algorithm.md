@@ -1,7 +1,7 @@
 # 0007 - safekey algorithm with reference test vectors
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #1 §Contract 4 / #17
 

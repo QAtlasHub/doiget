@@ -1,7 +1,7 @@
 # 0015 - No telemetry / phone-home / self-update
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #12
 

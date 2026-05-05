@@ -1,7 +1,7 @@
 # 0019 - Eight-safeguard legal posture (5 social + 3 technical)
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #16
 

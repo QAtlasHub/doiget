@@ -1,7 +1,7 @@
 # 0008 - Workspace is split into doiget-core / -cli / -mcp (+ -obsidian opt)
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #14 / #18
 

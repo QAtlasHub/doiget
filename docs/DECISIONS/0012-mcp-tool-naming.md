@@ -1,7 +1,7 @@
 # 0012 - MCP tool naming + structured ok-false errors
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #8
 

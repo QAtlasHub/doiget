@@ -60,13 +60,19 @@ pub enum Ref {
 /// Construct via `Doi::parse(s)` (Phase 1+). The inner field is intentionally
 /// `pub(crate)` to forbid bypass construction; tests inside `doiget-core` may
 /// still use `Doi(s)` for fixture purposes.
+///
+/// Wire format: bare string (`#[serde(transparent)]`), e.g. `"10.1234/example"`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Doi(pub(crate) String);
 
 /// A validated arXiv id string.
 ///
 /// Construct via `ArxivId::parse(s)` (Phase 1+). Inner field is `pub(crate)`.
+///
+/// Wire format: bare string (`#[serde(transparent)]`), e.g. `"2401.12345"`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ArxivId(pub(crate) String);
 
 impl Doi {
@@ -91,7 +97,10 @@ impl ArxivId {
 ///
 /// See `docs/SAFEKEY.md` for the full algorithm and reference test vectors.
 /// Construct via `Ref::safekey()` (Phase 1+); inner field is `pub(crate)`.
+///
+/// Wire format: bare string (`#[serde(transparent)]`), e.g. `"doi_10.1234_example"`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Safekey(pub(crate) String);
 
 impl Safekey {
@@ -205,6 +214,10 @@ impl RateLimits {
 /// is a non-breaking change. Phase 0 callers should not construct this type
 /// directly; use `CapabilityProfile::from_env()` (which today never produces
 /// `Some(TdmGrant)`).
+///
+/// Implements `Default` so that in-crate test fixtures using
+/// `TdmGrant { agree_env_var: ..., ..Default::default() }` survive future
+/// field additions (e.g. `api_key` in Phase 1) without source edits.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct TdmGrant {
@@ -214,12 +227,25 @@ pub struct TdmGrant {
     pub agreed_at: chrono::DateTime<chrono::Utc>,
 }
 
+impl Default for TdmGrant {
+    fn default() -> Self {
+        Self {
+            agree_env_var: String::new(),
+            agreed_at: chrono::Utc::now(),
+        }
+    }
+}
+
 /// Runtime gate for which sources may be invoked. See `docs/CAPABILITY.md`.
 ///
 /// Marked `#[non_exhaustive]` so adding new capability classes is non-breaking.
 /// Pattern-match only against the documented variants and use a wildcard arm.
-/// Tests may construct profiles via field syntax with `..Default::default()`
-/// once `Default` is implemented.
+///
+/// **Construction**: external callers use [`CapabilityProfile::from_env()`].
+/// Struct-literal construction is blocked outside this crate by
+/// `#[non_exhaustive]`; this is intentional — the type's safety guarantees
+/// rely on the resolution rules in `from_env`. `Default` is **not yet**
+/// implemented; Phase 1 will add it once the field set stabilizes.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct CapabilityProfile {
@@ -265,6 +291,23 @@ impl CapabilityProfile {
     /// Phase 1 must replace this body with the resolution algorithm specified
     /// in `docs/CAPABILITY.md` §2 and exercise both `CapabilityError` variants
     /// in tests.
+    ///
+    /// # Precondition: tracing subscriber must be installed first
+    ///
+    /// The Phase-0 audit signal is delivered via `tracing::warn!`. Callers
+    /// MUST install a `tracing-subscriber` (or equivalent) **before** invoking
+    /// this function, otherwise the warn is silently dropped and a
+    /// misconfigured user will see no signal that their TDM env vars were
+    /// ignored. The `doiget-cli` binary already does this in `main.rs`.
+    ///
+    /// # Warn message format (for log filtering)
+    ///
+    /// Each detected env var emits a `WARN`-level event with structured field
+    /// `env_var = "<NAME>"` and a message starting with
+    /// `"doiget-core Phase 0 stub: <NAME> is set but env-driven \
+    ///  CapabilityProfile resolution is not implemented yet."`.
+    /// Grep your log aggregator for `env_var=DOIGET_AGREE_TDM_*` to surface
+    /// affected sessions.
     pub fn from_env() -> Result<Self, CapabilityError> {
         // Detect any Phase-1-relevant env var and warn loudly. This is
         // intentionally not a hard error in Phase 0 so that local development
@@ -327,9 +370,11 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_1_x() {
-        // docs/STORE.md §3 — Phase 0/1 writes 1.x only.
-        assert!(SCHEMA_VERSION.starts_with("1."));
+    fn schema_version_is_pinned_to_1_0() {
+        // docs/STORE.md §3 — Phase 0/1 writes 1.0 exactly.
+        // A bump to 1.1 (minor, backward-compat additions) requires updating
+        // both this test and the cross-tool compat fixtures simultaneously.
+        assert_eq!(SCHEMA_VERSION, "1.0");
     }
 
     #[test]

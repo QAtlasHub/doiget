@@ -1,7 +1,7 @@
 # 0009 - MVP source list is Tier 1 only (Crossref / Unpaywall / arXiv)
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #3
 

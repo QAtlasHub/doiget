@@ -15,24 +15,24 @@ See [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) §"ADR workflow".
 | # | Title | Status | Source Discussion |
 |---|---|---|---|
 | 0001 | MCP transport is stdio only | Accepted | #4 |
-| 0002 | TDM sources are compile-time feature-gated | Accepted | #5 |
-| 0003 | PDF content processing is permanently out of scope | Accepted | #9 |
-| 0004 | BiblioFetch.jl coexistence — shared store contract | Accepted | #1 / #2 |
-| 0005 | CapabilityProfile gates source invocation at the type level | Accepted | #16 / #17 |
-| 0006 | Provenance log is JSON Lines + SHA-256 hash chain (fail-closed) | Accepted | #12 / #17 |
-| 0007 | safekey algorithm with 100 reference test vectors | Accepted | #1 §Contract 4 / #17 |
-| 0008 | Workspace is split into doiget-core / -cli / -mcp (+ -obsidian opt) | Accepted | #14 / #18 |
-| 0009 | MVP source list is Tier 1 only (Crossref / Unpaywall / arXiv) | Accepted | #3 |
-| 0010 | Citation graph hard-cap (depth=3, total=100, per-paper=20) | Accepted | #6 |
-| 0011 | Phase plan v1 — MVP at 5 weeks, Phase 5 deferred-by-default | Accepted | #7 |
-| 0012 | MCP tool naming + structured ok-false errors | Accepted | #8 |
-| 0013 | CI baseline (9 workflows, OIDC publish, sigstore signing) | Accepted | #10 |
-| 0014 | Docs split into NORMATIVE / INFORMATIVE with ADR change-control | Accepted | #11 |
-| 0015 | No telemetry / phone-home / self-update | Accepted | #12 |
-| 0016 | Common foundation crates + deny list | Accepted | #13 |
-| 0017 | Output mode resolution (flag > env > implicit > TTY > quiet) | Accepted | #14 |
-| 0018 | Obsidian export is one-direction, optional Phase 7 | Accepted | #15 |
-| 0019 | Eight-safeguard legal posture (5 social + 3 technical) | Accepted | #16 |
+| 0002 | TDM sources are compile-time feature-gated | Proposed | #5 |
+| 0003 | PDF content processing is permanently out of scope | Proposed | #9 |
+| 0004 | BiblioFetch.jl coexistence — shared store contract | Proposed | #1 / #2 |
+| 0005 | CapabilityProfile gates source invocation at the type level | Proposed | #16 / #17 |
+| 0006 | Provenance log is JSON Lines + SHA-256 hash chain (fail-closed) | Proposed | #12 / #17 |
+| 0007 | safekey algorithm with 100 reference test vectors | Proposed | #1 §Contract 4 / #17 |
+| 0008 | Workspace is split into doiget-core / -cli / -mcp (+ -obsidian opt) | Proposed | #14 / #18 |
+| 0009 | MVP source list is Tier 1 only (Crossref / Unpaywall / arXiv) | Proposed | #3 |
+| 0010 | Citation graph hard-cap (depth=3, total=100, per-paper=20) | Proposed | #6 |
+| 0011 | Phase plan v1 — MVP at 5 weeks, Phase 5 deferred-by-default | Proposed | #7 |
+| 0012 | MCP tool naming + structured ok-false errors | Proposed | #8 |
+| 0013 | CI baseline (9 workflows, OIDC publish, sigstore signing) | Proposed | #10 |
+| 0014 | Docs split into NORMATIVE / INFORMATIVE with ADR change-control | Proposed | #11 |
+| 0015 | No telemetry / phone-home / self-update | Proposed | #12 |
+| 0016 | Common foundation crates + deny list | Proposed | #13 |
+| 0017 | Output mode resolution (flag > env > implicit > TTY > quiet) | Proposed | #14 |
+| 0018 | Obsidian export is one-direction, optional Phase 7 | Proposed | #15 |
+| 0019 | Eight-safeguard legal posture (5 social + 3 technical) | Proposed | #16 |
 
 ## Conventions
 

@@ -1,7 +1,7 @@
 # 0003 - PDF content processing is permanently out of scope
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #9
 

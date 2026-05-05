@@ -1,7 +1,7 @@
 # 0005 - CapabilityProfile gates source invocation at the type level
 
 - **Date:** 2026-05-05
-- **Status:** Accepted
+- **Status:** Proposed
 - **Supersedes:** -
 - **Source:** Discussion #16 / #17
 
