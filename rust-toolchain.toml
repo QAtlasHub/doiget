@@ -1,9 +1,12 @@
-# Pinned toolchain. MSRV is documented in README and Cargo.toml as well.
-# A minor bump here is a minor semver bump for doiget-core; see docs/PUBLIC_API.md §7.
+# Track latest stable. The declared MSRV in Cargo.toml / clippy.toml is the
+# floor the library and CLI promise to support; the `msrv` CI job pins to
+# that floor explicitly. This file pins the *active* toolchain to whatever
+# is currently stable, so transitive crate-MSRV bumps (icu_*, etc.) do not
+# break the workspace as ecosystem floors rise.
+#
+# Changing this away from "stable" requires an ADR — see docs/PUBLIC_API.md §7.
 
 [toolchain]
-channel    = "1.85"
-# 1.85 is the minimum that can parse `clap_derive 4.6+` and install
-# `cargo-audit 0.22+`. Bumped from 1.83 in the round-3 CI fix.
+channel    = "stable"
 components = ["rustfmt", "clippy"]
 profile    = "minimal"

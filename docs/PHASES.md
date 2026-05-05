@@ -39,7 +39,7 @@ Phase 0 is complete when **all** of the following are committed.
 
 - [ ] [`Cargo.toml`](../Cargo.toml) workspace + features matrix.
 - [ ] `Cargo.lock` committed.
-- [ ] [`rust-toolchain.toml`](../rust-toolchain.toml) — MSRV 1.85 pin.
+- [ ] [`rust-toolchain.toml`](../rust-toolchain.toml) — MSRV 1.86 declared (channel: stable).
 - [ ] [`deny.toml`](../deny.toml) — banned crate list.
 - [ ] [`clippy.toml`](../clippy.toml) — workspace lints.
 - [ ] [`.cargo/config.toml`](../.cargo/config.toml) — build flags.
