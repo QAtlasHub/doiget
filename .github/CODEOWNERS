@@ -1,0 +1,40 @@
+# CODEOWNERS for doiget
+#
+# GitHub auto-assigns the matching owners as required reviewers on every PR
+# that touches the listed paths (last matching pattern wins per CODEOWNERS rules).
+# NORMATIVE files require maintainer review per ADR-0014 (docs/DECISIONS/0014-docs-class-system.md).
+# This file does NOT enforce review — branch protection rules do (see PHASES.md §2 last subsection).
+
+# Default catch-all (least specific; explicit entries below override).
+*  @sotashimozono
+
+# ---- NORMATIVE docs (per docs/PHASES.md §2) ----
+/docs/LEGAL.md            @sotashimozono
+/docs/SCOPE.md            @sotashimozono
+/docs/SECURITY.md         @sotashimozono
+/docs/STORE.md            @sotashimozono
+/docs/SAFEKEY.md          @sotashimozono
+/docs/CAPABILITY.md       @sotashimozono
+/docs/PROVENANCE_LOG.md   @sotashimozono
+/docs/ERRORS.md           @sotashimozono
+/docs/CONFIG.md           @sotashimozono
+/docs/CACHE.md            @sotashimozono
+/docs/PUBLIC_API.md       @sotashimozono
+/docs/MCP_TOOLS.md        @sotashimozono
+/docs/SOURCES.md          @sotashimozono
+
+# ---- ADR directory ----
+# ADRs are append-only NORMATIVE; no in-place edits, only supersedes.
+/docs/DECISIONS/  @sotashimozono
+
+# ---- CI workflows ----
+/.github/workflows/  @sotashimozono
+
+# ---- Cargo workspace ----
+/Cargo.toml  @sotashimozono
+/Cargo.lock  @sotashimozono
+
+# ---- Crate roots ----
+/crates/doiget-core/  @sotashimozono
+/crates/doiget-cli/   @sotashimozono
+/crates/doiget-mcp/   @sotashimozono
