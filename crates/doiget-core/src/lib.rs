@@ -93,6 +93,43 @@ impl Doi {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Parses a DOI from user-supplied input.
+    ///
+    /// Strips a leading case-insensitive `doi:` URI scheme if present, then
+    /// validates the remainder against the regex
+    /// `^10\.\d{4,9}/[A-Za-z0-9._/()\-]+$` from `docs/SECURITY.md` §1.1.
+    ///
+    /// The validator is hand-written (no `regex` dep) and intentionally
+    /// uses no nested quantifiers, so it is `O(n)` and immune to ReDoS.
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    /// - [`ParseError::Empty`] when the input (after scheme stripping) is empty.
+    /// - [`ParseError::TooLong`] when the stripped length exceeds
+    ///   [`DOI_SUFFIX_MAX_LEN`] (256 chars).
+    /// - [`ParseError::InvalidFormat`] when the input does not match the
+    ///   DOI regex (e.g., wrong prefix, missing `/`, unsupported chars).
+    #[must_use = "use the returned Doi to construct a Ref"]
+    pub fn parse(input: &str) -> Result<Self, ParseError> {
+        let stripped = strip_scheme_ci(input, "doi:");
+
+        if stripped.is_empty() {
+            return Err(ParseError::Empty);
+        }
+
+        if stripped.len() > DOI_SUFFIX_MAX_LEN {
+            return Err(ParseError::TooLong {
+                actual: stripped.len(),
+                max: DOI_SUFFIX_MAX_LEN,
+            });
+        }
+
+        validate_doi_shape(stripped)?;
+
+        Ok(Doi(stripped.to_string()))
+    }
 }
 
 impl ArxivId {
@@ -100,6 +137,293 @@ impl ArxivId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Parses an arXiv identifier from user-supplied input.
+    ///
+    /// Strips a leading case-insensitive `arxiv:` URI scheme if present.
+    /// Accepts two forms (per arXiv's own ID conventions):
+    ///
+    /// - **New-style** (post-April 2007): `\d{4}\.\d{4,5}(v\d+)?` — e.g.
+    ///   `2401.12345`, `2401.12345v2`.
+    /// - **Old-style** (pre-April 2007): `[a-z\-]+/\d{7}` — e.g.
+    ///   `cond-mat/9501001`.
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    /// - [`ParseError::Empty`] when the input (after scheme stripping) is empty.
+    /// - [`ParseError::TooLong`] when the stripped length exceeds 64 chars.
+    /// - [`ParseError::InvalidFormat`] when the input matches neither form.
+    #[must_use = "use the returned ArxivId to construct a Ref"]
+    pub fn parse(input: &str) -> Result<Self, ParseError> {
+        const ARXIV_MAX_LEN: usize = 64;
+
+        let stripped = strip_scheme_ci(input, "arxiv:");
+
+        if stripped.is_empty() {
+            return Err(ParseError::Empty);
+        }
+
+        if stripped.len() > ARXIV_MAX_LEN {
+            return Err(ParseError::TooLong {
+                actual: stripped.len(),
+                max: ARXIV_MAX_LEN,
+            });
+        }
+
+        validate_arxiv_shape(stripped)?;
+
+        Ok(ArxivId(stripped.to_string()))
+    }
+}
+
+impl Ref {
+    /// Parses a `Ref` from user-supplied input.
+    ///
+    /// Tries [`Doi::parse`] first; on failure falls back to [`ArxivId::parse`].
+    /// Per `docs/SAFEKEY.md` §3 step 0, this is the single chokepoint that
+    /// strips `doi:` / `arxiv:` URI schemes — the inner [`Doi`] / [`ArxivId`]
+    /// stored in the resulting variant is the bare identifier, which is what
+    /// the safekey algorithm expects.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError::InvalidFormat`] if the input matches neither
+    /// the DOI regex nor either arXiv form. Length-based errors from the
+    /// inner parsers are surfaced as [`ParseError::TooLong`].
+    #[must_use = "use the returned Ref to call .safekey() or feed a Source"]
+    pub fn parse(input: &str) -> Result<Self, ParseError> {
+        match Doi::parse(input) {
+            Ok(d) => Ok(Ref::Doi(d)),
+            Err(doi_err) => match ArxivId::parse(input) {
+                Ok(a) => Ok(Ref::Arxiv(a)),
+                Err(arxiv_err) => {
+                    // Surface a length error if either inner parser saw one;
+                    // otherwise report a unified "neither DOI nor arXiv" hint.
+                    match (doi_err, arxiv_err) {
+                        (ParseError::TooLong { actual, max }, _)
+                        | (_, ParseError::TooLong { actual, max }) => {
+                            Err(ParseError::TooLong { actual, max })
+                        }
+                        (ParseError::Empty, ParseError::Empty) => Err(ParseError::Empty),
+                        _ => Err(ParseError::InvalidFormat {
+                            hint: "input is neither a valid DOI nor an arXiv id",
+                        }),
+                    }
+                }
+            },
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ParseError
+// ---------------------------------------------------------------------------
+
+/// Errors returned by [`Doi::parse`], [`ArxivId::parse`], and [`Ref::parse`].
+///
+/// Marked `#[non_exhaustive]` so adding new variants is a minor (not major)
+/// version bump. Pattern-match with a wildcard arm.
+///
+/// The `hint` carried by [`ParseError::InvalidFormat`] is a `&'static str` —
+/// validator code never embeds attacker-controlled input into this string,
+/// so logging a `ParseError` cannot inject CR/LF or control chars
+/// (see `docs/SECURITY.md` §1.1, log-injection row).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ParseError {
+    /// Input was empty (or contained only the URI scheme prefix).
+    #[error("ref input is empty")]
+    Empty,
+    /// Input exceeded the per-form maximum length.
+    #[error("ref input is too long: {actual} chars (max {max})")]
+    TooLong {
+        /// Length of the offending input, in bytes / ASCII chars.
+        actual: usize,
+        /// Per-form maximum length.
+        max: usize,
+    },
+    /// Input did not match the expected DOI / arXiv shape.
+    #[error("ref input has invalid format: {hint}")]
+    InvalidFormat {
+        /// Static, log-injection-safe hint describing the validation failure.
+        hint: &'static str,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Validators (hand-written; no `regex` dep, see Cargo.toml workspace deps)
+// ---------------------------------------------------------------------------
+
+/// If `input` starts with `scheme` (compared case-insensitively, ASCII only),
+/// return the remainder; otherwise return `input` unchanged.
+///
+/// `scheme` MUST be all-lowercase ASCII (e.g. `"doi:"`, `"arxiv:"`).
+fn strip_scheme_ci<'a>(input: &'a str, scheme: &str) -> &'a str {
+    debug_assert!(
+        scheme.bytes().all(|b| b.is_ascii_lowercase() || b == b':'),
+        "scheme must be lowercase ASCII"
+    );
+    if input.len() < scheme.len() {
+        return input;
+    }
+    let (head, rest) = input.split_at(scheme.len());
+    if head.eq_ignore_ascii_case(scheme) {
+        rest
+    } else {
+        input
+    }
+}
+
+/// Validates `s` against `^10\.\d{4,9}/[A-Za-z0-9._/()\-]+$` from
+/// `docs/SECURITY.md` §1.1. Single-pass, no backtracking, no nested
+/// quantifiers — `O(n)`.
+fn validate_doi_shape(s: &str) -> Result<(), ParseError> {
+    let bytes = s.as_bytes();
+
+    // Must start with "10."
+    if !bytes.starts_with(b"10.") {
+        return Err(ParseError::InvalidFormat {
+            hint: "DOI must start with '10.'",
+        });
+    }
+
+    // 4..=9 digits after "10."
+    let digits_start = 3;
+    let mut i = digits_start;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    let digit_count = i - digits_start;
+    if !(4..=9).contains(&digit_count) {
+        return Err(ParseError::InvalidFormat {
+            hint: "DOI registrant must be 4-9 digits after '10.'",
+        });
+    }
+
+    // Followed by '/'
+    if i >= bytes.len() || bytes[i] != b'/' {
+        return Err(ParseError::InvalidFormat {
+            hint: "DOI must contain '/' between registrant and suffix",
+        });
+    }
+    i += 1;
+
+    // Suffix: one or more chars from [A-Za-z0-9._/()-]
+    if i >= bytes.len() {
+        return Err(ParseError::InvalidFormat {
+            hint: "DOI suffix must be non-empty",
+        });
+    }
+    while i < bytes.len() {
+        let b = bytes[i];
+        let ok = b.is_ascii_alphanumeric()
+            || matches!(b, b'.' | b'_' | b'/' | b'(' | b')' | b'-');
+        if !ok {
+            return Err(ParseError::InvalidFormat {
+                hint: "DOI suffix contains an unsupported character",
+            });
+        }
+        i += 1;
+    }
+
+    Ok(())
+}
+
+/// Validates `s` against either the new-style or old-style arXiv id form.
+fn validate_arxiv_shape(s: &str) -> Result<(), ParseError> {
+    if is_new_style_arxiv(s) || is_old_style_arxiv(s) {
+        Ok(())
+    } else {
+        Err(ParseError::InvalidFormat {
+            hint: "arXiv id must be NNNN.NNNNN[vN] or category/NNNNNNN",
+        })
+    }
+}
+
+/// New-style: `\d{4}\.\d{4,5}(v\d+)?`.
+fn is_new_style_arxiv(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+
+    // 4 digits
+    if bytes.len() < 4 {
+        return false;
+    }
+    for _ in 0..4 {
+        if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+            return false;
+        }
+        i += 1;
+    }
+
+    // '.'
+    if i >= bytes.len() || bytes[i] != b'.' {
+        return false;
+    }
+    i += 1;
+
+    // 4..=5 digits
+    let digits_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    let dcount = i - digits_start;
+    if !(4..=5).contains(&dcount) {
+        return false;
+    }
+
+    // Optional `v\d+`
+    if i == bytes.len() {
+        return true;
+    }
+    if bytes[i] != b'v' {
+        return false;
+    }
+    i += 1;
+    let v_digits_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i - v_digits_start == 0 {
+        return false;
+    }
+
+    // Must be at end now.
+    i == bytes.len()
+}
+
+/// Old-style: `[a-z\-]+/\d{7}`.
+fn is_old_style_arxiv(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+
+    // 1+ lowercase letters or '-'
+    let cat_start = i;
+    while i < bytes.len() && (bytes[i].is_ascii_lowercase() || bytes[i] == b'-') {
+        i += 1;
+    }
+    if i == cat_start {
+        return false;
+    }
+
+    // '/'
+    if i >= bytes.len() || bytes[i] != b'/' {
+        return false;
+    }
+    i += 1;
+
+    // Exactly 7 digits
+    let d_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i - d_start != 7 {
+        return false;
+    }
+
+    // End of string.
+    i == bytes.len()
 }
 
 // ---------------------------------------------------------------------------
@@ -560,6 +884,260 @@ mod tests {
             parsed.vectors.len(),
             failures.join("\n")
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Doi/ArxivId/Ref::parse — Phase 1 constructors.
+    // Spec sources: docs/SECURITY.md §1.1 (DOI regex, length cap),
+    // docs/SAFEKEY.md §3 step 0 (Ref::parse strips URI scheme).
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn parse_doi_strips_scheme() {
+        let d = Doi::parse("doi:10.1234/example").expect("valid prefixed DOI");
+        assert_eq!(d.as_str(), "10.1234/example");
+    }
+
+    #[test]
+    fn parse_doi_strips_scheme_case_insensitive() {
+        let d = Doi::parse("DOI:10.1234/example").expect("valid prefixed DOI (uppercase)");
+        assert_eq!(d.as_str(), "10.1234/example");
+        let d2 = Doi::parse("Doi:10.1234/example").expect("valid prefixed DOI (mixed case)");
+        assert_eq!(d2.as_str(), "10.1234/example");
+    }
+
+    #[test]
+    fn parse_doi_accepts_bare() {
+        let d = Doi::parse("10.1103/PhysRevLett.130.200601").expect("valid bare DOI");
+        assert_eq!(d.as_str(), "10.1103/PhysRevLett.130.200601");
+    }
+
+    #[test]
+    fn parse_doi_accepts_full_punctuation_set() {
+        // Suffix exercising every char class in the regex char class:
+        // [A-Za-z0-9._/()-]
+        let d = Doi::parse("10.1016/S0370-1573(98)00122-3").expect("valid DOI with parens/dashes");
+        assert_eq!(d.as_str(), "10.1016/S0370-1573(98)00122-3");
+    }
+
+    #[test]
+    fn parse_doi_rejects_empty() {
+        assert_eq!(Doi::parse(""), Err(ParseError::Empty));
+        // doi:-only is also empty after stripping.
+        assert_eq!(Doi::parse("doi:"), Err(ParseError::Empty));
+    }
+
+    #[test]
+    fn parse_doi_rejects_too_long() {
+        // DOI_SUFFIX_MAX_LEN = 256. Build a stripped length of 257.
+        // "10.1234/" is 8 chars; pad with 'a' to reach 257.
+        let suffix = "a".repeat(257 - 8);
+        let raw = format!("10.1234/{}", suffix);
+        assert_eq!(raw.len(), 257);
+        match Doi::parse(&raw) {
+            Err(ParseError::TooLong { actual, max }) => {
+                assert_eq!(actual, 257);
+                assert_eq!(max, DOI_SUFFIX_MAX_LEN);
+            }
+            other => panic!("expected TooLong, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_doi_rejects_no_slash() {
+        match Doi::parse("10.1234example") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_doi_rejects_bad_prefix() {
+        match Doi::parse("9.1234/x") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat for non-'10.' prefix, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_doi_rejects_short_registrant() {
+        // Registrant must be 4..=9 digits. "10.123/x" has only 3.
+        match Doi::parse("10.123/x") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat for 3-digit registrant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_doi_rejects_long_registrant() {
+        // 10 digits is one over the max.
+        match Doi::parse("10.1234567890/x") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat for 10-digit registrant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_doi_rejects_empty_suffix() {
+        match Doi::parse("10.1234/") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat for empty suffix, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_doi_rejects_unsupported_suffix_char() {
+        // Space is not in [A-Za-z0-9._/()-].
+        match Doi::parse("10.1234/foo bar") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat for space in suffix, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_arxiv_new_style_bare() {
+        let a = ArxivId::parse("2401.12345").expect("valid new-style arXiv id");
+        assert_eq!(a.as_str(), "2401.12345");
+    }
+
+    #[test]
+    fn parse_arxiv_new_style_with_version() {
+        let a = ArxivId::parse("2401.12345v2").expect("valid new-style arXiv id with version");
+        assert_eq!(a.as_str(), "2401.12345v2");
+        let a2 = ArxivId::parse("2401.12345v10").expect("valid new-style arXiv id v10");
+        assert_eq!(a2.as_str(), "2401.12345v10");
+    }
+
+    #[test]
+    fn parse_arxiv_new_style_4_digit_seq() {
+        // 4-digit sequence number (pre-2015 new-style).
+        let a = ArxivId::parse("0704.1234").expect("valid new-style arXiv id (4-digit seq)");
+        assert_eq!(a.as_str(), "0704.1234");
+    }
+
+    #[test]
+    fn parse_arxiv_strips_scheme() {
+        let a = ArxivId::parse("arxiv:2401.12345").expect("valid prefixed arXiv id");
+        assert_eq!(a.as_str(), "2401.12345");
+        let a2 = ArxivId::parse("ArXiv:2401.12345").expect("mixed-case scheme");
+        assert_eq!(a2.as_str(), "2401.12345");
+    }
+
+    #[test]
+    fn parse_arxiv_old_style() {
+        let a = ArxivId::parse("cond-mat/9501001").expect("valid old-style arXiv id");
+        assert_eq!(a.as_str(), "cond-mat/9501001");
+        let a2 = ArxivId::parse("hep-th/0001001").expect("valid hep-th old-style");
+        assert_eq!(a2.as_str(), "hep-th/0001001");
+    }
+
+    #[test]
+    fn parse_arxiv_rejects_empty() {
+        assert_eq!(ArxivId::parse(""), Err(ParseError::Empty));
+        assert_eq!(ArxivId::parse("arxiv:"), Err(ParseError::Empty));
+    }
+
+    #[test]
+    fn parse_arxiv_rejects_too_long() {
+        let long = "a".repeat(65);
+        match ArxivId::parse(&long) {
+            Err(ParseError::TooLong { actual, max }) => {
+                assert_eq!(actual, 65);
+                assert_eq!(max, 64);
+            }
+            other => panic!("expected TooLong, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_arxiv_rejects_malformed_new_style() {
+        // 3-digit prefix.
+        match ArxivId::parse("240.12345") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat, got {:?}", other),
+        }
+        // Too few suffix digits.
+        match ArxivId::parse("2401.123") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat, got {:?}", other),
+        }
+        // Trailing 'v' with no digits.
+        match ArxivId::parse("2401.12345v") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat, got {:?}", other),
+        }
+        // Trailing junk after version.
+        match ArxivId::parse("2401.12345v2x") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_arxiv_rejects_malformed_old_style() {
+        // 6 digits instead of 7.
+        match ArxivId::parse("cond-mat/950100") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat, got {:?}", other),
+        }
+        // Uppercase in category.
+        match ArxivId::parse("Cond-mat/9501001") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat, got {:?}", other),
+        }
+        // Empty category.
+        match ArxivId::parse("/9501001") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_ref_chooses_doi_for_doi_input() {
+        let r = Ref::parse("doi:10.1234/example").expect("valid DOI input");
+        match r {
+            Ref::Doi(d) => assert_eq!(d.as_str(), "10.1234/example"),
+            Ref::Arxiv(_) => panic!("expected Doi variant"),
+        }
+        // Bare DOI also routes to Doi.
+        let r2 = Ref::parse("10.1103/PhysRevLett.130.200601").expect("valid bare DOI");
+        assert!(matches!(r2, Ref::Doi(_)));
+    }
+
+    #[test]
+    fn parse_ref_chooses_arxiv_for_arxiv_input() {
+        let r = Ref::parse("arxiv:2401.12345").expect("valid arXiv input");
+        match r {
+            Ref::Arxiv(a) => assert_eq!(a.as_str(), "2401.12345"),
+            Ref::Doi(_) => panic!("expected Arxiv variant"),
+        }
+        // Bare new-style.
+        let r2 = Ref::parse("2401.12345v2").expect("valid bare arXiv id");
+        assert!(matches!(r2, Ref::Arxiv(_)));
+        // Old-style.
+        let r3 = Ref::parse("cond-mat/9501001").expect("valid old-style arXiv id");
+        assert!(matches!(r3, Ref::Arxiv(_)));
+    }
+
+    #[test]
+    fn parse_ref_rejects_garbage() {
+        match Ref::parse("not a ref at all") {
+            Err(ParseError::InvalidFormat { .. }) => {}
+            other => panic!("expected InvalidFormat, got {:?}", other),
+        }
+        assert_eq!(Ref::parse(""), Err(ParseError::Empty));
+    }
+
+    #[test]
+    fn parse_ref_then_safekey_round_trip() {
+        // The motivating use case from the PR description: parse strips the
+        // URI scheme so safekey adds the prefix exactly once (per
+        // docs/SAFEKEY.md §3 step 0).
+        let r = Ref::parse("doi:10.1234/example").expect("valid prefixed DOI");
+        assert_eq!(r.safekey().as_str(), "doi_10.1234_example");
+
+        let r2 = Ref::parse("arxiv:2401.12345").expect("valid prefixed arXiv id");
+        assert_eq!(r2.safekey().as_str(), "arxiv_2401.12345");
     }
 
     #[test]
