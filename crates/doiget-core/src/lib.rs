@@ -739,60 +739,210 @@ pub enum CapabilityError {
 impl CapabilityProfile {
     /// Read the runtime profile from environment variables.
     ///
-    /// **Phase 0 stub.** Returns a Tier-1-only profile and emits a `tracing::warn!`
-    /// breadcrumb so that any environment with TDM env vars set will surface
-    /// loudly in CI / logs as "Phase 0 stub did not honor your TDM env vars".
-    /// Phase 1 must replace this body with the resolution algorithm specified
-    /// in `docs/CAPABILITY.md` §2 and exercise both `CapabilityError` variants
-    /// in tests.
+    /// Implements the resolution algorithm specified in
+    /// [`docs/CAPABILITY.md`](../../../docs/CAPABILITY.md) §2.
+    ///
+    /// # Tier 1 (Open Access)
+    ///
+    /// Always permitted; not gated on any env var or feature.
+    ///
+    /// # Tier 2 (metadata)
+    ///
+    /// Each metadata source becomes available when its env var is set
+    /// (presence-checked, value ignored) **and** the `metadata` Cargo feature
+    /// was compiled in. If the env var is set but the feature is not compiled
+    /// in, a `tracing::warn!` is emitted and the source is left disabled —
+    /// this is not an error so that users can move binaries between machines
+    /// (or switch feature sets between cargo invocations) without breaking
+    /// startup. See `docs/CAPABILITY.md` §3 for the env var list.
+    ///
+    /// # Tier 3 (TDM)
+    ///
+    /// For each publisher in `{ELSEVIER, APS, SPRINGER}`, the
+    /// `DOIGET_AGREE_TDM_<X>` agreement env var is paired with
+    /// `DOIGET_KEY_<X>`. Resolution rules (per `docs/CAPABILITY.md` §2):
+    ///
+    /// - both unset → `tdm_<x> = None` (no error);
+    /// - `agree == "1"` and key set → `Some(TdmGrant { .. })` (subject to the
+    ///   feature gate below);
+    /// - `agree == "1"` and key unset → [`CapabilityError::AgreedButNoKey`];
+    /// - key set but `agree` unset (or `agree != "1"`) →
+    ///   [`CapabilityError::KeyButNotAgreed`].
+    ///
+    /// When both env vars are set correctly **but** the corresponding
+    /// `tdm-<x>` Cargo feature is not compiled in, this function emits a
+    /// `tracing::warn!` and sets the grant to `None` rather than returning an
+    /// error — same rationale as for the Tier 2 warn-and-skip behavior.
     ///
     /// # Precondition: tracing subscriber must be installed first
     ///
-    /// The Phase-0 audit signal is delivered via `tracing::warn!`. Callers
-    /// MUST install a `tracing-subscriber` (or equivalent) **before** invoking
-    /// this function, otherwise the warn is silently dropped and a
-    /// misconfigured user will see no signal that their TDM env vars were
-    /// ignored. The `doiget-cli` binary already does this in `main.rs`.
+    /// Warn breadcrumbs are delivered via `tracing::warn!`. Callers MUST
+    /// install a `tracing-subscriber` (or equivalent) **before** invoking
+    /// this function, otherwise warnings are silently dropped. The
+    /// `doiget-cli` binary does this in `main.rs`.
     ///
-    /// # Warn message format (for log filtering)
+    /// # Errors
     ///
-    /// Each detected env var emits a `WARN`-level event with structured field
-    /// `env_var = "<NAME>"` and a message starting with
-    /// `"doiget-core Phase 0 stub: <NAME> is set but env-driven \
-    ///  CapabilityProfile resolution is not implemented yet."`.
-    /// Grep your log aggregator for `env_var=DOIGET_AGREE_TDM_*` to surface
-    /// affected sessions.
+    /// Returns [`CapabilityError::AgreedButNoKey`] or
+    /// [`CapabilityError::KeyButNotAgreed`] when the TDM env-var pair for any
+    /// publisher is misconfigured. See the variant docs for the precise
+    /// trigger conditions.
+    ///
+    /// # Note on `api_key` storage
+    ///
+    /// The [`TdmGrant`] struct does not yet carry an `api_key` field — it is
+    /// a marker that the user agreed and supplied a key, but the key value is
+    /// not threaded through `CapabilityProfile` at this phase. Sources that
+    /// need the key read it from the same env var directly. See the
+    /// [`TdmGrant`] doc-comment for the rationale and roadmap.
     pub fn from_env() -> Result<Self, CapabilityError> {
-        // Detect any Phase-1-relevant env var and warn loudly. This is
-        // intentionally not a hard error in Phase 0 so that local development
-        // and CI can run before Phase 1 resolution lands.
-        for var in [
+        // TODO Phase 1+: thread api_key through TdmGrant. The key would be
+        // read here and stored as `secrecy::Secret<String>`; deferred for now
+        // because adding a field to `TdmGrant` requires a coordinated
+        // `secrecy` design (the dep is `optional = true` and only compiled in
+        // under `tdm-*` features). See the `TdmGrant` doc-comment above and
+        // `docs/CAPABILITY.md` §1.
+
+        // -- Tier 2 metadata -------------------------------------------------
+        let metadata = MetadataAccess {
+            openalex: resolve_metadata_flag(
+                "DOIGET_ENABLE_OPENALEX",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            semantic_scholar: resolve_metadata_flag(
+                "DOIGET_ENABLE_S2",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            doaj: resolve_metadata_flag(
+                "DOIGET_ENABLE_DOAJ",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+        };
+
+        // -- Tier 3 TDM grants ----------------------------------------------
+        let tdm_elsevier = resolve_tdm_grant(
             "DOIGET_AGREE_TDM_ELSEVIER",
-            "DOIGET_AGREE_TDM_APS",
-            "DOIGET_AGREE_TDM_SPRINGER",
             "DOIGET_KEY_ELSEVIER",
+            "tdm-elsevier",
+            cfg!(feature = "tdm-elsevier"),
+        )?;
+        let tdm_aps = resolve_tdm_grant(
+            "DOIGET_AGREE_TDM_APS",
             "DOIGET_KEY_APS",
+            "tdm-aps",
+            cfg!(feature = "tdm-aps"),
+        )?;
+        let tdm_springer = resolve_tdm_grant(
+            "DOIGET_AGREE_TDM_SPRINGER",
             "DOIGET_KEY_SPRINGER",
-        ] {
-            if std::env::var_os(var).is_some() {
-                tracing::warn!(
-                    env_var = var,
-                    "doiget-core Phase 0 stub: {} is set but env-driven \
-                     CapabilityProfile resolution is not implemented yet. \
-                     The TDM source will be silently disabled. Track in \
-                     docs/PHASES.md and ADR-0005.",
-                    var
-                );
-            }
-        }
+            "tdm-springer",
+            cfg!(feature = "tdm-springer"),
+        )?;
+
         Ok(Self {
             oa: AlwaysOn,
-            metadata: MetadataAccess::default(),
-            tdm_elsevier: None,
-            tdm_aps: None,
-            tdm_springer: None,
+            metadata,
+            tdm_elsevier,
+            tdm_aps,
+            tdm_springer,
             rate_limits: RateLimits::HARD_CODED,
         })
+    }
+}
+
+/// Resolve a Tier 2 metadata flag from its env var and compile-in feature.
+///
+/// Returns `true` only when both the env var is present and the feature is
+/// compiled in. When the env var is set without the feature, emits a
+/// `tracing::warn!` and returns `false` — see [`CapabilityProfile::from_env`]
+/// for the rationale (binaries may move between hosts / feature sets).
+fn resolve_metadata_flag(env_var: &str, feature: &str, feature_enabled: bool) -> bool {
+    let env_set = std::env::var_os(env_var).is_some();
+    match (env_set, feature_enabled) {
+        (true, true) => true,
+        (true, false) => {
+            tracing::warn!(
+                env_var,
+                feature,
+                "{} is set but feature {} was not compiled in; the source will be unavailable",
+                env_var,
+                feature
+            );
+            false
+        }
+        (false, _) => false,
+    }
+}
+
+/// Resolve a Tier 3 TDM grant from the `agree`/`key` env-var pair and the
+/// per-publisher Cargo feature.
+///
+/// Implements the rules in `docs/CAPABILITY.md` §2:
+///
+/// - both unset → `Ok(None)`.
+/// - `agree == "1"` and `key` set → `Ok(Some(TdmGrant { .. }))` (when the
+///   feature is enabled), or warn-and-`Ok(None)` (when the feature is not
+///   compiled in).
+/// - `agree == "1"` and `key` unset →
+///   [`CapabilityError::AgreedButNoKey`].
+/// - `key` set and `agree` unset OR `agree` set to anything other than `"1"`
+///   → [`CapabilityError::KeyButNotAgreed`].
+fn resolve_tdm_grant(
+    agree_var: &str,
+    key_var: &str,
+    feature: &str,
+    feature_enabled: bool,
+) -> Result<Option<TdmGrant>, CapabilityError> {
+    // `agree` is "agreed" iff the value is exactly the literal "1"; any other
+    // value (including "true", "yes", empty) is treated as not-agreed per
+    // `docs/CAPABILITY.md` §2.
+    let agree_raw = std::env::var(agree_var).ok();
+    let agreed = matches!(agree_raw.as_deref(), Some("1"));
+    let agree_present = agree_raw.is_some();
+    // The key value itself is not stored in `TdmGrant` at this phase; we only
+    // care whether it is set. See the TODO in `from_env`.
+    let key_present = std::env::var_os(key_var).is_some();
+
+    match (agreed, agree_present, key_present) {
+        (true, _, true) => {
+            if feature_enabled {
+                Ok(Some(TdmGrant {
+                    agree_env_var: agree_var.to_string(),
+                    agreed_at: chrono::Utc::now(),
+                }))
+            } else {
+                tracing::warn!(
+                    env_var = agree_var,
+                    feature,
+                    "{} is set but feature {} was not compiled in; the source will be unavailable",
+                    agree_var,
+                    feature
+                );
+                Ok(None)
+            }
+        }
+        (true, _, false) => Err(CapabilityError::AgreedButNoKey {
+            agree_var: agree_var.to_string(),
+            key_var: key_var.to_string(),
+        }),
+        // agree set to non-"1", key also set: KeyButNotAgreed (the key would
+        // otherwise authorize the source without an explicit agreement).
+        (false, true, true) => Err(CapabilityError::KeyButNotAgreed {
+            agree_var: agree_var.to_string(),
+        }),
+        // agree unset, key set: KeyButNotAgreed (same rule).
+        (false, false, true) => Err(CapabilityError::KeyButNotAgreed {
+            agree_var: agree_var.to_string(),
+        }),
+        // agree set to non-"1" and no key: treat as no-grant. The user
+        // expressed something but did not opt in and provided no credential,
+        // so silent skip is the safe default (no source enabled).
+        (false, true, false) => Ok(None),
+        // Neither env var set: no grant, no error.
+        (false, false, false) => Ok(None),
     }
 }
 
@@ -835,16 +985,203 @@ mod tests {
         assert_eq!(SCHEMA_VERSION, "1.0");
     }
 
+    // -----------------------------------------------------------------
+    // CapabilityProfile::from_env — Phase 1 resolution algorithm tests.
+    //
+    // These tests mutate process-global env state via std::env::set_var /
+    // remove_var, so each test holds an `EnvGuard` RAII drop guard that
+    // captures the pre-test value of every env var it touches and restores
+    // it on drop (even on panic). They also use `#[serial_test::serial]` so
+    // that no two tests in this module touch env state concurrently — the
+    // workspace's test runner defaults to multi-threaded.
+    //
+    // Spec: docs/CAPABILITY.md §2 (resolution algorithm) and §3 (env var
+    // reference table).
+    // -----------------------------------------------------------------
+
+    /// RAII guard that captures the prior value of an env var on construction
+    /// and restores it on drop. Use one guard per touched var per test.
+    struct EnvGuard {
+        var: &'static str,
+        prior: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        /// Capture and clear `var`. Use `set` afterwards to install a value.
+        fn unset(var: &'static str) -> Self {
+            let prior = std::env::var_os(var);
+            // SAFETY (env mutation): tests are serialized via
+            // `#[serial_test::serial]`. `remove_var` is sound when no other
+            // thread reads or writes the environment concurrently.
+            std::env::remove_var(var);
+            EnvGuard { var, prior }
+        }
+
+        /// Capture, then set `var` to `value`.
+        fn set(var: &'static str, value: &str) -> Self {
+            let prior = std::env::var_os(var);
+            std::env::set_var(var, value);
+            EnvGuard { var, prior }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(v) => std::env::set_var(self.var, v),
+                None => std::env::remove_var(self.var),
+            }
+        }
+    }
+
+    /// Convenience: unset every Tier 2 / Tier 3 env var the resolution
+    /// algorithm reads, returning a vector of guards that restore them on
+    /// drop. Callers can then `EnvGuard::set` individual vars on top.
+    fn unset_all_capability_env_vars() -> Vec<EnvGuard> {
+        [
+            "DOIGET_ENABLE_OPENALEX",
+            "DOIGET_ENABLE_S2",
+            "DOIGET_ENABLE_DOAJ",
+            "DOIGET_AGREE_TDM_ELSEVIER",
+            "DOIGET_KEY_ELSEVIER",
+            "DOIGET_AGREE_TDM_APS",
+            "DOIGET_KEY_APS",
+            "DOIGET_AGREE_TDM_SPRINGER",
+            "DOIGET_KEY_SPRINGER",
+        ]
+        .iter()
+        .map(|v| EnvGuard::unset(v))
+        .collect()
+    }
+
     #[test]
-    fn capability_profile_from_env_is_tier_1_only_in_phase_0() {
-        // Phase 0 stub guarantee: TDM is never enabled regardless of env vars.
-        // Phase 1 must update this test to cover the real resolution algorithm
-        // (including AgreedButNoKey / KeyButNotAgreed Err branches).
-        let p = CapabilityProfile::from_env().expect("Phase 0 stub never errors");
+    #[serial_test::serial]
+    fn from_env_no_env_vars_set_returns_tier_1_only() {
+        // Rule: with every relevant env var unset, the resolved profile has
+        // all TDM grants `None` and all metadata flags `false`. Hard-coded
+        // rate limits still apply. (Replaces the old Phase 0 stub test.)
+        let _g = unset_all_capability_env_vars();
+
+        let p = CapabilityProfile::from_env().expect("clean env never errors");
         assert!(p.tdm_elsevier.is_none());
         assert!(p.tdm_aps.is_none());
         assert!(p.tdm_springer.is_none());
+        assert!(!p.metadata.openalex);
+        assert!(!p.metadata.semantic_scholar);
+        assert!(!p.metadata.doaj);
         assert_eq!(p.rate_limits.max_concurrent_fetches(), 5);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn from_env_no_tdm_returns_tier_1_profile() {
+        // Rule (CAPABILITY.md §2): with every TDM env var unset, all
+        // `tdm_*` fields are `None` and no error is produced.
+        let _g = unset_all_capability_env_vars();
+
+        let p = CapabilityProfile::from_env().expect("no TDM env -> Ok");
+        assert!(p.tdm_elsevier.is_none());
+        assert!(p.tdm_aps.is_none());
+        assert!(p.tdm_springer.is_none());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn from_env_agreed_but_no_key_errs() {
+        // Rule (CAPABILITY.md §2): agree=1 + key unset -> AgreedButNoKey.
+        let _g = unset_all_capability_env_vars();
+        let _agree = EnvGuard::set("DOIGET_AGREE_TDM_ELSEVIER", "1");
+
+        let result = CapabilityProfile::from_env();
+        match result {
+            Err(CapabilityError::AgreedButNoKey { agree_var, key_var }) => {
+                assert_eq!(agree_var, "DOIGET_AGREE_TDM_ELSEVIER");
+                assert_eq!(key_var, "DOIGET_KEY_ELSEVIER");
+            }
+            other => panic!("expected AgreedButNoKey, got {:?}", other),
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn from_env_key_but_not_agreed_errs() {
+        // Rule (CAPABILITY.md §2): key set + agree unset -> KeyButNotAgreed.
+        // A leaked DOIGET_KEY_ELSEVIER must not silently enable a source.
+        let _g = unset_all_capability_env_vars();
+        let _key = EnvGuard::set("DOIGET_KEY_ELSEVIER", "sk-test");
+
+        let result = CapabilityProfile::from_env();
+        match result {
+            Err(CapabilityError::KeyButNotAgreed { agree_var }) => {
+                assert_eq!(agree_var, "DOIGET_AGREE_TDM_ELSEVIER");
+            }
+            other => panic!("expected KeyButNotAgreed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn from_env_agree_not_one_errs() {
+        // Rule (CAPABILITY.md §2): the agree var must be exactly "1". Any
+        // other value (here: "true") is treated as not-agreed; combined
+        // with a key set, that triggers KeyButNotAgreed.
+        let _g = unset_all_capability_env_vars();
+        let _agree = EnvGuard::set("DOIGET_AGREE_TDM_ELSEVIER", "true");
+        let _key = EnvGuard::set("DOIGET_KEY_ELSEVIER", "sk-test");
+
+        let result = CapabilityProfile::from_env();
+        match result {
+            Err(CapabilityError::KeyButNotAgreed { agree_var }) => {
+                assert_eq!(agree_var, "DOIGET_AGREE_TDM_ELSEVIER");
+            }
+            other => panic!("expected KeyButNotAgreed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn from_env_both_set_correctly_returns_grant() {
+        // Rule (CAPABILITY.md §2): agree=1 + key set -> Some(TdmGrant) when
+        // the corresponding feature is compiled in; else None (warn-and-skip).
+        // The feature gate for elsevier is `tdm-elsevier`; this test asserts
+        // both branches via `cfg!`.
+        let _g = unset_all_capability_env_vars();
+        let _agree = EnvGuard::set("DOIGET_AGREE_TDM_ELSEVIER", "1");
+        let _key = EnvGuard::set("DOIGET_KEY_ELSEVIER", "sk-test");
+
+        let p = CapabilityProfile::from_env().expect("agree=1 + key -> Ok");
+
+        if cfg!(feature = "tdm-elsevier") {
+            let grant = p
+                .tdm_elsevier
+                .as_ref()
+                .expect("feature tdm-elsevier compiled in -> Some(TdmGrant)");
+            assert_eq!(grant.agree_env_var, "DOIGET_AGREE_TDM_ELSEVIER");
+        } else {
+            assert!(
+                p.tdm_elsevier.is_none(),
+                "feature tdm-elsevier NOT compiled in -> None (warn-and-skip)"
+            );
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn from_env_metadata_env_warns_without_feature() {
+        // Rule (CAPABILITY.md §2): metadata env var without the `metadata`
+        // feature -> source disabled (warn-and-skip, not an error).
+        // We don't capture the tracing warn here; we just assert the field
+        // is `false` when the feature is absent and `true` when present.
+        let _g = unset_all_capability_env_vars();
+        let _enable = EnvGuard::set("DOIGET_ENABLE_OPENALEX", "1");
+
+        let p = CapabilityProfile::from_env().expect("metadata env never errors");
+
+        if cfg!(feature = "metadata") {
+            assert!(p.metadata.openalex);
+        } else {
+            assert!(!p.metadata.openalex);
+        }
     }
 
     // -----------------------------------------------------------------
