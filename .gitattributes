@@ -1,0 +1,37 @@
+# Enforce LF line endings across the repo to prevent CRLF drift on Windows checkouts.
+# Added per Phase 0 hygiene cleanup (Wave 1 agent feedback flagged CRLF warnings on Windows commits).
+
+# Catch-all default: detect text vs binary, normalize text to LF in-tree.
+* text=auto eol=lf
+
+# Source / config — explicit LF
+*.rs            text eol=lf
+*.toml          text eol=lf
+*.json          text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.md            text eol=lf
+*.sh            text eol=lf
+*.lock          text eol=lf
+Cargo.lock      text eol=lf
+Cargo.toml      text eol=lf
+*.cargo/config.toml text eol=lf
+
+# Windows-script files keep CRLF (cmd.exe / batch interpreters require it).
+# PowerShell stays LF — modern pwsh handles LF fine on linux/macos checkouts.
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=lf
+
+# Binary assets — never normalize, never diff as text.
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.pdf           binary
+*.zip           binary
+*.tar.gz        binary
+*.ico           binary
+
+# Lockfile diff suppression in PRs (still tracked + LF-normalized; only inline diff hidden).
+Cargo.lock      -diff
+Cargo.lock      linguist-generated=true
