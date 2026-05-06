@@ -41,17 +41,28 @@ serde_json         = { workspace = true }
 # `ResolvedConfig`'s `Utf8PathBuf` fields serialize for `config show`.
 camino             = { workspace = true, features = ["serde1"] }
 chrono             = { workspace = true }
-# `doiget config` introspection — TOML serialization for `config show` and
-# cross-platform $HOME / $XDG_CONFIG_HOME / %APPDATA% resolution.
-# Also used by `doiget info` to re-serialize Metadata for stdout.
+# TOML serialization for `config show`, `info`, and metadata round-trip.
 toml               = { workspace = true }
+# Cross-platform $HOME / $XDG_CONFIG_HOME / %APPDATA% resolution.
 dirs               = { workspace = true }
+# Session-id generation for the provenance log (`docs/PROVENANCE_LOG.md` §3
+# requires a 26-char ULID per process invocation).
+ulid               = { workspace = true }
+# URL parsing for the source-base env-var overrides
+# (`DOIGET_ARXIV_BASE` / `DOIGET_CROSSREF_BASE` / `DOIGET_UNPAYWALL_BASE`).
+url                = { workspace = true }
+# Production dep: the orchestrator stages PDF bytes to a tempfile so the
+# existing `Store::write(_, _, Some(&Utf8Path))` atomic-rename code path
+# applies (Source impls return `Bytes`, Store takes a path).
+tempfile           = { workspace = true }
 
 [dev-dependencies]
-assert_cmd  = { workspace = true }
-predicates  = { workspace = true }
-# `doiget config` tests mutate process-global env vars; serialize them.
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+# Wiremock-driven integration tests for the `doiget fetch` orchestrator
+# (`tests/fetch_arxiv_e2e.rs`). The network-purity guard in CI relies on
+# all integration tests using wiremock instead of real upstream hosts.
+wiremock    = { workspace = true }
+# Serializes tests that mutate process-global env state — used by the
+# `fetch_arxiv_e2e` test and `doiget config` tests.
 serial_test = "3"
-# `tempfile` lets `info` / `list-recent` e2e tests seed a per-test store root via
-# DOIGET_STORE_ROOT instead of mutating the user's real `~/papers/`.
-tempfile    = { workspace = true }

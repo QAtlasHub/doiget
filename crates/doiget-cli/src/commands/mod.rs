@@ -8,13 +8,15 @@
 //! ## Phase 1 surface (so far)
 //!
 //! - [`config`] — `doiget config show/path/doctor`.
+//! - [`fetch`] — `doiget fetch <ref>` orchestrator (arXiv E2E + DOI metadata-only).
 //! - [`info`] — prints a stored entry's `Metadata` as TOML on stdout.
 //! - [`list_recent`] — prints up to N most-recently-fetched entries.
 //!
-//! Other subcommands (`fetch`, `search`, `batch`, `bib`, `csl`, `audit-log`,
-//! `serve`) land in separate PRs.
+//! Other subcommands (`search`, `batch`, `bib`, `csl`, `audit-log`, `serve`)
+//! land in separate PRs.
 
 pub mod config;
+pub mod fetch;
 pub mod info;
 pub mod list_recent;
 

@@ -8,8 +8,6 @@
 //! network paths (`fetch`, `batch`, `serve`, `bib`, `csl`, `audit-log`)
 //! follow in subsequent PRs.
 
-mod commands;
-
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -79,7 +77,8 @@ enum Command {
     },
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     // Logging — strictly to stderr. See docs/SECURITY.md §3 / ADR-0001.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -92,15 +91,18 @@ fn main() -> anyhow::Result<()> {
         None => {
             anyhow::bail!("no subcommand. Run `doiget --help` for available commands.");
         }
-        Some(Command::Config { action }) => commands::config::run(action),
-        // Phase 1 read-only paths.
-        Some(Command::Info { ref_ }) => commands::info::run(ref_),
-        Some(Command::ListRecent { limit }) => commands::list_recent::run(limit),
+        // Phase 1 subcommands. All command modules live in the library half
+        // of this crate (see `src/lib.rs`) so integration tests can drive them
+        // in-process.
+        Some(Command::Config { action }) => doiget_cli::commands::config::run(action),
+        Some(Command::Info { ref_ }) => doiget_cli::commands::info::run(ref_),
+        Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit),
+        Some(Command::Fetch { ref_ }) => doiget_cli::commands::fetch::run(ref_).await,
         // Other subcommands remain Phase-1-pending; they land in their own
         // dedicated PRs to keep the diff scoped.
-        Some(_cmd) => {
+        Some(_) => {
             anyhow::bail!(
-                "doiget {}: subcommand not yet implemented in this build. \
+                "doiget {} (Phase 1): subcommand not yet implemented. \
                  See docs/PHASES.md.",
                 doiget_core::VERSION
             );
