@@ -16,6 +16,7 @@ use sha2::Digest;
 
 // --- Modules ---
 pub mod http;
+pub mod provenance;
 pub mod rate_limiter;
 
 /// Crate version. Used by `doiget-cli --version` and `doiget_health`.
