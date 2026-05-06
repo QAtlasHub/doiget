@@ -184,7 +184,7 @@ impl Ref {
     /// [`ArxivId::parse`] call. When the input has an explicit scheme
     /// (`doi:` / `arxiv:`), the matching parser is dispatched and its error
     /// surfaces directly. When the input is bare and ambiguous, the
-    /// heuristic in rule 3/4 selects the parser; an unparseable bare input
+    /// heuristic in rule 3/4 selects the parser; an unparsable bare input
     /// surfaces the arXiv parser's error (a non-`10.` ref that also fails
     /// arXiv validation is never a valid DOI).
     pub fn parse(s: &str) -> Result<Self, RefParseError> {
