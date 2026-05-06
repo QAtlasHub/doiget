@@ -175,7 +175,7 @@ mod tests {
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    use crate::http::{HttpClient, SourceAllowlist};
+    use crate::http::HttpClient;
     use crate::provenance::{LogRow, ProvenanceLog};
     use crate::rate_limiter::RateLimiter;
     use crate::source::FetchContext;
@@ -197,9 +197,7 @@ mod tests {
             Utf8PathBuf::try_from(td.path().to_path_buf()).expect("temp dir path must be UTF-8");
         let log_path = log_dir.join("test.jsonl");
 
-        let allowlist = SourceAllowlist::new("unpaywall", vec![host.to_string()]);
-        let http =
-            Arc::new(HttpClient::new_for_test_http(vec![allowlist]).expect("http client builds"));
+        let http = Arc::new(HttpClient::new_for_tests_allow_http("unpaywall", host));
         let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
         let session_id = "01J0000000000000000000TEST".to_string();
         let log = Arc::new(
