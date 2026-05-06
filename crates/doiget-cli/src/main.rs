@@ -5,8 +5,7 @@
 //!
 //! Phase 1 progressively replaces the Phase-0 bail-out per subcommand. The
 //! `config`, `info`, `list-recent`, `search`, `fetch`, `audit-log`, `batch`,
-//! and `bib` (Phase 2 starter) subcommands have landed; the remaining
-//! `serve` and `csl` paths follow in subsequent PRs.
+//! `bib`, and `csl` subcommands have landed; only `serve` remains.
 
 use clap::{Parser, Subcommand};
 
@@ -102,6 +101,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Fetch { ref_ }) => doiget_cli::commands::fetch::run(ref_).await,
         Some(Command::Batch { path }) => doiget_cli::commands::batch::run(path).await,
         Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_),
+        Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_),
         // Other subcommands remain Phase-1-pending; they land in their own
         // dedicated PRs to keep the diff scoped.
         Some(_) => {

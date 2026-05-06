@@ -12,17 +12,19 @@
 //! - [`batch`] — `doiget batch <path>` multi-ref orchestrator (rate-bounded).
 //! - [`bib`] — `doiget bib <ref>` BibTeX exporter (Phase 2 starter).
 //! - [`config`] — `doiget config show/path/doctor`.
+//! - [`csl`] — `doiget csl <ref>` exports a stored entry as CSL JSON 1.0.
 //! - [`fetch`] — `doiget fetch <ref>` orchestrator (arXiv E2E + DOI metadata-only).
 //! - [`info`] — prints a stored entry's `Metadata` as TOML on stdout.
 //! - [`list_recent`] — prints up to N most-recently-fetched entries.
 //! - [`search`] — case-insensitive substring search over stored metadata.
 //!
-//! Other subcommands (`csl`, `serve`) land in separate PRs.
+//! Other subcommands (`serve`) land in separate PRs.
 
 pub mod audit_log;
 pub mod batch;
 pub mod bib;
 pub mod config;
+pub mod csl;
 pub mod fetch;
 pub mod info;
 pub mod list_recent;
