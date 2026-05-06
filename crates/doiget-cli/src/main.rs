@@ -2,6 +2,11 @@
 //!
 //! Phase 0 ships the CLI skeleton: `doiget --help` works, and each subcommand
 //! returns a Phase-1-pending error message. Real implementations land in Phase 1+.
+//!
+//! Phase 1 progressively replaces the Phase-0 bail-out per subcommand. The
+//! `config` subcommand is the first to land — see `commands/config.rs`.
+
+mod commands;
 
 use clap::{Parser, Subcommand};
 
@@ -85,6 +90,7 @@ fn main() -> anyhow::Result<()> {
         None => {
             anyhow::bail!("no subcommand. Run `doiget --help` for available commands.");
         }
+        Some(Command::Config { action }) => commands::config::run(action),
         Some(_cmd) => {
             anyhow::bail!(
                 "doiget {} (Phase 0): subcommands are not yet implemented. \

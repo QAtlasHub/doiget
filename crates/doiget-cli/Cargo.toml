@@ -37,9 +37,19 @@ tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
-camino             = { workspace = true }
+# Enable the `serde1` feature here (workspace default omits it) so that
+# `ResolvedConfig`'s `Utf8PathBuf` fields serialize for `config show`.
+camino             = { workspace = true, features = ["serde1"] }
 chrono             = { workspace = true }
+# `doiget config` introspection — TOML serialization for `config show` and
+# cross-platform $HOME / $XDG_CONFIG_HOME / %APPDATA% resolution.
+# See docs/CONFIG.md §2 and crates/doiget-cli/src/commands/config.rs.
+toml               = { workspace = true }
+dirs               = { workspace = true }
 
 [dev-dependencies]
-assert_cmd = { workspace = true }
-predicates = { workspace = true }
+assert_cmd  = { workspace = true }
+predicates  = { workspace = true }
+# `doiget config` tests mutate process-global env vars; serialize them.
+# Same convention as `doiget-core/Cargo.toml`.
+serial_test = "3"
