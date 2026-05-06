@@ -47,6 +47,8 @@ hex         = { workspace = true }
 uuid        = { workspace = true }
 ulid        = { workspace = true }
 url         = { workspace = true }
+bytes        = { workspace = true }
+futures-util = { workspace = true }
 
 [dev-dependencies]
 wiremock   = { workspace = true }

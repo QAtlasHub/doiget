@@ -107,6 +107,11 @@ ulid = { version = "1", features = ["serde"] }
 # URL parsing — required, see docs/SECURITY.md §1.4
 url = "2"
 
+# Byte buffer + async stream combinators for streaming-with-cap body reads
+# (see crates/doiget-core/src/http.rs, docs/SECURITY.md §1.2 oversized PDF).
+bytes        = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
 # Test fixtures
 wiremock    = "0.6"
 assert_cmd  = "2"
