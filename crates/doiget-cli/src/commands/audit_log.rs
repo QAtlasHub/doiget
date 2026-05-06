@@ -1,0 +1,238 @@
+//! `doiget audit-log --verify` — re-validate the SHA-256 hash chain.
+//!
+//! The provenance log on disk is JSON Lines + a SHA-256 hash chain
+//! (`docs/PROVENANCE_LOG.md` §4). This subcommand recomputes the chain via
+//! [`doiget_core::provenance::verify`] and reports any mismatches. It is the
+//! ONLY tool that detects log tampering; per `docs/SECURITY.md` §1.8 the
+//! hash chain is "best-effort tamper-evident" — it does not prevent
+//! rewriting, only makes rewrites detectable.
+//!
+//! # Phase 1 surface
+//!
+//! Only `--verify` is implemented in Phase 1. `--since`, `--source`, and
+//! `--session` (per `docs/PROVENANCE_LOG.md` §7) ship in later phases. The
+//! current entry point bails out with a clear message if `--verify` is
+//! omitted.
+//!
+//! # Output (stdout)
+//!
+//! Three header lines followed by zero or more issue lines:
+//!
+//! ```text
+//! audit-log verify: 42 rows
+//!   ok:     41
+//!   issues: 1
+//!   line 17: this-hash — this_hash mismatch: stored=…, recomputed=…
+//! ```
+//!
+//! On a clean log the issue list is empty and the process exits zero. With
+//! one or more issues the process exits non-zero so shell pipelines can
+//! treat tampering as a hard failure.
+//!
+//! `print_stdout` is denied workspace-wide for MCP stdio safety (ADR-0001 /
+//! `docs/SECURITY.md` §3). `audit-log` is a human-facing CLI surface, never
+//! invoked from inside an MCP session, so we use `writeln!` against an
+//! explicit `stdout().lock()` — the sanctioned escape hatch.
+
+use std::io::Write;
+
+use anyhow::{bail, Context, Result};
+use camino::Utf8PathBuf;
+
+use doiget_core::provenance::{verify, VerifyIssueKind};
+
+/// Run the `audit-log` subcommand.
+///
+/// `verify_flag` corresponds to the `--verify` clap flag. Phase 1 requires
+/// it: any other invocation bails with an explanatory error.
+///
+/// Returns `Ok(())` on a clean log (zero issues), or an error whose Display
+/// summarizes the failure when one or more chain issues are detected. The
+/// per-issue breakdown is always written to stdout BEFORE returning, so a
+/// caller scripting this subcommand can inspect both the structured stdout
+/// and the non-zero exit code.
+pub fn run(verify_flag: bool) -> Result<()> {
+    if !verify_flag {
+        bail!(
+            "doiget audit-log: --verify is required (Phase 1 ships only \
+             --verify; --since / --source / --session land later)"
+        );
+    }
+
+    let log_path = resolve_log_path()?;
+    let report = verify(&log_path)
+        .with_context(|| format!("failed to read provenance log at {log_path}"))?;
+
+    // `print_stdout` is workspace-deny for MCP stdio safety — see module docs.
+    // The `audit-log` CLI is the explicit human-facing channel; locking
+    // `stdout()` and using `writeln!` is the sanctioned way to emit lines.
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    writeln!(out, "audit-log verify: {} rows", report.total_rows)
+        .context("failed to write header to stdout")?;
+    writeln!(out, "  ok:     {}", report.ok_rows)
+        .context("failed to write ok-row count to stdout")?;
+    writeln!(out, "  issues: {}", report.errors.len())
+        .context("failed to write issue count to stdout")?;
+
+    for issue in &report.errors {
+        // `VerifyIssueKind` is `#[non_exhaustive]` (forward-compat for
+        // future variants like `SessionIdChange`); the wildcard arm uses a
+        // generic label so older CLI builds keep producing well-formed
+        // output even when run against a newer core that adds variants.
+        let kind = match issue.kind {
+            VerifyIssueKind::ParseError => "parse",
+            VerifyIssueKind::PrevHashMismatch => "prev-hash",
+            VerifyIssueKind::ThisHashMismatch => "this-hash",
+            VerifyIssueKind::SequenceJump => "sequence",
+            _ => "other",
+        };
+        writeln!(out, "  line {}: {} — {}", issue.line, kind, issue.message)
+            .context("failed to write issue line to stdout")?;
+    }
+
+    if report.errors.is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "audit-log: {} chain issue(s) detected — see stdout for details",
+            report.errors.len()
+        )
+    }
+}
+
+/// Resolve the on-disk provenance-log path.
+///
+/// Resolution order (subset of `docs/CONFIG.md` §4 — full CLI-flag /
+/// config-file resolution lands with the `config` subcommand):
+///
+/// 1. `DOIGET_LOG_PATH` env var, if set and non-empty.
+/// 2. `<config_dir>/doiget/access.jsonl` (cross-platform via `dirs::config_dir`).
+///
+/// Note: the writer's default in `commands/config.rs::ResolvedConfig` is
+/// `DOIGET_LOG_DIR` + `access.jsonl`. We accept the more direct
+/// `DOIGET_LOG_PATH` here too because §1 of `docs/PROVENANCE_LOG.md`
+/// specifies `DOIGET_LOG_PATH` as the spec'd override. Tests rely on
+/// `DOIGET_LOG_PATH` to point at a per-test tempdir.
+fn resolve_log_path() -> Result<Utf8PathBuf> {
+    if let Ok(s) = std::env::var("DOIGET_LOG_PATH") {
+        if !s.is_empty() {
+            return Ok(Utf8PathBuf::from(s));
+        }
+    }
+    // Fall back to the same convention as `ResolvedConfig::from_env`:
+    // <config_dir>/doiget/access.jsonl.
+    let cfg = Utf8PathBuf::try_from(
+        dirs::config_dir().ok_or_else(|| anyhow::anyhow!("no config dir on this platform"))?,
+    )
+    .context("config directory path is not valid UTF-8")?;
+    Ok(cfg.join("doiget").join("access.jsonl"))
+}
+
+// ---------------------------------------------------------------------------
+// Tests — env-mutating, serialized via serial_test (DOIGET_LOG_PATH is process
+// global). Each test scopes its env mutation to a TempDir-backed log file.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
+    use super::*;
+
+    use camino::Utf8PathBuf;
+    use tempfile::TempDir;
+
+    use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
+
+    /// RAII guard that captures the prior value of an env var on
+    /// construction and restores it on drop. Mirrors the convention in
+    /// `crates/doiget-cli/src/commands/config.rs::tests`.
+    struct EnvGuard {
+        var: &'static str,
+        prior: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(var: &'static str, value: &str) -> Self {
+            let prior = std::env::var_os(var);
+            std::env::set_var(var, value);
+            EnvGuard { var, prior }
+        }
+
+        fn unset(var: &'static str) -> Self {
+            let prior = std::env::var_os(var);
+            std::env::remove_var(var);
+            EnvGuard { var, prior }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(v) => std::env::set_var(self.var, v),
+                None => std::env::remove_var(self.var),
+            }
+        }
+    }
+
+    fn tmp_dir_utf8(dir: &TempDir) -> Utf8PathBuf {
+        Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("temp dir path must be UTF-8")
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn run_without_verify_flag_errors() {
+        // Even with no log file at all, the absence of --verify is a
+        // user-error guard that fires before we touch the disk.
+        let _g = EnvGuard::unset("DOIGET_LOG_PATH");
+        let err = run(false).expect_err("--verify must be required in Phase 1");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("--verify is required"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn run_verifies_clean_log() {
+        // Build a small valid log via the real writer, point
+        // DOIGET_LOG_PATH at it, run --verify; expect success.
+        let dir = TempDir::new().expect("tmp");
+        let path = tmp_dir_utf8(&dir).join("access.jsonl");
+
+        let log = ProvenanceLog::open(path.clone(), "01JCKZ7Q0000000000000000AB".to_string())
+            .expect("open log");
+        for _ in 0..3 {
+            log.append(RowInput {
+                event: LogEvent::Fetch,
+                result: LogResult::Ok,
+                capability: Capability::Oa,
+                ref_: None,
+                source: None,
+                error_code: None,
+                size_bytes: None,
+                license: None,
+                store_path: None,
+            })
+            .expect("append");
+        }
+        drop(log);
+
+        let _g = EnvGuard::set("DOIGET_LOG_PATH", path.as_str());
+        run(true).expect("verify must pass on a clean log");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn run_verifies_missing_log_as_clean() {
+        // Spec contract: missing log is treated as empty/clean — the bytes
+        // that don't exist cannot have been tampered with.
+        let dir = TempDir::new().expect("tmp");
+        let path = tmp_dir_utf8(&dir).join("never-created.jsonl");
+        assert!(!path.exists(), "precondition: log must not exist");
+
+        let _g = EnvGuard::set("DOIGET_LOG_PATH", path.as_str());
+        run(true).expect("verify must succeed on missing log");
+    }
+}

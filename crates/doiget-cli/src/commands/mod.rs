@@ -7,15 +7,18 @@
 //!
 //! ## Phase 1 surface (so far)
 //!
+//! - [`audit_log`] — `doiget audit-log --verify` recomputes the SHA-256 hash
+//!   chain on the provenance log and reports any mismatches.
 //! - [`config`] — `doiget config show/path/doctor`.
 //! - [`fetch`] — `doiget fetch <ref>` orchestrator (arXiv E2E + DOI metadata-only).
 //! - [`info`] — prints a stored entry's `Metadata` as TOML on stdout.
 //! - [`list_recent`] — prints up to N most-recently-fetched entries.
 //! - [`search`] — case-insensitive substring search over stored metadata.
 //!
-//! Other subcommands (`batch`, `bib`, `csl`, `audit-log`, `serve`) land in
+//! Other subcommands (`batch`, `bib`, `csl`, `serve`) land in
 //! separate PRs.
 
+pub mod audit_log;
 pub mod config;
 pub mod fetch;
 pub mod info;

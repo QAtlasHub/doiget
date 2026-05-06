@@ -504,6 +504,251 @@ fn recover_state(path: &Utf8Path) -> Result<(u64, String), LogError> {
 }
 
 // ---------------------------------------------------------------------------
+// Verification (`doiget audit-log --verify`)
+//
+// The provenance log is a JSON Lines file with a SHA-256 hash chain
+// (PROVENANCE_LOG.md §4). Tampering is detected by recomputing every row's
+// `this_hash` and validating the chain. This module provides the offline
+// verifier; the CLI wrapper lives in `doiget-cli::commands::audit_log`.
+//
+// Failure model: returning `Err` is reserved for I/O failures opening / reading
+// the file. Per-row issues (parse failures, hash/chain mismatches, sequence
+// regressions) are accumulated into [`VerifyReport::errors`] so callers can
+// report them all in one pass — this is the contract Phase 1 ships.
+// ---------------------------------------------------------------------------
+
+/// Outcome of [`verify`]: per-row chain status across the entire log.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct VerifyReport {
+    /// Total non-empty lines processed (1-based count).
+    pub total_rows: usize,
+    /// Rows whose hash, chain link, and `ts_seq` all validated.
+    pub ok_rows: usize,
+    /// Issues encountered, in encounter order. Line numbers are 1-based.
+    pub errors: Vec<VerifyIssue>,
+}
+
+impl VerifyReport {
+    /// An empty, all-clear report — used when the log file is absent.
+    fn empty() -> Self {
+        Self {
+            total_rows: 0,
+            ok_rows: 0,
+            errors: Vec::new(),
+        }
+    }
+}
+
+/// A single issue discovered by [`verify`].
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct VerifyIssue {
+    /// 1-based line number where the issue was detected.
+    pub line: usize,
+    /// Classification of the issue (see [`VerifyIssueKind`]).
+    pub kind: VerifyIssueKind,
+    /// Human-readable description (caller may format for stderr/stdout).
+    pub message: String,
+}
+
+/// Classification of a [`VerifyIssue`]. `non_exhaustive` for forward
+/// compatibility — future kinds may include `SessionIdChange`, etc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VerifyIssueKind {
+    /// Row failed to parse as [`LogRow`] (corrupted JSON or unknown field).
+    ParseError,
+    /// `prev_hash` did not match the previous row's `this_hash` (or the
+    /// genesis sentinel on row 1).
+    PrevHashMismatch,
+    /// Row's stored `this_hash` did not match the recomputed canonical-JSON
+    /// SHA-256.
+    ThisHashMismatch,
+    /// `ts_seq` did not increase strictly monotonically (within a session;
+    /// see PROVENANCE_LOG.md §3 + §6 — chain restarts after rotation are
+    /// permitted to reset `ts_seq` and are detected via the genesis sentinel).
+    SequenceJump,
+}
+
+/// Verify the entire log file at `path`.
+///
+/// Returns `Ok(VerifyReport)` regardless of whether the chain validates;
+/// callers inspect `report.errors.is_empty()` to determine pass/fail.
+/// Returns `Err` only when the file itself cannot be opened or read at the
+/// I/O level.
+///
+/// Behavior:
+///
+/// - A missing file is treated as a clean, empty log (no tampering possible
+///   on bytes that don't exist) and returns an empty report after a `warn!`.
+/// - Empty / blank lines are skipped — they are not data per the writer's
+///   on-disk format (PROVENANCE_LOG.md §2).
+/// - On a row that fails to parse as [`LogRow`], a `ParseError` is recorded
+///   and verification continues on the next line. The chain anchor does NOT
+///   advance through an unparsable row, so the next valid row's `prev_hash`
+///   is checked against the last successfully parsed row (or against
+///   `"GENESIS"` if no valid row has been seen yet).
+/// - A `prev_hash == "GENESIS"` sentinel marks a chain restart (first row of
+///   a fresh / rotated log per §6) and resets the `ts_seq` monotonicity
+///   anchor — `ts_seq` is NOT compared to the prior row across a restart.
+pub fn verify(path: &Utf8Path) -> Result<VerifyReport, LogError> {
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::warn!(
+                path = %path,
+                "audit-log verify: log file does not exist; reporting empty"
+            );
+            return Ok(VerifyReport::empty());
+        }
+        Err(e) => return Err(LogError::Io(e)),
+    };
+
+    let reader = BufReader::new(file);
+    let mut report = VerifyReport::empty();
+
+    // Anchor for the chain check: the LAST SUCCESSFULLY PARSED row. The chain
+    // is anchored to the bytes on disk, not to a hypothetical "should have
+    // been". This matches the spec — tampering at row N must surface both as
+    // a hash mismatch on N and as a chain break on N+1.
+    let mut prev_row: Option<LogRow> = None;
+
+    for (idx, line_res) in reader.lines().enumerate() {
+        let line_no = idx + 1;
+        let line = line_res?;
+        if line.is_empty() {
+            continue;
+        }
+
+        report.total_rows += 1;
+
+        let row: LogRow = match serde_json::from_str(&line) {
+            Ok(r) => r,
+            Err(e) => {
+                report.errors.push(VerifyIssue {
+                    line: line_no,
+                    kind: VerifyIssueKind::ParseError,
+                    message: format!("failed to parse row as LogRow: {e}"),
+                });
+                // Chain anchor cannot advance through an unparsable row;
+                // leave `prev_row` untouched so the next valid row's
+                // `prev_hash` is checked against the last-known anchor (or
+                // GENESIS if we never had one).
+                continue;
+            }
+        };
+
+        let mut row_ok = true;
+
+        // 1. Recompute `this_hash` from canonical JSON (row \ {this_hash}).
+        let rfh = RowForHash {
+            ts: row.ts,
+            ts_seq: row.ts_seq,
+            event: row.event,
+            ref_: row.ref_.as_deref(),
+            source: row.source.as_deref(),
+            result: row.result,
+            license: row.license.as_deref(),
+            size_bytes: row.size_bytes,
+            store_path: row.store_path.as_deref(),
+            capability: row.capability,
+            session_id: &row.session_id,
+            error_code: row.error_code.as_deref(),
+            prev_hash: &row.prev_hash,
+        };
+        match compute_this_hash(&rfh) {
+            Ok(recomputed) => {
+                if recomputed != row.this_hash {
+                    report.errors.push(VerifyIssue {
+                        line: line_no,
+                        kind: VerifyIssueKind::ThisHashMismatch,
+                        message: format!(
+                            "this_hash mismatch: stored={}, recomputed={}",
+                            row.this_hash, recomputed
+                        ),
+                    });
+                    row_ok = false;
+                }
+            }
+            Err(e) => {
+                // Canonicalization itself failed — surface as a hash
+                // mismatch with the underlying error in the message.
+                report.errors.push(VerifyIssue {
+                    line: line_no,
+                    kind: VerifyIssueKind::ThisHashMismatch,
+                    message: format!("failed to recompute this_hash: {e}"),
+                });
+                row_ok = false;
+            }
+        }
+
+        // 2. Chain link: `prev_hash` matches anchor (GENESIS on row 1 / after
+        //    a chain restart, prior row's `this_hash` otherwise).
+        let is_genesis = row.prev_hash == GENESIS_HASH;
+        match &prev_row {
+            None => {
+                // First non-empty row in the file: must declare GENESIS.
+                if !is_genesis {
+                    report.errors.push(VerifyIssue {
+                        line: line_no,
+                        kind: VerifyIssueKind::PrevHashMismatch,
+                        message: format!(
+                            "first row must have prev_hash=\"GENESIS\", got {:?}",
+                            row.prev_hash
+                        ),
+                    });
+                    row_ok = false;
+                }
+            }
+            Some(prev) => {
+                if is_genesis {
+                    // Chain restart (rotation per §6) — accepted, no link
+                    // check, and the `ts_seq` monotonicity anchor resets
+                    // (handled below via `is_genesis`).
+                } else if row.prev_hash != prev.this_hash {
+                    report.errors.push(VerifyIssue {
+                        line: line_no,
+                        kind: VerifyIssueKind::PrevHashMismatch,
+                        message: format!(
+                            "prev_hash mismatch: row stores {}, previous row's this_hash is {}",
+                            row.prev_hash, prev.this_hash
+                        ),
+                    });
+                    row_ok = false;
+                }
+            }
+        }
+
+        // 3. ts_seq monotonicity — strictly greater than the previous row's
+        //    `ts_seq`, EXCEPT across a chain restart (where `ts_seq` resets).
+        if let Some(prev) = &prev_row {
+            if !is_genesis && row.ts_seq <= prev.ts_seq {
+                report.errors.push(VerifyIssue {
+                    line: line_no,
+                    kind: VerifyIssueKind::SequenceJump,
+                    message: format!(
+                        "ts_seq did not increase strictly: previous={}, current={}",
+                        prev.ts_seq, row.ts_seq
+                    ),
+                });
+                row_ok = false;
+            }
+        }
+
+        if row_ok {
+            report.ok_rows += 1;
+        }
+
+        // Advance the anchor to the just-parsed row (whether or not it had
+        // issues — the on-disk bytes ARE the chain).
+        prev_row = Some(row);
+    }
+
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -799,6 +1044,191 @@ mod tests {
         let ts_idx = s.find("\"ts\":").expect("ts key present");
         let tsseq_idx = s.find("\"ts_seq\":").expect("ts_seq key present");
         assert!(ts_idx < tsseq_idx, "ts must precede ts_seq");
+    }
+
+    // -----------------------------------------------------------------
+    // verify() tests — Phase 1 surface for `doiget audit-log --verify`.
+    // -----------------------------------------------------------------
+
+    /// Rewrite a single field's quoted-string value on a specific 1-based
+    /// line of `path`. Used to simulate tampering. Panics on malformed input
+    /// — only valid inputs are produced by the test harness.
+    ///
+    /// `field_key` is matched as `"field_key":"...old..."` (quoted string
+    /// JSON value). The new value is the literal string `new_value` (no
+    /// JSON escaping needed for the test fixtures we use).
+    fn tamper_string_field(
+        path: &Utf8Path,
+        line_no_1based: usize,
+        field_key: &str,
+        new_value: &str,
+    ) {
+        let raw = fs::read_to_string(path).expect("read log");
+        let mut lines: Vec<String> = raw.lines().map(str::to_string).collect();
+        let target = &lines[line_no_1based - 1];
+        let needle = format!("\"{field_key}\":\"");
+        let start = target
+            .find(&needle)
+            .unwrap_or_else(|| panic!("field {field_key} not found on line {line_no_1based}"))
+            + needle.len();
+        let end_rel = target[start..]
+            .find('"')
+            .unwrap_or_else(|| panic!("unterminated string for field {field_key}"));
+        let end = start + end_rel;
+        let mut new_line = String::with_capacity(target.len());
+        new_line.push_str(&target[..start]);
+        new_line.push_str(new_value);
+        new_line.push_str(&target[end..]);
+        lines[line_no_1based - 1] = new_line;
+        let mut out = lines.join("\n");
+        out.push('\n');
+        fs::write(path, out).expect("write tampered log");
+    }
+
+    #[test]
+    fn verify_empty_log_is_ok() {
+        // Missing file is a clean log — no tampering possible on bytes that
+        // don't exist. `verify` returns an empty report, not an error.
+        let dir = TempDir::new().expect("tmp");
+        let path = tmp_dir_utf8(&dir).join("nonexistent.jsonl");
+        assert!(!path.exists(), "precondition: file must not exist");
+
+        let report = verify(&path).expect("verify must not error on missing file");
+        assert_eq!(report.total_rows, 0);
+        assert_eq!(report.ok_rows, 0);
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+    }
+
+    #[test]
+    fn verify_well_formed_chain_passes() {
+        // Three rows written via the real writer must verify clean.
+        let dir = TempDir::new().expect("tmp");
+        let path = tmp_dir_utf8(&dir).join("log.jsonl");
+        let log = open_log(&path);
+        for _ in 0..3 {
+            log.append(empty_input()).expect("append");
+        }
+
+        let report = verify(&path).expect("verify must succeed");
+        assert_eq!(report.total_rows, 3);
+        assert_eq!(report.ok_rows, 3);
+        assert!(
+            report.errors.is_empty(),
+            "expected no issues on a well-formed log; got: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn verify_detects_tampered_row_hash() {
+        // Mutate the SECOND row's `this_hash` to a syntactically-valid but
+        // wrong hash. The recomputed canonical-JSON SHA-256 will not match.
+        let dir = TempDir::new().expect("tmp");
+        let path = tmp_dir_utf8(&dir).join("log.jsonl");
+        let log = open_log(&path);
+        log.append(empty_input()).expect("append 1");
+        log.append(empty_input()).expect("append 2");
+        drop(log);
+
+        // 64 lowercase hex chars, all zeros — passes `LogRow` parse, fails hash check.
+        tamper_string_field(
+            &path,
+            2,
+            "this_hash",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
+
+        let report = verify(&path).expect("verify must succeed");
+        assert_eq!(report.total_rows, 2);
+        // Row 2's hash mismatch breaks both the hash check on row 2 AND the
+        // chain link from row 2's stored `prev_hash` (still correct) into the
+        // forward direction. There's no row 3 to fail forward, so we expect
+        // exactly one issue: the this-hash mismatch on line 2.
+        let hash_issues: Vec<_> = report
+            .errors
+            .iter()
+            .filter(|e| e.kind == VerifyIssueKind::ThisHashMismatch)
+            .collect();
+        assert_eq!(
+            hash_issues.len(),
+            1,
+            "expected exactly one ThisHashMismatch, got {:?}",
+            report.errors
+        );
+        assert_eq!(hash_issues[0].line, 2);
+    }
+
+    #[test]
+    fn verify_detects_tampered_prev_hash() {
+        // Mutate the SECOND row's `prev_hash` to a wrong value. This
+        // invalidates the chain link but the row's own `this_hash` was
+        // computed with the original `prev_hash`, so the this-hash check
+        // ALSO fails (hash input changed). We assert at least the prev-hash
+        // issue is reported on line 2.
+        let dir = TempDir::new().expect("tmp");
+        let path = tmp_dir_utf8(&dir).join("log.jsonl");
+        let log = open_log(&path);
+        log.append(empty_input()).expect("append 1");
+        log.append(empty_input()).expect("append 2");
+        drop(log);
+
+        tamper_string_field(
+            &path,
+            2,
+            "prev_hash",
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        );
+
+        let report = verify(&path).expect("verify must succeed");
+        assert_eq!(report.total_rows, 2);
+        let prev_issues: Vec<_> = report
+            .errors
+            .iter()
+            .filter(|e| e.kind == VerifyIssueKind::PrevHashMismatch)
+            .collect();
+        assert_eq!(
+            prev_issues.len(),
+            1,
+            "expected exactly one PrevHashMismatch, got {:?}",
+            report.errors
+        );
+        assert_eq!(prev_issues[0].line, 2);
+    }
+
+    #[test]
+    fn verify_detects_corrupted_json() {
+        // One valid row plus a literal `{"garbage":true}` line. The garbage
+        // line fails `serde_json::from_str::<LogRow>` (missing fields +
+        // `deny_unknown_fields`) and surfaces as a `ParseError` on line 2.
+        let dir = TempDir::new().expect("tmp");
+        let path = tmp_dir_utf8(&dir).join("log.jsonl");
+        let log = open_log(&path);
+        log.append(empty_input()).expect("append 1");
+        drop(log);
+
+        // Append a garbage line directly.
+        let mut existing = fs::read_to_string(&path).expect("read");
+        if !existing.ends_with('\n') {
+            existing.push('\n');
+        }
+        existing.push_str("{\"garbage\":true}\n");
+        fs::write(&path, existing).expect("write");
+
+        let report = verify(&path).expect("verify must succeed");
+        // total_rows counts non-empty lines, so both lines are counted.
+        assert_eq!(report.total_rows, 2);
+        let parse_issues: Vec<_> = report
+            .errors
+            .iter()
+            .filter(|e| e.kind == VerifyIssueKind::ParseError)
+            .collect();
+        assert_eq!(
+            parse_issues.len(),
+            1,
+            "expected exactly one ParseError, got {:?}",
+            report.errors
+        );
+        assert_eq!(parse_issues[0].line, 2);
     }
 
     #[test]
