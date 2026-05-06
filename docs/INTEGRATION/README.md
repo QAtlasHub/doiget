@@ -16,12 +16,12 @@ server and the corresponding host snippets in this directory.
 
 | File | Host | Status |
 |---|---|---|
-| `claude-desktop.md` | Claude Desktop (stdio MCP) | Phase 3 |
-| `cursor.md` | Cursor | Phase 3 |
-| `codex.md` | OpenAI Codex CLI | Phase 3 |
-| `claude-code.md` | Claude Code (this tool) | Phase 3 |
-| `obsidian.md` | Obsidian backend export | Phase 7 (optional) |
-| `chain-with-paperqa.md` | Composition with paper-qa for content processing | Phase 3+ |
+| `claude-desktop.md` | Claude Desktop (stdio MCP) | Phase 3 (stub) |
+| `cursor.md` | Cursor | Phase 3 (stub) |
+| `codex.md` | OpenAI Codex CLI | Phase 3 (stub) |
+| `claude-code.md` | Claude Code (this tool) | Phase 3 (stub) |
+| `obsidian.md` | Obsidian backend export | Phase 7 (optional, stub) |
+| `chain-with-paperqa.md` | Composition with paper-qa for content processing | Phase 3+ (stub) |
 
 ## What to read in the meantime
 
