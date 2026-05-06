@@ -66,6 +66,10 @@ criteria = "safe-to-run"
 version = "0.4.42"
 criteria = "safe-to-deploy"
 
+[[exemptions.async-trait]]
+version = "0.1.78"
+criteria = "safe-to-deploy"
+
 [[exemptions.aws-lc-rs]]
 version = "1.16.3"
 criteria = "safe-to-deploy"
