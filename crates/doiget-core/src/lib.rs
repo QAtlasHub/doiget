@@ -575,13 +575,22 @@ mod tests {
         let s = key.as_str();
 
         // Shape: <192 ASCII chars from {A-Za-z0-9._-}> + "_" + <8 hex chars>
-        assert_eq!(s.len(), 201, "expected 201-char truncated key, got {}: {}", s.len(), s);
+        assert_eq!(
+            s.len(),
+            201,
+            "expected 201-char truncated key, got {}: {}",
+            s.len(),
+            s
+        );
         assert_eq!(&s[192..193], "_", "expected '_' separator at byte 192");
         let hash_part = &s[193..];
         assert_eq!(hash_part.len(), 8, "hash suffix must be 8 hex chars");
         assert!(
-            hash_part.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-            "hash suffix must be lowercase hex: {}", hash_part
+            hash_part
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "hash suffix must be lowercase hex: {}",
+            hash_part
         );
 
         // Determinism: same input twice must produce the same key.
@@ -599,6 +608,9 @@ mod tests {
                 digest[0], digest[1], digest[2], digest[3]
             )
         };
-        assert_eq!(hash_part, expected_hash, "hash must match SHA-256 of raw form");
+        assert_eq!(
+            hash_part, expected_hash,
+            "hash must match SHA-256 of raw form"
+        );
     }
 }
