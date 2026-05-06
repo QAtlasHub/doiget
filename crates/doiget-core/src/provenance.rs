@@ -1,8 +1,8 @@
 //! JSON Lines + SHA-256 hash-chained provenance log.
 //!
-//! Binding spec: `docs/PROVENANCE_LOG.md`. Failure semantics: **fail-closed** —
-//! callers MUST abort the fetch if a log write returns `Err`. See
-//! `docs/SECURITY.md` §1.8 and ADR-0006.
+//! Binding spec: `docs/PROVENANCE_LOG.md` (NORMATIVE, §3 row schema, §4 hash
+//! chain). Failure semantics: **fail-closed** — callers MUST abort the fetch
+//! if a log write returns `Err`. See `docs/SECURITY.md` §1.8 and ADR-0006.
 //!
 //! # On-disk format
 //!
@@ -14,25 +14,28 @@
 //! - In audit-grade mode (the only mode shipped here), the writer flushes the
 //!   `BufWriter` and `fsync`s the file after every row.
 //!
-//! # Hash chain
+//! # Hash chain (PROVENANCE_LOG.md §4)
 //!
-//! Each row carries a `prev_hash` and a `row_hash`. The first row's
-//! `prev_hash` is the literal 64-char string `"0".repeat(64)`. Every
-//! subsequent row's `prev_hash` MUST equal the previous row's `row_hash`.
+//! Each row carries a `prev_hash` and a `this_hash`. The first row's
+//! `prev_hash` is the literal string `"GENESIS"`. Every subsequent row's
+//! `prev_hash` MUST equal the previous row's `this_hash`.
 //!
-//! `row_hash` is computed as:
+//! When a log file rotates (§6 — not yet implemented in this crate; see TODO
+//! below), the first row of the NEW log file also uses `prev_hash =
+//! "GENESIS"`, restarting the chain.
+//!
+//! `this_hash` is computed as:
 //!
 //! ```text
-//! row_hash = lower_hex(SHA-256(canonical_json(row \ {row_hash})))
+//! this_hash = lower_hex(SHA-256(canonical_json(row \ {this_hash})))
 //! ```
 //!
-//! where `canonical_json` is the bytes produced by `serde_json::to_string`
-//! over a struct that contains every row field **except** `row_hash`, in the
-//! exact field order declared in `LogRow` / `RowForHash` below. There is no
-//! whitespace and no key sorting beyond the deterministic field order serde
-//! produces for struct serialization. Downstream `audit-log --verify` (Phase
-//! 1+) relies on this exact rule — do not reorder, rename, or insert fields
-//! without bumping the spec.
+//! where `canonical_json` is **compact JSON (no whitespace) with object keys
+//! sorted lexicographically** (PROVENANCE_LOG.md §4). For a row with fields
+//! `{ts: "...", ts_seq: 1, event: "fetch", ...}`, the canonical bytes begin
+//! with `{"capability":...` because `capability` is the lex-first top-level
+//! key. Downstream `doiget audit-log --verify` (Phase 1+) relies on this
+//! exact rule — do not change the canonicalization without bumping the spec.
 //!
 //! # In-process serialization
 //!
@@ -41,7 +44,21 @@
 //! on log appender" requirement of `docs/SECURITY.md` §1.8. Cross-process
 //! coordination (multiple `doiget` invocations) is out of scope here and
 //! handled by the higher-level `flock`-based store layer.
+//!
+//! # Session id
+//!
+//! `session_id` (PROVENANCE_LOG.md §3) is a 26-char ULID generated **once per
+//! process invocation** by the caller and stamped into every row written
+//! through the resulting [`ProvenanceLog`]. This crate does not generate the
+//! ULID itself — see [`ProvenanceLog::open`] for the contract.
+//!
+//! # TODO: log rotation (§6)
+//!
+//! Log rotation is not yet implemented. When it lands, the first row of the
+//! NEW log file MUST use `prev_hash = "GENESIS"` (chain restart), matching
+//! the `GENESIS_HASH` constant below.
 
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::sync::Mutex;
@@ -51,18 +68,18 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// One row of the provenance log.
+/// One row of the provenance log (PROVENANCE_LOG.md §3).
 ///
-/// Field order matches `docs/PROVENANCE_LOG.md` §3 and is the canonical
-/// serialization order used for hashing. **Do not reorder fields** — doing
-/// so silently invalidates every previously-written `row_hash`.
+/// The on-disk wire field names match the spec table; struct-field order is
+/// **not** load-bearing for the hash because canonicalization sorts keys
+/// lexicographically (see [`canonical_json_for_hash`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LogRow {
-    /// Per-log monotonic sequence, starting at 1.
-    pub seq: u64,
-    /// RFC3339 UTC timestamp of the append.
+    /// RFC3339 UTC timestamp of the append (millisecond precision).
     pub ts: DateTime<Utc>,
+    /// Per-session monotonic sequence number, starting at 1.
+    pub ts_seq: u64,
     /// Event class (see [`LogEvent`]).
     pub event: LogEvent,
     /// Optional reference (DOI / arXiv id). Wire field name is `ref`.
@@ -70,55 +87,87 @@ pub struct LogRow {
     pub ref_: Option<String>,
     /// Optional source name (e.g. `unpaywall`).
     pub source: Option<String>,
-    /// Status (see [`LogStatus`]).
-    pub status: LogStatus,
-    /// Stable error code on failure rows.
-    pub error_code: Option<String>,
+    /// Result (see [`LogResult`]).
+    pub result: LogResult,
+    /// OA license string (`event=fetch`, `result=ok`); `None` otherwise.
+    pub license: Option<String>,
     /// Bytes written / fetched, on success rows.
     pub size_bytes: Option<u64>,
-    /// Filesystem-safe key (see `docs/SAFEKEY.md`).
-    pub safekey: Option<String>,
-    /// MCP request id, when invoked via the MCP server.
-    pub mcp_call_id: Option<String>,
-    /// Hostname of the machine that wrote this row. **No PID** —
-    /// PIDs are not stable identifiers and would leak process-restart cadence.
-    pub host: String,
-    /// 64 lowercase hex chars. `"0".repeat(64)` for the first row of a log.
+    /// Path to the stored payload, relative to the store root
+    /// (`event=fetch`, `result=ok`); `None` otherwise.
+    pub store_path: Option<String>,
+    /// Capability under which the row was written (REQUIRED, every row).
+    pub capability: Capability,
+    /// 26-char ULID identifying the process invocation (REQUIRED).
+    pub session_id: String,
+    /// Stable error code on failure rows.
+    pub error_code: Option<String>,
+    /// 64 lowercase hex chars, OR the literal string `"GENESIS"` for the
+    /// first row of a fresh log file.
     pub prev_hash: String,
     /// 64 lowercase hex chars. SHA-256 of canonical JSON of THIS row with
-    /// the `row_hash` field removed. See module docs.
-    pub row_hash: String,
+    /// the `this_hash` field removed. See module docs.
+    pub this_hash: String,
 }
 
-/// Event class for a log row. `non_exhaustive` so adding new variants is
-/// non-breaking.
+/// Event class for a log row (PROVENANCE_LOG.md §3).
+///
+/// Note: result-status (`ok`/`err`/`denied`) lives in [`LogResult`], NOT in
+/// the event variant. So `Fetch` covers both successful and failed fetch
+/// attempts; the row's `result` distinguishes them.
+///
+/// `non_exhaustive` so adding new variants is non-breaking.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum LogEvent {
-    /// A fetch attempt has begun.
-    FetchStart,
-    /// Fetch completed successfully.
-    FetchOk,
-    /// Fetch failed.
-    FetchErr,
-    /// Store write completed successfully.
-    StoreWriteOk,
-    /// Store write failed.
-    StoreWriteErr,
-    /// A previous log file was rotated (chain restart marker).
-    LogRotated,
+    /// Process started; first row of a new session.
+    SessionStart,
+    /// Capability resolution finished (allowed / denied / which env var).
+    CapabilityResolved,
+    /// Reference resolved to a fetch URL.
+    Resolve,
+    /// Fetch attempt (success or failure determined by `result`).
+    Fetch,
+    /// Store write attempt (success or failure determined by `result`).
+    StoreWrite,
+    /// Process ended cleanly.
+    SessionEnd,
 }
 
-/// Status field. `non_exhaustive` for forward compatibility.
+/// Per-row outcome (PROVENANCE_LOG.md §3). `non_exhaustive` for forward
+/// compatibility.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
-pub enum LogStatus {
+pub enum LogResult {
     /// The operation succeeded.
     Ok,
-    /// The operation failed.
+    /// The operation failed with an error.
     Err,
+    /// The operation was denied (e.g. capability gate).
+    Denied,
+}
+
+/// Capability under which a row was written (PROVENANCE_LOG.md §3).
+///
+/// `kebab-case` serde rename emits `oa`, `metadata`, `tdm-elsevier`,
+/// `tdm-aps`, `tdm-springer` exactly as the spec requires. `non_exhaustive`
+/// for forward compatibility.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum Capability {
+    /// Open access tier.
+    Oa,
+    /// Metadata-only access.
+    Metadata,
+    /// Elsevier TDM (Tier 3, opt-in build).
+    TdmElsevier,
+    /// APS TDM (Tier 3, opt-in build).
+    TdmAps,
+    /// Springer TDM (Tier 3, opt-in build).
+    TdmSpringer,
 }
 
 /// Errors emitted by the provenance log writer. Callers MUST treat any
@@ -145,29 +194,33 @@ pub enum LogError {
 pub struct ProvenanceLog {
     path: Utf8PathBuf,
     state: Mutex<LogState>,
-    host: String,
+    session_id: String,
 }
 
 /// Mutable internal state, guarded by [`ProvenanceLog::state`].
 #[derive(Debug)]
 struct LogState {
-    /// `seq` of the **next** row to be appended.
+    /// `ts_seq` of the **next** row to be appended.
     next_seq: u64,
-    /// 64 lowercase hex chars; `"0".repeat(64)` if the log is empty.
+    /// 64 lowercase hex chars; [`GENESIS_HASH`] if the log is empty.
     last_hash: String,
 }
 
-/// The genesis hash used as `prev_hash` for the first row of a log.
-const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+/// The genesis sentinel used as `prev_hash` for the first row of a log file
+/// (PROVENANCE_LOG.md §3, §6). Also written verbatim as the prev-hash of the
+/// first row after a log rotation (TODO: rotation not yet implemented).
+const GENESIS_HASH: &str = "GENESIS";
 
-/// Caller-supplied fields for a row. The writer fills in `seq`, `ts`, `host`,
-/// `prev_hash`, and `row_hash`.
+/// Caller-supplied fields for a row. The writer fills in `ts`, `ts_seq`,
+/// `session_id`, `prev_hash`, and `this_hash`.
 #[derive(Debug, Clone)]
 pub struct RowInput<'a> {
     /// Event class.
     pub event: LogEvent,
-    /// Status.
-    pub status: LogStatus,
+    /// Result.
+    pub result: LogResult,
+    /// Capability under which the row is written (REQUIRED for every row).
+    pub capability: Capability,
     /// Optional DOI / arXiv id.
     pub ref_: Option<&'a str>,
     /// Optional source name.
@@ -176,61 +229,97 @@ pub struct RowInput<'a> {
     pub error_code: Option<&'a str>,
     /// Optional payload size in bytes.
     pub size_bytes: Option<u64>,
-    /// Optional safekey (`docs/SAFEKEY.md`).
-    pub safekey: Option<&'a str>,
-    /// Optional MCP call id.
-    pub mcp_call_id: Option<&'a str>,
+    /// Optional OA license string (set on `event=fetch`, `result=ok`).
+    pub license: Option<&'a str>,
+    /// Optional store path relative to the store root (set on `event=fetch`,
+    /// `result=ok`).
+    pub store_path: Option<&'a str>,
 }
 
 // ---------------------------------------------------------------------------
-// Canonical-JSON helper
+// Canonical-JSON helper (PROVENANCE_LOG.md §4)
 //
 // Hashing rule (CRITICAL — this is the spec contract for `audit-log --verify`):
 //
-//   row_hash = lower_hex(SHA-256(serde_json::to_string(RowForHash { ... })))
+//   this_hash = lower_hex(SHA-256(canonical_json(row \ {this_hash})))
 //
-// where `RowForHash` is a struct with EVERY field of `LogRow` EXCEPT
-// `row_hash`, in the same declaration order (seq, ts, event, ref_, source,
-// status, error_code, size_bytes, safekey, mcp_call_id, host, prev_hash).
+// Canonical JSON = **compact (no whitespace), keys sorted lexicographically,
+// no trailing whitespace** (§4). Struct field order is deliberately NOT
+// load-bearing here; the canonicalizer sorts the resulting object keys via
+// `BTreeMap<String, Value>`, which serializes in lex-sorted key order.
 //
-// `serde_json::to_string` emits no whitespace and walks struct fields in
-// declaration order, so this is deterministic without sorting. UTF-8.
-// Lowercase hex output. 64 chars.
+// Worked example: for the row fragment `{ts_seq: 1, ts: "..."}` (input order),
+// the canonical bytes after lex sort are `{"ts":"...","ts_seq":1}` because
+// `"ts"` < `"ts_seq"` lexicographically. Similarly, the lex-first top-level
+// key of a full row is `"capability"`.
 // ---------------------------------------------------------------------------
 
-/// Serializable shadow of [`LogRow`] **without** `row_hash`. Used solely to
-/// compute the canonical bytes that `row_hash` is the SHA-256 of.
+/// Serializable shadow of [`LogRow`] **without** `this_hash`. Used solely as
+/// an intermediate to compute the canonical bytes that `this_hash` is the
+/// SHA-256 of. The wire key names match [`LogRow`]'s `serde` attributes.
 #[derive(Serialize)]
 struct RowForHash<'a> {
-    seq: u64,
     ts: DateTime<Utc>,
+    ts_seq: u64,
     event: LogEvent,
     #[serde(rename = "ref")]
     ref_: Option<&'a str>,
     source: Option<&'a str>,
-    status: LogStatus,
-    error_code: Option<&'a str>,
+    result: LogResult,
+    license: Option<&'a str>,
     size_bytes: Option<u64>,
-    safekey: Option<&'a str>,
-    mcp_call_id: Option<&'a str>,
-    host: &'a str,
+    store_path: Option<&'a str>,
+    capability: Capability,
+    session_id: &'a str,
+    error_code: Option<&'a str>,
     prev_hash: &'a str,
 }
 
-/// Compute `row_hash` for the given row-without-hash. Returns 64 lowercase hex
-/// chars.
-fn compute_row_hash(rfh: &RowForHash<'_>) -> Result<String, LogError> {
-    let bytes = serde_json::to_vec(rfh)?;
+/// Produce canonical-JSON bytes for a row-without-hash, with object keys
+/// sorted lexicographically per PROVENANCE_LOG.md §4.
+///
+/// Implementation: serialize via `serde_json::to_value` to get a `Value`,
+/// require it be an object, then move its entries into a
+/// `BTreeMap<String, Value>` (which serializes with lex-sorted keys) and
+/// re-serialize compactly. No new dependency required.
+fn canonical_json_for_hash(rfh: &RowForHash<'_>) -> Result<Vec<u8>, LogError> {
+    let value = serde_json::to_value(rfh)?;
+    let map = match value {
+        serde_json::Value::Object(m) => m,
+        // RowForHash is always a struct, so this branch is unreachable in
+        // practice; surface as a serde error if it ever changes.
+        _ => {
+            return Err(LogError::Serialize(serde::de::Error::custom(
+                "RowForHash did not serialize to a JSON object",
+            )));
+        }
+    };
+    let sorted: BTreeMap<String, serde_json::Value> = map.into_iter().collect();
+    Ok(serde_json::to_vec(&sorted)?)
+}
+
+/// Compute `this_hash` for the given row-without-hash. Returns 64 lowercase
+/// hex chars.
+fn compute_this_hash(rfh: &RowForHash<'_>) -> Result<String, LogError> {
+    let bytes = canonical_json_for_hash(rfh)?;
     let digest = Sha256::digest(&bytes);
     Ok(hex::encode(digest))
 }
 
 impl ProvenanceLog {
-    /// Open or create the log at `path`.
+    /// Open or create the log at `path`, stamping every row with
+    /// `session_id`.
     ///
-    /// If the file exists, scan it once to recover the last `seq` and
-    /// `row_hash`. If the file is missing or empty, the first row will use
-    /// `prev_hash = "0".repeat(64)` and `seq = 1`.
+    /// `session_id` MUST be a 26-char ULID generated **once per process**
+    /// invocation by the caller. Re-opening the log within the same process
+    /// reuses the same `session_id`; re-opening in a new process gets a new
+    /// one. This crate intentionally does NOT generate the ULID itself —
+    /// callers are responsible for creating one (e.g. via the `ulid` crate
+    /// already present in the workspace) and threading it through.
+    ///
+    /// If the file exists, scan it once to recover the last `ts_seq` and
+    /// `this_hash`. If the file is missing or empty, the first row will use
+    /// `prev_hash = "GENESIS"` and `ts_seq = 1`.
     ///
     /// # Errors
     ///
@@ -240,7 +329,7 @@ impl ProvenanceLog {
     ///
     /// Returns [`LogError::NotARegularFile`] if `path` exists but is not a
     /// regular file (e.g. a directory).
-    pub fn open(path: impl Into<Utf8PathBuf>) -> Result<Self, LogError> {
+    pub fn open(path: impl Into<Utf8PathBuf>, session_id: String) -> Result<Self, LogError> {
         let path: Utf8PathBuf = path.into();
 
         // Reject obvious non-files up front so later `OpenOptions::append`
@@ -260,14 +349,15 @@ impl ProvenanceLog {
                 next_seq,
                 last_hash,
             }),
-            host: detect_host(),
+            session_id,
         })
     }
 
-    /// Append a row. Computes `prev_hash`, `seq`, and `row_hash`; the caller
-    /// only supplies the semantic fields via [`RowInput`].
+    /// Append a row. Computes `prev_hash`, `ts_seq`, `ts`, `session_id`, and
+    /// `this_hash`; the caller only supplies the semantic fields via
+    /// [`RowInput`].
     ///
-    /// Returns the assigned `seq` on success.
+    /// Returns the assigned `ts_seq` on success.
     ///
     /// # Errors
     ///
@@ -286,43 +376,45 @@ impl ProvenanceLog {
             .lock()
             .map_err(|_| LogError::Io(std::io::Error::other("provenance log mutex poisoned")))?;
 
-        let seq = state.next_seq;
+        let ts_seq = state.next_seq;
         let prev_hash = state.last_hash.clone();
         let ts = Utc::now();
 
         let rfh = RowForHash {
-            seq,
             ts,
+            ts_seq,
             event: input.event,
             ref_: input.ref_,
             source: input.source,
-            status: input.status,
-            error_code: input.error_code,
+            result: input.result,
+            license: input.license,
             size_bytes: input.size_bytes,
-            safekey: input.safekey,
-            mcp_call_id: input.mcp_call_id,
-            host: &self.host,
+            store_path: input.store_path,
+            capability: input.capability,
+            session_id: &self.session_id,
+            error_code: input.error_code,
             prev_hash: &prev_hash,
         };
 
-        let row_hash = compute_row_hash(&rfh)?;
+        let this_hash = compute_this_hash(&rfh)?;
 
         // Build the on-disk row. Owned strings here because `LogRow` does
         // not borrow.
         let row = LogRow {
-            seq,
             ts,
+            ts_seq,
             event: input.event,
             ref_: input.ref_.map(str::to_string),
             source: input.source.map(str::to_string),
-            status: input.status,
-            error_code: input.error_code.map(str::to_string),
+            result: input.result,
+            license: input.license.map(str::to_string),
             size_bytes: input.size_bytes,
-            safekey: input.safekey.map(str::to_string),
-            mcp_call_id: input.mcp_call_id.map(str::to_string),
-            host: self.host.clone(),
+            store_path: input.store_path.map(str::to_string),
+            capability: input.capability,
+            session_id: self.session_id.clone(),
+            error_code: input.error_code.map(str::to_string),
             prev_hash,
-            row_hash: row_hash.clone(),
+            this_hash: this_hash.clone(),
         };
 
         // Serialize, append `\n`, write_all in one syscall, flush BufWriter,
@@ -350,16 +442,22 @@ impl ProvenanceLog {
 
         // Only after a successful fsync do we advance the in-memory state.
         // If any of the above fails, the next `append` retries from the
-        // same `(seq, prev_hash)` — at most a torn last line on disk.
-        state.next_seq = seq + 1;
-        state.last_hash = row_hash;
+        // same `(ts_seq, prev_hash)` — at most a torn last line on disk.
+        state.next_seq = ts_seq + 1;
+        state.last_hash = this_hash;
 
-        Ok(seq)
+        Ok(ts_seq)
     }
 
     /// Returns the path the log was opened at. Useful for tests and audit tooling.
     pub fn path(&self) -> &Utf8Path {
         &self.path
+    }
+
+    /// Returns the session id stamped into every row written through this
+    /// writer.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 }
 
@@ -394,8 +492,8 @@ fn recover_state(path: &Utf8Path) -> Result<(u64, String), LogError> {
                 format!("corrupted log at line {}: {}", line_no, e),
             ))
         })?;
-        last_seq = row.seq;
-        last_hash = row.row_hash;
+        last_seq = row.ts_seq;
+        last_hash = row.this_hash;
     }
 
     if last_seq == 0 {
@@ -403,26 +501,6 @@ fn recover_state(path: &Utf8Path) -> Result<(u64, String), LogError> {
     } else {
         Ok((last_seq + 1, last_hash))
     }
-}
-
-/// Best-effort hostname detection. Falls back to `"unknown"` if the OS does
-/// not expose one. Matches the `host` field semantics in
-/// `docs/PROVENANCE_LOG.md` (no PID, hostname only).
-fn detect_host() -> String {
-    // Deliberately avoid pulling in the `gethostname` crate to keep the
-    // dependency surface minimal; this small env fallback is sufficient for
-    // the spec ("hostname, no PID") and works on both POSIX and Windows.
-    if let Ok(h) = std::env::var("HOSTNAME") {
-        if !h.is_empty() {
-            return h;
-        }
-    }
-    if let Ok(h) = std::env::var("COMPUTERNAME") {
-        if !h.is_empty() {
-            return h;
-        }
-    }
-    "unknown".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -446,16 +524,25 @@ mod tests {
         Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("temp dir path must be UTF-8")
     }
 
+    /// A fixed 26-char ULID-shaped string used in tests. Real callers use
+    /// the `ulid` crate; tests pin a constant so output is reproducible.
+    const TEST_SESSION_ID: &str = "01JCKZ7Q0000000000000000AB";
+
+    fn open_log(path: &Utf8Path) -> ProvenanceLog {
+        ProvenanceLog::open(path, TEST_SESSION_ID.to_string()).expect("open")
+    }
+
     fn empty_input() -> RowInput<'static> {
         RowInput {
-            event: LogEvent::FetchStart,
-            status: LogStatus::Ok,
+            event: LogEvent::Fetch,
+            result: LogResult::Ok,
+            capability: Capability::Oa,
             ref_: None,
             source: None,
             error_code: None,
             size_bytes: None,
-            safekey: None,
-            mcp_call_id: None,
+            license: None,
+            store_path: None,
         }
     }
 
@@ -468,53 +555,55 @@ mod tests {
             .collect()
     }
 
-    /// Recompute `row_hash` for a stored row and assert it matches the
-    /// stored value. Walks the same canonicalization rule as `compute_row_hash`.
-    fn verify_row_hash(row: &LogRow) {
+    /// Recompute `this_hash` for a stored row and assert it matches the
+    /// stored value. Walks the same canonicalization rule as
+    /// [`compute_this_hash`].
+    fn verify_this_hash(row: &LogRow) {
         let rfh = RowForHash {
-            seq: row.seq,
             ts: row.ts,
+            ts_seq: row.ts_seq,
             event: row.event,
             ref_: row.ref_.as_deref(),
             source: row.source.as_deref(),
-            status: row.status,
-            error_code: row.error_code.as_deref(),
+            result: row.result,
+            license: row.license.as_deref(),
             size_bytes: row.size_bytes,
-            safekey: row.safekey.as_deref(),
-            mcp_call_id: row.mcp_call_id.as_deref(),
-            host: &row.host,
+            store_path: row.store_path.as_deref(),
+            capability: row.capability,
+            session_id: &row.session_id,
+            error_code: row.error_code.as_deref(),
             prev_hash: &row.prev_hash,
         };
-        let recomputed = compute_row_hash(&rfh).expect("hash");
+        let recomputed = compute_this_hash(&rfh).expect("hash");
         assert_eq!(
-            recomputed, row.row_hash,
-            "row_hash mismatch on seq {}",
-            row.seq
+            recomputed, row.this_hash,
+            "this_hash mismatch on ts_seq {}",
+            row.ts_seq
         );
     }
 
     #[test]
-    fn first_row_uses_zero_prev_hash() {
+    fn first_row_uses_genesis_prev_hash() {
         let dir = TempDir::new().expect("tmp");
         let path = tmp_dir_utf8(&dir).join("log.jsonl");
-        let log = ProvenanceLog::open(&path).expect("open");
+        let log = open_log(&path);
         let seq = log.append(empty_input()).expect("append");
         assert_eq!(seq, 1);
 
         let rows = read_rows(&path);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].seq, 1);
+        assert_eq!(rows[0].ts_seq, 1);
         assert_eq!(rows[0].prev_hash, GENESIS_HASH);
-        assert_eq!(rows[0].prev_hash.len(), 64);
-        assert_eq!(rows[0].row_hash.len(), 64);
-        verify_row_hash(&rows[0]);
+        assert_eq!(rows[0].this_hash.len(), 64);
+        assert_eq!(rows[0].session_id, TEST_SESSION_ID);
+        verify_this_hash(&rows[0]);
     }
 
     #[test]
     fn subsequent_rows_chain_correctly() {
         let dir = TempDir::new().expect("tmp");
         let path = tmp_dir_utf8(&dir).join("log.jsonl");
-        let log = ProvenanceLog::open(&path).expect("open");
+        let log = open_log(&path);
 
         for _ in 0..3 {
             log.append(empty_input()).expect("append");
@@ -523,14 +612,14 @@ mod tests {
         let rows = read_rows(&path);
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].prev_hash, GENESIS_HASH);
-        assert_eq!(rows[1].prev_hash, rows[0].row_hash);
-        assert_eq!(rows[2].prev_hash, rows[1].row_hash);
+        assert_eq!(rows[1].prev_hash, rows[0].this_hash);
+        assert_eq!(rows[2].prev_hash, rows[1].this_hash);
         for r in &rows {
-            verify_row_hash(r);
+            verify_this_hash(r);
         }
-        assert_eq!(rows[0].seq, 1);
-        assert_eq!(rows[1].seq, 2);
-        assert_eq!(rows[2].seq, 3);
+        assert_eq!(rows[0].ts_seq, 1);
+        assert_eq!(rows[1].ts_seq, 2);
+        assert_eq!(rows[2].ts_seq, 3);
     }
 
     #[test]
@@ -539,13 +628,13 @@ mod tests {
         let path = tmp_dir_utf8(&dir).join("log.jsonl");
 
         {
-            let log = ProvenanceLog::open(&path).expect("open");
+            let log = open_log(&path);
             for _ in 0..3 {
                 log.append(empty_input()).expect("append");
             }
         } // drop writer
 
-        let log2 = ProvenanceLog::open(&path).expect("reopen");
+        let log2 = open_log(&path);
         let seq = log2.append(empty_input()).expect("append after reopen");
         assert_eq!(seq, 4);
 
@@ -555,14 +644,14 @@ mod tests {
         for i in 1..rows.len() {
             assert_eq!(
                 rows[i].prev_hash,
-                rows[i - 1].row_hash,
+                rows[i - 1].this_hash,
                 "chain break at row {}",
                 i + 1
             );
         }
         for (i, r) in rows.iter().enumerate() {
-            assert_eq!(r.seq, (i + 1) as u64);
-            verify_row_hash(r);
+            assert_eq!(r.ts_seq, (i + 1) as u64);
+            verify_this_hash(r);
         }
     }
 
@@ -570,7 +659,7 @@ mod tests {
     fn concurrent_writers_in_same_process_serialize() {
         let dir = TempDir::new().expect("tmp");
         let path = tmp_dir_utf8(&dir).join("log.jsonl");
-        let log = Arc::new(ProvenanceLog::open(&path).expect("open"));
+        let log = Arc::new(open_log(&path));
 
         let mut handles = Vec::with_capacity(8);
         for _ in 0..8 {
@@ -590,22 +679,22 @@ mod tests {
         assert_eq!(rows.len(), 8);
 
         // The in-process mutex serializes appends, so file order MUST equal
-        // seq order: row N (0-indexed) on disk has seq = N+1.
+        // ts_seq order: row N (0-indexed) on disk has ts_seq = N+1.
         for (i, r) in rows.iter().enumerate() {
-            assert_eq!(r.seq, (i + 1) as u64, "seq gap at file row {}", i + 1);
+            assert_eq!(r.ts_seq, (i + 1) as u64, "ts_seq gap at file row {}", i + 1);
         }
         // Hash chain follows file order.
         assert_eq!(rows[0].prev_hash, GENESIS_HASH);
         for i in 1..rows.len() {
             assert_eq!(
                 rows[i].prev_hash,
-                rows[i - 1].row_hash,
+                rows[i - 1].this_hash,
                 "chain break at file row {}",
                 i + 1
             );
         }
         for r in &rows {
-            verify_row_hash(r);
+            verify_this_hash(r);
         }
     }
 
@@ -616,9 +705,10 @@ mod tests {
 
         // JSON but not a valid LogRow: missing required fields, has unknown
         // field. `deny_unknown_fields` ensures the parser refuses.
-        fs::write(&path, "{\"seq\": 1, \"garbage\": true}\n").expect("write");
+        fs::write(&path, "{\"ts_seq\": 1, \"garbage\": true}\n").expect("write");
 
-        let err = ProvenanceLog::open(&path).expect_err("must fail open");
+        let err =
+            ProvenanceLog::open(&path, TEST_SESSION_ID.to_string()).expect_err("must fail open");
         match err {
             LogError::Io(io) => {
                 let msg = io.to_string();
@@ -636,7 +726,8 @@ mod tests {
     fn rejects_non_regular_file() {
         // Pointing the log at a directory must fail with NotARegularFile.
         let dir = TempDir::new().expect("tmp");
-        let err = ProvenanceLog::open(tmp_dir_utf8(&dir)).expect_err("must fail");
+        let err = ProvenanceLog::open(tmp_dir_utf8(&dir), TEST_SESSION_ID.to_string())
+            .expect_err("must fail");
         match err {
             LogError::NotARegularFile(_) => {}
             other => panic!("expected NotARegularFile, got {:?}", other),
@@ -644,26 +735,90 @@ mod tests {
     }
 
     #[test]
-    fn canonical_json_excludes_row_hash_field() {
-        // Spec contract: the hashed bytes do not include `row_hash`. If this
-        // ever regresses, every previously-written log becomes unverifiable.
+    fn canonical_json_excludes_this_hash_field() {
+        // Spec contract: the hashed bytes do not include `this_hash`. If
+        // this ever regresses, every previously-written log becomes
+        // unverifiable.
         let rfh = RowForHash {
-            seq: 1,
             ts: Utc::now(),
-            event: LogEvent::FetchStart,
+            ts_seq: 1,
+            event: LogEvent::Fetch,
             ref_: None,
             source: None,
-            status: LogStatus::Ok,
-            error_code: None,
+            result: LogResult::Ok,
+            license: None,
             size_bytes: None,
-            safekey: None,
-            mcp_call_id: None,
-            host: "h",
+            store_path: None,
+            capability: Capability::Oa,
+            session_id: TEST_SESSION_ID,
+            error_code: None,
             prev_hash: GENESIS_HASH,
         };
-        let bytes = serde_json::to_vec(&rfh).expect("serialize");
+        let bytes = canonical_json_for_hash(&rfh).expect("canonicalize");
         let s = std::str::from_utf8(&bytes).expect("utf8");
-        assert!(!s.contains("row_hash"), "row_hash leaked into hash input");
+        assert!(!s.contains("this_hash"), "this_hash leaked into hash input");
         assert!(s.contains("\"prev_hash\":"));
+    }
+
+    #[test]
+    fn canonical_json_keys_are_lexicographically_sorted() {
+        // PROVENANCE_LOG.md §4: canonical JSON uses keys sorted
+        // lexicographically. The lex-first top-level key of a row is
+        // `capability` ("c..." < "e..." < ...). Build a row and assert the
+        // canonical bytes start with that key.
+        let rfh = RowForHash {
+            ts: Utc::now(),
+            ts_seq: 1,
+            event: LogEvent::Fetch,
+            ref_: Some("10.1234/example"),
+            source: Some("unpaywall"),
+            result: LogResult::Ok,
+            license: Some("CC-BY-4.0"),
+            size_bytes: Some(1234),
+            store_path: Some("papers/x.pdf"),
+            capability: Capability::Oa,
+            session_id: TEST_SESSION_ID,
+            error_code: None,
+            prev_hash: GENESIS_HASH,
+        };
+        let bytes = canonical_json_for_hash(&rfh).expect("canonicalize");
+        let s = std::str::from_utf8(&bytes).expect("utf8");
+        assert!(
+            s.starts_with("{\"capability\":"),
+            "canonical bytes must start with lex-first key, got: {}",
+            s
+        );
+        // Spot-check ordering: `prev_hash` (p) must come before `ref` (r),
+        // which must come before `result` (re...) — wait, "ref" < "result"
+        // lexicographically because 'f' < 's' in ascii at index 2 vs 'e' at
+        // index 2 of "result"... let me just check a couple of unambiguous
+        // pairs: `event` < `prev_hash`, and `ts` < `ts_seq`.
+        let event_idx = s.find("\"event\":").expect("event key present");
+        let prev_idx = s.find("\"prev_hash\":").expect("prev_hash key present");
+        assert!(event_idx < prev_idx, "event must precede prev_hash");
+        let ts_idx = s.find("\"ts\":").expect("ts key present");
+        let tsseq_idx = s.find("\"ts_seq\":").expect("ts_seq key present");
+        assert!(ts_idx < tsseq_idx, "ts must precede ts_seq");
+    }
+
+    #[test]
+    fn capability_serializes_kebab_case() {
+        // PROVENANCE_LOG.md §3 requires `oa`, `metadata`, `tdm-elsevier`,
+        // `tdm-aps`, `tdm-springer` on the wire (kebab-case).
+        let cases = [
+            (Capability::Oa, "\"oa\""),
+            (Capability::Metadata, "\"metadata\""),
+            (Capability::TdmElsevier, "\"tdm-elsevier\""),
+            (Capability::TdmAps, "\"tdm-aps\""),
+            (Capability::TdmSpringer, "\"tdm-springer\""),
+        ];
+        for (cap, expected) in cases {
+            let got = serde_json::to_string(&cap).expect("serialize");
+            assert_eq!(
+                got, expected,
+                "capability wire format mismatch for {:?}",
+                cap
+            );
+        }
     }
 }
