@@ -30,6 +30,10 @@ tdm-springer = ["doiget-core/tdm-springer"]
 
 [dependencies]
 doiget-core        = { workspace = true }
+# `doiget serve` (Phase 3 MCP foundation) hands off to the MCP server.
+# Stdio-only per ADR-0001; transitive features are constrained by the
+# workspace-root `rmcp` dep declaration.
+doiget-mcp         = { workspace = true }
 clap               = { workspace = true }
 anyhow             = { workspace = true }
 tokio              = { workspace = true }

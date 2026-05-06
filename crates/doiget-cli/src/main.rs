@@ -5,7 +5,8 @@
 //!
 //! Phase 1 progressively replaces the Phase-0 bail-out per subcommand. The
 //! `config`, `info`, `list-recent`, `search`, `fetch`, `audit-log`, `batch`,
-//! `bib`, and `csl` subcommands have landed; only `serve` remains.
+//! `bib`, and `csl` subcommands have landed. Phase 3 wires `serve` to
+//! the rmcp-based MCP server in `doiget-mcp`.
 
 use clap::{Parser, Subcommand};
 
@@ -102,14 +103,14 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Batch { path }) => doiget_cli::commands::batch::run(path).await,
         Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_),
         Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_),
-        // Other subcommands remain Phase-1-pending; they land in their own
-        // dedicated PRs to keep the diff scoped.
-        Some(_) => {
-            anyhow::bail!(
-                "doiget {} (Phase 1): subcommand not yet implemented. \
-                 See docs/PHASES.md.",
-                doiget_core::VERSION
-            );
+        // Phase 3 (MCP foundation). The MCP server runs on stdio per
+        // ADR-0001. The `tracing_subscriber` installed at the top of
+        // `main` is already redirected to stderr, so any rmcp / tool
+        // tracing output will not collide with JSON-RPC frames on stdout.
+        // See docs/SECURITY.md §3 / docs/MCP_TOOLS.md §8.
+        Some(Command::Serve) => {
+            let profile = doiget_core::CapabilityProfile::from_env()?;
+            doiget_mcp::Server::new(profile).run().await
         }
     }
 }
