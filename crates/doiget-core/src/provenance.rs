@@ -586,7 +586,7 @@ pub enum VerifyIssueKind {
 ///   on-disk format (PROVENANCE_LOG.md §2).
 /// - On a row that fails to parse as [`LogRow`], a `ParseError` is recorded
 ///   and verification continues on the next line. The chain anchor does NOT
-///   advance through an unparseable row, so the next valid row's `prev_hash`
+///   advance through an unparsable row, so the next valid row's `prev_hash`
 ///   is checked against the last successfully parsed row (or against
 ///   `"GENESIS"` if no valid row has been seen yet).
 /// - A `prev_hash == "GENESIS"` sentinel marks a chain restart (first row of
@@ -631,7 +631,7 @@ pub fn verify(path: &Utf8Path) -> Result<VerifyReport, LogError> {
                     kind: VerifyIssueKind::ParseError,
                     message: format!("failed to parse row as LogRow: {e}"),
                 });
-                // Chain anchor cannot advance through an unparseable row;
+                // Chain anchor cannot advance through an unparsable row;
                 // leave `prev_row` untouched so the next valid row's
                 // `prev_hash` is checked against the last-known anchor (or
                 // GENESIS if we never had one).
