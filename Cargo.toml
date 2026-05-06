@@ -88,6 +88,10 @@ reqwest = { version = "0.13", default-features = false, features = [
 camino    = "1"
 fs2       = "0.4"
 tempfile  = "3"
+# Cross-platform XDG / known-folder lookup for $HOME, $XDG_CONFIG_HOME,
+# %USERPROFILE%, %APPDATA%, etc. Used by `doiget config` resolution.
+# See docs/CONFIG.md §2.
+dirs      = "6"
 
 # Concurrency
 parking_lot = "0.12"
