@@ -51,8 +51,13 @@ bytes        = { workspace = true }
 futures-util = { workspace = true }
 
 [dev-dependencies]
-wiremock   = { workspace = true }
-proptest   = { workspace = true }
+wiremock     = { workspace = true }
+proptest     = { workspace = true }
+# Serializes tests that mutate process-global env state (used by the
+# `CapabilityProfile::from_env` resolution tests, which call
+# `std::env::set_var` / `remove_var`). See docs/CAPABILITY.md §2 and the
+# `EnvGuard` RAII guard in `crates/doiget-core/src/lib.rs::tests`.
+serial_test  = "3"
 # `test-util` enables `tokio::test(start_paused = true)` and the
 # `tokio::time::pause()` / `advance()` API used by rate_limiter tests.
-tokio      = { workspace = true, features = ["test-util"] }
+tokio        = { workspace = true, features = ["test-util"] }

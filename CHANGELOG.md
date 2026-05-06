@@ -146,6 +146,9 @@ for the full Phase 0 deliverable checklist.
   `#[non_exhaustive]` and funnels to `ErrorCode::InvalidRef` at the public
   MCP / CLI boundary via `impl From<RefParseError> for ErrorCode`, so the
   `INVALID_REF` surface seen by external callers is unchanged.
+- `CapabilityProfile::from_env` resolves TDM env vars per
+  [`docs/CAPABILITY.md`](docs/CAPABILITY.md) §2 (Phase 1; supersedes the
+  Phase 0 always-tier-1 stub).
 
 ### Fixed
 - `audit.yml`: removed the temporary in-CI `cargo generate-lockfile` step now
