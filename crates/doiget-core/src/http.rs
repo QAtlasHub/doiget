@@ -249,6 +249,26 @@ impl HttpClient {
         })
     }
 
+    /// Test-only constructor that relaxes `https_only` so wiremock servers
+    /// served over plain `http://127.0.0.1:N` are reachable. The redirect
+    /// closure (security-load-bearing) is unchanged: it still rejects
+    /// non-HTTPS redirects and off-allowlist hosts. Used by `Source` impl
+    /// integration tests inside this crate; never exposed publicly.
+    #[cfg(test)]
+    pub(crate) fn new_for_test_http(
+        allowlists: Vec<SourceAllowlist>,
+    ) -> Result<Self, reqwest::Error> {
+        let mut clients = HashMap::with_capacity(allowlists.len());
+        for entry in allowlists {
+            let source = entry.source.clone();
+            let client = build_client_test_http(entry)?;
+            clients.insert(source, client);
+        }
+        Ok(Self {
+            clients: Arc::new(clients),
+        })
+    }
+
     /// Fetch a URL, treating it as a JSON or text body. Caps at
     /// [`PDF_MAX_BYTES`].
     ///
@@ -486,6 +506,58 @@ fn build_client(allowlist: SourceAllowlist) -> Result<Client, reqwest::Error> {
         // older `use_rustls_tls()`. The workspace `reqwest` features
         // already pin `rustls`, so this is a re-assertion at builder
         // level rather than a feature switch.
+        .tls_backend_rustls()
+        .build()
+}
+
+/// Test-only builder mirroring [`build_client`] but with `https_only(false)`
+/// so the *initial leg* may be plain HTTP (wiremock servers bind to
+/// `http://127.0.0.1:N`). Redirect-policy enforcement is unchanged — every
+/// redirect hop is still required to be HTTPS and on the allowlist. Used by
+/// [`HttpClient::new_for_test_http`].
+#[cfg(test)]
+fn build_client_test_http(allowlist: SourceAllowlist) -> Result<Client, reqwest::Error> {
+    let user_agent = format!(
+        "doiget/{} (+https://github.com/sotashimozono/doiget)",
+        VERSION
+    );
+
+    let allowlist_for_closure = allowlist.clone();
+    let redirect_policy = Policy::custom(move |attempt| {
+        let scheme = attempt.url().scheme().to_string();
+        let host_opt = attempt.url().host_str().map(|h| h.to_ascii_lowercase());
+        let prev_count = attempt.previous().len();
+        if scheme != "https" {
+            return attempt.error(HttpError::InsecureRedirect { scheme });
+        }
+        if prev_count >= MAX_REDIRECTS {
+            return attempt.stop();
+        }
+        let host = match host_opt {
+            Some(h) => h,
+            None => {
+                return attempt.error(HttpError::RedirectDenied {
+                    source_key: allowlist_for_closure.source.clone(),
+                    host: String::new(),
+                });
+            }
+        };
+        if !allowlist_for_closure.matches(&host) {
+            return attempt.error(HttpError::RedirectDenied {
+                source_key: allowlist_for_closure.source.clone(),
+                host,
+            });
+        }
+        attempt.follow()
+    });
+
+    ClientBuilder::new()
+        .https_only(false)
+        .redirect(redirect_policy)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(TOTAL_TIMEOUT)
+        .read_timeout(READ_TIMEOUT)
+        .user_agent(user_agent)
         .tls_backend_rustls()
         .build()
 }

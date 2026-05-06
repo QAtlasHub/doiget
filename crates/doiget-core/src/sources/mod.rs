@@ -5,3 +5,4 @@
 //! sources land in Phase 4/5.
 
 pub mod crossref;
+pub mod unpaywall;
