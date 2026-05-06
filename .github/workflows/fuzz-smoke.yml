@@ -41,5 +41,11 @@ jobs:
           workspaces: "crates/doiget-core/fuzz -> target"
       - name: Install cargo-fuzz
         run: cargo install --locked cargo-fuzz
+      # `rust-toolchain.toml` at the repo root pins `channel = "stable"`, which
+      # would otherwise override the nightly we just installed. cargo-fuzz
+      # needs nightly for `-Zsanitizer`, so force nightly via env for this
+      # step. Equivalent to `cargo +nightly fuzz run ...`.
       - name: cargo fuzz run ${{ matrix.target }} (60 s)
+        env:
+          RUSTUP_TOOLCHAIN: nightly
         run: cargo fuzz run ${{ matrix.target }} --fuzz-dir crates/doiget-core/fuzz -- -max_total_time=60
