@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 
 /// Crate version. Used by `doiget-cli --version` and `doiget_health`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -119,6 +120,78 @@ impl Safekey {
     /// Returns the safekey as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl Ref {
+    /// Derives a deterministic, filesystem-safe key from this reference.
+    ///
+    /// The algorithm is the NORMATIVE binding spec in `docs/SAFEKEY.md` §3.
+    /// Both Rust and Julia implementations MUST produce bit-identical output
+    /// for every entry in `tests/fixtures/safekey/vectors.json`.
+    ///
+    /// # Algorithm summary
+    ///
+    /// 1. Prefix with `doi_` or `arxiv_` (per variant).
+    /// 2. Replace any character outside `[A-Za-z0-9._-]` with `_`.
+    /// 3. Collapse consecutive `_` runs to a single `_`.
+    /// 4. Trim leading/trailing `_`.
+    /// 5. If the result exceeds 192 bytes, take the first 192 bytes plus
+    ///    `_` plus the first 8 hex chars of `SHA-256(raw)` (where `raw` is
+    ///    the step-1 output, before escaping).
+    ///
+    /// The bound on `as_str()` after step 4 is pure ASCII (steps 1-3 produce
+    /// only ASCII bytes), so the byte-slice in step 5 cannot split a
+    /// multibyte char.
+    pub fn safekey(&self) -> Safekey {
+        // Step 0: prefix per variant. Doi/ArxivId hold the bare identifier
+        // (no `doi:` / `arxiv:` URI scheme — that is stripped by Ref::parse,
+        // not relevant here).
+        let raw = match self {
+            Ref::Doi(d) => format!("doi_{}", d.as_str()),
+            Ref::Arxiv(a) => format!("arxiv_{}", a.as_str()),
+        };
+
+        // Step 1: replace unsafe chars with '_'. Non-ASCII chars (emitted by
+        // String::chars() as full Unicode code points) all hit the wildcard
+        // arm and become a single '_'.
+        let escaped: String = raw
+            .chars()
+            .map(|c| match c {
+                'A'..='Z' | 'a'..='z' | '0'..='9' | '.' | '-' | '_' => c,
+                _ => '_',
+            })
+            .collect();
+
+        // Step 2: collapse consecutive '_' runs to a single '_'.
+        let mut collapsed = String::with_capacity(escaped.len());
+        let mut last_was_underscore = false;
+        for c in escaped.chars() {
+            if c == '_' {
+                if !last_was_underscore {
+                    collapsed.push('_');
+                }
+                last_was_underscore = true;
+            } else {
+                collapsed.push(c);
+                last_was_underscore = false;
+            }
+        }
+
+        // Step 3: trim leading/trailing '_'.
+        let trimmed = collapsed.trim_matches('_');
+
+        // Step 4: length-bound. After steps 1-3 `trimmed` is pure ASCII, so
+        // `len()` (bytes) == char count and `&trimmed[..192]` is char-safe.
+        let key = if trimmed.len() > 192 {
+            let digest = sha2::Sha256::digest(raw.as_bytes());
+            let hash = hex::encode(&digest[..4]);
+            format!("{}_{}", &trimmed[..192], hash)
+        } else {
+            trimmed.to_string()
+        };
+
+        Safekey(key)
     }
 }
 
@@ -364,7 +437,7 @@ impl CapabilityProfile {
 // The workspace lints deny them in production code; relax for the test module
 // only.
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -403,5 +476,88 @@ mod tests {
         assert!(p.tdm_aps.is_none());
         assert!(p.tdm_springer.is_none());
         assert_eq!(p.rate_limits.max_concurrent_fetches(), 5);
+    }
+
+    // -----------------------------------------------------------------
+    // Safekey reference vectors (docs/SAFEKEY.md §3, NORMATIVE).
+    //
+    // The vectors.json file is the binding cross-tool contract with
+    // BiblioFetch.jl: every entry MUST round-trip identically through
+    // both implementations. Phase 0 ships 13 entries; the full 100-entry
+    // set is gated on the BiblioFetch.jl pre-flight (ADR-0007 Status:
+    // Proposed at the time of this Phase 1 implementation).
+    //
+    // `Ref::parse` is concurrent W3-A work and is not on `main` yet, so
+    // this test branches on the input prefix (`doi:` / `arxiv:`) and
+    // constructs the variant directly via the in-crate `pub(crate)`
+    // tuple constructor.
+    // -----------------------------------------------------------------
+
+    #[derive(Deserialize)]
+    struct SafekeyVector {
+        input: String,
+        expected: String,
+    }
+
+    #[derive(Deserialize)]
+    struct SafekeyVectorFile {
+        vectors: Vec<SafekeyVector>,
+    }
+
+    /// In-crate test helper: build a `Ref` from the user-facing form used
+    /// in the vectors file, by stripping the `doi:` / `arxiv:` URI scheme
+    /// and wrapping the remainder. This bypasses validation; it is fine
+    /// here because the vectors are hand-curated and the test asserts the
+    /// derivation algorithm, not parser semantics.
+    fn ref_from_vector_input(input: &str) -> Ref {
+        if let Some(rest) = input.strip_prefix("doi:") {
+            Ref::Doi(Doi(rest.to_string()))
+        } else if let Some(rest) = input.strip_prefix("arxiv:") {
+            Ref::Arxiv(ArxivId(rest.to_string()))
+        } else {
+            panic!(
+                "vectors.json entry has unknown ref scheme (expected doi: or arxiv: prefix): {}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn safekey_matches_reference_vectors() {
+        // include_str! resolves relative to the file containing this macro
+        // call (crates/doiget-core/src/lib.rs), so we go up three levels
+        // to reach the workspace root, then down to tests/fixtures.
+        let raw = include_str!("../../../tests/fixtures/safekey/vectors.json");
+        let parsed: SafekeyVectorFile =
+            serde_json::from_str(raw).expect("vectors.json is valid JSON matching schema");
+
+        // Phase 1 Wave 3 ships the 13-entry placeholder set. The full
+        // 100-entry set is a follow-up gated on BiblioFetch.jl pre-flight.
+        assert_eq!(
+            parsed.vectors.len(),
+            13,
+            "expected 13 reference vectors; got {} (vectors.json drift?)",
+            parsed.vectors.len()
+        );
+
+        let mut failures: Vec<String> = Vec::new();
+        for v in &parsed.vectors {
+            let r = ref_from_vector_input(&v.input);
+            let got = r.safekey().as_str().to_string();
+            if got != v.expected {
+                failures.push(format!(
+                    "input={:?}\n  expected={:?}\n  got     ={:?}",
+                    v.input, v.expected, got
+                ));
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "{}/{} safekey reference vectors failed:\n{}",
+            failures.len(),
+            parsed.vectors.len(),
+            failures.join("\n")
+        );
     }
 }
