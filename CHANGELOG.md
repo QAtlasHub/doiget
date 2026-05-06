@@ -97,6 +97,18 @@ for the full Phase 0 deliverable checklist.
   safekey algorithm; the remaining 87 are a Phase 0 deliverable generated in
   coordination with BiblioFetch.jl per [docs/SAFEKEY.md](docs/SAFEKEY.md).
 
+#### Safekey derivation (Phase 1)
+- `doiget-core`: `impl Ref { pub fn safekey(&self) -> Safekey }` implementing
+  the NORMATIVE algorithm from [docs/SAFEKEY.md](docs/SAFEKEY.md) §3 — `doi_` /
+  `arxiv_` prefix, replace any character outside `[A-Za-z0-9._-]` with `_`,
+  collapse `_` runs, trim edges, and (for refs longer than 192 chars) append a
+  SHA-256(raw) 8-hex tag after a 192-byte ASCII-safe prefix. Binding spec
+  shared with BiblioFetch.jl per
+  [ADR-0007](docs/DECISIONS/0007-safekey-algorithm.md) (#39).
+- `safekey_matches_reference_vectors` test loads
+  `tests/fixtures/safekey/vectors.json` via `include_str!` and asserts
+  bit-identical output across all 13 reference vectors (#39).
+
 ### Changed
 - Bumped `reqwest` from `0.12` to `0.13` (#30). The umbrella `rustls-tls`
   feature was removed upstream and replaced with composable pieces; switched
@@ -109,6 +121,24 @@ for the full Phase 0 deliverable checklist.
 - CI: bumped MSRV to `1.85` then aligned with declared MSRV `1.86`; refreshed
   action SHAs; scoped `posture-lint` to source paths; allow `expect` / `unwrap`
   in tests; whitelisted `CDLA-Permissive-2.0`.
+- `doiget-core` safekey tests hardened: `safekey_matches_reference_vectors`
+  now asserts `>= 13` vectors (not `== 13`) so the test survives the clean
+  expansion to the NORMATIVE 100-entry set per
+  [docs/SAFEKEY.md](docs/SAFEKEY.md) §5 without re-touching the test;
+  added `safekey_truncates_long_inputs_with_sha256_suffix` exercising the
+  `> 192` branch (synthetic 220-char DOI suffix; asserts 201-char shape, `_`
+  separator at byte 192, lowercase hex suffix, determinism, and exact
+  SHA-256 hash content per [docs/SAFEKEY.md](docs/SAFEKEY.md) §3 step 5).
+  No new dependencies (#48).
+- Bumped `reqwest` `0.13.1` → `0.13.3` and `rustls-platform-verifier` `0.6.2`
+  → `0.7.0`; the standalone `webpki-roots` reqwest feature flag was dropped
+  (merged into `rustls` upstream in 0.13.2+, cert-bundle behaviour preserved).
+  The rustls-platform-verifier bump transitively advances `jni` `0.21.1` →
+  `0.22.4` (Android-only target dep), which in turn moves to `thiserror ^2`
+  and removes `thiserror 1.0.69` from the workspace lockfile entirely
+  (`thiserror 2.0.18` only). Reduces future RUSTSEC exposure surface by
+  proactively eliminating the dual-version `thiserror 1.x` transitive before
+  any advisory lands (#49).
 
 ### Fixed
 - `audit.yml`: removed the temporary in-CI `cargo generate-lockfile` step now
