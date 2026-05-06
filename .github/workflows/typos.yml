@@ -1,0 +1,23 @@
+name: typos
+
+# Spell / typo check across the repo. doiget is heavily docs-driven (ADRs,
+# NORMATIVE policy docs, READMEs), so a typo guard is high-value low-cost.
+# Read-only: the action defaults to fail-on-typos (no auto-fix).
+# To allow a flagged word, add it under [default.extend-words] in .typos.toml.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  typos:
+    name: typos
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
+      - uses: crate-ci/typos@bbaefadf97b0ec5fdc942684b647f1a6ab250274     # v1.46.0
