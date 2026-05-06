@@ -29,6 +29,7 @@ tdm-springer = ["dep:secrecy"]
 [dependencies]
 tokio       = { workspace = true }
 thiserror   = { workspace = true }
+async-trait = { workspace = true }
 tracing     = { workspace = true }
 secrecy     = { workspace = true, optional = true }
 reqwest     = { workspace = true }
