@@ -6,12 +6,14 @@
 //!   [`ArxivSource`], the `[doiget]` extension table is populated with the
 //!   resolved license, source, size, and `fetched_at`, and the result is
 //!   written to the on-disk store with both the metadata TOML and the PDF.
-//! - **DOI refs** — metadata-only. The orchestrator queries Crossref for the
-//!   bibliographic record (title / authors / year / venue / type), then
-//!   enriches with Unpaywall to recover the OA license. The PDF is NOT
-//!   fetched in this PR — that requires a per-publisher redirect allowlist
-//!   for the discovered OA URL, which is deferred to a follow-up
-//!   (see `docs/REDIRECT_ALLOWLIST.md` §3 and the PR body).
+//! - **DOI refs** — Crossref metadata + Unpaywall license enrichment + an
+//!   OA PDF fetch when Unpaywall's `best_oa_location.url_for_pdf` (or
+//!   `best_oa_location.url`) resolves to a host on the synthetic
+//!   `"oa-publisher"` allowlist (`docs/REDIRECT_ALLOWLIST.md` §3). The OA
+//!   URL host check is informed-best-effort; if the host is not on the
+//!   allowlist or the body fails the magic-byte check, the orchestrator
+//!   logs a `Fetch err` row under `source = "oa-publisher"` and falls back
+//!   to metadata-only success — the metadata is still useful.
 //!
 //! ## Provenance contract
 //!
@@ -35,6 +37,7 @@
 //! | `DOIGET_ARXIV_BASE` | `https://arxiv.org` | arXiv source base (test override) |
 //! | `DOIGET_CROSSREF_BASE` | `https://api.crossref.org` | Crossref source base (test override) |
 //! | `DOIGET_UNPAYWALL_BASE` | `https://api.unpaywall.org/v2` | Unpaywall source base (test override) |
+//! | `DOIGET_OA_PUBLISHER_BASE` | (production allowlist) | OA publisher host allowlist override (test override) |
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -43,7 +46,7 @@ use anyhow::{anyhow, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::Utc;
 
-use doiget_core::http::{tier_1_allowlist, HttpClient};
+use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, HttpClient, HttpError};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
 use doiget_core::source::{FetchContext, FetchResult, Source};
@@ -120,21 +123,31 @@ fn config_dir_utf8() -> Result<Utf8PathBuf> {
 
 /// Construct the workspace-wide [`HttpClient`].
 ///
-/// Production path: `HttpClient::new(tier_1_allowlist())` — strict
-/// HTTPS-only with the canonical Tier-1 redirect allowlist (Crossref,
-/// Unpaywall, arXiv). Test path: when any of the three `DOIGET_*_BASE` env
-/// vars is set, build a multi-source relaxed-`https_only` client whose
-/// per-source allowlist is derived from the corresponding env-var hosts.
-/// This lets the integration test under `tests/fetch_arxiv_e2e.rs` point
-/// the orchestrator at a wiremock server without ever touching the real
-/// network.
+/// Production path: `HttpClient::new(tier_1_allowlist() ∪ oa_publisher_allowlist())` —
+/// strict HTTPS-only with the canonical Tier-1 redirect allowlist (Crossref,
+/// Unpaywall, arXiv) plus the synthetic `"oa-publisher"` allowlist used for
+/// the OA PDF leg of the DOI fetch path (`fetch_doi` issues
+/// `HttpClient::fetch_pdf("oa-publisher", url)` against the URL Unpaywall
+/// returned in `best_oa_location`). The OA-publisher list is
+/// informed-best-effort per `docs/REDIRECT_ALLOWLIST.md` §3.
+///
+/// Test path: when any of the three `DOIGET_*_BASE` env vars is set, build a
+/// multi-source relaxed-`https_only` client whose per-source allowlist is
+/// derived from the corresponding env-var hosts. The `oa-publisher` source
+/// key is registered against the same host (typically the wiremock origin)
+/// when `DOIGET_OA_PUBLISHER_BASE` is set — this lets the integration tests
+/// under `tests/fetch_doi_oa_pdf_e2e.rs` exercise the full PDF leg without
+/// touching the real network.
 fn build_http_client() -> Result<HttpClient> {
     let arxiv = std::env::var("DOIGET_ARXIV_BASE").ok();
     let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
     let unpaywall = std::env::var("DOIGET_UNPAYWALL_BASE").ok();
+    let oa_publisher = std::env::var("DOIGET_OA_PUBLISHER_BASE").ok();
 
-    if arxiv.is_none() && crossref.is_none() && unpaywall.is_none() {
-        return HttpClient::new(tier_1_allowlist()).context("building HTTP client");
+    if arxiv.is_none() && crossref.is_none() && unpaywall.is_none() && oa_publisher.is_none() {
+        let mut allowlists = tier_1_allowlist();
+        allowlists.extend(oa_publisher_allowlist());
+        return HttpClient::new(allowlists).context("building HTTP client");
     }
 
     // Test-base mode: build a relaxed client per overridden source.
@@ -143,6 +156,7 @@ fn build_http_client() -> Result<HttpClient> {
         ("arxiv", arxiv.as_deref()),
         ("crossref", crossref.as_deref()),
         ("unpaywall", unpaywall.as_deref()),
+        ("oa-publisher", oa_publisher.as_deref()),
     ] {
         if let Some(b) = base {
             let url = url::Url::parse(b)
@@ -467,8 +481,17 @@ async fn fetch_arxiv(
     Ok(())
 }
 
-/// DOI branch — Crossref metadata + Unpaywall license enrichment. No PDF
-/// in this PR (the OA URL fetch is deferred — see module docs).
+/// DOI branch — Crossref metadata + Unpaywall license enrichment, plus
+/// (Phase 1 success criterion) an OA PDF fetch when Unpaywall returns a
+/// `best_oa_location` URL whose host is in the `oa-publisher` allowlist
+/// (`docs/REDIRECT_ALLOWLIST.md` §3).
+///
+/// **Partial-success semantics.** Per the `informed-best-effort` posture in
+/// `docs/REDIRECT_ALLOWLIST.md` §3, an OA URL whose host is NOT in the
+/// allowlist (or whose body fails the magic-byte check) does NOT abort the
+/// fetch — the metadata is still useful. The PDF outcome is logged as a
+/// distinct `Fetch` row with `source = "oa-publisher"` and the metadata
+/// write proceeds either way.
 async fn fetch_doi(
     doi: &Doi,
     ref_: &Ref,
@@ -487,20 +510,53 @@ async fn fetch_doi(
     let crossref_meta = cross.metadata_json.unwrap_or(serde_json::Value::Null);
     let extracted = extract_crossref_fields(&crossref_meta);
 
-    // Unpaywall second — license enrichment. A failure here is non-fatal:
-    // we still write the Crossref-derived metadata.
+    // Unpaywall second — license enrichment + OA URL discovery. A failure
+    // here is non-fatal: we still write the Crossref-derived metadata.
     let unpaywall = build_unpaywall_source(&cfg.unpaywall_email)?;
     let upw_result = unpaywall.fetch(ref_, profile, ctx).await;
-    let (license, source_label) = match upw_result {
-        Ok(r) if r.license != "unknown" => (r.license, "unpaywall".to_string()),
-        Ok(r) => (r.license, "crossref".to_string()),
+    let (license, source_label, oa_url) = match upw_result {
+        Ok(r) => {
+            let oa = extract_best_oa_url(r.metadata_json.as_ref());
+            let label = if r.license != "unknown" {
+                "unpaywall".to_string()
+            } else {
+                "crossref".to_string()
+            };
+            (r.license, label, oa)
+        }
         Err(e) => {
             tracing::warn!(
                 error = %e,
                 "unpaywall fetch failed; continuing with crossref-only metadata"
             );
-            ("unknown".to_string(), "crossref".to_string())
+            ("unknown".to_string(), "crossref".to_string(), None)
         }
+    };
+
+    // Step: OA PDF leg. Try the URL Unpaywall returned via the
+    // `oa-publisher` source allowlist. Magic-byte check is enforced inside
+    // `HttpClient::fetch_pdf`. Any failure here is logged as a distinct
+    // `Fetch err` row and falls through to metadata-only success.
+    let pdf_outcome = if let Some(url) = oa_url {
+        try_fetch_oa_pdf(doi, &url, ctx).await
+    } else {
+        None
+    };
+
+    // If the PDF leg succeeded, the on-disk source label flips to
+    // `oa-publisher` (we got actual content, not just a metadata-derived
+    // license). Otherwise keep the metadata-source label.
+    let (final_source_label, size_bytes, pdf_path_relative, pdf_staged) = match &pdf_outcome {
+        Some((bytes, _final_url)) => {
+            let staged = stage_pdf_to_tempfile(bytes.as_ref())?;
+            (
+                "oa-publisher".to_string(),
+                bytes.len() as u64,
+                Some(format!("{}.pdf", safekey.as_str())),
+                Some(staged),
+            )
+        }
+        None => (source_label, 0u64, None, None),
     };
 
     let metadata = Metadata {
@@ -518,29 +574,144 @@ async fn fetch_doi(
         type_: extracted.type_,
         keywords: Vec::new(),
         url: cross.final_url.as_ref().map(|u| u.to_string()),
-        pdf_path: None,
+        pdf_path: pdf_path_relative,
         doiget: Some(DoigetExtension {
             fetched_at: Utc::now(),
-            source: source_label,
+            source: final_source_label,
             license,
-            size_bytes: 0,
+            size_bytes,
             mcp_call_id: None,
         }),
         other: BTreeMap::new(),
     };
 
-    write_to_store(store, safekey, &metadata, None, ctx).await?;
+    let pdf_src_path = pdf_staged
+        .as_ref()
+        .and_then(|tmp| Utf8Path::from_path(tmp.path()).map(|p| p.to_path_buf()));
+    write_to_store(store, safekey, &metadata, pdf_src_path.as_deref(), ctx).await?;
+    drop(pdf_staged); // keep tempfile alive across write_to_store
 
-    let toml_path = store
-        .root()
-        .join(".metadata")
-        .join(format!("{}.toml", safekey.as_str()));
-    print_success(format_args!(
-        "fetched doi:{} (metadata-only) -> {}",
-        doi.as_str(),
-        toml_path
-    ));
+    if pdf_outcome.is_some() {
+        let pdf_path = store.root().join(format!("{}.pdf", safekey.as_str()));
+        print_success(format_args!(
+            "fetched doi:{} ({} bytes) -> {}",
+            doi.as_str(),
+            metadata.doiget.as_ref().map(|d| d.size_bytes).unwrap_or(0),
+            pdf_path
+        ));
+    } else {
+        let toml_path = store
+            .root()
+            .join(".metadata")
+            .join(format!("{}.toml", safekey.as_str()));
+        print_success(format_args!(
+            "fetched doi:{} (metadata-only) -> {}",
+            doi.as_str(),
+            toml_path
+        ));
+    }
     Ok(())
+}
+
+/// Pull the preferred OA URL out of an Unpaywall `metadata_json` envelope.
+/// Tries `best_oa_location.url_for_pdf` first (direct PDF link), falling
+/// back to `best_oa_location.url` (landing page that typically redirects
+/// to the PDF). Returns `None` if neither field is present, malformed, or
+/// fails to parse as a URL.
+fn extract_best_oa_url(meta: Option<&serde_json::Value>) -> Option<url::Url> {
+    let meta = meta?;
+    let loc = meta.get("best_oa_location")?;
+    let candidate = loc
+        .get("url_for_pdf")
+        .and_then(|v| v.as_str())
+        .or_else(|| loc.get("url").and_then(|v| v.as_str()))?;
+    url::Url::parse(candidate).ok()
+}
+
+/// Attempt the OA PDF fetch under the `"oa-publisher"` source key. Logs a
+/// `Fetch ok` row on success and a `Fetch err` row with
+/// `error_code = "NETWORK_ERROR"` on every failure mode (redirect denied,
+/// magic-byte mismatch, transport, status, timeout). Returns `Some((bytes,
+/// final_url))` on success, `None` otherwise — the caller treats `None` as
+/// "metadata-only success", per the `informed-best-effort` posture in
+/// `docs/REDIRECT_ALLOWLIST.md` §3.
+async fn try_fetch_oa_pdf(
+    doi: &Doi,
+    url: &url::Url,
+    ctx: &FetchContext,
+) -> Option<(Vec<u8>, url::Url)> {
+    const SOURCE: &str = "oa-publisher";
+    let _permit = ctx.rate_limiter.acquire(SOURCE).await;
+    match ctx.http.fetch_pdf(SOURCE, url.clone()).await {
+        Ok((body, final_url)) => {
+            let size_bytes = body.len() as u64;
+            // Best-effort log row; if appending fails, surface a tracing
+            // warning but still return success — the body is in memory and
+            // the metadata write below will still go through.
+            if let Err(e) = ctx.log.append(RowInput {
+                event: LogEvent::Fetch,
+                result: LogResult::Ok,
+                capability: Capability::Oa,
+                ref_: Some(doi.as_str()),
+                source: Some(SOURCE),
+                error_code: None,
+                size_bytes: Some(size_bytes),
+                license: None,
+                store_path: None,
+            }) {
+                tracing::warn!(error = %e, "appending oa-publisher Fetch ok row failed");
+            }
+            Some((body.to_vec(), final_url))
+        }
+        Err(e) => {
+            // Categorize for tracing visibility — the on-disk row is the
+            // same `NETWORK_ERROR` for all transport-level outcomes per
+            // `docs/ERRORS.md`.
+            match &e {
+                HttpError::RedirectDenied { host, .. } => {
+                    tracing::info!(
+                        oa_url = %url,
+                        denied_host = %host,
+                        "OA URL host outside oa-publisher allowlist; metadata-only fallback"
+                    );
+                }
+                HttpError::NotAPdf { .. } => {
+                    tracing::info!(
+                        oa_url = %url,
+                        "OA URL did not return a PDF magic byte; metadata-only fallback"
+                    );
+                }
+                other => {
+                    tracing::warn!(
+                        oa_url = %url,
+                        error = %other,
+                        "OA PDF fetch failed; metadata-only fallback"
+                    );
+                }
+            }
+            let _ = ctx.log.append(RowInput {
+                event: LogEvent::Fetch,
+                result: LogResult::Err,
+                capability: Capability::Oa,
+                ref_: Some(doi.as_str()),
+                source: Some(SOURCE),
+                error_code: Some("NETWORK_ERROR"),
+                size_bytes: None,
+                license: None,
+                store_path: None,
+            });
+            None
+        }
+    }
+}
+
+/// Stage PDF bytes to a tempfile so the existing `Store::write` atomic-
+/// rename code path applies (the store takes a path, not bytes). Mirrors
+/// the staging helper inlined in `fetch_arxiv`.
+fn stage_pdf_to_tempfile(bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
+    let tmp = tempfile::NamedTempFile::new().context("creating PDF staging tempfile")?;
+    std::fs::write(tmp.path(), bytes).context("staging PDF bytes")?;
+    Ok(tmp)
 }
 
 /// Single-line user-visible success message, written to stderr per ADR-0001

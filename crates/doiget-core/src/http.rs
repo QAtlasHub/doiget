@@ -135,6 +135,65 @@ pub fn tier_1_allowlist() -> Vec<SourceAllowlist> {
     ]
 }
 
+/// Hard-coded Phase 1 allowlist for the synthetic `"oa-publisher"` source —
+/// the publisher / preprint / repository hosts to which Unpaywall's
+/// `best_oa_location.url` (or `url_for_pdf`) typically resolves.
+///
+/// **Status: informed-best-effort.** Per `docs/REDIRECT_ALLOWLIST.md` §3,
+/// every entry below is a documented OA-publisher host pulled from the
+/// public DOI / OA discovery surface as of this function's authoring; they
+/// are **not** a substitute for empirical validation. Entries marked
+/// `(unverified)` MUST be confirmed by a real fetch or removed before
+/// Phase 1 is closed.
+///
+/// The orchestrator (`doiget-cli::commands::fetch::fetch_doi`) calls
+/// [`HttpClient::fetch_pdf`] under the `"oa-publisher"` source key when
+/// Unpaywall returns an OA URL. If the OA host is not in this list, the
+/// PDF leg is denied (`HttpError::RedirectDenied`) and the orchestrator
+/// falls back to metadata-only success (the `informed-best-effort`
+/// posture from the spec section above).
+pub fn oa_publisher_allowlist() -> Vec<SourceAllowlist> {
+    vec![SourceAllowlist::new(
+        "oa-publisher",
+        vec![
+            // Springer Nature OA imprints. Springer / SpringerOpen / Nature
+            // OA URLs all resolve under one of these registrable suffixes.
+            // (unverified) — confirm by replaying real Unpaywall responses.
+            "*.springer.com".to_string(),
+            "*.springeropen.com".to_string(),
+            "*.springernature.com".to_string(),
+            "*.nature.com".to_string(),
+            // Wiley OA. (unverified)
+            "*.wiley.com".to_string(),
+            // Elsevier OA route only — the TDM gated path is a separate
+            // source (`tdm-elsevier`, Phase 5c) and is not covered here.
+            // (unverified)
+            "*.elsevier.com".to_string(),
+            "*.sciencedirect.com".to_string(),
+            // Frontiers. (unverified)
+            "*.frontiersin.org".to_string(),
+            // MDPI. (unverified)
+            "*.mdpi.com".to_string(),
+            // PLOS. (unverified)
+            "*.plos.org".to_string(),
+            // Preprint servers — biorxiv / medrxiv. (unverified)
+            "*.biorxiv.org".to_string(),
+            "*.medrxiv.org".to_string(),
+            // Europe PMC + NIH PMC. (unverified)
+            "europepmc.org".to_string(),
+            "*.europepmc.org".to_string(),
+            "*.nih.gov".to_string(),
+            "*.ncbi.nlm.nih.gov".to_string(),
+            // arXiv — already on the `arxiv` tier-1 allowlist, but the
+            // Unpaywall-driven path uses the `oa-publisher` source key,
+            // so we mirror the host list here too. See REDIRECT_ALLOWLIST.md
+            // §3.3 for the underlying entries.
+            "arxiv.org".to_string(),
+            "*.arxiv.org".to_string(),
+        ],
+    )]
+}
+
 // ---------------------------------------------------------------------------
 // HttpError
 // ---------------------------------------------------------------------------
@@ -551,6 +610,44 @@ mod tests {
         let lists = tier_1_allowlist();
         assert!(lists.iter().any(|a| a.source == "unpaywall"));
         assert!(lists.iter().any(|a| a.source == "arxiv"));
+    }
+
+    #[test]
+    fn oa_publisher_allowlist_groups_under_one_synthetic_source() {
+        // The OA-publisher fan-out from Unpaywall's `best_oa_location.url`
+        // is keyed under a single synthetic `"oa-publisher"` source so the
+        // orchestrator can pass that one source key to
+        // `HttpClient::fetch_pdf`. See `docs/REDIRECT_ALLOWLIST.md` §3 (the
+        // informed-best-effort note) and the function-level docs in
+        // [`oa_publisher_allowlist`].
+        let lists = oa_publisher_allowlist();
+        assert_eq!(lists.len(), 1, "exactly one synthetic source entry");
+        assert_eq!(lists[0].source, "oa-publisher");
+    }
+
+    #[test]
+    fn oa_publisher_allowlist_matches_known_oa_hosts() {
+        let lists = oa_publisher_allowlist();
+        let oa = lists
+            .iter()
+            .find(|a| a.source == "oa-publisher")
+            .expect("oa-publisher entry");
+        // Spot-check a representative entry per host family.
+        assert!(oa.matches("link.springer.com"));
+        assert!(oa.matches("nature.com"));
+        assert!(oa.matches("onlinelibrary.wiley.com"));
+        assert!(oa.matches("www.frontiersin.org"));
+        assert!(oa.matches("www.mdpi.com"));
+        assert!(oa.matches("journals.plos.org"));
+        assert!(oa.matches("www.biorxiv.org"));
+        assert!(oa.matches("europepmc.org"));
+        assert!(oa.matches("www.ncbi.nlm.nih.gov"));
+        assert!(oa.matches("arxiv.org"));
+        // Negative: an attacker host is not covered.
+        assert!(!oa.matches("attacker.test"));
+        // Negative: dot-boundary safety — `*.springer.com` must not match
+        // `notspringer.com`.
+        assert!(!oa.matches("notspringer.com"));
     }
 
     #[test]

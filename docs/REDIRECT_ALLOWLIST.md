@@ -142,6 +142,52 @@ Notes:
   the Phase 1 fetcher observes such a redirect, the response is to add the
   CDN's host suffix here via ADR — NOT to silently widen the allowlist at runtime.
 
+### 3.4 `oa-publisher`
+
+| Field | Value |
+|---|---|
+| `source` | `oa-publisher` (synthetic — see notes) |
+| `redirect_hosts` | `*.springer.com`, `*.springeropen.com`, `*.springernature.com`, `*.nature.com`, `*.wiley.com`, `*.elsevier.com`, `*.sciencedirect.com`, `*.frontiersin.org`, `*.mdpi.com`, `*.plos.org`, `*.biorxiv.org`, `*.medrxiv.org`, `europepmc.org`, `*.europepmc.org`, `*.nih.gov`, `*.ncbi.nlm.nih.gov`, `arxiv.org`, `*.arxiv.org` |
+
+Notes:
+
+- **Synthetic source key.** Unlike the other §3 entries, `oa-publisher` is not
+  one of the integrated metadata sources in [`SOURCES.md`](SOURCES.md) §1. It is
+  the source key the Phase 1 orchestrator uses when fetching the PDF that
+  Unpaywall's `best_oa_location.url_for_pdf` (or `best_oa_location.url`)
+  resolves to — i.e. the URL Unpaywall hands back, which lives on a publisher /
+  preprint / repository host, not on `api.unpaywall.org`. The redirect-policy
+  closure is the same per-source one used everywhere else; the orchestrator
+  registers an `HttpClient` with this allowlist and calls
+  `HttpClient::fetch_pdf("oa-publisher", url)`.
+- **Informed-best-effort.** Per §3 above, every entry below is the documented
+  OA host for the named publisher / repository as of the implementation
+  authoring; they have NOT all been validated against real fetch traces. Each
+  entry below is `(unverified)` for Phase 1 and MUST be either confirmed or
+  removed before Phase 1 closes.
+- **Partial-success semantics.** When the OA URL host is NOT on this list, the
+  redirect is denied at the closure boundary (`HttpError::RedirectDenied`) and
+  the orchestrator falls back to metadata-only success — the metadata is still
+  useful. The PDF outcome is logged as a distinct `Fetch` provenance row with
+  `source = "oa-publisher"` and `result = err` /
+  `error_code = "NETWORK_ERROR"`.
+- **Host families** (each `(unverified)`):
+  - Springer Nature OA imprints: `*.springer.com`, `*.springeropen.com`,
+    `*.springernature.com`, `*.nature.com`.
+  - Wiley OA: `*.wiley.com`.
+  - Elsevier OA route only: `*.elsevier.com`, `*.sciencedirect.com`. The TDM
+    gated path is a separate Tier 3 source (`elsevier-tdm`, Phase 5c).
+  - Frontiers: `*.frontiersin.org`.
+  - MDPI: `*.mdpi.com`.
+  - PLOS: `*.plos.org`.
+  - Preprint servers: `*.biorxiv.org`, `*.medrxiv.org`.
+  - Europe PMC + NIH PMC: `europepmc.org`, `*.europepmc.org`, `*.nih.gov`,
+    `*.ncbi.nlm.nih.gov`.
+  - arXiv: `arxiv.org`, `*.arxiv.org` (mirrors §3.3 because the Unpaywall
+    flow re-derives an arXiv URL through the `oa-publisher` source key, not
+    the tier-1 `arxiv` key).
+- Additions or removals follow the §5 update process.
+
 ## 4. Phase 2 / Phase 3 entries
 
 | Source | Tier | Phase | Status |
