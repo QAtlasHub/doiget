@@ -13,4 +13,7 @@
 # Generated / vendored / fixture files where typo enforcement is not useful.
 # Add new globs here (NOT new code paths) when typos has false positives in
 # fixtures or third-party blobs.
-extend-exclude = ["Cargo.lock", "tests/fixtures/**", "*.lock"]
+# `supply-chain/` is cargo-vet's machine-generated audit data (peer-imported
+# crate exemptions). Crate names like `flate2` / `writeable` are false-positive
+# hits for typos; we don't curate this content.
+extend-exclude = ["Cargo.lock", "tests/fixtures/**", "*.lock", "supply-chain/**"]
