@@ -1,0 +1,61 @@
+name: "Feature request"
+description: "Propose a feature, behavior change, or enhancement."
+title: "[Feature] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please skim `docs/SCOPE.md` — doiget has a deliberately narrow scope (no PDF content processing, no telemetry, no marketing). Out-of-scope ideas should go to Discussions instead.
+  - type: dropdown
+    id: phase-target
+    attributes:
+      label: "Phase target"
+      description: "Which Phase would this feature land in?"
+      options:
+        - Phase 1 (resolver/sources)
+        - Phase 2 (store)
+        - Phase 3 (MCP)
+        - Phase 4 (Tier 2)
+        - Phase 5+ (TDM)
+        - Phase 7 (optional features)
+        - unknown
+    validations:
+      required: true
+  - type: textarea
+    id: problem-statement
+    attributes:
+      label: "Problem statement"
+      description: "What problem does this solve? Whose problem?"
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: "Proposed solution"
+      description: "Describe the proposed change in enough detail that a reviewer could evaluate scope and effort."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives-considered
+    attributes:
+      label: "Alternatives considered"
+      description: "What other approaches did you consider? Why did you reject them? (Optional but encouraged.)"
+    validations:
+      required: false
+  - type: textarea
+    id: adr-implication
+    attributes:
+      label: "ADR implication"
+      description: "Does this change a NORMATIVE doc or imply a new ADR? If yes, link the relevant ADR(s)."
+    validations:
+      required: false
+  - type: checkboxes
+    id: scope-sanity
+    attributes:
+      label: "Scope sanity"
+      options:
+        - label: "I read `docs/SCOPE.md` and this proposal is in-scope (or I argue here why scope should expand)"
+          required: true
+        - label: "This does not introduce telemetry / phone-home / self-update (ADR-0015)"
+          required: true
