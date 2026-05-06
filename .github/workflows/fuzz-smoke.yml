@@ -1,0 +1,45 @@
+name: fuzz-smoke
+# Smoke-fuzz the input-validation surface. NOT exhaustive — 60 s per target.
+# Long fuzz runs happen out-of-band; this CI catches harness compilation
+# breaks and immediate panics. See docs/SECURITY.md §1.1.
+
+on:
+  pull_request:
+    paths:
+      - "crates/doiget-core/src/**"
+      - "crates/doiget-core/fuzz/**"
+      - ".github/workflows/fuzz-smoke.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/doiget-core/src/**"
+      - "crates/doiget-core/fuzz/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: cargo fuzz smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [doi_parse, arxiv_parse, ref_parse]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4   # v2.9.1
+        with:
+          workspaces: "crates/doiget-core/fuzz -> target"
+      - name: Install cargo-fuzz
+        run: cargo install --locked cargo-fuzz
+      - name: cargo fuzz run ${{ matrix.target }} (60 s)
+        run: cargo fuzz run ${{ matrix.target }} --fuzz-dir crates/doiget-core/fuzz -- -max_total_time=60

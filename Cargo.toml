@@ -8,6 +8,10 @@ members = [
 exclude = [
     # Phase 7 optional, default OFF (see ADR-0008 / docs/SCOPE.md)
     "crates/doiget-obsidian",
+    # cargo-fuzz harness — requires nightly toolchain (libfuzzer-sys),
+    # so it lives outside the stable workspace. See
+    # crates/doiget-core/fuzz/README.md and docs/SECURITY.md §1.1.
+    "crates/doiget-core/fuzz",
 ]
 
 [workspace.package]

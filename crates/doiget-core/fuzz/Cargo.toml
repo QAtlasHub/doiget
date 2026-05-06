@@ -1,0 +1,45 @@
+[package]
+name = "doiget-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Force cargo to treat this crate as its own one-crate workspace so
+# `cargo fuzz` (which invokes the manifest directly via `--manifest-path`)
+# does not try to claim membership in the parent doiget workspace, which
+# pins stable Rust. The parent `Cargo.toml` also lists this directory in
+# `workspace.exclude`; both belt and suspenders are required.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+doiget-core = { path = ".." }
+
+# This crate is intentionally excluded from the main workspace
+# (see workspace `Cargo.toml`) because libfuzzer-sys requires the nightly
+# toolchain. See `crates/doiget-core/fuzz/README.md` and
+# `docs/SECURITY.md` §1.1.
+
+[[bin]]
+name = "doi_parse"
+path = "fuzz_targets/doi_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "arxiv_parse"
+path = "fuzz_targets/arxiv_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ref_parse"
+path = "fuzz_targets/ref_parse.rs"
+test = false
+doc = false
+bench = false
