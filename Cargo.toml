@@ -65,9 +65,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"]
 # ADR-0002). `doiget-core/Cargo.toml` does this correctly.
 secrecy = { version = "0.10", features = ["serde"] }
 
-# HTTP client (rustls only — no openssl by deny.toml)
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls", "json", "gzip", "brotli", "stream",
+# HTTP client (rustls only — no openssl by deny.toml).
+# reqwest 0.13 split the old `rustls-tls` umbrella into composable pieces:
+#   `rustls`       = rustls backend + aws-lc-rs crypto provider + platform-verifier roots
+#   `webpki-roots` = bundled Mozilla WebPKI roots (cross-platform, no system store needed)
+# Together these reproduce the 0.12 `rustls-tls` behaviour.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls", "webpki-roots", "json", "gzip", "brotli", "stream",
 ] }
 
 # Filesystem
