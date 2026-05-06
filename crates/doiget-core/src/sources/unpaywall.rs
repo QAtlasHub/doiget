@@ -38,10 +38,13 @@ impl UnpaywallSource {
         }
     }
 
-    /// Test constructor — accepts an arbitrary base URL (e.g., a wiremock
-    /// http://127.0.0.1:N). Available in cfg(test) only.
-    #[cfg(test)]
-    pub(crate) fn with_base(base: Url, contact_email: String) -> Self {
+    /// Construct with an arbitrary base URL.
+    ///
+    /// The orchestrator (`doiget-cli::commands::fetch`) uses this to honor
+    /// the `DOIGET_UNPAYWALL_BASE` env var, which lets integration tests
+    /// point the source at a wiremock origin without compile-time gates.
+    /// Production callers use [`UnpaywallSource::new`].
+    pub fn with_base(base: Url, contact_email: String) -> Self {
         Self {
             base,
             contact_email,

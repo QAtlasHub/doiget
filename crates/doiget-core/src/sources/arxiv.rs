@@ -61,10 +61,13 @@ impl ArxivSource {
         Self { base }
     }
 
-    /// Test constructor — accepts an arbitrary base URL so a `wiremock`
-    /// server can stand in for `arxiv.org` during unit tests.
-    #[cfg(test)]
-    pub(crate) fn with_base(base: Url) -> Self {
+    /// Construct with an arbitrary base URL.
+    ///
+    /// The orchestrator (`doiget-cli::commands::fetch`) uses this to honor
+    /// the `DOIGET_ARXIV_BASE` env var, which lets integration tests point
+    /// the source at a wiremock origin without resorting to compile-time
+    /// gates. Production callers use [`ArxivSource::new`].
+    pub fn with_base(base: Url) -> Self {
         Self { base }
     }
 

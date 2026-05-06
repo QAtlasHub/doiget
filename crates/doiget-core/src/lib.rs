@@ -495,6 +495,21 @@ impl Safekey {
 }
 
 impl Ref {
+    /// Returns the bare identifier string usable as a provenance `ref` field.
+    ///
+    /// Equivalent to `Doi::as_str` / `ArxivId::as_str` dispatched on the
+    /// variant — the URI scheme (`doi:` / `arxiv:`) is never present in the
+    /// inner identifiers (it is stripped at parse time), so the result is
+    /// always the bare DOI or arXiv id. Used by the CLI / MCP orchestrators
+    /// to populate the `ref` column of provenance log rows
+    /// (`docs/PROVENANCE_LOG.md` §3) without re-matching the variant.
+    pub fn as_input_str(&self) -> &str {
+        match self {
+            Ref::Doi(d) => d.as_str(),
+            Ref::Arxiv(a) => a.as_str(),
+        }
+    }
+
     /// Derives a deterministic, filesystem-safe key from this reference.
     ///
     /// The algorithm is the NORMATIVE binding spec in `docs/SAFEKEY.md` §3.

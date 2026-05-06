@@ -346,20 +346,25 @@ impl HttpClient {
     }
 }
 
-/// Test-only [`HttpClient`] constructors. Visible to sibling modules' test
-/// code (`sources::crossref::tests` etc.) so each new `Source` impl can
-/// exercise its fetch path against a wiremock `http://` origin without
-/// re-deriving the per-source `reqwest::Client` build recipe.
-#[cfg(test)]
+/// Test-oriented [`HttpClient`] constructor. Originally `cfg(test)`; now
+/// also reachable from the `doiget-cli` orchestrator's integration tests
+/// (which live outside this crate and therefore cannot see `cfg(test)`-gated
+/// items). The constructor name retains its `for_tests_allow_http` signal —
+/// production code MUST use [`HttpClient::new`] with [`tier_1_allowlist`].
 #[allow(clippy::expect_used)]
 impl HttpClient {
-    /// Build a test-only `HttpClient` against an `http://` wiremock origin.
-    /// The redirect closure still rejects insecure schemes — we only relax
-    /// `https_only` at the connection level so wiremock can serve. This is
-    /// acceptable because the redirect closure (which is the security-load-
-    /// bearing path) is exercised by the `redirect_to_http_is_rejected_by_closure`
-    /// test in `tests` below.
-    pub(crate) fn new_for_tests_allow_http(source: &str, allowlist_host: &str) -> Self {
+    /// Build a test-oriented `HttpClient` against an `http://` wiremock
+    /// origin. The redirect closure still rejects insecure schemes — we only
+    /// relax `https_only` at the connection level so wiremock can serve.
+    /// This is acceptable because the redirect closure (which is the
+    /// security-load-bearing path) is exercised by the
+    /// `redirect_to_http_is_rejected_by_closure` test below.
+    ///
+    /// Production callers MUST use [`HttpClient::new`] with
+    /// [`tier_1_allowlist`] — the `for_tests_allow_http` suffix is the load-
+    /// bearing signal that this constructor lifts the initial-leg HTTPS-only
+    /// requirement.
+    pub fn new_for_tests_allow_http(source: &str, allowlist_host: &str) -> Self {
         let allowlist = SourceAllowlist::new(source, vec![allowlist_host.to_string()]);
         let client = build_client_allow_http(allowlist.clone()).expect("test client builds");
         let mut map = HashMap::new();
@@ -368,9 +373,28 @@ impl HttpClient {
             clients: Arc::new(map),
         }
     }
+
+    /// Multi-source variant of [`HttpClient::new_for_tests_allow_http`].
+    ///
+    /// Builds a relaxed-`https_only` client per `(source, allowlist_host)`
+    /// pair. Used by the `doiget-cli` orchestrator's integration tests when
+    /// more than one upstream needs to be wiremocked simultaneously
+    /// (e.g. Crossref + Unpaywall against two different mock servers).
+    /// Production callers MUST use [`HttpClient::new`] with
+    /// [`tier_1_allowlist`].
+    pub fn new_for_tests_allow_http_multi(entries: &[(&str, &str)]) -> Self {
+        let mut map = HashMap::with_capacity(entries.len());
+        for (source, host) in entries {
+            let allowlist = SourceAllowlist::new(*source, vec![host.to_string()]);
+            let client = build_client_allow_http(allowlist.clone()).expect("test client builds");
+            map.insert(allowlist.source.clone(), client);
+        }
+        Self {
+            clients: Arc::new(map),
+        }
+    }
 }
 
-#[cfg(test)]
 fn build_client_allow_http(allowlist: SourceAllowlist) -> Result<Client, reqwest::Error> {
     let allowlist_for_closure = allowlist.clone();
     let redirect_policy = Policy::custom(move |attempt| {
