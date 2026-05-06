@@ -346,6 +346,76 @@ impl HttpClient {
     }
 }
 
+/// Test-only [`HttpClient`] constructors. Visible to sibling modules' test
+/// code (`sources::crossref::tests` etc.) so each new `Source` impl can
+/// exercise its fetch path against a wiremock `http://` origin without
+/// re-deriving the per-source `reqwest::Client` build recipe.
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+impl HttpClient {
+    /// Build a test-only `HttpClient` against an `http://` wiremock origin.
+    /// The redirect closure still rejects insecure schemes — we only relax
+    /// `https_only` at the connection level so wiremock can serve. This is
+    /// acceptable because the redirect closure (which is the security-load-
+    /// bearing path) is exercised by the `redirect_to_http_is_rejected_by_closure`
+    /// test in `tests` below.
+    pub(crate) fn new_for_tests_allow_http(source: &str, allowlist_host: &str) -> Self {
+        let allowlist = SourceAllowlist::new(source, vec![allowlist_host.to_string()]);
+        let client = build_client_allow_http(allowlist.clone()).expect("test client builds");
+        let mut map = HashMap::new();
+        map.insert(allowlist.source.clone(), client);
+        Self {
+            clients: Arc::new(map),
+        }
+    }
+}
+
+#[cfg(test)]
+fn build_client_allow_http(allowlist: SourceAllowlist) -> Result<Client, reqwest::Error> {
+    let allowlist_for_closure = allowlist.clone();
+    let redirect_policy = Policy::custom(move |attempt| {
+        let scheme = attempt.url().scheme().to_string();
+        let host_opt = attempt.url().host_str().map(|h| h.to_ascii_lowercase());
+        let prev_count = attempt.previous().len();
+        if scheme != "https" {
+            return attempt.error(HttpError::InsecureRedirect { scheme });
+        }
+        if prev_count >= MAX_REDIRECTS {
+            return attempt.stop();
+        }
+        let host = match host_opt {
+            Some(h) => h,
+            None => {
+                return attempt.error(HttpError::RedirectDenied {
+                    source_key: allowlist_for_closure.source.clone(),
+                    host: String::new(),
+                });
+            }
+        };
+        if !allowlist_for_closure.matches(&host) {
+            return attempt.error(HttpError::RedirectDenied {
+                source_key: allowlist_for_closure.source.clone(),
+                host,
+            });
+        }
+        attempt.follow()
+    });
+    ClientBuilder::new()
+        // `https_only(false)` only at this scope — production builders
+        // (the public `HttpClient::new`) keep it on.
+        .https_only(false)
+        .redirect(redirect_policy)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(TOTAL_TIMEOUT)
+        .read_timeout(READ_TIMEOUT)
+        .user_agent(format!(
+            "doiget/{} (+https://github.com/sotashimozono/doiget)",
+            VERSION
+        ))
+        .tls_backend_rustls()
+        .build()
+}
+
 // ---------------------------------------------------------------------------
 // ClientBuilder helpers
 // ---------------------------------------------------------------------------
