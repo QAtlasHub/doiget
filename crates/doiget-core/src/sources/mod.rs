@@ -6,3 +6,4 @@
 
 pub mod arxiv;
 pub mod crossref;
+pub mod unpaywall;
