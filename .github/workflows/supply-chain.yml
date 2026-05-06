@@ -1,0 +1,43 @@
+name: supply-chain
+# cargo-vet supply-chain audit. See docs/SECURITY.md §1.9 / §2.
+# Fails when a new dependency is introduced that is not covered by:
+#  - an explicit local audit in supply-chain/audits.toml, OR
+#  - an imported peer audit (mozilla / google / embark / etc.), OR
+#  - an exemption in supply-chain/config.toml.
+
+on:
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "supply-chain/**"
+      - ".github/workflows/supply-chain.yml"
+  push:
+    branches: [main]
+  schedule:
+    # Weekly Wednesday 07:00 UTC; offset from audit.yml (Mon) and codeql.yml
+    # (Tue) so the three scheduled scans run on different days.
+    - cron: "0 7 * * 3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vet:
+    name: cargo vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4   # v2.9.1
+      - name: Install cargo-vet
+        run: cargo install --locked cargo-vet
+      - name: cargo vet
+        run: cargo vet --locked
