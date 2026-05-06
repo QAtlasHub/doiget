@@ -93,12 +93,375 @@ impl Doi {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Parses and validates a DOI string per `docs/SECURITY.md` §1.1.
+    ///
+    /// Accepts:
+    /// - Bare DOIs: `10.<registrant>/<suffix>` where `<registrant>` is 4–9
+    ///   digits and `<suffix>` is a non-empty sequence of characters drawn
+    ///   from `[A-Za-z0-9._/()-]`.
+    /// - The `doi:` URI scheme prefix; it is stripped before validation, so
+    ///   the stored value never carries a scheme. (Matches the convention
+    ///   established in `docs/SAFEKEY.md` §3 step 0.)
+    ///
+    /// Rejects:
+    /// - Inputs missing the literal `10.` prefix (after optional scheme
+    ///   strip).
+    /// - Suffixes longer than [`DOI_SUFFIX_MAX_LEN`] bytes.
+    /// - Empty suffixes.
+    /// - Any character outside the suffix charset above (including control
+    ///   characters, whitespace, and non-ASCII).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`RefParseError`] variant that names the specific rejection
+    /// category. Tier 1+ callers should map any [`RefParseError`] to
+    /// [`ErrorCode::InvalidRef`] when surfacing to MCP / CLI.
+    pub fn parse(s: &str) -> Result<Self, RefParseError> {
+        let stripped = parse::strip_doi_scheme(s);
+        parse::validate_doi(stripped)?;
+        Ok(Doi(stripped.to_string()))
+    }
 }
 
 impl ArxivId {
     /// Returns the arXiv id as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Parses and validates an arXiv id per `docs/SECURITY.md` §1.1 and the
+    /// pattern published in `docs/MCP_TOOLS.md`.
+    ///
+    /// Accepts:
+    /// - New-style ids: `YYMM.NNNNN[vN]` where the date block is 4 digits, the
+    ///   sequence number is 4–5 digits, and the optional version `vN` is one
+    ///   or more digits. Examples: `2401.12345`, `2401.12345v2`.
+    /// - Old-style ids: `subject-class/YYMMNNN[vN]` where the subject class
+    ///   is a lowercase token (with optional internal hyphens and an
+    ///   optional `.XX` two-uppercase-letter group), and the numeric body
+    ///   is exactly 7 digits with optional `vN`. Examples:
+    ///   `cond-mat/9501001`, `astro-ph.CO/0703123v2`.
+    /// - The `arxiv:` / `arXiv:` URI scheme prefix; it is stripped before
+    ///   validation.
+    ///
+    /// Rejects:
+    /// - Inputs that match neither the new-style nor old-style shape.
+    /// - Inputs containing characters outside the per-shape charset
+    ///   (control chars, whitespace, non-ASCII).
+    /// - Empty input.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`RefParseError`] variant that names the specific rejection
+    /// category.
+    pub fn parse(s: &str) -> Result<Self, RefParseError> {
+        let stripped = parse::strip_arxiv_scheme(s);
+        parse::validate_arxiv(stripped)?;
+        Ok(ArxivId(stripped.to_string()))
+    }
+}
+
+impl Ref {
+    /// Parses a string into a [`Ref`], auto-detecting DOI vs arXiv.
+    ///
+    /// Detection rules:
+    /// 1. If the input begins with the case-insensitive `doi:` scheme, the
+    ///    remainder is parsed as a DOI.
+    /// 2. If the input begins with the `arxiv:` or `arXiv:` scheme, the
+    ///    remainder is parsed as an arXiv id.
+    /// 3. Otherwise, if the input starts with `10.` it is treated as a bare
+    ///    DOI; this matches the heuristic in `docs/SAFEKEY.md` §4 (Julia
+    ///    reference) and is stable because DOIs always begin `10.`.
+    /// 4. Failing all of the above, parsing falls back to arXiv.
+    ///
+    /// The returned [`Ref`] never carries the URI scheme — `as_str()` on the
+    /// inner `Doi` / `ArxivId` is always the bare identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`RefParseError`] from the underlying [`Doi::parse`] or
+    /// [`ArxivId::parse`] call. When the input has an explicit scheme
+    /// (`doi:` / `arxiv:`), the matching parser is dispatched and its error
+    /// surfaces directly. When the input is bare and ambiguous, the
+    /// heuristic in rule 3/4 selects the parser; an unparseable bare input
+    /// surfaces the arXiv parser's error (a non-`10.` ref that also fails
+    /// arXiv validation is never a valid DOI).
+    pub fn parse(s: &str) -> Result<Self, RefParseError> {
+        // Reject empty up front so all three parsers see a meaningful slice;
+        // without this, `strip_*_scheme("")` returns "" and we'd get a
+        // confusing "missing 10. prefix" error for empty input.
+        if s.is_empty() {
+            return Err(RefParseError::Empty);
+        }
+
+        if parse::has_doi_scheme(s) {
+            return Doi::parse(s).map(Ref::Doi);
+        }
+        if parse::has_arxiv_scheme(s) {
+            return ArxivId::parse(s).map(Ref::Arxiv);
+        }
+        if s.starts_with("10.") {
+            return Doi::parse(s).map(Ref::Doi);
+        }
+        ArxivId::parse(s).map(Ref::Arxiv)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parser internals
+// ---------------------------------------------------------------------------
+
+mod parse {
+    use super::{RefParseError, DOI_SUFFIX_MAX_LEN};
+
+    /// Case-insensitive `doi:` prefix detector. Matches both `doi:` and
+    /// `DOI:` (and any case mix); the spec in `docs/SAFEKEY.md` §3 only
+    /// names the lowercase form, but the field convention is to be lenient
+    /// in what we accept (the scheme is dropped at the boundary anyway).
+    pub(crate) fn has_doi_scheme(s: &str) -> bool {
+        s.len() >= 4 && s.is_char_boundary(4) && s[..4].eq_ignore_ascii_case("doi:")
+    }
+
+    /// Case-insensitive `arxiv:` prefix detector. Accepts `arxiv:`,
+    /// `arXiv:` (the form used in `docs/MCP_TOOLS.md`), and any other case
+    /// mix.
+    pub(crate) fn has_arxiv_scheme(s: &str) -> bool {
+        s.len() >= 6 && s.is_char_boundary(6) && s[..6].eq_ignore_ascii_case("arxiv:")
+    }
+
+    pub(crate) fn strip_doi_scheme(s: &str) -> &str {
+        if has_doi_scheme(s) {
+            &s[4..]
+        } else {
+            s
+        }
+    }
+
+    pub(crate) fn strip_arxiv_scheme(s: &str) -> &str {
+        if has_arxiv_scheme(s) {
+            &s[6..]
+        } else {
+            s
+        }
+    }
+
+    /// DOI suffix charset per `docs/SECURITY.md` §1.1:
+    /// `[A-Za-z0-9._/()-]`. The forward slash is permitted inside the
+    /// suffix (e.g. `10.1016/...`); the registrant separator is the
+    /// *first* `/` and the suffix is everything after it.
+    fn is_doi_suffix_char(c: char) -> bool {
+        matches!(c,
+            'A'..='Z' | 'a'..='z' | '0'..='9'
+            | '.' | '_' | '/' | '(' | ')' | '-'
+        )
+    }
+
+    pub(crate) fn validate_doi(s: &str) -> Result<(), RefParseError> {
+        if s.is_empty() {
+            return Err(RefParseError::Empty);
+        }
+
+        // Must begin with literal "10."; the registrant is 4–9 digits up
+        // to the first '/'. After that, everything is suffix.
+        let rest = s
+            .strip_prefix("10.")
+            .ok_or(RefParseError::MissingDoiPrefix)?;
+        let slash_idx = rest
+            .find('/')
+            .ok_or(RefParseError::MissingDoiSuffixSeparator)?;
+        let registrant = &rest[..slash_idx];
+        let suffix = &rest[slash_idx + 1..];
+
+        // Registrant: 4–9 ASCII digits.
+        if registrant.len() < 4
+            || registrant.len() > 9
+            || !registrant.chars().all(|c| c.is_ascii_digit())
+        {
+            return Err(RefParseError::InvalidDoiRegistrant);
+        }
+
+        // Suffix: non-empty, charset-restricted, length-bounded.
+        if suffix.is_empty() {
+            return Err(RefParseError::EmptyDoiSuffix);
+        }
+        if suffix.len() > DOI_SUFFIX_MAX_LEN {
+            return Err(RefParseError::DoiSuffixTooLong {
+                len: suffix.len(),
+                max: DOI_SUFFIX_MAX_LEN,
+            });
+        }
+        if let Some(bad) = suffix.chars().find(|c| !is_doi_suffix_char(*c)) {
+            return Err(RefParseError::InvalidDoiSuffixChar { ch: bad });
+        }
+        Ok(())
+    }
+
+    /// Validates an arXiv id (with the `arxiv:` / `arXiv:` scheme already
+    /// stripped). Tries the new-style shape first, then the old-style.
+    pub(crate) fn validate_arxiv(s: &str) -> Result<(), RefParseError> {
+        if s.is_empty() {
+            return Err(RefParseError::Empty);
+        }
+        if validate_arxiv_new(s).is_ok() || validate_arxiv_old(s).is_ok() {
+            return Ok(());
+        }
+        Err(RefParseError::InvalidArxivShape)
+    }
+
+    /// New-style arXiv id: `YYMM.NNNNN[vN]`.
+    fn validate_arxiv_new(s: &str) -> Result<(), ()> {
+        let dot_idx = s.find('.').ok_or(())?;
+        let head = &s[..dot_idx];
+        let tail = &s[dot_idx + 1..];
+
+        // Head: exactly 4 ASCII digits.
+        if head.len() != 4 || !head.chars().all(|c| c.is_ascii_digit()) {
+            return Err(());
+        }
+
+        // Tail: 4–5 digits, then optional `v` followed by ≥1 digits.
+        let bytes = tail.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        let digits_len = i;
+        if !(4..=5).contains(&digits_len) {
+            return Err(());
+        }
+        if i == bytes.len() {
+            return Ok(());
+        }
+        // Optional version suffix.
+        if bytes[i] != b'v' {
+            return Err(());
+        }
+        i += 1;
+        let v_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == v_start || i != bytes.len() {
+            return Err(());
+        }
+        Ok(())
+    }
+
+    /// Old-style arXiv id: `subject-class/YYMMNNN[vN]`.
+    /// Subject class: `[a-z]([a-z-]*[a-z])?(\.[A-Z]{2})?`.
+    fn validate_arxiv_old(s: &str) -> Result<(), ()> {
+        let slash_idx = s.find('/').ok_or(())?;
+        let class = &s[..slash_idx];
+        let id = &s[slash_idx + 1..];
+
+        // Class: starts with [a-z], body is [a-z-], optional `.XX` (two
+        // ASCII upper).
+        let (core_class, dot_part) = match class.find('.') {
+            Some(d) => (&class[..d], Some(&class[d + 1..])),
+            None => (class, None),
+        };
+        if core_class.is_empty()
+            || !core_class
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '-')
+            || core_class.starts_with('-')
+            || core_class.ends_with('-')
+        {
+            return Err(());
+        }
+        if let Some(dp) = dot_part {
+            if dp.len() != 2 || !dp.chars().all(|c| c.is_ascii_uppercase()) {
+                return Err(());
+            }
+        }
+
+        // Id: 7 digits, optional `vN`.
+        let bytes = id.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i != 7 {
+            return Err(());
+        }
+        if i == bytes.len() {
+            return Ok(());
+        }
+        if bytes[i] != b'v' {
+            return Err(());
+        }
+        i += 1;
+        let v_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == v_start || i != bytes.len() {
+            return Err(());
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RefParseError
+// ---------------------------------------------------------------------------
+
+/// Reasons a `Doi::parse` / `ArxivId::parse` / `Ref::parse` call can fail.
+///
+/// Each variant maps to one rejection category in `docs/SECURITY.md` §1.1.
+/// All variants funnel to [`ErrorCode::InvalidRef`] when surfacing to MCP /
+/// CLI; the granular shape is preserved for tests and for future log
+/// breadcrumbs. The `From<RefParseError> for ErrorCode` impl below makes
+/// `?` propagation collapse to `INVALID_REF` automatically, satisfying
+/// `docs/PUBLIC_API.md` §4.
+///
+/// Marked `#[non_exhaustive]` so adding new categories is a non-breaking
+/// change. Pattern-match with a wildcard arm.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum RefParseError {
+    /// Input was empty.
+    #[error("empty input")]
+    Empty,
+    /// Input did not begin with the required `10.` literal (after any
+    /// scheme strip).
+    #[error("DOI must begin with '10.'")]
+    MissingDoiPrefix,
+    /// Input started with `10.` but had no `/` separator between
+    /// registrant and suffix.
+    #[error("DOI must contain '/' between registrant and suffix")]
+    MissingDoiSuffixSeparator,
+    /// Registrant was not 4–9 ASCII digits.
+    #[error("DOI registrant must be 4–9 ASCII digits")]
+    InvalidDoiRegistrant,
+    /// DOI suffix was empty.
+    #[error("DOI suffix is empty")]
+    EmptyDoiSuffix,
+    /// DOI suffix exceeded `DOI_SUFFIX_MAX_LEN` bytes.
+    #[error("DOI suffix is {len} bytes; maximum is {max}")]
+    DoiSuffixTooLong {
+        /// Observed suffix length, in bytes.
+        len: usize,
+        /// Hard upper bound (always [`DOI_SUFFIX_MAX_LEN`]).
+        max: usize,
+    },
+    /// DOI suffix contained a character outside `[A-Za-z0-9._/()-]`.
+    #[error("DOI suffix contains invalid character {ch:?}")]
+    InvalidDoiSuffixChar {
+        /// The first offending character.
+        ch: char,
+    },
+    /// Input matched neither the new-style nor old-style arXiv shape.
+    #[error("input does not match any known arXiv id shape")]
+    InvalidArxivShape,
+}
+
+impl From<RefParseError> for ErrorCode {
+    fn from(_: RefParseError) -> Self {
+        // All parse failures collapse to INVALID_REF at the public boundary,
+        // matching `docs/PUBLIC_API.md` §4 and `docs/SECURITY.md` §1.1.
+        ErrorCode::InvalidRef
     }
 }
 
@@ -612,5 +975,427 @@ mod tests {
             hash_part, expected_hash,
             "hash must match SHA-256 of raw form"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Doi::parse / ArxivId::parse / Ref::parse — Phase 1 W3-A.
+    // Spec: docs/SECURITY.md §1.1 (input validation). The rejection
+    // category set is the binding contract; each test case below names
+    // which rule it exercises in a comment.
+    // -----------------------------------------------------------------
+
+    // ---- Doi::parse happy paths (≥6) --------------------------------
+
+    #[test]
+    fn doi_parse_accepts_bare_canonical_form() {
+        // Rule: "10.<registrant>/<suffix>" is the canonical bare form.
+        let d = Doi::parse("10.1234/example").expect("canonical bare DOI");
+        assert_eq!(d.as_str(), "10.1234/example");
+    }
+
+    #[test]
+    fn doi_parse_accepts_doi_uri_scheme() {
+        // Rule: the `doi:` scheme is stripped at construction; as_str
+        // never carries it (matches docs/SAFEKEY.md §3 step 0).
+        let d = Doi::parse("doi:10.1234/example").expect("doi: scheme accepted");
+        assert_eq!(d.as_str(), "10.1234/example");
+    }
+
+    #[test]
+    fn doi_parse_accepts_complex_real_world_suffix() {
+        // Rule: suffix charset includes `.`, `(`, `)`, `-`. From a real
+        // PhysRevLett DOI used elsewhere in the test fixture set.
+        let d = Doi::parse("10.1103/PhysRevLett.130.200601").expect("real-world PhysRev DOI");
+        assert_eq!(d.as_str(), "10.1103/PhysRevLett.130.200601");
+    }
+
+    #[test]
+    fn doi_parse_accepts_parens_in_suffix() {
+        // Rule: `(` and `)` are explicitly listed in the spec charset.
+        let d = Doi::parse("10.1016/S0370-1573(98)00122-3").expect("parens in suffix");
+        assert_eq!(d.as_str(), "10.1016/S0370-1573(98)00122-3");
+    }
+
+    #[test]
+    fn doi_parse_accepts_nested_slashes_in_suffix() {
+        // Rule: `/` is a suffix character; only the first `/` is the
+        // registrant/suffix separator.
+        let d = Doi::parse("10.1234/foo/bar/baz").expect("nested slashes");
+        assert_eq!(d.as_str(), "10.1234/foo/bar/baz");
+    }
+
+    #[test]
+    fn doi_parse_accepts_suffix_at_max_len_boundary() {
+        // Rule: a suffix of exactly DOI_SUFFIX_MAX_LEN bytes is accepted;
+        // 1 byte more is rejected (covered separately below).
+        let suffix = "a".repeat(DOI_SUFFIX_MAX_LEN);
+        let input = format!("10.1234/{}", suffix);
+        let d = Doi::parse(&input).expect("suffix at max len");
+        assert_eq!(d.as_str().len(), "10.1234/".len() + DOI_SUFFIX_MAX_LEN);
+    }
+
+    #[test]
+    fn doi_parse_uri_scheme_is_case_insensitive() {
+        // Rule: be lenient on scheme casing; the scheme is stripped
+        // either way so the stored form is identical.
+        let d = Doi::parse("DOI:10.1234/example").expect("uppercase scheme");
+        assert_eq!(d.as_str(), "10.1234/example");
+    }
+
+    // ---- Doi::parse rejection paths (≥6) ----------------------------
+
+    #[test]
+    fn doi_parse_rejects_missing_10_prefix() {
+        // Rule: must start with "10." literal.
+        assert_eq!(
+            Doi::parse("11.1234/example"),
+            Err(RefParseError::MissingDoiPrefix)
+        );
+    }
+
+    #[test]
+    fn doi_parse_rejects_empty_input() {
+        // Rule: empty inputs are not valid DOIs.
+        assert_eq!(Doi::parse(""), Err(RefParseError::Empty));
+    }
+
+    #[test]
+    fn doi_parse_rejects_missing_suffix_separator() {
+        // Rule: must contain a `/` between registrant and suffix.
+        assert_eq!(
+            Doi::parse("10.1234"),
+            Err(RefParseError::MissingDoiSuffixSeparator)
+        );
+    }
+
+    #[test]
+    fn doi_parse_rejects_empty_suffix() {
+        // Rule: suffix must be non-empty.
+        assert_eq!(Doi::parse("10.1234/"), Err(RefParseError::EmptyDoiSuffix));
+    }
+
+    #[test]
+    fn doi_parse_rejects_invalid_registrant_too_short() {
+        // Rule: registrant must be 4–9 digits.
+        assert_eq!(
+            Doi::parse("10.12/example"),
+            Err(RefParseError::InvalidDoiRegistrant)
+        );
+    }
+
+    #[test]
+    fn doi_parse_rejects_non_digit_registrant() {
+        // Rule: registrant chars must all be ASCII digits.
+        assert_eq!(
+            Doi::parse("10.12ab/example"),
+            Err(RefParseError::InvalidDoiRegistrant)
+        );
+    }
+
+    #[test]
+    fn doi_parse_rejects_control_char_in_suffix() {
+        // Rule (from docs/SECURITY.md §1.1, log-injection mitigation):
+        // control chars are not in the suffix charset; reject before they
+        // can reach the provenance log.
+        let result = Doi::parse("10.1234/foo\nbar");
+        assert!(
+            matches!(
+                result,
+                Err(RefParseError::InvalidDoiSuffixChar { ch: '\n' })
+            ),
+            "got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn doi_parse_rejects_suffix_over_max_len() {
+        // Rule: DOI_SUFFIX_MAX_LEN + 1 bytes is rejected.
+        let suffix = "a".repeat(DOI_SUFFIX_MAX_LEN + 1);
+        let input = format!("10.1234/{}", suffix);
+        let result = Doi::parse(&input);
+        match result {
+            Err(RefParseError::DoiSuffixTooLong { len, max }) => {
+                assert_eq!(len, DOI_SUFFIX_MAX_LEN + 1);
+                assert_eq!(max, DOI_SUFFIX_MAX_LEN);
+            }
+            other => panic!("expected DoiSuffixTooLong, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn doi_parse_rejects_non_ascii_in_suffix() {
+        // Rule: spec charset is ASCII-only; non-ASCII becomes an
+        // InvalidDoiSuffixChar (consistent with safekey behavior of
+        // collapsing such chars to '_', which is a downstream concern).
+        let result = Doi::parse("10.1234/物理学");
+        assert!(
+            matches!(result, Err(RefParseError::InvalidDoiSuffixChar { .. })),
+            "got {:?}",
+            result
+        );
+    }
+
+    // ---- ArxivId::parse happy paths (≥6) ----------------------------
+
+    #[test]
+    fn arxiv_parse_accepts_new_style_4_digit_seq() {
+        // Rule: new-style YYMM.NNNN (4-digit sequence number).
+        let a = ArxivId::parse("0704.0001").expect("new-style 4-digit seq");
+        assert_eq!(a.as_str(), "0704.0001");
+    }
+
+    #[test]
+    fn arxiv_parse_accepts_new_style_5_digit_seq() {
+        // Rule: new-style YYMM.NNNNN (5-digit sequence number, post-2015).
+        let a = ArxivId::parse("2401.12345").expect("new-style 5-digit seq");
+        assert_eq!(a.as_str(), "2401.12345");
+    }
+
+    #[test]
+    fn arxiv_parse_accepts_new_style_with_version() {
+        // Rule: optional `vN` version suffix.
+        let a = ArxivId::parse("2401.12345v2").expect("with version");
+        assert_eq!(a.as_str(), "2401.12345v2");
+    }
+
+    #[test]
+    fn arxiv_parse_accepts_old_style() {
+        // Rule: old-style subject-class/YYMMNNN.
+        let a = ArxivId::parse("cond-mat/9501001").expect("old-style cond-mat");
+        assert_eq!(a.as_str(), "cond-mat/9501001");
+    }
+
+    #[test]
+    fn arxiv_parse_accepts_old_style_with_subclass_and_version() {
+        // Rule: old-style subject-class may have a `.XX` two-upper subclass
+        // and an optional `vN` suffix.
+        let a = ArxivId::parse("astro-ph.CO/0703123v2").expect("old-style with subclass + version");
+        assert_eq!(a.as_str(), "astro-ph.CO/0703123v2");
+    }
+
+    #[test]
+    fn arxiv_parse_accepts_arxiv_uri_scheme() {
+        // Rule: `arxiv:` / `arXiv:` scheme is stripped at construction.
+        let a = ArxivId::parse("arxiv:2401.12345").expect("arxiv: scheme");
+        assert_eq!(a.as_str(), "2401.12345");
+    }
+
+    #[test]
+    fn arxiv_parse_accepts_arxiv_uri_scheme_mixed_case() {
+        // Rule: scheme case-insensitive; matches the `arXiv:` form named
+        // in docs/MCP_TOOLS.md.
+        let a = ArxivId::parse("arXiv:2401.12345v2").expect("arXiv: scheme");
+        assert_eq!(a.as_str(), "2401.12345v2");
+    }
+
+    // ---- ArxivId::parse rejection paths (≥6) ------------------------
+
+    #[test]
+    fn arxiv_parse_rejects_empty_input() {
+        // Rule: empty rejected up-front.
+        assert_eq!(ArxivId::parse(""), Err(RefParseError::Empty));
+    }
+
+    #[test]
+    fn arxiv_parse_rejects_no_dot_or_slash() {
+        // Rule: must contain `.` (new-style) or `/` (old-style).
+        assert_eq!(
+            ArxivId::parse("notanarxivid"),
+            Err(RefParseError::InvalidArxivShape)
+        );
+    }
+
+    #[test]
+    fn arxiv_parse_rejects_new_style_wrong_head_length() {
+        // Rule: head must be exactly 4 digits.
+        assert_eq!(
+            ArxivId::parse("240.12345"),
+            Err(RefParseError::InvalidArxivShape)
+        );
+    }
+
+    #[test]
+    fn arxiv_parse_rejects_new_style_seq_too_short() {
+        // Rule: seq must be 4–5 digits.
+        assert_eq!(
+            ArxivId::parse("2401.123"),
+            Err(RefParseError::InvalidArxivShape)
+        );
+    }
+
+    #[test]
+    fn arxiv_parse_rejects_old_style_wrong_id_length() {
+        // Rule: old-style id is exactly 7 digits.
+        assert_eq!(
+            ArxivId::parse("cond-mat/95001"),
+            Err(RefParseError::InvalidArxivShape)
+        );
+    }
+
+    #[test]
+    fn arxiv_parse_rejects_invalid_version_suffix() {
+        // Rule: version suffix is `v` followed by ≥1 digits, nothing else.
+        assert_eq!(
+            ArxivId::parse("2401.12345v"),
+            Err(RefParseError::InvalidArxivShape)
+        );
+    }
+
+    #[test]
+    fn arxiv_parse_rejects_control_char() {
+        // Rule (docs/SECURITY.md §1.1 log-injection): no control chars.
+        assert_eq!(
+            ArxivId::parse("2401.12345\n"),
+            Err(RefParseError::InvalidArxivShape)
+        );
+    }
+
+    #[test]
+    fn arxiv_parse_rejects_non_ascii() {
+        // Rule: ASCII-only.
+        assert_eq!(
+            ArxivId::parse("2401.物理"),
+            Err(RefParseError::InvalidArxivShape)
+        );
+    }
+
+    // ---- Ref::parse happy paths (≥6) --------------------------------
+
+    #[test]
+    fn ref_parse_dispatches_doi_scheme_to_doi() {
+        // Detection rule 1: explicit `doi:` scheme.
+        match Ref::parse("doi:10.1234/example").expect("doi: dispatched to Doi") {
+            Ref::Doi(d) => assert_eq!(d.as_str(), "10.1234/example"),
+            other => panic!("expected Ref::Doi, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ref_parse_dispatches_arxiv_scheme_to_arxiv() {
+        // Detection rule 2: explicit `arxiv:` scheme.
+        match Ref::parse("arxiv:2401.12345").expect("arxiv: dispatched to Arxiv") {
+            Ref::Arxiv(a) => assert_eq!(a.as_str(), "2401.12345"),
+            other => panic!("expected Ref::Arxiv, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ref_parse_dispatches_arxiv_mixed_case_scheme() {
+        // Detection rule 2 (case-insensitive): `arXiv:` form.
+        match Ref::parse("arXiv:cond-mat/9501001").expect("arXiv: dispatched") {
+            Ref::Arxiv(a) => assert_eq!(a.as_str(), "cond-mat/9501001"),
+            other => panic!("expected Ref::Arxiv, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ref_parse_bare_doi_resolves_to_doi() {
+        // Detection rule 3: bare input starting with `10.` is a DOI.
+        match Ref::parse("10.1234/foo").expect("bare DOI") {
+            Ref::Doi(d) => assert_eq!(d.as_str(), "10.1234/foo"),
+            other => panic!("expected Ref::Doi, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ref_parse_bare_arxiv_new_resolves_to_arxiv() {
+        // Detection rule 4: bare input not starting with `10.` falls
+        // through to arXiv. Tests the ambiguous-input branch named in the
+        // PR brief: `2401.12345` should resolve to ArxivId.
+        match Ref::parse("2401.12345").expect("bare new-style arXiv") {
+            Ref::Arxiv(a) => assert_eq!(a.as_str(), "2401.12345"),
+            other => panic!("expected Ref::Arxiv, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ref_parse_bare_arxiv_old_resolves_to_arxiv() {
+        // Detection rule 4: bare old-style arXiv id.
+        match Ref::parse("cond-mat/9501001").expect("bare old-style arXiv") {
+            Ref::Arxiv(a) => assert_eq!(a.as_str(), "cond-mat/9501001"),
+            other => panic!("expected Ref::Arxiv, got {:?}", other),
+        }
+    }
+
+    // ---- Ref::parse rejection paths (≥6) ----------------------------
+
+    #[test]
+    fn ref_parse_rejects_empty() {
+        // Rule: empty up-front.
+        assert_eq!(Ref::parse(""), Err(RefParseError::Empty));
+    }
+
+    #[test]
+    fn ref_parse_doi_scheme_with_invalid_doi_propagates_doi_error() {
+        // When the scheme is explicit, we surface the parser's error
+        // verbatim — not a generic "shape mismatch".
+        assert_eq!(
+            Ref::parse("doi:10.1234"),
+            Err(RefParseError::MissingDoiSuffixSeparator)
+        );
+    }
+
+    #[test]
+    fn ref_parse_arxiv_scheme_with_invalid_arxiv_propagates_arxiv_error() {
+        assert_eq!(
+            Ref::parse("arxiv:notanid"),
+            Err(RefParseError::InvalidArxivShape)
+        );
+    }
+
+    #[test]
+    fn ref_parse_bare_with_10_prefix_uses_doi_errors() {
+        // Bare `10.…` heuristic: DOI parser is dispatched and its error
+        // surfaces (here: bad registrant).
+        assert_eq!(
+            Ref::parse("10.12/x"),
+            Err(RefParseError::InvalidDoiRegistrant)
+        );
+    }
+
+    #[test]
+    fn ref_parse_bare_without_10_prefix_uses_arxiv_errors() {
+        // Bare ambiguous fallback: ArxivId parser is dispatched and its
+        // error surfaces. `1.2.3` is neither a DOI nor an arXiv shape.
+        assert_eq!(Ref::parse("1.2.3"), Err(RefParseError::InvalidArxivShape));
+    }
+
+    #[test]
+    fn ref_parse_rejects_doi_scheme_with_oversized_suffix() {
+        // Length-bound: DOI suffix > DOI_SUFFIX_MAX_LEN through Ref::parse
+        // surfaces DoiSuffixTooLong, not a generic InvalidArxivShape.
+        let suffix = "a".repeat(DOI_SUFFIX_MAX_LEN + 5);
+        let input = format!("doi:10.1234/{}", suffix);
+        match Ref::parse(&input) {
+            Err(RefParseError::DoiSuffixTooLong { .. }) => {}
+            other => panic!("expected DoiSuffixTooLong, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ref_parse_round_trip_via_serde_preserves_inner_string() {
+        // Wire-format check: Doi/ArxivId are #[serde(transparent)], and a
+        // round-trip through Ref::parse → serde_json → Ref must preserve
+        // the inner identifier. Guards against accidental scheme leakage
+        // into the stored form.
+        let r = Ref::parse("doi:10.1234/example").expect("parse ok");
+        let json = serde_json::to_string(&r).expect("serialize");
+        // The transparent inner value is the bare identifier (no `doi:`).
+        assert!(
+            json.contains("10.1234/example") && !json.contains("doi:"),
+            "scheme leaked into wire form: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn ref_parse_error_maps_to_invalid_ref_error_code() {
+        // Public-API contract (docs/PUBLIC_API.md §4): all parse failures
+        // collapse to ErrorCode::InvalidRef at the public boundary.
+        let err: ErrorCode = RefParseError::Empty.into();
+        assert_eq!(err, ErrorCode::InvalidRef);
+        let err2: ErrorCode = RefParseError::MissingDoiPrefix.into();
+        assert_eq!(err2, ErrorCode::InvalidRef);
     }
 }
