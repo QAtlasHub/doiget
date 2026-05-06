@@ -68,6 +68,7 @@ Phase 0 is complete when **all** of the following are committed.
 - [x] [`docs/PUBLIC_API.md`](PUBLIC_API.md)
 - [x] [`docs/MCP_TOOLS.md`](MCP_TOOLS.md)
 - [x] [`docs/SOURCES.md`](SOURCES.md)
+- [x] [`docs/REDIRECT_ALLOWLIST.md`](REDIRECT_ALLOWLIST.md)
 - [x] [`CHANGELOG.md`](../CHANGELOG.md) (Keep a Changelog format)
 
 ### INFORMATIVE docs
