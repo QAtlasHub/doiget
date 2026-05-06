@@ -33,6 +33,7 @@ See [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) §"ADR workflow".
 | 0017 | Output mode resolution (flag > env > implicit > TTY > quiet) | Proposed | #14 |
 | 0018 | Obsidian export is one-direction, optional Phase 7 | Proposed | #15 |
 | 0019 | Eight-safeguard legal posture (5 social + 3 technical) | Proposed | #16 |
+| 0020 | reqwest TLS feature stack (rustls-only, webpki bundled) | Proposed | PR #30 / PR #49 |
 
 ## Conventions
 
