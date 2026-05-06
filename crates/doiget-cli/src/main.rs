@@ -100,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit),
         Some(Command::Search { query }) => doiget_cli::commands::search::run(query),
         Some(Command::Fetch { ref_ }) => doiget_cli::commands::fetch::run(ref_).await,
+        Some(Command::Batch { path }) => doiget_cli::commands::batch::run(path).await,
         // Other subcommands remain Phase-1-pending; they land in their own
         // dedicated PRs to keep the diff scoped.
         Some(_) => {
