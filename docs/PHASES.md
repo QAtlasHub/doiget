@@ -36,19 +36,19 @@ Phase 0 is complete when **all** of the following are committed.
 
 ### Code
 
-- [ ] Cargo workspace with members `doiget-core`, `doiget-cli`, `doiget-mcp`.
-- [ ] `cargo build` succeeds (default features = `oa-only`).
-- [ ] `cargo build --no-default-features` succeeds (sanity: nothing under `oa-only` is actually load-bearing for compilation in Phase 0).
-- [ ] `doiget --help` runs (no subcommands implemented yet).
+- [x] Cargo workspace with members `doiget-core`, `doiget-cli`, `doiget-mcp`.
+- [x] `cargo build` succeeds (default features = `oa-only`).
+- [x] `cargo build --no-default-features` succeeds (sanity: nothing under `oa-only` is actually load-bearing for compilation in Phase 0).
+- [x] `doiget --help` runs (no subcommands implemented yet).
 
 ### Configuration files
 
-- [ ] [`Cargo.toml`](../Cargo.toml) workspace + features matrix.
-- [ ] `Cargo.lock` committed.
-- [ ] [`rust-toolchain.toml`](../rust-toolchain.toml) — MSRV 1.86 declared (channel: stable).
-- [ ] [`deny.toml`](../deny.toml) — banned crate list.
-- [ ] [`clippy.toml`](../clippy.toml) — workspace lints.
-- [ ] [`.cargo/config.toml`](../.cargo/config.toml) — build flags.
+- [x] [`Cargo.toml`](../Cargo.toml) workspace + features matrix.
+- [x] `Cargo.lock` committed.
+- [x] [`rust-toolchain.toml`](../rust-toolchain.toml) — MSRV 1.86 declared (channel: stable).
+- [x] [`deny.toml`](../deny.toml) — banned crate list.
+- [x] [`clippy.toml`](../clippy.toml) — workspace lints.
+- [x] [`.cargo/config.toml`](../.cargo/config.toml) — build flags.
 
 ### NORMATIVE docs
 
@@ -75,17 +75,17 @@ Phase 0 is complete when **all** of the following are committed.
 - [x] [`CONTRIBUTING.md`](../CONTRIBUTING.md)
 - [x] [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)
 - [x] [`docs/PHASES.md`](.) (this document)
-- [ ] [`docs/MIGRATION.md`](MIGRATION.md) (placeholder; full content Phase 2)
-- [ ] [`docs/DECISIONS/INDEX.md`](DECISIONS/) + ADRs 0001–0019
+- [x] [`docs/MIGRATION.md`](MIGRATION.md) (placeholder; full content Phase 2)
+- [x] [`docs/DECISIONS/INDEX.md`](DECISIONS/) + ADRs 0001–0019
 
 ### CI workflows
 
-- [ ] `.github/workflows/ci.yml` (fmt, clippy, test on a 3 OS × 3 features matrix)
-- [ ] `.github/workflows/audit.yml` (cargo audit + cargo deny)
-- [ ] `.github/workflows/posture-lint.yml` (forbidden term / crate guard)
-- [ ] `.github/workflows/codeql.yml` (Phase 0 onward)
-- [ ] `.github/workflows/safekey-vectors.yml` (vector-set parity)
-- [ ] `.github/workflows/cross-tool-compat.yml` (BiblioFetch.jl round-trip; placeholder until Phase 2)
+- [x] `.github/workflows/ci.yml` (fmt, clippy, test on a 3 OS × 3 features matrix)
+- [x] `.github/workflows/audit.yml` (cargo audit + cargo deny)
+- [x] `.github/workflows/posture-lint.yml` (forbidden term / crate guard)
+- [x] `.github/workflows/codeql.yml` (Phase 0 onward)
+- [x] `.github/workflows/safekey-vectors.yml` (vector-set parity)
+- [x] `.github/workflows/cross-tool-compat.yml` (BiblioFetch.jl round-trip; placeholder until Phase 2)
 - [x] `.github/workflows/msrv-drift.yml` (weekly: detect transitive-dep MSRV bumps past declared 1.86)
 - [x] `.github/dependabot.yml` (auto-merge disabled)
 
@@ -98,8 +98,8 @@ Phase 0 is complete when **all** of the following are committed.
 
 ### Test fixtures
 
-- [ ] `tests/fixtures/safekey/vectors.json` — 100 reference test vectors.
-- [ ] `tests/fixtures/golden/` — placeholder.
+- [ ] `tests/fixtures/safekey/vectors.json` — 100 reference test vectors. (13/100; full set Phase 0 final)
+- [x] `tests/fixtures/golden/` — placeholder.
 
 ### Pre-flight items (must be confirmed before Phase 0 begins)
 
