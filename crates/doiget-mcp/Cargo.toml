@@ -24,6 +24,21 @@ tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
+# `camino::Utf8PathBuf` for the store-root probe — the workspace `clippy.toml`
+# bans `std::path::PathBuf` for user-facing paths.
+camino             = { workspace = true }
+# Official Rust MCP SDK. Feature set is locked at the workspace root —
+# stdio-only (`transport-io`), no HTTP server, no oauth, no `__reqwest`.
+# See ADR-0001 / docs/SECURITY.md §3.
+rmcp               = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
+# In-process integration test (`tests/initialize_handshake.rs`) drives the
+# server via the rmcp client over a `tokio::io::duplex` pipe. Adding
+# `client` here unions with the (server, macros, transport-io, schemars)
+# set inherited from `[dependencies]`.
+rmcp        = { workspace = true, features = ["client"] }
+# Match the test's `tokio::io::duplex` + `AsyncReadExt` use.
+tokio       = { workspace = true, features = ["io-util"] }
+serde_json  = { workspace = true }

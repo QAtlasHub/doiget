@@ -131,6 +131,26 @@ proptest    = "1"
 # Phase 4 (citation graph)
 petgraph = "0.6"
 
+# MCP server SDK — official rust-sdk (`rmcp`). See ADR-0001 (stdio only).
+#
+# `default-features = false` is required: rmcp's defaults pull `base64`
+# (unused — base64 binary blob support is not part of doiget's tool surface).
+# We explicitly enable:
+#   - `server`       : `ServerHandler` trait + tool dispatch.
+#   - `macros`       : `#[tool_router]` / `#[tool]` / `#[tool_handler]`.
+#   - `transport-io` : async stdin/stdout transport.
+#   - `schemars`     : tool input-schema generation (the macros emit code
+#                      that references `::rmcp::schemars::JsonSchema`).
+#
+# The streamable-http-* / oauth2 / jsonwebtoken / __reqwest features are
+# deliberately omitted: ADR-0001 forbids any non-stdio transport, and
+# `deny.toml` bans `axum` / `hyper::Server` / `openssl` / `native-tls`.
+# A `cargo tree -p doiget-mcp` after the edit must NOT show any of those
+# crates; `cargo deny check` enforces this in CI.
+rmcp = { version = "1.6", default-features = false, features = [
+    "server", "macros", "transport-io", "schemars",
+] }
+
 [workspace.lints.rust]
 unsafe_code   = "forbid"
 missing_docs  = "warn"
