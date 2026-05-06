@@ -19,6 +19,7 @@ pub mod http;
 pub mod provenance;
 pub mod rate_limiter;
 pub mod source;
+pub mod sources;
 pub mod store;
 
 /// Crate version. Used by `doiget-cli --version` and `doiget_health`.
