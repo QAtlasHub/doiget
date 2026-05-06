@@ -97,6 +97,19 @@ for the full Phase 0 deliverable checklist.
   safekey algorithm; the remaining 87 are a Phase 0 deliverable generated in
   coordination with BiblioFetch.jl per [docs/SAFEKEY.md](docs/SAFEKEY.md).
 
+#### OA PDF fetch from DOI (Phase 1)
+- `doiget fetch <DOI>` now resolves the OA URL from Unpaywall's
+  `best_oa_location.url_for_pdf` (preferred) or `best_oa_location.url`, and
+  fetches the PDF via the synthetic `oa-publisher` source key whose redirect
+  allowlist is documented in
+  [docs/REDIRECT_ALLOWLIST.md](docs/REDIRECT_ALLOWLIST.md) §3.4. Closes the
+  Phase 1 success criterion ([docs/PHASES.md](docs/PHASES.md) §4) for the
+  Crossref + Unpaywall path. The OA-publisher allowlist is informed-best-
+  effort; OA URLs whose host is outside the list, or whose body fails the
+  PDF magic-byte check, log a `Fetch err / source=oa-publisher /
+  error_code=NETWORK_ERROR` row and fall back to metadata-only success
+  (partial-success semantics — the metadata is still useful).
+
 #### Safekey derivation (Phase 1)
 - `doiget-core`: `impl Ref { pub fn safekey(&self) -> Safekey }` implementing
   the NORMATIVE algorithm from [docs/SAFEKEY.md](docs/SAFEKEY.md) §3 — `doi_` /
