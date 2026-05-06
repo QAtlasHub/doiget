@@ -4,7 +4,9 @@
 //! returns a Phase-1-pending error message. Real implementations land in Phase 1+.
 //!
 //! Phase 1 progressively replaces the Phase-0 bail-out per subcommand. The
-//! `config` subcommand is the first to land — see `commands/config.rs`.
+//! `config`, `info`, and `list-recent` subcommands have landed; the write /
+//! network paths (`fetch`, `batch`, `serve`, `bib`, `csl`, `audit-log`)
+//! follow in subsequent PRs.
 
 mod commands;
 
@@ -91,9 +93,14 @@ fn main() -> anyhow::Result<()> {
             anyhow::bail!("no subcommand. Run `doiget --help` for available commands.");
         }
         Some(Command::Config { action }) => commands::config::run(action),
+        // Phase 1 read-only paths.
+        Some(Command::Info { ref_ }) => commands::info::run(ref_),
+        Some(Command::ListRecent { limit }) => commands::list_recent::run(limit),
+        // Other subcommands remain Phase-1-pending; they land in their own
+        // dedicated PRs to keep the diff scoped.
         Some(_cmd) => {
             anyhow::bail!(
-                "doiget {} (Phase 0): subcommands are not yet implemented. \
+                "doiget {}: subcommand not yet implemented in this build. \
                  See docs/PHASES.md.",
                 doiget_core::VERSION
             );
