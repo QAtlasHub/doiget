@@ -77,7 +77,7 @@ Phase 0 is complete when **all** of the following are committed.
 - [x] [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)
 - [x] [`docs/PHASES.md`](.) (this document)
 - [x] [`docs/MIGRATION.md`](MIGRATION.md) (placeholder; full content Phase 2)
-- [x] [`docs/DECISIONS/INDEX.md`](DECISIONS/) + ADRs 0001–0019
+- [x] [`docs/DECISIONS/INDEX.md`](DECISIONS/) + ADRs 0001–0020
 
 ### CI workflows
 
