@@ -58,6 +58,12 @@ clap = { version = "4", features = ["derive", "env", "string"] }
 thiserror = "2"
 anyhow    = "1"
 
+# Async-fn-in-trait shim. Native `async fn` in traits is stable since
+# 1.75, but `#[async_trait::async_trait]` is still required to make
+# the public `Source` trait dyn-compatible (`Box<dyn Source>`), since
+# native dyn-safety for async fn in traits is unstable.
+async-trait = "0.1"
+
 # Logging
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
