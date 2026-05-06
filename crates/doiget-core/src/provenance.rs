@@ -72,7 +72,7 @@ use sha2::{Digest, Sha256};
 ///
 /// The on-disk wire field names match the spec table; struct-field order is
 /// **not** load-bearing for the hash because canonicalization sorts keys
-/// lexicographically (see [`canonical_json_for_hash`]).
+/// lexicographically (see PROVENANCE_LOG.md §4).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LogRow {
