@@ -11,14 +11,16 @@
 //! - [`fetch`] — `doiget fetch <ref>` orchestrator (arXiv E2E + DOI metadata-only).
 //! - [`info`] — prints a stored entry's `Metadata` as TOML on stdout.
 //! - [`list_recent`] — prints up to N most-recently-fetched entries.
+//! - [`search`] — case-insensitive substring search over stored metadata.
 //!
-//! Other subcommands (`search`, `batch`, `bib`, `csl`, `audit-log`, `serve`)
-//! land in separate PRs.
+//! Other subcommands (`batch`, `bib`, `csl`, `audit-log`, `serve`) land in
+//! separate PRs.
 
 pub mod config;
 pub mod fetch;
 pub mod info;
 pub mod list_recent;
+pub mod search;
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
