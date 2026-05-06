@@ -38,7 +38,7 @@ Source: publisher / source API. Trust level: **partially trusted** (TLS-authenti
 | Vector | Mitigation |
 |---|---|
 | Redirect to `file://`, `data:`, internal | reqwest is configured with redirect policy `RedirectPolicy::custom`: only `https://` redirects allowed. |
-| Redirect to attacker host | Per-source allowlist of redirect target hosts; redirects outside the allowlist abort the fetch. |
+| Redirect to attacker host | Per-source allowlist of redirect target hosts; redirects outside the allowlist abort the fetch. See [`REDIRECT_ALLOWLIST.md`](REDIRECT_ALLOWLIST.md). |
 | Redirect loop | `redirect_limit = 10`. |
 | Open-redirect SSRF chain | Tool inputs never accept URLs (only DOI / arXiv id). All URLs are constructed from validated source-side templates. |
 
