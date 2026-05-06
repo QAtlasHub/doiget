@@ -191,11 +191,11 @@ fn build_unpaywall_source(contact_email: &str) -> Result<UnpaywallSource> {
 }
 
 /// Resolved configuration derived from the environment.
-struct OrchestratorConfig {
-    store_root: Utf8PathBuf,
-    log_path: Utf8PathBuf,
-    contact_email: String,
-    unpaywall_email: String,
+pub(crate) struct OrchestratorConfig {
+    pub(crate) store_root: Utf8PathBuf,
+    pub(crate) log_path: Utf8PathBuf,
+    pub(crate) contact_email: String,
+    pub(crate) unpaywall_email: String,
 }
 
 impl OrchestratorConfig {
@@ -215,6 +215,147 @@ impl OrchestratorConfig {
     }
 }
 
+/// Reusable fetch harness shared by `doiget fetch <ref>` (single ref) and
+/// `doiget batch <path>` (many refs). Owns the shared foundation modules
+/// (`HttpClient` / `RateLimiter` / `ProvenanceLog`), the on-disk store, and
+/// the resolved capability profile, plus the session bookkeeping required by
+/// `docs/PROVENANCE_LOG.md` §3 (the 26-char ULID `session_id`).
+///
+/// Construction is performed once via [`FetchHarness::from_env`]. Per-ref
+/// orchestration runs through [`FetchHarness::fetch_one`]; bookend rows go
+/// via [`FetchHarness::log_session_start`] / [`FetchHarness::log_session_end`]
+/// so the orchestrator can frame either one fetch or many.
+pub(crate) struct FetchHarness {
+    pub(crate) http: Arc<HttpClient>,
+    pub(crate) rate_limiter: Arc<RateLimiter>,
+    pub(crate) log: Arc<ProvenanceLog>,
+    pub(crate) store: FsStore,
+    pub(crate) profile: CapabilityProfile,
+    pub(crate) session_id: String,
+    pub(crate) cfg: OrchestratorConfig,
+}
+
+impl FetchHarness {
+    /// Build a harness from the same env-var surface documented at the top
+    /// of this module. Creates the log parent directory if missing, opens
+    /// the provenance log (allocating a fresh `session_id`), and constructs
+    /// the HTTP client honoring `DOIGET_*_BASE` overrides for tests.
+    pub(crate) fn from_env() -> Result<Self> {
+        let cfg = OrchestratorConfig::from_env()?;
+        if let Some(parent) = cfg.log_path.parent() {
+            if !parent.as_str().is_empty() {
+                std::fs::create_dir_all(parent.as_std_path())
+                    .with_context(|| format!("creating log dir {parent}"))?;
+            }
+        }
+        let session_id = new_session_id();
+        let log = Arc::new(
+            ProvenanceLog::open(cfg.log_path.clone(), session_id.clone())
+                .context("opening provenance log")?,
+        );
+        let http = Arc::new(build_http_client()?);
+        let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
+        let store = FsStore::new(cfg.store_root.clone()).context("opening store")?;
+        let profile = CapabilityProfile::from_env().context("resolving capability profile")?;
+
+        Ok(Self {
+            http,
+            rate_limiter,
+            log,
+            store,
+            profile,
+            session_id,
+            cfg,
+        })
+    }
+
+    /// Build a [`FetchContext`] view over this harness's foundation modules.
+    /// Creating one is cheap (cloning three `Arc`s + a `String`); per-ref
+    /// orchestration constructs one on demand.
+    pub(crate) fn fetch_context(&self) -> FetchContext {
+        FetchContext {
+            http: self.http.clone(),
+            rate_limiter: self.rate_limiter.clone(),
+            log: self.log.clone(),
+            session_id: self.session_id.clone(),
+        }
+    }
+
+    /// Append a `SessionStart` row. `ref_input` is the raw user-supplied ref
+    /// string (single-fetch path); pass `None` for batch sessions where no
+    /// single ref attributes the session.
+    pub(crate) fn log_session_start(&self, ref_input: Option<&str>) -> Result<()> {
+        self.log
+            .append(RowInput {
+                event: LogEvent::SessionStart,
+                result: LogResult::Ok,
+                capability: Capability::Oa,
+                ref_: ref_input,
+                source: None,
+                error_code: None,
+                size_bytes: None,
+                license: None,
+                store_path: None,
+            })
+            .context("appending SessionStart row")?;
+        Ok(())
+    }
+
+    /// Append a `SessionEnd` row. `ref_input` mirrors the `log_session_start`
+    /// argument; pass `None` for batch sessions. The result is best-effort —
+    /// if this append fails, the caller already has the underlying fetch
+    /// error (if any) and we don't override it.
+    pub(crate) fn log_session_end(&self, ok: bool, ref_input: Option<&str>) {
+        let result = if ok { LogResult::Ok } else { LogResult::Err };
+        let _ = self.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result,
+            capability: Capability::Oa,
+            ref_: ref_input,
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+        });
+    }
+
+    /// Run a single ref through the per-kind orchestration (arxiv → PDF +
+    /// metadata; doi → metadata-only via Crossref + Unpaywall). Errors here
+    /// are scoped to this one ref — the caller decides whether to abort the
+    /// surrounding session.
+    pub(crate) async fn fetch_one(&self, ref_: &Ref) -> Result<()> {
+        let safekey = ref_.safekey();
+        let ctx = self.fetch_context();
+        match ref_ {
+            Ref::Arxiv(id) => {
+                fetch_arxiv(
+                    id,
+                    ref_,
+                    &self.profile,
+                    &ctx,
+                    &self.store,
+                    &safekey,
+                    &self.cfg,
+                )
+                .await
+            }
+            Ref::Doi(doi) => {
+                fetch_doi(
+                    doi,
+                    ref_,
+                    &self.profile,
+                    &ctx,
+                    &self.store,
+                    &safekey,
+                    &self.cfg,
+                )
+                .await
+            }
+        }
+    }
+}
+
 /// Run the `doiget fetch <ref>` subcommand.
 ///
 /// Returns `Ok(())` on success and writes a one-line success message to
@@ -225,73 +366,21 @@ pub async fn run(input: String) -> Result<()> {
     // Step 1: parse + safekey. Granular `RefParseError` collapses to anyhow
     // via `?`; the higher-level CLI binary maps the error to its exit code.
     let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
-    let safekey = ref_.safekey();
 
-    // Step 2: resolve config + foundation modules.
-    let cfg = OrchestratorConfig::from_env()?;
-    if let Some(parent) = cfg.log_path.parent() {
-        if !parent.as_str().is_empty() {
-            std::fs::create_dir_all(parent.as_std_path())
-                .with_context(|| format!("creating log dir {parent}"))?;
-        }
-    }
-    let session_id = new_session_id();
-    let log = Arc::new(
-        ProvenanceLog::open(cfg.log_path.clone(), session_id.clone())
-            .context("opening provenance log")?,
-    );
-    let http = Arc::new(build_http_client()?);
-    let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
-    let store = FsStore::new(cfg.store_root.clone()).context("opening store")?;
-    let profile = CapabilityProfile::from_env().context("resolving capability profile")?;
+    // Step 2: build harness (foundation modules + provenance log).
+    let harness = FetchHarness::from_env()?;
 
     // Step 3: emit SessionStart. Fail-closed if the log write fails — the
     // surrounding fetch MUST NOT proceed (`docs/PROVENANCE_LOG.md` §5).
-    log.append(RowInput {
-        event: LogEvent::SessionStart,
-        result: LogResult::Ok,
-        capability: Capability::Oa,
-        ref_: Some(ref_.as_input_str()),
-        source: None,
-        error_code: None,
-        size_bytes: None,
-        license: None,
-        store_path: None,
-    })
-    .context("appending SessionStart row")?;
-
-    let ctx = FetchContext {
-        http,
-        rate_limiter,
-        log: log.clone(),
-        session_id: session_id.clone(),
-    };
+    harness.log_session_start(Some(ref_.as_input_str()))?;
 
     // Step 4: dispatch on ref kind.
-    let result = match &ref_ {
-        Ref::Arxiv(id) => fetch_arxiv(id, &ref_, &profile, &ctx, &store, &safekey, &cfg).await,
-        Ref::Doi(doi) => fetch_doi(doi, &ref_, &profile, &ctx, &store, &safekey, &cfg).await,
-    };
+    let result = harness.fetch_one(&ref_).await;
 
     // Step 5: emit SessionEnd regardless of outcome. Best-effort: if this
     // append also fails, surface the underlying fetch error (or a fresh one
     // if the fetch was Ok).
-    let session_result = if result.is_ok() {
-        LogResult::Ok
-    } else {
-        LogResult::Err
-    };
-    let _ = log.append(RowInput {
-        event: LogEvent::SessionEnd,
-        result: session_result,
-        capability: Capability::Oa,
-        ref_: Some(ref_.as_input_str()),
-        source: None,
-        error_code: None,
-        size_bytes: None,
-        license: None,
-        store_path: None,
-    });
+    harness.log_session_end(result.is_ok(), Some(ref_.as_input_str()));
 
     result
 }
