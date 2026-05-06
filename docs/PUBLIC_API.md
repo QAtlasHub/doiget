@@ -109,22 +109,37 @@ pub struct DoigetExtension {
 
 ```rust
 impl Doi {
-    pub fn parse(s: &str) -> Result<Self, ErrorCode>;
+    pub fn parse(s: &str) -> Result<Self, RefParseError>;
     pub fn as_str(&self) -> &str;
 }
 
 impl ArxivId {
-    pub fn parse(s: &str) -> Result<Self, ErrorCode>;
+    pub fn parse(s: &str) -> Result<Self, RefParseError>;
     pub fn as_str(&self) -> &str;
 }
 
 impl Ref {
-    pub fn parse(s: &str) -> Result<Self, ErrorCode>;
+    pub fn parse(s: &str) -> Result<Self, RefParseError>;
     pub fn safekey(&self) -> Safekey;
 }
 ```
 
-`parse` returns `Err(ErrorCode::InvalidRef)` for malformed input.
+`parse` returns a [`RefParseError`] variant naming the specific rejection
+category (`Empty`, `MissingDoiPrefix`, `MissingDoiSuffixSeparator`,
+`InvalidDoiRegistrant`, `EmptyDoiSuffix`, `DoiSuffixTooLong { len, max }`,
+`InvalidDoiSuffixChar { ch }`, `InvalidArxivShape`). The granular shape is
+preserved for tests and future log breadcrumbs; at the public MCP / CLI
+boundary, all variants funnel to [`ErrorCode::InvalidRef`] via the
+`impl From<RefParseError> for ErrorCode` blanket conversion, so `?`
+propagation collapses to `INVALID_REF` automatically.
+
+`RefParseError` is `#[non_exhaustive]`; adding new categories is a
+non-breaking change. Pattern-match with a wildcard arm.
+
+History: prior revisions of this section documented the signature as
+`Result<Self, ErrorCode>` (a Phase 0 placeholder before the parse impls
+landed). PR #55 introduced the dedicated `RefParseError` type; see also
+the [`Unreleased`] entry in [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## 5. CapabilityProfile
 

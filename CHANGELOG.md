@@ -139,6 +139,13 @@ for the full Phase 0 deliverable checklist.
   (`thiserror 2.0.18` only). Reduces future RUSTSEC exposure surface by
   proactively eliminating the dual-version `thiserror 1.x` transitive before
   any advisory lands (#49).
+- `Doi::parse` / `ArxivId::parse` / `Ref::parse` return
+  `Result<Self, RefParseError>` (renamed from the documented `ErrorCode`
+  placeholder; see PR #55,
+  [`docs/PUBLIC_API.md`](docs/PUBLIC_API.md) §4). `RefParseError` is
+  `#[non_exhaustive]` and funnels to `ErrorCode::InvalidRef` at the public
+  MCP / CLI boundary via `impl From<RefParseError> for ErrorCode`, so the
+  `INVALID_REF` surface seen by external callers is unchanged.
 
 ### Fixed
 - `audit.yml`: removed the temporary in-CI `cargo generate-lockfile` step now
