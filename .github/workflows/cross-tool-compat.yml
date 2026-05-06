@@ -1,0 +1,50 @@
+# ---
+# Phase 0 placeholder. Phase 2 implementation will:
+#   (a) install julia + BiblioFetch.jl,
+#   (b) write a TOML store entry from BiblioFetch.jl,
+#   (c) read it via doiget-core::store,
+#   (d) assert byte-for-byte parity per docs/STORE.md schema_version.
+# Reserved by ADR-0004 (BiblioFetch.jl coexistence — shared store contract).
+#
+# Until Phase 2 lands, this workflow only prints an identifying message and
+# exits 0. It exists now so the required-status-check slot is reserved and
+# branch protection can reference a stable workflow name from Phase 0 onward.
+# ---
+
+name: cross-tool-compat
+
+on:
+  pull_request:
+    paths:
+      - 'crates/doiget-core/src/store/**'
+      - 'docs/STORE.md'
+      - 'docs/DECISIONS/0004-bibliofetch-coexistence.md'
+      - '.github/workflows/cross-tool-compat.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/doiget-core/src/store/**'
+      - 'docs/STORE.md'
+      - 'docs/DECISIONS/0004-bibliofetch-coexistence.md'
+      - '.github/workflows/cross-tool-compat.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-tool-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  placeholder:
+    name: placeholder (Phase 2 will replace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11   # v4.1.1
+
+      - name: Announce placeholder status
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "cross-tool-compat: Phase 0 placeholder — no round-trip executed."
+          echo "Phase 2 will add BiblioFetch.jl <-> doiget Store round-trip parity (ADR-0004)."
