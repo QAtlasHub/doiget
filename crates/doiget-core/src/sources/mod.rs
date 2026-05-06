@@ -4,4 +4,5 @@
 //! is the always-on Open Access tier (Crossref / Unpaywall / arXiv). Tier 2/3
 //! sources land in Phase 4/5.
 
+pub mod arxiv;
 pub mod crossref;
