@@ -63,3 +63,87 @@ jobs:
             echo "::error::posture-lint: openssl/native_tls imported; use rustls (deny.toml)"
             exit 1
           fi
+
+  network-purity:
+    # Phase 0 must make zero outbound network calls from the unit / integration
+    # test suite. See `docs/PHASES.md` §3 working principle ("No external
+    # services touched") and `docs/SECURITY.md` §1.10 (network side channel).
+    # Phase 1 will introduce real fetches behind explicit, mocked, or
+    # `#[ignore]`'d tests; this job pins the Phase-0 contract so a regression
+    # is caught at PR review rather than at runtime on a sandboxed runner.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
+
+      - name: No outbound-network APIs in unit / integration tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Scope:
+          #   - crates/*/src/**/*.rs   (unit tests live in `#[cfg(test)] mod tests`)
+          #   - crates/*/tests/**/*.rs (integration tests)
+          # Out-of-scope (allowed to use real HTTP):
+          #   - crates/*/benches/**    (benchmarks may hit real services for warmup)
+          #
+          # Escape hatch for legitimate uses (e.g., a future mock harness that
+          # legitimately re-exports `reqwest::Client`): a file may opt out by
+          # setting its FIRST line to the literal:
+          #
+          #     // allow: outbound-network
+          #
+          # This must be the very first line of the file so reviewers see it
+          # immediately at the top of any diff.
+          #
+          # Patterns are fixed strings (`grep -F`) where possible; otherwise
+          # anchored to disallow `// reqwest::` style commented imports.
+          FIXED_PATTERNS=(
+            'reqwest::'
+            'hyper::client'
+            'std::net::TcpStream'
+            'std::net::UdpSocket'
+            'tokio::net::TcpStream'
+            'tokio::net::UdpSocket'
+            'socket2::'
+          )
+
+          # Collect candidate files: unit-test sources + integration tests,
+          # excluding benches.
+          mapfile -t FILES < <(
+            find crates -type f -name '*.rs' \
+              \( -path 'crates/*/src/*' -o -path 'crates/*/tests/*' \) \
+              -not -path 'crates/*/benches/*'
+          )
+
+          fail=0
+          for f in "${FILES[@]}"; do
+            # Escape hatch: skip files whose first line opts out.
+            first_line="$(head -n1 "$f" || true)"
+            if [ "$first_line" = "// allow: outbound-network" ]; then
+              continue
+            fi
+            for pat in "${FIXED_PATTERNS[@]}"; do
+              # We only care whether the import is real, not commented out.
+              # The regex `^[[:space:]]*[^/[:space:]]` asserts the line begins
+              # with non-comment, non-whitespace content; we then `grep -F`
+              # the literal pattern over those lines.
+              if matches="$(grep -nE '^[[:space:]]*[^/[:space:]].*' "$f" | grep -F "$pat" || true)"; then
+                if [ -n "$matches" ]; then
+                  echo "::error file=$f::posture-lint network-purity: forbidden API '$pat' found in test source"
+                  echo "$matches" | sed "s|^|    $f:|"
+                  fail=1
+                fi
+              fi
+            done
+          done
+
+          if [ "$fail" -ne 0 ]; then
+            echo
+            echo "::error::posture-lint network-purity: outbound-network APIs detected in unit/integration tests."
+            echo "Phase 0 forbids real network calls in the test suite; see"
+            echo "  - .github/workflows/posture-lint.yml (this job)"
+            echo "  - docs/PHASES.md §3 (working principle: \"No external services touched\")"
+            echo "If this use is legitimate (e.g., a mock harness that re-exports a"
+            echo "network type), opt the file out by setting its first line to:"
+            echo "    // allow: outbound-network"
+            exit 1
+          fi
