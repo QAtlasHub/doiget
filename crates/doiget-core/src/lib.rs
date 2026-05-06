@@ -532,11 +532,12 @@ mod tests {
             serde_json::from_str(raw).expect("vectors.json is valid JSON matching schema");
 
         // Phase 1 Wave 3 ships the 13-entry placeholder set. The full
-        // 100-entry set is a follow-up gated on BiblioFetch.jl pre-flight.
-        assert_eq!(
-            parsed.vectors.len(),
-            13,
-            "expected 13 reference vectors; got {} (vectors.json drift?)",
+        // 100-entry NORMATIVE set (docs/SAFEKEY.md §5) is a follow-up gated
+        // on BiblioFetch.jl pre-flight. Use a minimum-count guard so the
+        // test catches truncation but does not break when vectors.json grows.
+        assert!(
+            parsed.vectors.len() >= 13,
+            "vectors.json has fewer entries than expected ({}); fixture may be truncated",
             parsed.vectors.len()
         );
 
@@ -559,5 +560,45 @@ mod tests {
             parsed.vectors.len(),
             failures.join("\n")
         );
+    }
+
+    #[test]
+    fn safekey_truncates_long_inputs_with_sha256_suffix() {
+        // Construct a synthetic DOI whose suffix produces a `trimmed` longer than
+        // 192 chars after step 3. 220 ASCII-safe chars + the `doi_10.1234/`
+        // prefix easily exceeds 192. The resulting key must be exactly 201 chars:
+        // 192 (trimmed prefix) + 1 (`_` separator) + 8 (hex of first 4 bytes of
+        // SHA-256(raw)). Per docs/SAFEKEY.md §3 step 5.
+        let suffix = "a".repeat(220);
+        let doi = Doi(format!("10.1234/{}", suffix));
+        let key = Ref::Doi(doi).safekey();
+        let s = key.as_str();
+
+        // Shape: <192 ASCII chars from {A-Za-z0-9._-}> + "_" + <8 hex chars>
+        assert_eq!(s.len(), 201, "expected 201-char truncated key, got {}: {}", s.len(), s);
+        assert_eq!(&s[192..193], "_", "expected '_' separator at byte 192");
+        let hash_part = &s[193..];
+        assert_eq!(hash_part.len(), 8, "hash suffix must be 8 hex chars");
+        assert!(
+            hash_part.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "hash suffix must be lowercase hex: {}", hash_part
+        );
+
+        // Determinism: same input twice must produce the same key.
+        let key2 = Ref::Doi(Doi(format!("10.1234/{}", "a".repeat(220)))).safekey();
+        assert_eq!(s, key2.as_str(), "safekey must be deterministic");
+
+        // Hash content: must equal hex(sha256(raw)[..4]) where raw is the
+        // pre-escape prefixed form per docs/SAFEKEY.md §3 step 5.
+        use sha2::Digest;
+        let raw = format!("doi_10.1234/{}", "a".repeat(220));
+        let expected_hash = {
+            let digest = sha2::Sha256::digest(raw.as_bytes());
+            format!(
+                "{:02x}{:02x}{:02x}{:02x}",
+                digest[0], digest[1], digest[2], digest[3]
+            )
+        };
+        assert_eq!(hash_part, expected_hash, "hash must match SHA-256 of raw form");
     }
 }
