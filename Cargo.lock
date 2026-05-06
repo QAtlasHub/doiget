@@ -490,9 +490,11 @@ dependencies = [
 name = "doiget-core"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "camino",
  "chrono",
  "fs2",
+ "futures-util",
  "hex",
  "once_cell",
  "parking_lot",

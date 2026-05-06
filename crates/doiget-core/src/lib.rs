@@ -14,6 +14,8 @@
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
+pub mod http;
+
 /// Crate version. Used by `doiget-cli --version` and `doiget_health`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
