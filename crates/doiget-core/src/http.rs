@@ -249,22 +249,6 @@ impl HttpClient {
         })
     }
 
-    /// Build an `HttpClient` directly from a pre-constructed map of
-    /// `(source_key, reqwest::Client)`. **Test-only.**
-    ///
-    /// `crate::http::tests::build_test_client_for_http` (in this module's
-    /// own test scope) constructs a relaxed `https_only(false)` client so
-    /// wiremock plain-HTTP origins can be exercised; sibling-module tests
-    /// (e.g. `crate::sources::arxiv::tests`) need the same capability but
-    /// cannot reach the private `clients` field directly. This `cfg(test)`
-    /// constructor is the only sanctioned crossing of that boundary.
-    #[cfg(test)]
-    pub(crate) fn from_clients_for_test(clients: HashMap<String, Client>) -> Self {
-        Self {
-            clients: Arc::new(clients),
-        }
-    }
-
     /// Fetch a URL, treating it as a JSON or text body. Caps at
     /// [`PDF_MAX_BYTES`].
     ///

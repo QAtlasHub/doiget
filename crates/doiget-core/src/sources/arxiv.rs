@@ -175,74 +175,19 @@ mod tests {
     use super::*;
 
     use std::sync::Arc;
-    use std::time::Duration;
 
     use camino::Utf8PathBuf;
-    use reqwest::redirect::Policy;
-    use reqwest::ClientBuilder;
     use tempfile::TempDir;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    use crate::http::{HttpClient, HttpError, SourceAllowlist};
+    use crate::http::{HttpClient, HttpError};
     use crate::provenance::{LogRow, ProvenanceLog};
     use crate::rate_limiter::RateLimiter;
     use crate::source::FetchContext;
-    use crate::{ArxivId, CapabilityProfile, Doi, RateLimits, Ref, VERSION};
+    use crate::{ArxivId, CapabilityProfile, Doi, RateLimits, Ref};
 
     const TEST_SESSION_ID: &str = "01J0000000000000000000TEST";
-
-    /// Build an `HttpClient` registered for the `arxiv` source with the
-    /// given allowlist host, but with `https_only(false)` so it can talk
-    /// to `wiremock`'s plain-HTTP origin. Mirrors the test pattern in
-    /// `crate::http::tests::build_test_client_for_http` — copied here
-    /// rather than re-exported because that helper is `#[cfg(test)]` and
-    /// not visible across module boundaries. The redirect closure still
-    /// rejects non-HTTPS / off-allowlist redirects exactly as production
-    /// does.
-    fn build_test_http_client(allowlist_host: &str) -> HttpClient {
-        let allowlist = SourceAllowlist::new("arxiv", vec![allowlist_host.to_string()]);
-        let allowlist_for_closure = allowlist.clone();
-        let redirect_policy = Policy::custom(move |attempt| {
-            let scheme = attempt.url().scheme().to_string();
-            let host_opt = attempt.url().host_str().map(|h| h.to_ascii_lowercase());
-            if scheme != "https" {
-                return attempt.error(HttpError::InsecureRedirect { scheme });
-            }
-            let host = match host_opt {
-                Some(h) => h,
-                None => {
-                    return attempt.error(HttpError::RedirectDenied {
-                        source_key: allowlist_for_closure.source.clone(),
-                        host: String::new(),
-                    });
-                }
-            };
-            if !allowlist_for_closure.matches(&host) {
-                return attempt.error(HttpError::RedirectDenied {
-                    source_key: allowlist_for_closure.source.clone(),
-                    host,
-                });
-            }
-            attempt.follow()
-        });
-        let client = ClientBuilder::new()
-            .https_only(false)
-            .redirect(redirect_policy)
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .read_timeout(Duration::from_secs(60))
-            .user_agent(format!(
-                "doiget/{} (+https://github.com/sotashimozono/doiget)",
-                VERSION
-            ))
-            .tls_backend_rustls()
-            .build()
-            .expect("test client builds");
-        let mut map = std::collections::HashMap::new();
-        map.insert("arxiv".to_string(), client);
-        HttpClient::from_clients_for_test(map)
-    }
 
     /// Build a complete `FetchContext` against a wiremock host for use in
     /// the source-level tests below.
@@ -252,7 +197,7 @@ mod tests {
             Utf8PathBuf::try_from(td.path().to_path_buf()).expect("temp dir path must be UTF-8");
         let log_path = log_dir.join("test.jsonl");
 
-        let http = Arc::new(build_test_http_client(wiremock_host));
+        let http = Arc::new(HttpClient::new_for_tests_allow_http("arxiv", wiremock_host));
         let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
         let session_id = TEST_SESSION_ID.to_string();
         let log = Arc::new(
