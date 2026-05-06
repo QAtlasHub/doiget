@@ -53,3 +53,6 @@ futures-util = { workspace = true }
 [dev-dependencies]
 wiremock   = { workspace = true }
 proptest   = { workspace = true }
+# `test-util` enables `tokio::test(start_paused = true)` and the
+# `tokio::time::pause()` / `advance()` API used by rate_limiter tests.
+tokio      = { workspace = true, features = ["test-util"] }
