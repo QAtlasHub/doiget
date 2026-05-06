@@ -42,7 +42,7 @@ fn contains_semver_like(s: &str) -> bool {
             continue;
         }
         i += 1; // consume first '.'
-        // Consume run of digits (group 2).
+                // Consume run of digits (group 2).
         let g2_start = i;
         while i < bytes.len() && bytes[i].is_ascii_digit() {
             i += 1;
@@ -51,7 +51,7 @@ fn contains_semver_like(s: &str) -> bool {
             continue;
         }
         i += 1; // consume second '.'
-        // Consume run of digits (group 3).
+                // Consume run of digits (group 3).
         let g3_start = i;
         while i < bytes.len() && bytes[i].is_ascii_digit() {
             i += 1;
@@ -112,10 +112,7 @@ fn version_exits_successfully_and_prints_semver() {
     );
 
     let stdout = String::from_utf8(output.stdout).expect("doiget --version stdout was not UTF-8");
-    assert!(
-        !stdout.is_empty(),
-        "doiget --version produced empty stdout"
-    );
+    assert!(!stdout.is_empty(), "doiget --version produced empty stdout");
     assert!(
         contains_semver_like(&stdout),
         "doiget --version stdout did not contain a semver-shaped token \
