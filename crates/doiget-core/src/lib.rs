@@ -618,6 +618,14 @@ pub enum ErrorCode {
     LockTimeout,
     /// Bug — please open an issue.
     InternalError,
+    /// Feature is spec'd but not yet wired in this Phase. Distinct from
+    /// [`Self::InternalError`] (which signals a bug) and
+    /// [`Self::CapabilityDenied`] (which signals a runtime config gate).
+    /// Returned by stubs that exist to pin the public surface ahead of
+    /// orchestrator implementation, so an agent can react with "wait for
+    /// next minor release" rather than "report a bug" or "tweak my
+    /// capability profile". Wire form: `"NOT_IMPLEMENTED"`.
+    NotImplemented,
 }
 
 // ---------------------------------------------------------------------------
@@ -682,10 +690,17 @@ pub enum DenialReason {
 /// construction outside the crate AND wire-level extension — must agree.
 ///
 /// All fields except `reason` are optional. Producers populate the fields
-/// relevant to the reason and leave the rest at default (`None` / empty
-/// `Vec`); consumers MUST tolerate any subset of fields being present.
-/// Optional / empty fields are skipped on serialize but accepted as missing
-/// on deserialize via `#[serde(default, skip_serializing_if = ...)]`.
+/// relevant to the reason and leave the rest at `None`; consumers MUST
+/// tolerate any subset of fields being present. Optional fields are
+/// skipped on serialize but accepted as missing on deserialize via
+/// `#[serde(default, skip_serializing_if = "Option::is_none")]`.
+///
+/// [`Self::expected`] is `Option<Vec<String>>` rather than `Vec<String>`
+/// so the producer can distinguish "this reason has no allowlist channel"
+/// (`None` → field absent on the wire) from "this is the explicit list of
+/// acceptable values, possibly empty" (`Some(vec![])` → `"expected":[]` on
+/// the wire). The previous `Vec<String>` shape collapsed both states
+/// into "field omitted", which an LLM agent could not safely disambiguate.
 ///
 /// Mapping table: see ADR-0023 §4, plus the
 /// `From<&HttpError> for Option<DenialContext>` and
@@ -704,11 +719,15 @@ pub struct DenialContext {
     /// as opaque text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempted: Option<String>,
-    /// Allowlist entries / acceptable values. `Vec<String>` even when only
-    /// one value is meaningful (e.g. `["%PDF-"]`), so the format does not
-    /// have to flip when multiple values are acceptable.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub expected: Vec<String>,
+    /// Allowlist entries / acceptable values. `Option<Vec<String>>` so the
+    /// producer can distinguish "this reason has no allowlist channel"
+    /// (`None`, field absent on the wire) from "this is the explicit list
+    /// of acceptable values, possibly empty" (`Some(vec![])`, `"expected":[]`
+    /// on the wire). The inner `Vec<String>` is used even when only one
+    /// value is meaningful (e.g. `Some(vec!["%PDF-".into()])`) so the
+    /// format does not have to flip when multiple values are acceptable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<Vec<String>>,
     /// Redirect-chain hop position, 0-indexed. `u8` because the chain is
     /// hard-capped at [`crate::http`]'s `MAX_REDIRECTS` (= 10) and any
     /// larger value indicates a bug.
@@ -1909,7 +1928,10 @@ mod tests {
             reason: DenialReason::RedirectNotInAllowlist,
             source: Some("crossref".to_string()),
             attempted: Some("evil.example.com".to_string()),
-            expected: vec!["api.crossref.org".to_string(), "*.crossref.org".to_string()],
+            expected: Some(vec![
+                "api.crossref.org".to_string(),
+                "*.crossref.org".to_string(),
+            ]),
             hop_index: Some(1),
             cap: None,
             actual: None,
@@ -1921,19 +1943,44 @@ mod tests {
 
     #[test]
     fn denial_context_serialize_elides_empty_fields() {
-        // `skip_serializing_if` must keep the wire form lean: None / empty
-        // Vec MUST NOT appear on the wire. Reason is always present.
+        // `skip_serializing_if = "Option::is_none"` must keep the wire form
+        // lean: every `None` field MUST NOT appear on the wire. Reason is
+        // always present.
         let dc = DenialContext {
             reason: DenialReason::CapabilityNotGranted,
             source: None,
             attempted: None,
-            expected: Vec::new(),
+            expected: None,
             hop_index: None,
             cap: None,
             actual: None,
         };
         let s = serde_json::to_string(&dc).expect("ser");
         assert_eq!(s, "{\"reason\":\"capability_not_granted\"}");
+    }
+
+    #[test]
+    fn denial_context_expected_some_empty_vec_preserves_explicit_empty_allowlist() {
+        // Post-refinement disambiguation: `expected: Some(vec![])` is the
+        // "explicit empty allowlist" signal and MUST survive the wire as
+        // `"expected":[]`. Only `expected: None` is skipped on serialize.
+        // This is the bug the previous `Vec<String>` shape masked.
+        let dc = DenialContext {
+            reason: DenialReason::RedirectNotInAllowlist,
+            source: Some("crossref".to_string()),
+            attempted: Some("evil.example.com".to_string()),
+            expected: Some(Vec::new()),
+            hop_index: None,
+            cap: None,
+            actual: None,
+        };
+        let s = serde_json::to_string(&dc).expect("ser");
+        assert!(
+            s.contains("\"expected\":[]"),
+            "expected:[] must survive on the wire (got: {s})"
+        );
+        let back: DenialContext = serde_json::from_str(&s).expect("de");
+        assert_eq!(back.expected, Some(Vec::new()));
     }
 
     #[test]
@@ -1948,7 +1995,7 @@ mod tests {
         assert_eq!(dc.actual, Some(209715200));
         assert!(dc.source.is_none());
         assert!(dc.attempted.is_none());
-        assert!(dc.expected.is_empty());
+        assert!(dc.expected.is_none());
         assert!(dc.hop_index.is_none());
     }
 
@@ -1972,7 +2019,7 @@ mod tests {
             reason: DenialReason::RedirectNotInAllowlist,
             source: Some("crossref".into()),
             attempted: Some("evil.example.com".into()),
-            expected: vec!["api.crossref.org".into(), "*.crossref.org".into()],
+            expected: Some(vec!["api.crossref.org".into(), "*.crossref.org".into()]),
             hop_index: Some(1),
             cap: None,
             actual: None,

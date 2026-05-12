@@ -23,6 +23,7 @@ pub enum ErrorCode {
     SchemaTooNew,
     LockTimeout,
     InternalError,
+    NotImplemented,
 }
 ```
 
@@ -43,6 +44,7 @@ Wire form (JSON / MCP): `"INVALID_REF"`, `"NO_OA_AVAILABLE"`, etc.
 | `SCHEMA_TOO_NEW` | Store entry's `schema_version` is ahead. | Upgrade doiget. |
 | `LOCK_TIMEOUT` | Could not acquire `flock` within 5 s. | Retry; another process holds it. |
 | `INTERNAL_ERROR` | Bug. | Report at <https://github.com/sotashimozono/doiget/issues>. |
+| `NOT_IMPLEMENTED` | Feature is spec'd but not yet wired in this Phase. | Wait for next minor release; do not retry. |
 
 ## 3. Persona × error matrix
 
@@ -69,7 +71,13 @@ table below.
   "source":    "crossref",                     // resolver source key, optional
   "attempted": "evil.example.com",             // host/path/value, optional
   "expected":  ["api.crossref.org",
-                "*.crossref.org"],             // allowlist entries, [] when N/A
+                "*.crossref.org"],             // allowlist entries; the field
+                                                //   is ABSENT when the producer
+                                                //   did not populate it. An
+                                                //   explicit [] means "empty
+                                                //   allowlist" (ADR-0023 §3
+                                                //   None/Some(vec![])
+                                                //   disambiguation).
   "hop_index": 1,                              // redirect-chain position, optional
   "cap":       104857600,                      // size/rate cap, optional
   "actual":    209715200                       // observed value, optional

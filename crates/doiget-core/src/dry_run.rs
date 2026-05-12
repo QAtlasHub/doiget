@@ -76,6 +76,13 @@ pub struct FetchPlan {
     /// fetch would NOT append" without inverting the flag's meaning
     /// (ADR-0022 §1).
     pub would_append_provenance: bool,
+    /// Always `true` in Phase 1: [`PdfSourcePlan::candidate_hosts`] is the
+    /// **static allowlist** for the resolver, NOT a prediction of the
+    /// single host the real fetch would touch. See ADR-0022 §4 ("Honesty
+    /// about candidate uncertainty"). The field is machine-parseable so
+    /// an agent can detect the upper-bound semantics without reading the
+    /// spec — encoding the §4 disclaimer into the wire shape itself.
+    pub candidate_hosts_are_upper_bound: bool,
 }
 
 /// Hard-coded rate-limit budget surfaced with every [`FetchPlan`] preview.
@@ -181,6 +188,12 @@ pub fn build_fetch_plan(ref_: &Ref, store_root: &Utf8Path) -> FetchPlan {
         target_pdf_path,
         target_metadata_path,
         would_append_provenance: true,
+        // Always `true` in Phase 1 per ADR-0022 §4 ("Honesty about
+        // candidate uncertainty"): `candidate_hosts` is the static
+        // resolver allowlist, NOT a prediction of the single host the
+        // real fetch would touch. Surfaced on the wire so agents can
+        // detect the upper-bound semantics without parsing the spec.
+        candidate_hosts_are_upper_bound: true,
     }
 }
 
@@ -297,6 +310,24 @@ mod tests {
         let plan = build_fetch_plan(&r, &temp_root());
         let env = build_dry_run_envelope(&r, &plan);
         assert_eq!(env["ref"], serde_json::json!({ "arxiv": "2401.12345" }));
+    }
+
+    #[test]
+    fn fetch_plan_carries_candidate_hosts_are_upper_bound_true() {
+        // ADR-0022 §4 ("Honesty about candidate uncertainty"): the field
+        // is always `true` in Phase 1, and the wire envelope must
+        // surface it inside `plan` so agents can detect the upper-bound
+        // semantics without consulting the spec.
+        let r = Ref::Doi(Doi("10.1234/example".to_string()));
+        let plan = build_fetch_plan(&r, &temp_root());
+        assert!(plan.candidate_hosts_are_upper_bound);
+        let env = build_dry_run_envelope(&r, &plan);
+        assert_eq!(
+            env["plan"]["candidate_hosts_are_upper_bound"],
+            serde_json::json!(true),
+            "plan.candidate_hosts_are_upper_bound must be true on the \
+             wire (ADR-0022 §4); got: {env}"
+        );
     }
 
     #[test]

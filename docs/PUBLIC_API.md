@@ -202,7 +202,7 @@ pub struct DenialContext {
     pub reason:    DenialReason,
     pub source:    Option<String>,
     pub attempted: Option<String>,
-    pub expected:  Vec<String>,
+    pub expected:  Option<Vec<String>>,
     pub hop_index: Option<u8>,
     pub cap:       Option<u64>,
     pub actual:    Option<u64>,

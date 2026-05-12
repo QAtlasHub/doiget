@@ -149,7 +149,10 @@ impl From<&FetchError> for Option<crate::DenialContext> {
                 reason: DenialReason::CapabilityNotGranted,
                 source: Some(source_key.clone()),
                 attempted: None,
-                expected: Vec::new(),
+                // CapabilityNotGranted has no allowlist channel: the
+                // producer leaves `expected` at `None` (NOT `Some(vec![])`).
+                // See `DenialContext::expected` for the disambiguation.
+                expected: None,
                 hop_index: None,
                 cap: None,
                 actual: None,
@@ -377,7 +380,10 @@ mod tests {
         assert_eq!(dc.reason, DenialReason::CapabilityNotGranted);
         assert_eq!(dc.source.as_deref(), Some("tdm-elsevier"));
         assert!(dc.attempted.is_none());
-        assert!(dc.expected.is_empty());
+        // Post-refinement: `expected: None` ("producer did not populate")
+        // rather than `Some(vec![])` ("explicit empty allowlist"). See
+        // `DenialContext::expected` field doc for the disambiguation.
+        assert!(dc.expected.is_none());
     }
 
     #[test]

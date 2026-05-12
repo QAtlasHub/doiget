@@ -256,7 +256,7 @@ async fn doiget_metadata_only_dry_run_true_returns_fetch_plan_envelope() -> anyh
 }
 
 #[tokio::test]
-async fn doiget_metadata_only_default_dry_run_false_returns_internal_error_stub(
+async fn doiget_metadata_only_default_dry_run_false_returns_not_implemented_stub(
 ) -> anyhow::Result<()> {
     let (client, server_handle) = boot_in_memory_server().await?;
 
@@ -276,11 +276,14 @@ async fn doiget_metadata_only_default_dry_run_false_returns_internal_error_stub(
         .expect("doiget_metadata_only stub uses CallToolResult::structured");
 
     // Phase 1: the non-dry-run branch is a documented stub returning
-    // INTERNAL_ERROR with a clear message (see Server::doiget_metadata_only).
+    // NOT_IMPLEMENTED with a clear message (see Server::doiget_metadata_only).
+    // The post-incorporation review (item 5) introduced ErrorCode::NotImplemented
+    // specifically to distinguish "spec'd but not yet wired" stubs from
+    // bugs (INTERNAL_ERROR) or capability gates (CAPABILITY_DENIED).
     assert_eq!(structured["ok"], serde_json::json!(false));
     assert_eq!(
         structured["error"]["code"],
-        serde_json::json!("INTERNAL_ERROR"),
+        serde_json::json!("NOT_IMPLEMENTED"),
         "envelope: {structured:?}"
     );
     let msg = structured["error"]["message"]
@@ -288,7 +291,7 @@ async fn doiget_metadata_only_default_dry_run_false_returns_internal_error_stub(
         .expect("error.message is a string");
     assert!(
         msg.contains("not yet wired") || msg.contains("dry_run"),
-        "INTERNAL_ERROR stub message must mention the Phase 1 limitation; \
+        "NOT_IMPLEMENTED stub message must mention the Phase 1 limitation; \
          got: {msg:?}"
     );
 

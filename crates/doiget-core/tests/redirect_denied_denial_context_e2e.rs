@@ -105,18 +105,21 @@ async fn redirect_outside_allowlist_surfaces_denial_context_via_source_chain() {
          (got: {:?})",
         dc.attempted,
     );
+    let expected_hosts = dc.expected.as_deref().expect(
+        "RedirectNotInAllowlist must populate expected (post-refinement: Some(_), not None)",
+    );
     assert!(
-        !dc.expected.is_empty(),
+        !expected_hosts.is_empty(),
         "expected allowlist hosts must be carried through (the original \
          RedirectDenied snapshots them — see http.rs `expected_hosts` \
          field), got: {:?}",
-        dc.expected,
+        expected_hosts,
     );
     assert!(
-        dc.expected.iter().any(|h| h == &host),
+        expected_hosts.iter().any(|h| h == &host),
         "expected allowlist hosts must include the wiremock host {:?}; got: {:?}",
         host,
-        dc.expected,
+        expected_hosts,
     );
 }
 
@@ -181,6 +184,9 @@ fn source_chain_walk_recovers_wrapped_redirect_denied() {
     assert_eq!(dc.attempted.as_deref(), Some("evil.example.com"));
     assert_eq!(
         dc.expected,
-        vec!["api.crossref.org".to_string(), "*.crossref.org".to_string()]
+        Some(vec![
+            "api.crossref.org".to_string(),
+            "*.crossref.org".to_string(),
+        ]),
     );
 }

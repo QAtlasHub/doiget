@@ -310,7 +310,7 @@ impl From<&HttpError> for Option<crate::DenialContext> {
                 reason: DenialReason::RedirectNotInAllowlist,
                 source: Some(source_key.clone()),
                 attempted: Some(host.clone()),
-                expected: expected_hosts.clone(),
+                expected: Some(expected_hosts.clone()),
                 hop_index: None,
                 cap: None,
                 actual: None,
@@ -319,7 +319,11 @@ impl From<&HttpError> for Option<crate::DenialContext> {
                 reason: DenialReason::SizeCapExceeded,
                 source: None,
                 attempted: None,
-                expected: Vec::new(),
+                // The size-cap reason has no allowlist channel; use
+                // `None` to signal "field not populated by producer"
+                // rather than `Some(vec![])` (which would mean "explicit
+                // empty allowlist"). See `DenialContext::expected` docs.
+                expected: None,
                 hop_index: None,
                 cap: Some(*cap),
                 actual: Some(*actual),
@@ -336,7 +340,7 @@ impl From<&HttpError> for Option<crate::DenialContext> {
                     "{:02x}{:02x}{:02x}{:02x}{:02x}",
                     got[0], got[1], got[2], got[3], got[4]
                 )),
-                expected: vec!["%PDF-".to_string()],
+                expected: Some(vec!["%PDF-".to_string()]),
                 hop_index: None,
                 cap: None,
                 actual: None,
@@ -345,7 +349,7 @@ impl From<&HttpError> for Option<crate::DenialContext> {
                 reason: DenialReason::InsecureScheme,
                 source: None,
                 attempted: Some(format!("{}:...", scheme)),
-                expected: vec!["https".to_string()],
+                expected: Some(vec!["https".to_string()]),
                 hop_index: None,
                 cap: None,
                 actual: None,
@@ -1223,8 +1227,8 @@ mod tests {
         assert_eq!(dc.source.as_deref(), Some("crossref"));
         assert_eq!(dc.attempted.as_deref(), Some("evil.example.com"));
         assert_eq!(
-            dc.expected,
-            vec!["api.crossref.org".to_string(), "*.crossref.org".to_string()]
+            dc.expected.as_deref(),
+            Some(&["api.crossref.org".to_string(), "*.crossref.org".to_string()][..])
         );
         assert!(dc.cap.is_none());
         assert!(dc.actual.is_none());
@@ -1245,7 +1249,10 @@ mod tests {
         assert_eq!(dc.actual, Some(209_715_200));
         assert!(dc.source.is_none());
         assert!(dc.attempted.is_none());
-        assert!(dc.expected.is_empty());
+        // OversizedBody has no allowlist channel: producer leaves
+        // `expected` at `None` (NOT `Some(vec![])`). See the field doc on
+        // `DenialContext::expected` for the disambiguation.
+        assert!(dc.expected.is_none());
     }
 
     #[test]
@@ -1260,7 +1267,7 @@ mod tests {
         let dc = dc.expect("NotAPdf -> Some(DenialContext)");
         assert_eq!(dc.reason, DenialReason::ContentTypeMismatch);
         assert_eq!(dc.attempted.as_deref(), Some("3c68746d6c"));
-        assert_eq!(dc.expected, vec!["%PDF-".to_string()]);
+        assert_eq!(dc.expected.as_deref(), Some(&["%PDF-".to_string()][..]));
     }
 
     #[test]
@@ -1276,7 +1283,7 @@ mod tests {
         // allowlist reason — they are semantically distinct denials.
         assert_eq!(dc.reason, DenialReason::InsecureScheme);
         assert_eq!(dc.attempted.as_deref(), Some("http:..."));
-        assert_eq!(dc.expected, vec!["https".to_string()]);
+        assert_eq!(dc.expected.as_deref(), Some(&["https".to_string()][..]));
     }
 
     #[test]

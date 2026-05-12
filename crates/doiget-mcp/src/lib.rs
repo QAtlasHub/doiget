@@ -37,7 +37,7 @@
 use camino::Utf8PathBuf;
 
 use doiget_core::dry_run::{build_dry_run_envelope, build_fetch_plan};
-use doiget_core::{CapabilityProfile, Ref, SCHEMA_VERSION, VERSION};
+use doiget_core::{CapabilityProfile, ErrorCode, Ref, SCHEMA_VERSION, VERSION};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
@@ -169,9 +169,13 @@ impl Server {
     /// the orchestrator that performs a real metadata-only fetch (with
     /// the `metadata-only` provenance tag and no PDF leg) lands in a
     /// follow-up PR. The non-dry-run path returns
-    /// `{ok:false, error:{code:"INTERNAL_ERROR", ...}}` with a clear
-    /// message. The dry-run path is the user-visible value-add this PR
-    /// ships, per ADR-0022 (the `dry_run` companion ADR).
+    /// `{ok:false, error:{code:"NOT_IMPLEMENTED", ...}}` with a clear
+    /// message; `ErrorCode::NotImplemented` is the typed signal the
+    /// post-incorporation review (item 5) introduced specifically for
+    /// "spec'd but not yet wired" stubs — distinct from `INTERNAL_ERROR`
+    /// (a bug) and `CAPABILITY_DENIED` (a runtime config gate). The
+    /// dry-run path is the user-visible value-add this PR ships, per
+    /// ADR-0022 (the `dry_run` companion ADR).
     #[tool(
         description = "WHEN TO USE: User wants metadata for a DOI / arXiv id without paying for or being noticed by a PDF download.\n\
                        INPUTS: ref (DOI or arXiv id), dry_run (optional bool).\n\
@@ -190,7 +194,7 @@ impl Server {
             Ok(r) => r,
             Err(e) => {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
-                    "INVALID_REF",
+                    ErrorCode::InvalidRef,
                     &format!("invalid ref: {e}"),
                 )));
             }
@@ -214,8 +218,14 @@ impl Server {
         }
 
         // Step 3: non-dry-run path. The real metadata-only orchestrator
-        // lands in a follow-up PR; surface a clear INTERNAL_ERROR
-        // envelope so an agent doesn't get a confusing default reply.
+        // lands in a follow-up PR; surface a clear NOT_IMPLEMENTED
+        // envelope so an agent reacts with "wait for the next minor
+        // release" rather than "report a bug" (INTERNAL_ERROR) or
+        // "tweak my capability profile" (CAPABILITY_DENIED). The typed
+        // `ErrorCode::NotImplemented` value (rather than a raw string
+        // literal) is the I6 lesson from the PR #84 multi-agent review:
+        // the envelope's `code` field MUST come from the closed enum
+        // so a typo in the literal cannot ship.
         // TODO(phase-1.x): wire the metadata-only orchestrator.
         // It should: dispatch Crossref + Unpaywall (DOI) or arXiv-meta
         // (arXiv), write the metadata TOML, append a `Fetch` row tagged
@@ -224,8 +234,10 @@ impl Server {
         // reported but never followed (that is the contract that
         // distinguishes this tool from `doiget_fetch_paper`).
         Ok(CallToolResult::structured(metadata_only_error_envelope(
-            "INTERNAL_ERROR",
-            "metadata_only is not yet wired in Phase 1; only dry_run is supported",
+            ErrorCode::NotImplemented,
+            "metadata-only orchestrator is not yet wired in Phase 1; \
+             only dry_run is supported. Will be implemented in a \
+             follow-up PR.",
         )))
     }
 }
@@ -261,18 +273,24 @@ pub struct MetadataOnlyInput {
 }
 
 /// Build the `{ok:false, error:{...}}` envelope used by
-/// `doiget_metadata_only` for both INVALID_REF (bad input) and
-/// INTERNAL_ERROR (Phase 1 stub) cases. Mirrors the wire shape from
+/// `doiget_metadata_only` for both `INVALID_REF` (bad input) and
+/// `NOT_IMPLEMENTED` (Phase 1 stub) cases. Mirrors the wire shape from
 /// `docs/MCP_TOOLS.md` §5; `denial_context` is omitted (these failure
 /// modes do not produce one — see `docs/ERRORS.md` §3.1).
-fn metadata_only_error_envelope(code: &str, message: &str) -> Value {
+///
+/// The `code` parameter is typed as [`ErrorCode`] (not `&str`) so the
+/// closed enum is the single source of truth for the wire token — the
+/// I6 lesson from PR #84's multi-agent review: free-form string codes
+/// can drift from `ErrorCode`'s SCREAMING_SNAKE_CASE rendering without
+/// the compiler noticing.
+fn metadata_only_error_envelope(code: ErrorCode, message: &str) -> Value {
     json!({
         "ok": false,
         "error": {
             "code": code,
             "message": message,
             // denial_context is intentionally absent for these envelope
-            // shapes (parse-error / internal-error); ADR-0023 §3 says
+            // shapes (parse-error / not-implemented); ADR-0023 §3 says
             // consumers MUST tolerate the field being absent.
         },
     })
