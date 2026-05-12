@@ -76,6 +76,8 @@ Per the user's 2026-05-12 directive (Discussion #12 incorporation review),
 pub enum DenialReason {
     /// Redirect target host did not match the source's allowlist.
     RedirectNotInAllowlist,
+    /// Redirect target had a non-HTTPS scheme.
+    InsecureScheme,
     /// Source produced a URL whose host is on a blocklist (future use).
     HostInBlockList,
     /// Body exceeded `PDF_MAX_BYTES`.
@@ -134,7 +136,7 @@ The producer-side mapping from internal error variants to `DenialContext` is:
 | `HttpError::RedirectDenied { source_key, host }` | `redirect_not_in_allowlist` | `source=source_key`, `attempted=host`, `expected=allowlist hosts`, `hop_index` if known |
 | `HttpError::OversizedBody { actual, cap }`       | `size_cap_exceeded`       | `cap`, `actual`                                     |
 | `HttpError::NotAPdf { got }`                     | `content_type_mismatch`   | `attempted=hex(got)`, `expected=["%PDF-"]`          |
-| `HttpError::InsecureRedirect { scheme }`         | `redirect_not_in_allowlist` | `attempted=scheme:...`, `expected=["https"]`        |
+| `HttpError::InsecureRedirect { scheme }`         | `insecure_scheme`         | `attempted=scheme:...`, `expected=["https"]`        |
 | `FetchError::NotEligible { source_key }`         | `capability_not_granted`  | `source=source_key`                                 |
 | `RateLimiter` denial (future)                    | `rate_limit_window`       | `source`, `cap=per-source rate`                     |
 | Store schema rejection                           | `schema_drift`            | `actual=row schema_version`, `cap=binary version`   |

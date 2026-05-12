@@ -76,11 +76,11 @@ table below.
 }
 ```
 
-Closed `reason` set: `redirect_not_in_allowlist`, `host_in_block_list`,
-`size_cap_exceeded`, `schema_drift`, `capability_not_granted`,
-`rate_limit_window`, `ssrf_private_address`, `content_type_mismatch`. Adding
-a new variant is a minor semver bump; renaming or repurposing one is a
-breaking change.
+Closed `reason` set: `redirect_not_in_allowlist`, `insecure_scheme`,
+`host_in_block_list`, `size_cap_exceeded`, `schema_drift`,
+`capability_not_granted`, `rate_limit_window`, `ssrf_private_address`,
+`content_type_mismatch`. Adding a new variant is a minor semver bump;
+renaming or repurposing one is a breaking change.
 
 `error.message` MUST continue to embed the same parameters in human-readable
 form — `denial_context` is a parallel channel, not a replacement.

@@ -96,16 +96,6 @@ pub fn emit_dry_run_plan_to_stdout(ref_: &Ref, plan: &FetchPlan) -> Result<()> {
     Ok(())
 }
 
-/// Resolve the on-disk store root. `DOIGET_STORE_ROOT` wins; otherwise
-/// fall back to `$HOME/papers` (POSIX) or `%USERPROFILE%\papers` (Windows).
-fn resolve_store_root() -> Result<Utf8PathBuf> {
-    if let Some(s) = read_env_utf8("DOIGET_STORE_ROOT")? {
-        return Ok(Utf8PathBuf::from(s));
-    }
-    let home = home_dir_utf8()?;
-    Ok(home.join("papers"))
-}
-
 /// Resolve the provenance log path. `DOIGET_LOG_PATH` wins; otherwise
 /// fall back to `<config>/doiget/access.jsonl` per `docs/PROVENANCE_LOG.md`
 /// §1.
@@ -249,7 +239,7 @@ pub(crate) struct OrchestratorConfig {
 
 impl OrchestratorConfig {
     fn from_env() -> Result<Self> {
-        let store_root = resolve_store_root()?;
+        let store_root = super::resolve_store_root()?;
         let log_path = resolve_log_path()?;
         let contact_email =
             std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".into());
@@ -466,7 +456,7 @@ pub async fn run_with_options(input: String, opts: FetchOptions) -> Result<()> {
         // Resolve store root for path projections. Failures here surface
         // as a normal CLI error (not as a denial) — same behaviour the
         // non-dry-run path would exhibit on a misconfigured environment.
-        let store_root = resolve_store_root()?;
+        let store_root = super::resolve_store_root()?;
         let plan = build_fetch_plan(&ref_, &store_root);
         emit_dry_run_plan_to_stdout(&ref_, &plan)?;
         return Ok(());

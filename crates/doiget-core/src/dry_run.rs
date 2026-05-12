@@ -101,6 +101,19 @@ pub fn rate_limit_budget() -> RateLimitBudget {
 /// production HTTP client is built with (Tier 1 + the synthetic OA
 /// publisher), reflecting `doiget-cli::commands::fetch::build_http_client`'s
 /// composition.
+///
+/// # Panics
+///
+/// Panics with a self-documenting message if the in-crate allowlist
+/// builders ([`oa_publisher_allowlist`] / [`tier_1_allowlist`]) ever stop
+/// returning the source keys this function looks up. That signals an
+/// internal-contract drift bug, not a user error — fail-fast at preview
+/// time is preferable to silently emitting an empty `candidate_hosts`
+/// list. The workspace `clippy::expect_used` lint is `warn`-level
+/// (promoted to `deny` under `-D warnings`); the localized `#[allow]` is
+/// the minimal intervention here, mirroring the pattern in
+/// `crate::http::HttpClient::new_for_tests_allow_http`.
+#[allow(clippy::expect_used)]
 pub fn build_fetch_plan(ref_: &Ref, store_root: &Utf8Path) -> FetchPlan {
     let safekey = ref_.safekey();
     let target_pdf_path = store_root.join(format!("{}.pdf", safekey.as_str()));
@@ -110,11 +123,22 @@ pub fn build_fetch_plan(ref_: &Ref, store_root: &Utf8Path) -> FetchPlan {
 
     let (metadata_sources, pdf_sources) = match ref_ {
         Ref::Doi(_) => {
+            // Internal contract: `oa_publisher_allowlist()` MUST always
+            // return an entry whose `.source == "oa-publisher"`. Silent
+            // `.unwrap_or_default()` here would mask drift between this
+            // function and the allowlist source-of-truth — the resulting
+            // empty `candidate_hosts` would mislead an agent into
+            // believing the OA leg has no allowed hosts.
             let oa_hosts = oa_publisher_allowlist()
                 .into_iter()
                 .find(|a: &SourceAllowlist| a.source == "oa-publisher")
                 .map(|a| a.redirect_hosts)
-                .unwrap_or_default();
+                .expect(
+                    "oa-publisher allowlist must exist (see \
+                     crates/doiget-core/src/http.rs::oa_publisher_allowlist); \
+                     if this fires, build_fetch_plan and oa_publisher_allowlist \
+                     have drifted",
+                );
             (
                 vec!["crossref".to_string(), "unpaywall".to_string()],
                 vec![PdfSourcePlan {
@@ -124,11 +148,17 @@ pub fn build_fetch_plan(ref_: &Ref, store_root: &Utf8Path) -> FetchPlan {
             )
         }
         Ref::Arxiv(_) => {
+            // Same internal-contract rationale as the DOI branch above.
             let arxiv_hosts = tier_1_allowlist()
                 .into_iter()
                 .find(|a: &SourceAllowlist| a.source == "arxiv")
                 .map(|a| a.redirect_hosts)
-                .unwrap_or_default();
+                .expect(
+                    "tier-1 allowlist must include 'arxiv' (see \
+                     crates/doiget-core/src/http.rs::tier_1_allowlist); \
+                     if this fires, build_fetch_plan and tier_1_allowlist \
+                     have drifted",
+                );
             (
                 Vec::<String>::new(),
                 vec![PdfSourcePlan {

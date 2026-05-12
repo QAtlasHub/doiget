@@ -95,7 +95,8 @@ type FetchResult =
     };
 
 type DenialContext = {
-  reason: "redirect_not_in_allowlist" | "host_in_block_list"
+  reason: "redirect_not_in_allowlist" | "insecure_scheme"
+        | "host_in_block_list"
         | "size_cap_exceeded" | "schema_drift" | "capability_not_granted"
         | "rate_limit_window" | "ssrf_private_address" | "content_type_mismatch",
   source?: string,

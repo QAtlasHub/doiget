@@ -3,17 +3,22 @@
 //! Phase 3 foundation. JSON-RPC framing is provided by the official `rmcp`
 //! SDK with stdio-only transport (`transport-io`). See ADR-0001 for the
 //! permanence of the stdio-only choice and `docs/MCP_TOOLS.md` for the
-//! 9-tool surface contract.
+//! tool surface contract.
 //!
-//! This module ships the rmcp wiring + two trivial tools to prove the
+//! This module ships the rmcp wiring + the always-on tools that prove the
 //! foundation:
 //!
 //! - `doiget_health` — operational sanity check.
 //! - `doiget_capability_profile` — reports the runtime [`CapabilityProfile`].
+//! - `doiget_metadata_only` — DOI / arXiv id metadata resolution; in
+//!   Phase 1 only the `dry_run: true` path is wired (the live metadata
+//!   fetch lands in a follow-up PR).
 //!
-//! The remaining seven tools (`doiget_resolve_paper`, `doiget_fetch_paper`,
-//! `doiget_batch_fetch`, `doiget_info`, `doiget_search_local`,
-//! `doiget_list_recent`, `doiget_paper_pdf_path`) land in follow-up PRs.
+//! The remaining tools named in `docs/MCP_TOOLS.md` (`doiget_resolve_paper`,
+//! `doiget_fetch_paper`, `doiget_batch_fetch`, `doiget_info`,
+//! `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`)
+//! land in follow-up PRs. The exact count is intentionally left unstated
+//! in this docstring so it does not rot as tools land.
 //!
 //! # Stdout safety
 //!
@@ -194,7 +199,7 @@ impl Server {
         // Step 2: dry-run branch (ADR-0022 §2). Build the same envelope
         // the CLI emits and route via JSON-RPC. NO network, NO store
         // write, NO provenance row.
-        if input.dry_run.unwrap_or(false) {
+        if input.dry_run {
             // Use the same store-root resolver as `doiget_health` so the
             // path projections in `plan.target_*` match what the live
             // fetch would write to. When neither HOME nor USERPROFILE
@@ -247,9 +252,12 @@ pub struct MetadataOnlyInput {
     /// When `true`, returns a [`FetchPlan`](doiget_core::dry_run::FetchPlan)
     /// preview without touching the network or writing anything (ADR-0022).
     /// Defaults to `false` (the production metadata-only path, currently
-    /// stubbed in Phase 1).
+    /// stubbed in Phase 1). Type is plain `bool` (not `Option<bool>`) so the
+    /// generated JSON schema declares `"type": "boolean"` and a wire `null`
+    /// is rejected at deserialize time — agents that intend "no preview"
+    /// either omit the field or pass `false`.
     #[serde(default)]
-    pub dry_run: Option<bool>,
+    pub dry_run: bool,
 }
 
 /// Build the `{ok:false, error:{...}}` envelope used by

@@ -639,8 +639,10 @@ pub enum ErrorCode {
 #[serde(rename_all = "snake_case")]
 pub enum DenialReason {
     /// Redirect target host did not match the source's allowlist
-    /// (`HttpError::RedirectDenied` / `HttpError::InsecureRedirect`).
+    /// (`HttpError::RedirectDenied`).
     RedirectNotInAllowlist,
+    /// Redirect target had a non-HTTPS scheme (`HttpError::InsecureRedirect`).
+    InsecureScheme,
     /// Source produced a URL whose host is on a future blocklist (reserved).
     HostInBlockList,
     /// Body exceeded [`PDF_MAX_BYTES`] (`HttpError::OversizedBody`).
@@ -689,7 +691,7 @@ pub enum DenialReason {
 /// `From<&HttpError> for Option<DenialContext>` and
 /// `From<&FetchError> for Option<DenialContext>` impls in
 /// [`crate::http`] / [`crate::source`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DenialContext {
     /// Closed-enum reason code; the only required field.
@@ -1882,6 +1884,7 @@ mod tests {
         // forces this test to be updated (the closed-set contract).
         for r in [
             DenialReason::RedirectNotInAllowlist,
+            DenialReason::InsecureScheme,
             DenialReason::HostInBlockList,
             DenialReason::SizeCapExceeded,
             DenialReason::SchemaDrift,
@@ -1899,7 +1902,9 @@ mod tests {
     #[test]
     fn denial_context_round_trips_full_shape() {
         // A populated context (the redirect-denied case from ADR-0023 §1
-        // example) survives a JSON round-trip.
+        // example) survives a JSON round-trip. Whole-struct equality
+        // exercises the `PartialEq` derive added per ADR-0023 §3 (added
+        // in the multi-agent review feedback PR — see ADR-0023 history).
         let dc = DenialContext {
             reason: DenialReason::RedirectNotInAllowlist,
             source: Some("crossref".to_string()),
@@ -1911,13 +1916,7 @@ mod tests {
         };
         let s = serde_json::to_string(&dc).expect("ser");
         let back: DenialContext = serde_json::from_str(&s).expect("de");
-        assert_eq!(back.reason, dc.reason);
-        assert_eq!(back.source, dc.source);
-        assert_eq!(back.attempted, dc.attempted);
-        assert_eq!(back.expected, dc.expected);
-        assert_eq!(back.hop_index, dc.hop_index);
-        assert_eq!(back.cap, dc.cap);
-        assert_eq!(back.actual, dc.actual);
+        assert_eq!(back, dc);
     }
 
     #[test]
@@ -1951,6 +1950,44 @@ mod tests {
         assert!(dc.attempted.is_none());
         assert!(dc.expected.is_empty());
         assert!(dc.hop_index.is_none());
+    }
+
+    #[test]
+    fn full_error_envelope_with_denial_context_serializes_to_pinned_json() {
+        // Pins the byte-exact wire shape of the full failure envelope
+        // documented in docs/ERRORS.md §3 + §3.1 and ADR-0023 §1. A
+        // future regression that flips key order or skip-rules anywhere
+        // in the chain breaks this test loudly.
+        //
+        // Note: serde_json's `Map` (used by `json!`) sorts keys
+        // alphabetically when the `preserve_order` feature is NOT
+        // enabled (we do not enable it). Embedding a `DenialContext`
+        // via `json!` first re-serialises it through the same alphabet-
+        // sorted Map path, so the inner field order is also alphabetical
+        // here — NOT the struct field-order produced by direct
+        // `to_string(&DenialContext)`. This is by design: the public
+        // wire shape is canonicalised by serde_json's Map ordering, so
+        // the byte-exact pin below documents that exact canonicalisation.
+        let denial = DenialContext {
+            reason: DenialReason::RedirectNotInAllowlist,
+            source: Some("crossref".into()),
+            attempted: Some("evil.example.com".into()),
+            expected: vec!["api.crossref.org".into(), "*.crossref.org".into()],
+            hop_index: Some(1),
+            cap: None,
+            actual: None,
+        };
+        let envelope = serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": ErrorCode::NetworkError,
+                "message": "redirect target evil.example.com not in allowlist for source crossref",
+                "denial_context": denial,
+            }
+        });
+        let actual = serde_json::to_string(&envelope).expect("serialize envelope");
+        let expected = r#"{"error":{"code":"NETWORK_ERROR","denial_context":{"attempted":"evil.example.com","expected":["api.crossref.org","*.crossref.org"],"hop_index":1,"reason":"redirect_not_in_allowlist","source":"crossref"},"message":"redirect target evil.example.com not in allowlist for source crossref"},"ok":false}"#;
+        assert_eq!(actual, expected);
     }
 
     #[test]

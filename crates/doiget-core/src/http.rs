@@ -342,7 +342,7 @@ impl From<&HttpError> for Option<crate::DenialContext> {
                 actual: None,
             }),
             HttpError::InsecureRedirect { scheme } => Some(DenialContext {
-                reason: DenialReason::RedirectNotInAllowlist,
+                reason: DenialReason::InsecureScheme,
                 source: None,
                 attempted: Some(format!("{}:...", scheme)),
                 expected: vec!["https".to_string()],
@@ -350,12 +350,39 @@ impl From<&HttpError> for Option<crate::DenialContext> {
                 cap: None,
                 actual: None,
             }),
+            // `reqwest` wraps a custom error returned by the redirect
+            // policy closure (`attempt.error(HttpError::RedirectDenied{..})`
+            // / `attempt.error(HttpError::InsecureRedirect{..})`) inside a
+            // `reqwest::Error`, which surfaces here as `HttpError::Network`.
+            // Without source-chain walking, production redirect denials —
+            // the most operationally important denial class — would never
+            // produce a `DenialContext`, defeating the whole point of
+            // ADR-0023.
+            //
+            // Walk the `std::error::Error::source()` chain on the inner
+            // `reqwest::Error` and downcast each link to `&HttpError`. If
+            // a wrapped `HttpError` is found, recurse via this same `From`
+            // impl. Otherwise the network error is a "real" transport /
+            // DNS / TLS failure with no denial semantics — return `None`.
+            //
+            // `std::error::Error::source(e)` is fully-qualified to
+            // disambiguate against the inherent (and unrelated)
+            // `reqwest::Error::source()`.
+            HttpError::Network(e) => {
+                let mut source: Option<&(dyn std::error::Error + 'static)> =
+                    std::error::Error::source(e);
+                while let Some(s) = source {
+                    if let Some(http_err) = s.downcast_ref::<HttpError>() {
+                        return Option::<crate::DenialContext>::from(http_err);
+                    }
+                    source = s.source();
+                }
+                None
+            }
             // The remaining variants are not "denials" in the ADR-0023
-            // sense — Network/HttpStatus/UnknownSource are transport,
-            // upstream, or programming-error signals.
-            HttpError::Network(_)
-            | HttpError::HttpStatus { .. }
-            | HttpError::UnknownSource { .. } => None,
+            // sense — HttpStatus/UnknownSource are upstream / programming-
+            // error signals.
+            HttpError::HttpStatus { .. } | HttpError::UnknownSource { .. } => None,
         }
     }
 }
@@ -1237,14 +1264,17 @@ mod tests {
     }
 
     #[test]
-    fn denial_from_insecure_redirect_marks_https_expected() {
+    fn denial_from_insecure_redirect_marks_insecure_scheme() {
         use crate::{DenialContext, DenialReason};
         let e = HttpError::InsecureRedirect {
             scheme: "http".to_string(),
         };
         let dc: Option<DenialContext> = (&e).into();
         let dc = dc.expect("InsecureRedirect -> Some(DenialContext)");
-        assert_eq!(dc.reason, DenialReason::RedirectNotInAllowlist);
+        // ADR-0023 §4 (post-incorporation review): InsecureRedirect maps
+        // to its own dedicated `InsecureScheme` reason, not the host-
+        // allowlist reason — they are semantically distinct denials.
+        assert_eq!(dc.reason, DenialReason::InsecureScheme);
         assert_eq!(dc.attempted.as_deref(), Some("http:..."));
         assert_eq!(dc.expected, vec!["https".to_string()]);
     }

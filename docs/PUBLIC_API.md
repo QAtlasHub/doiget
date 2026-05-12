@@ -186,6 +186,7 @@ adopt a stable-channel-tracks-current-stable-minus-N rule at that point.
 #[serde(rename_all = "snake_case")]
 pub enum DenialReason {
     RedirectNotInAllowlist,
+    InsecureScheme,
     HostInBlockList,
     SizeCapExceeded,
     SchemaDrift,
@@ -195,7 +196,7 @@ pub enum DenialReason {
     ContentTypeMismatch,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DenialContext {
     pub reason:    DenialReason,
