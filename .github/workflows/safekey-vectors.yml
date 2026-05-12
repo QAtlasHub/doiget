@@ -123,17 +123,6 @@ jobs:
         # toolchain action honors that file when no toolchain input is set.
         uses: dtolnay/rust-toolchain@b95584d8105b9ab200e15821fa671848cf2b7017   # stable, 2025-10-23
 
-      - name: Cache cargo registry + git + target
-        uses: actions/cache@e12d46a63a90f2fae62d114769bbf2a179198b5c   # v4.3.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-safekey-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-safekey-
-
       - name: cargo test safekey_matches_reference_vectors
         # The Rust parity test loads tests/fixtures/safekey/vectors.json via
         # include_str! and asserts Ref::safekey output matches `expected` for
