@@ -249,4 +249,49 @@ is reserved for Phase 2 (per ADR-0021 §3).
   `crates/doiget-core/Cargo.toml` so `Utf8PathBuf` fields on `FetchPlan`
   serialize. (`doiget-cli` already enabled the same feature.)
 
+##### Post-incorporation review refinements (items 2/3/4/5)
+
+Four refinements landed on top of the C1/C2/I1–I7 review-fix commit to
+harden the wire contracts the previous commits introduced:
+
+- **(2)** ADR-0021 §1 (canonical-digest): made the `version_or_empty`
+  byte-sequence semantics fully unambiguous — `version = None` MUST
+  serialize as the empty byte sequence (zero bytes), NOT a `"null"` /
+  `"none"` / `"-"` sentinel. Docs-only; Phase 2 implementations
+  (`CanonicalRef`) can no longer disagree about the missing-version
+  digest.
+- **(3)** `DenialContext.expected: Vec<String>` → `Option<Vec<String>>`.
+  `None` = "producer did not populate this field for this reason";
+  `Some(vec![])` = "explicit empty allowlist". The previous shape
+  collapsed both states, leaving an LLM agent unable to disambiguate
+  "field not applicable" from "field applies but allowlist happens to
+  be empty". Updated in `doiget-core/src/lib.rs` (struct + 4 tests),
+  `doiget-core/src/http.rs` (4 `From` arms + 4 tests),
+  `doiget-core/src/source.rs` (1 `From` arm + 1 test),
+  `doiget-core/tests/redirect_denied_denial_context_e2e.rs` (2 tests),
+  plus ADR-0023 §3 + §4, ERRORS.md §3.1, MCP_TOOLS.md §5, PUBLIC_API.md
+  §8. New
+  `denial_context_expected_some_empty_vec_preserves_explicit_empty_allowlist`
+  test pins the disambiguation on the wire.
+- **(4)** Added `FetchPlan.candidate_hosts_are_upper_bound: bool` (always
+  `true` in Phase 1). Machine-encodes ADR-0022 §4 ("Honesty about
+  candidate uncertainty") directly into the dry-run envelope, so an
+  agent can detect the upper-bound semantics of `candidate_hosts`
+  without consulting the spec. Updated `doiget-core/src/dry_run.rs`
+  (struct + producer + new test), ADR-0022 §1 + prose, MCP_TOOLS.md §10.
+- **(5)** Added `ErrorCode::NotImplemented` (wire form `"NOT_IMPLEMENTED"`).
+  Distinct from `INTERNAL_ERROR` (a bug) and `CAPABILITY_DENIED` (a
+  runtime config gate). `doiget_metadata_only`'s non-dry-run stub
+  changed from `INTERNAL_ERROR` to `NOT_IMPLEMENTED` so agents react
+  with "wait for next minor release" rather than "report a bug". The
+  `metadata_only_error_envelope` helper now takes a typed `ErrorCode`
+  rather than `&str` (the I6 lesson from review-pr A5: free-form
+  string codes can drift from the SCREAMING_SNAKE_CASE rendering
+  without the compiler noticing). Test
+  `doiget_metadata_only_default_dry_run_false_returns_internal_error_stub`
+  → `..._returns_not_implemented_stub`. Updated `doiget-core/src/lib.rs`
+  (enum), `doiget-mcp/src/lib.rs` (stub + helper),
+  `doiget-mcp/tests/initialize_handshake.rs` (renamed test),
+  ERRORS.md §1 + §2 (new variant + semantics row).
+
 [Unreleased]: https://github.com/sotashimozono/doiget/compare/main...HEAD

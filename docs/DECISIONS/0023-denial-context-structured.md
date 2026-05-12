@@ -108,7 +108,7 @@ pub struct DenialContext {
     pub reason:    DenialReason,
     pub source:    Option<String>,   // resolver source key (e.g. "crossref")
     pub attempted: Option<String>,   // host, path, or other concrete value
-    pub expected:  Vec<String>,      // allowlist entries / acceptable values
+    pub expected:  Option<Vec<String>>, // allowlist entries / acceptable values
     pub hop_index: Option<u8>,       // redirect chain position, 0-indexed
     pub cap:       Option<u64>,      // size or rate cap value
     pub actual:    Option<u64>,      // observed value (e.g. response bytes)
@@ -118,9 +118,20 @@ pub struct DenialContext {
 Field-shape rules (NORMATIVE):
 
 - All fields except `reason` are optional. Producers populate the fields
-  relevant to the reason and leave the rest at default (`None` / empty
-  `Vec`). Consumers MUST tolerate any subset of fields being present.
-- `expected` is `Vec<String>` even when only one value is meaningful, to
+  relevant to the reason and leave the rest at `None`. Consumers MUST
+  tolerate any subset of fields being present.
+- `expected` is `Option<Vec<String>>`. `None` means **"the producer did
+  not populate this field for this reason"** (this reason has no
+  allowlist channel) and serializes as an absent field. `Some(vec![...])`
+  means **"this is the explicit list of acceptable values, possibly
+  empty"** and serializes as `"expected":[...]` — including `"expected":[]`
+  for the explicit-empty-allowlist case. The previous `Vec<String>` shape
+  collapsed these two distinct states (both omitted the field on the
+  wire and both Rust-constructed identically as `vec![]`); this
+  refinement (post-incorporation review of PR #84) restores the
+  distinction so an LLM agent can disambiguate "field not applicable"
+  from "field applies but allowlist happens to be empty". The inner
+  `Vec<String>` is used even when only one value is meaningful, to
   avoid format ambiguity for cases where multiple values are acceptable
   (allowlist with several patterns).
 - `hop_index` is `u8` because the redirect chain is hard-capped at 10 in
@@ -133,14 +144,14 @@ The producer-side mapping from internal error variants to `DenialContext` is:
 
 | Internal source                                  | `reason`                  | Populated fields                                    |
 |--------------------------------------------------|---------------------------|-----------------------------------------------------|
-| `HttpError::RedirectDenied { source_key, host }` | `redirect_not_in_allowlist` | `source=source_key`, `attempted=host`, `expected=allowlist hosts`, `hop_index` if known |
-| `HttpError::OversizedBody { actual, cap }`       | `size_cap_exceeded`       | `cap`, `actual`                                     |
-| `HttpError::NotAPdf { got }`                     | `content_type_mismatch`   | `attempted=hex(got)`, `expected=["%PDF-"]`          |
-| `HttpError::InsecureRedirect { scheme }`         | `insecure_scheme`         | `attempted=scheme:...`, `expected=["https"]`        |
-| `FetchError::NotEligible { source_key }`         | `capability_not_granted`  | `source=source_key`                                 |
-| `RateLimiter` denial (future)                    | `rate_limit_window`       | `source`, `cap=per-source rate`                     |
-| Store schema rejection                           | `schema_drift`            | `actual=row schema_version`, `cap=binary version`   |
-| SSRF guard (future)                              | `ssrf_private_address`    | `attempted=ip:port`                                 |
+| `HttpError::RedirectDenied { source_key, host }` | `redirect_not_in_allowlist` | `source=Some(source_key)`, `attempted=Some(host)`, `expected=Some(allowlist hosts)`, `hop_index` if known |
+| `HttpError::OversizedBody { actual, cap }`       | `size_cap_exceeded`       | `cap`, `actual`; `expected=None` (no allowlist channel) |
+| `HttpError::NotAPdf { got }`                     | `content_type_mismatch`   | `attempted=Some(hex(got))`, `expected=Some(["%PDF-"])` |
+| `HttpError::InsecureRedirect { scheme }`         | `insecure_scheme`         | `attempted=Some(scheme:...)`, `expected=Some(["https"])` |
+| `FetchError::NotEligible { source_key }`         | `capability_not_granted`  | `source=Some(source_key)`; `expected=None` (no allowlist channel) |
+| `RateLimiter` denial (future)                    | `rate_limit_window`       | `source`, `cap=per-source rate`; `expected=None`    |
+| Store schema rejection                           | `schema_drift`            | `actual=row schema_version`, `cap=binary version`; `expected=None` |
+| SSRF guard (future)                              | `ssrf_private_address`    | `attempted=Some(ip:port)`; `expected=None`          |
 
 The mapping is implemented as a `From<HttpError> for Option<DenialContext>`
 plus `From<FetchError> for Option<DenialContext>`, sitting next to the

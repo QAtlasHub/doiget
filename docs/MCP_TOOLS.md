@@ -101,7 +101,11 @@ type DenialContext = {
         | "rate_limit_window" | "ssrf_private_address" | "content_type_mismatch",
   source?: string,
   attempted?: string,
-  expected: string[],
+  // `expected?` is absent when the producer did not populate this field for
+  // this reason. An empty array (`"expected": []`) is the distinct
+  // "explicit empty allowlist" signal — see ADR-0023 §3 for the
+  // None / Some(vec![]) disambiguation.
+  expected?: string[],
   hop_index?: number,
   cap?: number,
   actual?: number,
@@ -170,6 +174,10 @@ an optional `dry_run: boolean` input field, defaulting to `false`. When
   for the resolver, not a prediction of the single host the real fetch would
   hit. doiget cannot resolve the post-Unpaywall OA URL host without making
   the Unpaywall call, and `dry_run` MUST NOT make it.
+- The `plan.candidate_hosts_are_upper_bound` boolean is always `true` in
+  Phase 1 and machine-encodes the bullet above (ADR-0022 §4) directly into
+  the wire envelope, so an agent can detect the upper-bound semantics
+  without consulting the spec.
 
 ```jsonc
 {
@@ -182,10 +190,11 @@ an optional `dry_run: boolean` input field, defaulting to `false`. When
       "key":             "oa-publisher",
       "candidate_hosts": ["*.springer.com", "*.springeropen.com"]
     }],
-    "redirect_allowlists_loaded": ["crossref", "unpaywall", "arxiv", "oa-publisher"],
-    "target_pdf_path":            "/home/.../store/doi_10.1234_foo.pdf",
-    "target_metadata_path":       "/home/.../store/doi_10.1234_foo.toml",
-    "would_append_provenance":    true
+    "redirect_allowlists_loaded":      ["crossref", "unpaywall", "arxiv", "oa-publisher"],
+    "candidate_hosts_are_upper_bound": true,
+    "target_pdf_path":                 "/home/.../store/doi_10.1234_foo.pdf",
+    "target_metadata_path":            "/home/.../store/doi_10.1234_foo.toml",
+    "would_append_provenance":         true
   },
   "rate_limit_budget": {
     "global_per_sec":        5.0,

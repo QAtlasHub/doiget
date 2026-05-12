@@ -70,6 +70,13 @@ canonical_digest := SHA256( source_type | 0x00 | source_id | 0x00
 with `|` denoting byte concatenation, `0x00` as an unambiguous field separator,
 and `version_or_empty` being either the version string or an empty string.
 
+> **NORMATIVE.** When `version` is `None`, the `version_or_empty` byte sequence
+> MUST be the empty string (zero bytes). doiget MUST NOT use any sentinel value
+> (`"null"`, `"none"`, `"-"`, etc.) for an absent version — only the literal
+> empty byte sequence between the preceding `0x00` separator and the SHA-256
+> finalize call. This guarantees that two implementations of the canonical
+> digest cannot disagree about the missing-version case.
+
 ### 2. `safekey` continues to depend on `Ref` only
 
 The on-disk filename derivation algorithm in [`SAFEKEY.md`](../SAFEKEY.md) is

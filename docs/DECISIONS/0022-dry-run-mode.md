@@ -53,10 +53,11 @@ The preview shape (NORMATIVE) is
       "key":             "oa-publisher",
       "candidate_hosts": ["*.springer.com", "*.springeropen.com"]
     }],
-    "redirect_allowlists_loaded": ["crossref", "unpaywall", "arxiv", "oa-publisher"],
-    "target_pdf_path":            "/home/.../store/doi_10.1234_foo.pdf",
-    "target_metadata_path":       "/home/.../store/doi_10.1234_foo.toml",
-    "would_append_provenance":    true
+    "redirect_allowlists_loaded":      ["crossref", "unpaywall", "arxiv", "oa-publisher"],
+    "candidate_hosts_are_upper_bound": true,
+    "target_pdf_path":                 "/home/.../store/doi_10.1234_foo.pdf",
+    "target_metadata_path":            "/home/.../store/doi_10.1234_foo.toml",
+    "would_append_provenance":         true
   },
   "rate_limit_budget": {
     "global_per_sec":        5.0,
@@ -72,6 +73,13 @@ is emitted on `stderr` and `stdout` carries no bytes. The
 fetch appends a row), but it is named explicitly so future fetch modes can
 declare "this fetch would NOT append" without having to invert the flag's
 meaning.
+
+The `candidate_hosts_are_upper_bound` field is always `true` in Phase 1 and
+machine-encodes the §4 ("Honesty about candidate uncertainty") disclaimer
+directly into the wire envelope: `pdf_sources[].candidate_hosts` is the
+static resolver allowlist, NOT a prediction of the single host the real
+fetch would touch. The field exists so an agent can detect the upper-bound
+semantics without consulting the spec.
 
 ### 2. MCP parameter
 
