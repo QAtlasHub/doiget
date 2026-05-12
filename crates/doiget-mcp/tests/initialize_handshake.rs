@@ -255,12 +255,165 @@ async fn doiget_metadata_only_dry_run_true_returns_fetch_plan_envelope() -> anyh
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// doiget_metadata_only — Slice 1 non-dry-run wiring (A.3)
+//
+// The stub-era `doiget_metadata_only_default_dry_run_false_returns_not_implemented_stub`
+// test was DELETED here: the NOT_IMPLEMENTED branch no longer exists.
+// The tests below exercise the live orchestrator end-to-end through
+// the MCP envelope (wiremock-driven; no real network).
+//
+// These tests mutate process-global env vars (`DOIGET_*_BASE`,
+// `DOIGET_LOG_PATH`) so they are serialized via `serial_test::serial`.
+// ---------------------------------------------------------------------------
+
+/// RAII helper to scope env-var mutations across a test. Mirrors the
+/// `EnvGuard` in `crates/doiget-cli/tests/fetch_arxiv_e2e.rs`.
+struct EnvGuard {
+    keys: Vec<&'static str>,
+}
+
+impl EnvGuard {
+    fn new(keys: &[&'static str]) -> Self {
+        for k in keys {
+            std::env::remove_var(k);
+        }
+        Self {
+            keys: keys.to_vec(),
+        }
+    }
+    fn set(&self, key: &str, val: &str) {
+        std::env::set_var(key, val);
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for k in &self.keys {
+            std::env::remove_var(k);
+        }
+    }
+}
+
+/// Synthetic Atom payload (B.3 from the Slice 1 spec). Do not hit
+/// real arXiv.
+const SAMPLE_ATOM_FEED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.12345v1</id>
+    <updated>2024-02-01T00:00:00Z</updated>
+    <published>2024-01-15T00:00:00Z</published>
+    <title>Example arXiv Paper Title</title>
+    <summary>This is an example abstract.</summary>
+    <author><name>Jane Doe</name></author>
+    <author><name>John Roe</name></author>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="stat.ML" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>"#;
+
 #[tokio::test]
-async fn doiget_metadata_only_default_dry_run_false_returns_not_implemented_stub(
-) -> anyhow::Result<()> {
+#[serial_test::serial]
+async fn doiget_metadata_only_arxiv_happy_path_returns_metadata_envelope() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_ATOM_FEED))
+        .mount(&server)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let log_path = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .join("mcp-meta.jsonl");
+
+    let env = EnvGuard::new(&[
+        "DOIGET_ARXIV_BASE",
+        "DOIGET_CROSSREF_BASE",
+        "DOIGET_UNPAYWALL_BASE",
+        "DOIGET_LOG_PATH",
+    ]);
+    env.set("DOIGET_ARXIV_BASE", &server.uri());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+
     let (client, server_handle) = boot_in_memory_server().await?;
 
-    // Omit `dry_run`; defaults to false via `#[serde(default)] dry_run: bool`.
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("2401.12345"));
+
+    let result = client
+        .peer()
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("doiget_metadata_only").with_arguments(args),
+        )
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_metadata_only uses CallToolResult::structured");
+
+    assert_eq!(
+        structured["ok"],
+        serde_json::json!(true),
+        "envelope: {structured:?}"
+    );
+    assert_eq!(structured["source"], serde_json::json!("arxiv"));
+    assert_eq!(structured["ref"], serde_json::json!("2401.12345"));
+    assert_eq!(structured["license"], serde_json::json!("arxiv-default"));
+    // arXiv branch never surfaces an OA URL (the abstract page is not
+    // a PDF URL) — the field is emitted as `null`.
+    assert_eq!(structured["oa_url"], serde_json::Value::Null);
+    assert_eq!(
+        structured["metadata"]["title"],
+        serde_json::json!("Example arXiv Paper Title")
+    );
+    assert_eq!(
+        structured["metadata"]["authors"],
+        serde_json::json!(["Jane Doe", "John Roe"])
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn doiget_metadata_only_doi_crossref_happy_path_returns_metadata_envelope(
+) -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works/10.1234/example"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"status":"ok","message":{"title":["Example Paper"],"link":[{"URL":"https://example.org/oa.pdf"}]}}"#,
+        ))
+        .mount(&server)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let log_path = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .join("mcp-meta.jsonl");
+
+    let env = EnvGuard::new(&[
+        "DOIGET_ARXIV_BASE",
+        "DOIGET_CROSSREF_BASE",
+        "DOIGET_UNPAYWALL_BASE",
+        "DOIGET_LOG_PATH",
+    ]);
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
     let mut args = serde_json::Map::new();
     args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
 
@@ -273,29 +426,108 @@ async fn doiget_metadata_only_default_dry_run_false_returns_not_implemented_stub
     let structured = result
         .structured_content
         .as_ref()
-        .expect("doiget_metadata_only stub uses CallToolResult::structured");
+        .expect("doiget_metadata_only uses CallToolResult::structured");
 
-    // Phase 1: the non-dry-run branch is a documented stub returning
-    // NOT_IMPLEMENTED with a clear message (see Server::doiget_metadata_only).
-    // The post-incorporation review (item 5) introduced ErrorCode::NotImplemented
-    // specifically to distinguish "spec'd but not yet wired" stubs from
-    // bugs (INTERNAL_ERROR) or capability gates (CAPABILITY_DENIED).
-    assert_eq!(structured["ok"], serde_json::json!(false));
     assert_eq!(
-        structured["error"]["code"],
-        serde_json::json!("NOT_IMPLEMENTED"),
+        structured["ok"],
+        serde_json::json!(true),
         "envelope: {structured:?}"
     );
-    let msg = structured["error"]["message"]
-        .as_str()
-        .expect("error.message is a string");
-    assert!(
-        msg.contains("not yet wired") || msg.contains("dry_run"),
-        "NOT_IMPLEMENTED stub message must mention the Phase 1 limitation; \
-         got: {msg:?}"
+    assert_eq!(structured["source"], serde_json::json!("crossref"));
+    assert_eq!(structured["ref"], serde_json::json!("10.1234/example"));
+    // Crossref does not surface a license directly (Phase 1; future
+    // slices will chain Unpaywall for license enrichment).
+    assert_eq!(structured["license"], serde_json::Value::Null);
+    // OA URL discovered via `message.link[]`. Surfaced but never
+    // followed — the test does not mount a mock for it.
+    assert_eq!(
+        structured["oa_url"],
+        serde_json::json!("https://example.org/oa.pdf")
+    );
+    assert_eq!(
+        structured["metadata"]["title"],
+        serde_json::json!(["Example Paper"])
     );
 
     client.cancel().await?;
     server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn doiget_metadata_only_network_failure_returns_network_error_envelope() -> anyhow::Result<()>
+{
+    // Point Crossref and Unpaywall at a wiremock that returns 500 on
+    // every call. The orchestrator will try Crossref first, then fall
+    // back to Unpaywall (also pointed at the same broken origin), and
+    // surface a NETWORK_ERROR envelope when both legs fail.
+    // `denial_context` is absent — transport errors are not denials
+    // per ADR-0023 §4.
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let log_path = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .join("mcp-meta.jsonl");
+
+    let env = EnvGuard::new(&[
+        "DOIGET_ARXIV_BASE",
+        "DOIGET_CROSSREF_BASE",
+        "DOIGET_UNPAYWALL_BASE",
+        "DOIGET_LOG_PATH",
+    ]);
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &server.uri());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+
+    let result = client
+        .peer()
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("doiget_metadata_only").with_arguments(args),
+        )
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_metadata_only uses CallToolResult::structured");
+
+    assert_eq!(
+        structured["ok"],
+        serde_json::json!(false),
+        "envelope: {structured:?}"
+    );
+    assert_eq!(
+        structured["error"]["code"],
+        serde_json::json!("NETWORK_ERROR"),
+        "envelope: {structured:?}"
+    );
+    // Transport-level errors do NOT produce a denial_context (ADR-0023
+    // §4 mapping table: only RedirectDenied / InsecureRedirect /
+    // OversizedBody / NotAPdf map to denial reasons).
+    assert!(
+        structured["error"].get("denial_context").is_none()
+            || structured["error"]["denial_context"].is_null(),
+        "NETWORK_ERROR envelope must omit denial_context; got: {structured:?}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
     Ok(())
 }

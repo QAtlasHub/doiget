@@ -10,9 +10,12 @@
 //!
 //! - `doiget_health` — operational sanity check.
 //! - `doiget_capability_profile` — reports the runtime [`CapabilityProfile`].
-//! - `doiget_metadata_only` — DOI / arXiv id metadata resolution; in
-//!   Phase 1 only the `dry_run: true` path is wired (the live metadata
-//!   fetch lands in a follow-up PR).
+//! - `doiget_metadata_only` — DOI / arXiv id metadata resolution. Both
+//!   the `dry_run: true` preview path (ADR-0022) and the live
+//!   non-dry-run path (Slice 1: dispatches through
+//!   [`doiget_core::orchestrator::metadata_only`]) are wired. The
+//!   tool MUST NOT call `HttpClient::fetch_pdf` — that contract is
+//!   enforced by the orchestrator and the posture-lint workflow.
 //!
 //! The remaining tools named in `docs/MCP_TOOLS.md` (`doiget_resolve_paper`,
 //! `doiget_fetch_paper`, `doiget_batch_fetch`, `doiget_info`,
@@ -34,10 +37,19 @@
 // outside JSON-RPC frames. See docs/SECURITY.md §3.
 #![deny(clippy::print_stdout)]
 
+use std::sync::Arc;
+
 use camino::Utf8PathBuf;
 
 use doiget_core::dry_run::{build_dry_run_envelope, build_fetch_plan};
-use doiget_core::{CapabilityProfile, ErrorCode, Ref, SCHEMA_VERSION, VERSION};
+use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, HttpClient};
+use doiget_core::orchestrator::{metadata_only, MetadataOnlyOutcome};
+use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
+use doiget_core::rate_limiter::RateLimiter;
+use doiget_core::source::{FetchContext, FetchError};
+use doiget_core::{
+    CapabilityProfile, DenialContext, ErrorCode, RateLimits, Ref, SCHEMA_VERSION, VERSION,
+};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
@@ -165,17 +177,26 @@ impl Server {
     ///
     /// Per `docs/MCP_TOOLS.md` §11 (NORMATIVE).
     ///
-    /// **Phase 1 status:** only the `dry_run: true` path is wired —
-    /// the orchestrator that performs a real metadata-only fetch (with
-    /// the `metadata-only` provenance tag and no PDF leg) lands in a
-    /// follow-up PR. The non-dry-run path returns
-    /// `{ok:false, error:{code:"NOT_IMPLEMENTED", ...}}` with a clear
-    /// message; `ErrorCode::NotImplemented` is the typed signal the
-    /// post-incorporation review (item 5) introduced specifically for
-    /// "spec'd but not yet wired" stubs — distinct from `INTERNAL_ERROR`
-    /// (a bug) and `CAPABILITY_DENIED` (a runtime config gate). The
-    /// dry-run path is the user-visible value-add this PR ships, per
-    /// ADR-0022 (the `dry_run` companion ADR).
+    /// Slice 1 wired both branches:
+    ///
+    /// - `dry_run: true` → builds a [`FetchPlan`] preview and returns
+    ///   it without touching the network, store, or provenance log
+    ///   (ADR-0022 §2).
+    /// - `dry_run: false` (default) → dispatches through
+    ///   [`doiget_core::orchestrator::metadata_only`]:
+    ///   - DOI → Crossref (`message` metadata + OA URL via
+    ///     `message.link[]`), with Unpaywall as a fallback when
+    ///     Crossref fails.
+    ///   - arXiv → Atom feed at
+    ///     `https://export.arxiv.org/api/query?id_list=<id>` via
+    ///     [`doiget_core::sources::arxiv::ArxivSource::fetch_metadata_only`].
+    ///
+    /// In neither branch does this tool call
+    /// `HttpClient::fetch_pdf` — the spec contract for
+    /// `doiget_metadata_only` (`docs/MCP_TOOLS.md` §11) is
+    /// posture-lint-enforced.
+    ///
+    /// [`FetchPlan`]: doiget_core::dry_run::FetchPlan
     #[tool(
         description = "WHEN TO USE: User wants metadata for a DOI / arXiv id without paying for or being noticed by a PDF download.\n\
                        INPUTS: ref (DOI or arXiv id), dry_run (optional bool).\n\
@@ -217,28 +238,73 @@ impl Server {
             )));
         }
 
-        // Step 3: non-dry-run path. The real metadata-only orchestrator
-        // lands in a follow-up PR; surface a clear NOT_IMPLEMENTED
-        // envelope so an agent reacts with "wait for the next minor
-        // release" rather than "report a bug" (INTERNAL_ERROR) or
-        // "tweak my capability profile" (CAPABILITY_DENIED). The typed
-        // `ErrorCode::NotImplemented` value (rather than a raw string
-        // literal) is the I6 lesson from the PR #84 multi-agent review:
-        // the envelope's `code` field MUST come from the closed enum
-        // so a typo in the literal cannot ship.
-        // TODO(phase-1.x): wire the metadata-only orchestrator.
-        // It should: dispatch Crossref + Unpaywall (DOI) or arXiv-meta
-        // (arXiv), write the metadata TOML, append a `Fetch` row tagged
-        // `metadata-only`, and return `{ok:true, ref, source, license?,
-        // oa_url, metadata}` per docs/MCP_TOOLS.md §11. The OA URL is
-        // reported but never followed (that is the contract that
-        // distinguishes this tool from `doiget_fetch_paper`).
-        Ok(CallToolResult::structured(metadata_only_error_envelope(
-            ErrorCode::NotImplemented,
-            "metadata-only orchestrator is not yet wired in Phase 1; \
-             only dry_run is supported. Will be implemented in a \
-             follow-up PR.",
-        )))
+        // Step 3: non-dry-run path. Dispatch through the
+        // `metadata_only` orchestrator (Slice 1). The orchestrator owns
+        // source selection and per-leg politeness; we own the per-call
+        // session boundary (SessionStart / SessionEnd bookend rows) and
+        // the wire envelope shape (`docs/MCP_TOOLS.md` §11).
+        let ctx = match build_metadata_only_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                    ErrorCode::InternalError,
+                    &format!("metadata-only context initialization failed: {e}"),
+                )));
+            }
+        };
+
+        // SessionStart bookend (mirrors the CLI orchestrator pattern in
+        // `crates/doiget-cli/src/commands/fetch.rs::FetchHarness::log_session_start`).
+        // A log-append failure here is fail-closed per
+        // `docs/PROVENANCE_LOG.md` §5 — abort the call.
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Metadata,
+            ref_: Some(input.ref_.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+        }) {
+            return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        let outcome = metadata_only(&ref_, &self.profile, &ctx).await;
+
+        // SessionEnd bookend. Best-effort: if this append fails we still
+        // surface the orchestrator's outcome (a fresh log error here
+        // would mask the more informative orchestrator error).
+        let session_ok = outcome.is_ok();
+        let _ = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if session_ok {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Metadata,
+            ref_: Some(input.ref_.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+        });
+
+        match outcome {
+            Ok(o) => Ok(CallToolResult::structured(metadata_only_success_envelope(
+                &o,
+                &input.ref_,
+            ))),
+            Err(e) => Ok(CallToolResult::structured(
+                metadata_only_fetch_error_envelope(&e, &input.ref_),
+            )),
+        }
     }
 }
 
@@ -273,10 +339,12 @@ pub struct MetadataOnlyInput {
 }
 
 /// Build the `{ok:false, error:{...}}` envelope used by
-/// `doiget_metadata_only` for both `INVALID_REF` (bad input) and
-/// `NOT_IMPLEMENTED` (Phase 1 stub) cases. Mirrors the wire shape from
-/// `docs/MCP_TOOLS.md` §5; `denial_context` is omitted (these failure
-/// modes do not produce one — see `docs/ERRORS.md` §3.1).
+/// `doiget_metadata_only` for input-shape failures (e.g. `INVALID_REF`
+/// from `Ref::parse`) and internal initialization failures (e.g.
+/// `INTERNAL_ERROR` when the foundation modules cannot be constructed).
+/// Mirrors the wire shape from `docs/MCP_TOOLS.md` §5; `denial_context`
+/// is omitted (these failure modes do not produce one — see
+/// `docs/ERRORS.md` §3.1).
 ///
 /// The `code` parameter is typed as [`ErrorCode`] (not `&str`) so the
 /// closed enum is the single source of truth for the wire token — the
@@ -294,6 +362,181 @@ fn metadata_only_error_envelope(code: ErrorCode, message: &str) -> Value {
             // consumers MUST tolerate the field being absent.
         },
     })
+}
+
+/// Build the `{ok:true, ...}` success envelope per `docs/MCP_TOOLS.md`
+/// §11 (the `MetadataOnlyResult` type alias). `oa_url` is always
+/// emitted (as `null` when the resolver did not surface one) so agents
+/// can pattern-match on the field without checking for absence.
+fn metadata_only_success_envelope(outcome: &MetadataOnlyOutcome, ref_str: &str) -> Value {
+    json!({
+        "ok": true,
+        "ref": ref_str,
+        "source": outcome.source,
+        "license": outcome.license,
+        "oa_url": outcome.oa_url,
+        "metadata": outcome.metadata,
+        "schema_version": SCHEMA_VERSION,
+    })
+}
+
+/// Build the `{ok:false, error:{code, message, denial_context?}}`
+/// envelope for orchestrator failures. Maps the [`FetchError`] to the
+/// closed [`ErrorCode`] set via the existing
+/// `From<FetchError> for ErrorCode` impl, and produces the optional
+/// structured `denial_context` channel via
+/// `From<&FetchError> for Option<DenialContext>` (ADR-0023 §4).
+fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value {
+    // `FetchError` is not `Clone`; we can't move out of `&err`. Use
+    // the existing `From` boundary indirectly by re-mapping via a
+    // match on `&FetchError`. This duplicates a few lines of the
+    // `From<FetchError> for ErrorCode` impl but avoids cloning the
+    // underlying transport error.
+    let code: ErrorCode = match err {
+        FetchError::NotEligible { .. } => ErrorCode::CapabilityDenied,
+        FetchError::NoOaAvailable => ErrorCode::NoOaAvailable,
+        FetchError::Http(_) => ErrorCode::NetworkError,
+        FetchError::Log(_) => ErrorCode::LogError,
+        FetchError::InvalidRef(_) => ErrorCode::InvalidRef,
+        FetchError::SourceSchema { .. } => ErrorCode::InternalError,
+        // `FetchError` is `#[non_exhaustive]`; this wildcard pins
+        // future variants to `INTERNAL_ERROR` until they get an
+        // explicit mapping. Mirrors the conservative default in
+        // `doiget-core`'s `From<FetchError> for ErrorCode` impl.
+        _ => ErrorCode::InternalError,
+    };
+    let denial: Option<DenialContext> = err.into();
+    let message = err.to_string();
+
+    let mut error_obj = serde_json::Map::new();
+    error_obj.insert("code".into(), json!(code));
+    error_obj.insert("message".into(), json!(message));
+    if let Some(dc) = denial {
+        // `DenialContext` is `Serialize` (`#[serde(deny_unknown_fields)]`,
+        // optional fields). `serde_json::to_value` cannot fail on a
+        // typed struct; the `unwrap_or` defensively returns `null` if a
+        // future field becomes non-serializable (defensive only).
+        error_obj.insert(
+            "denial_context".into(),
+            serde_json::to_value(&dc).unwrap_or(Value::Null),
+        );
+    }
+    json!({
+        "ok": false,
+        "ref": ref_str,
+        "error": error_obj,
+    })
+}
+
+/// Build a [`FetchContext`] for the non-dry-run `doiget_metadata_only`
+/// path.
+///
+/// Mirrors `crates/doiget-cli/src/commands/fetch.rs::FetchHarness::from_env`
+/// minus the on-disk store (which the orchestrator does not touch in
+/// Slice 1 — see the `TODO Phase 2.x` in
+/// `crates/doiget-core/src/orchestrator.rs::metadata_only`):
+///
+/// - `HttpClient` — production allowlist (Tier 1 ∪ OA publisher), or
+///   the test-mode multi-source allowlist when any `DOIGET_*_BASE` env
+///   var is set.
+/// - `RateLimiter` — process-wide hard-coded politeness
+///   ([`RateLimits::HARD_CODED`]).
+/// - `ProvenanceLog` — opened at `$DOIGET_LOG_PATH` or
+///   `<config>/doiget/access.jsonl`; the parent directory is created
+///   if missing.
+/// - `session_id` — fresh 26-char ULID per call (one tool call = one
+///   logical session, per `docs/PROVENANCE_LOG.md` §3).
+fn build_metadata_only_context() -> anyhow::Result<FetchContext> {
+    let log_path = resolve_log_path()?;
+    if let Some(parent) = log_path.parent() {
+        if !parent.as_str().is_empty() {
+            std::fs::create_dir_all(parent.as_std_path())
+                .map_err(|e| anyhow::anyhow!("creating log dir {parent}: {e}"))?;
+        }
+    }
+    let session_id = ulid::Ulid::new().to_string();
+    let log = Arc::new(
+        ProvenanceLog::open(log_path, session_id.clone())
+            .map_err(|e| anyhow::anyhow!("opening provenance log: {e}"))?,
+    );
+    let http = Arc::new(build_metadata_only_http_client()?);
+    let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
+    Ok(FetchContext {
+        http,
+        rate_limiter,
+        log,
+        session_id,
+    })
+}
+
+/// HTTP client construction with the same `DOIGET_*_BASE` test-override
+/// surface that `doiget-cli` honors (`build_http_client` in
+/// `crates/doiget-cli/src/commands/fetch.rs`). When no overrides are
+/// set, returns the production allowlist (Tier 1 ∪ OA publisher).
+fn build_metadata_only_http_client() -> anyhow::Result<HttpClient> {
+    let arxiv = std::env::var("DOIGET_ARXIV_BASE").ok();
+    let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
+    let unpaywall = std::env::var("DOIGET_UNPAYWALL_BASE").ok();
+    let oa_publisher = std::env::var("DOIGET_OA_PUBLISHER_BASE").ok();
+
+    if arxiv.is_none() && crossref.is_none() && unpaywall.is_none() && oa_publisher.is_none() {
+        let mut allowlists = tier_1_allowlist();
+        allowlists.extend(oa_publisher_allowlist());
+        return HttpClient::new(allowlists)
+            .map_err(|e| anyhow::anyhow!("building production HTTP client: {e}"));
+    }
+
+    let mut owned: Vec<(String, String)> = Vec::new();
+    for (source, base) in [
+        ("arxiv", arxiv.as_deref()),
+        ("crossref", crossref.as_deref()),
+        ("unpaywall", unpaywall.as_deref()),
+        ("oa-publisher", oa_publisher.as_deref()),
+    ] {
+        if let Some(b) = base {
+            let url = url::Url::parse(b)
+                .map_err(|e| anyhow::anyhow!("DOIGET_*_BASE for {source} not a URL: {b}: {e}"))?;
+            let host = url
+                .host_str()
+                .ok_or_else(|| anyhow::anyhow!("base URL has no host: {b}"))?;
+            owned.push((source.to_string(), host.to_string()));
+        }
+    }
+    let entries: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(s, h)| (s.as_str(), h.as_str()))
+        .collect();
+    Ok(HttpClient::new_for_tests_allow_http_multi(&entries))
+}
+
+/// Resolve the provenance log path. Mirrors the CLI's precedence
+/// (`crates/doiget-cli/src/commands/fetch.rs::resolve_log_path`):
+/// 1. `DOIGET_LOG_PATH` env var.
+/// 2. `<config>/doiget/access.jsonl` where `<config>` is
+///    `XDG_CONFIG_HOME` / `APPDATA` / `$HOME/.config`.
+fn resolve_log_path() -> anyhow::Result<Utf8PathBuf> {
+    if let Ok(s) = std::env::var("DOIGET_LOG_PATH") {
+        if !s.is_empty() {
+            return Ok(Utf8PathBuf::from(s));
+        }
+    }
+    if let Ok(s) = std::env::var("XDG_CONFIG_HOME") {
+        if !s.is_empty() {
+            return Ok(Utf8PathBuf::from(s).join("doiget").join("access.jsonl"));
+        }
+    }
+    if let Ok(s) = std::env::var("APPDATA") {
+        if !s.is_empty() {
+            return Ok(Utf8PathBuf::from(s).join("doiget").join("access.jsonl"));
+        }
+    }
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| anyhow::anyhow!("neither HOME nor USERPROFILE is set"))?;
+    Ok(Utf8PathBuf::from(home)
+        .join(".config")
+        .join("doiget")
+        .join("access.jsonl"))
 }
 
 // `tool_handler` wires the router into rmcp's `ServerHandler` trait — it
