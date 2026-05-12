@@ -1,0 +1,18 @@
+{
+  "status": "ok",
+  "message-type": "work",
+  "message-version": "1.0.0",
+  "message": {
+    "DOI": "10.1038/nature.2014.16080",
+    "type": "journal-article",
+    "title": ["Open access tilts the balance"],
+    "author": [
+      { "family": "Van Noorden", "given": "Richard" }
+    ],
+    "container-title": ["Nature"],
+    "publisher": "Springer Science and Business Media LLC",
+    "issued": { "date-parts": [[2014, 9, 18]] },
+    "ISSN": ["0028-0836", "1476-4687"],
+    "link": []
+  }
+}

@@ -1,0 +1,8 @@
+# Crossref returns 404 (the file is mounted as the 404 body) — the
+# metadata_only orchestrator falls back to Unpaywall, which surfaces the
+# OA URL + license. Source becomes "unpaywall".
+safekey = "doi_10.5281_zenodo.3753745"
+source  = "unpaywall"
+title   = "A representative-shape illustration of a Zenodo deposit"
+oa_url  = "https://zenodo.org/record/3753745/files/preprint.pdf"
+license = "cc-by-4.0"

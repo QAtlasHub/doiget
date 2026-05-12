@@ -1,0 +1,6 @@
+# Crossref-only DOI, no OA URL in `link[]`. The metadata_only
+# orchestrator returns source=crossref with oa_url=None.
+safekey = "doi_10.1038_nature.2014.16080"
+source  = "crossref"
+title   = "Open access tilts the balance"
+# oa_url intentionally omitted — link[] is empty.

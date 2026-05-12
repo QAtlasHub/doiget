@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2312.11805v1</id>
+    <updated>2023-12-19T18:00:00Z</updated>
+    <published>2023-12-19T18:00:00Z</published>
+    <title>A representative-shape illustration of a modern arXiv preprint</title>
+    <summary>This is a hand-crafted abstract for an arXiv new-style id.</summary>
+    <author><name>Alice Researcher</name></author>
+    <author><name>Bob Coauthor</name></author>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="stat.ML" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>

@@ -14,6 +14,77 @@ Phase 0 (design + scaffolding). No version tag is published in this phase; the
 workspace stays at `0.0.0` until Phase 6. See [docs/PHASES.md](docs/PHASES.md)
 for the full Phase 0 deliverable checklist.
 
+**Roadmap close-out.** Slice 6 lands the final piece of the
+six-slice Phase-1 follow-up roadmap (Slice 1: metadata-only +
+arxiv Atom; Slice 2: MCP `doiget_fetch_paper` + `doiget_batch_fetch`;
+Slice 3: 100-entry safekey reference vectors; Slice 4: CanonicalRef +
+provenance v1→v2 migration; Slice 5: PR #84 advisory refactors;
+Slice 6: real-world fixture set). With this slice merged the
+roadmap is complete; subsequent work tracks back to the normal
+phase plan in [docs/PHASES.md](docs/PHASES.md).
+
+### Slice 6 — Real-world DOI / arXiv fixture set
+
+This slice curates a **frozen-snapshot fixture set** under
+`tests/fixtures/real_world/` so the wiremock-driven test suite has
+realistic Crossref / Unpaywall / arXiv response shapes to drive
+through `doiget_core::orchestrator::metadata_only`. The set is
+**closed and in-repo** — no live API is touched at test time, and
+fixtures are refreshed only by deliberate human curation (see the
+companion `README.md` for policy).
+
+- **13 fixture entries** spanning 9 representative classes:
+  - `doi-no-oa` (Crossref OK, `link[]` empty → no oa_url) — 1 entry
+  - `doi-crossref` (Crossref OK with OA URL) — 6 entries covering
+    Springer, PLOS, eLife, MDPI, Frontiers, and bioRxiv response
+    shapes
+  - `doi-crossref-fail-unpaywall` (Crossref 404 → Unpaywall fallback
+    with license + OA URL) — 1 entry (Zenodo)
+  - `doi-long-suffix` (safekey SHA-256 truncation boundary; 212-char
+    suffix) — 1 entry
+  - `doi-special-chars` (suffix with parens / slash / underscore →
+    escape-collapse path in `Ref::safekey()`) — 1 entry
+  - `arxiv-new` (modern `YYMM.NNNNN` id, Atom feed) — 1 entry
+  - `arxiv-old` (`subject-class/NNNNNNN` id) — 1 entry
+  - `arxiv-versioned` (`...vN` suffix) — 1 entry
+
+- **New reference test**
+  `crates/doiget-core/tests/real_world_fixtures_e2e.rs` walks
+  `tests/fixtures/real_world/index.toml` and for each enabled
+  `[[entry]]` mounts the frozen response on a `wiremock::MockServer`,
+  points the orchestrator at it via the `DOIGET_CROSSREF_BASE` /
+  `DOIGET_UNPAYWALL_BASE` / `DOIGET_ARXIV_BASE` env vars, and
+  asserts `safekey`, `source`, `title`, `oa_url`, and `license`
+  match the per-entry `expected.toml`. The test carries the
+  `// allow: outbound-network` posture-lint marker (no `reqwest::*`
+  imports; all traffic terminates at `127.0.0.1`).
+
+- **Curation policy**
+  ([`tests/fixtures/real_world/README.md`](tests/fixtures/real_world/README.md)):
+  - Each fixture is `provenance = "hand-crafted"` (synthesized to
+    match the documented API shape) or `"snapshot-from-real-api"`
+    (captured once with `curl` then trimmed). The slice-6 set is
+    entirely hand-crafted to side-step third-party redistribution
+    ambiguity and keep each file ≤ 5 KB.
+  - **Refresh is deliberate, not routine.** Refresh an entry only
+    when (a) a test exposes a real upstream shape change, or (b) the
+    entry's expected output is provably wrong. Document the refresh
+    in the entry's `notes` field and bump `last_refreshed_iso`.
+  - **No PDFs in this fixture set.** PDF licensing is publisher-
+    specific; the synthetic `%PDF-fake-bytes` payloads in
+    `crates/doiget-cli/tests/fetch_doi_oa_pdf_e2e.rs` and
+    `crates/doiget-mcp/tests/fetch_paper_e2e.rs` cover the PDF leg.
+  - The `disabled = true` per-entry flag is the escape hatch for
+    keeping CI green while a snapshot is being updated.
+
+- **Scope**
+  - The fixture set covers the **metadata response shape**, not the
+    PDF leg or the `fetch_paper` / `batch_fetch` store-write path
+    — those are already exercised by Slice 1 / Slice 2 wiremock
+    tests with synthetic payloads.
+  - Entry count is intentionally bounded (target 10–15); the goal
+    is "representative shapes covered", not "exhaustive corpus".
+
 ### Slice 5 — PR #84 review advisory refactors (code simplification)
 
 This slice addresses the seven Advisory-tier findings (A2 - A8) from

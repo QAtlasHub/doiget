@@ -1,0 +1,15 @@
+{
+  "status": "ok",
+  "message-type": "work",
+  "message-version": "1.0.0",
+  "message": {
+    "DOI": "10.1234/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "type": "journal-article",
+    "title": ["A representative-shape illustration of a DOI with a very long suffix"],
+    "author": [{ "family": "Boundary", "given": "Test" }],
+    "container-title": ["Journal of Tests"],
+    "publisher": "doiget test fixtures",
+    "issued": { "date-parts": [[2026, 5, 12]] },
+    "link": []
+  }
+}

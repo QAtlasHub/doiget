@@ -1,0 +1,24 @@
+{
+  "status": "ok",
+  "message-type": "work",
+  "message-version": "1.0.0",
+  "message": {
+    "DOI": "10.3390/atmos11070732",
+    "type": "journal-article",
+    "title": ["A representative-shape illustration of an MDPI Atmosphere article"],
+    "author": [
+      { "family": "Garcia", "given": "Elena" }
+    ],
+    "container-title": ["Atmosphere"],
+    "publisher": "MDPI AG",
+    "issued": { "date-parts": [[2020, 7, 10]] },
+    "ISSN": ["2073-4433"],
+    "link": [
+      {
+        "URL": "https://www.mdpi.com/2073-4433/11/7/732/pdf",
+        "content-type": "unspecified",
+        "intended-application": "similarity-checking"
+      }
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+safekey = "doi_10.1371_journal.pone.0001428"
+source  = "crossref"
+title   = "A representative-shape illustration of a PLOS gold-OA article"
+oa_url  = "https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0001428&type=printable"

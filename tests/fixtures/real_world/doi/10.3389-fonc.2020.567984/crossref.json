@@ -1,0 +1,24 @@
+{
+  "status": "ok",
+  "message-type": "work",
+  "message-version": "1.0.0",
+  "message": {
+    "DOI": "10.3389/fonc.2020.567984",
+    "type": "journal-article",
+    "title": ["A representative-shape illustration of a Frontiers in Oncology article"],
+    "author": [
+      { "family": "Schmidt", "given": "Felix" }
+    ],
+    "container-title": ["Frontiers in Oncology"],
+    "publisher": "Frontiers Media SA",
+    "issued": { "date-parts": [[2020, 12, 1]] },
+    "ISSN": ["2234-943X"],
+    "link": [
+      {
+        "URL": "https://www.frontiersin.org/articles/10.3389/fonc.2020.567984/pdf",
+        "content-type": "application/pdf",
+        "intended-application": "similarity-checking"
+      }
+    ]
+  }
+}

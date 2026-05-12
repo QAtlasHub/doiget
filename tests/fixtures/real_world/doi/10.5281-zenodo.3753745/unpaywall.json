@@ -1,0 +1,17 @@
+{
+  "doi": "10.5281/zenodo.3753745",
+  "is_oa": true,
+  "oa_status": "gold",
+  "title": "A representative-shape illustration of a Zenodo deposit",
+  "genre": "dataset",
+  "journal_name": null,
+  "publisher": "Zenodo",
+  "year": 2020,
+  "best_oa_location": {
+    "url": "https://zenodo.org/record/3753745",
+    "url_for_pdf": "https://zenodo.org/record/3753745/files/preprint.pdf",
+    "license": "cc-by-4.0",
+    "host_type": "repository",
+    "version": "publishedVersion"
+  }
+}

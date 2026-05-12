@@ -1,0 +1,24 @@
+{
+  "status": "ok",
+  "message-type": "posted-content",
+  "message-version": "1.0.0",
+  "message": {
+    "DOI": "10.1101/2024.01.01.000001",
+    "type": "posted-content",
+    "subtype": "preprint",
+    "title": ["A representative-shape illustration of a bioRxiv preprint"],
+    "author": [
+      { "family": "Tanaka", "given": "Hiroshi" }
+    ],
+    "container-title": [],
+    "publisher": "Cold Spring Harbor Laboratory",
+    "issued": { "date-parts": [[2024, 1, 1]] },
+    "link": [
+      {
+        "URL": "https://www.biorxiv.org/content/10.1101/2024.01.01.000001v1.full.pdf",
+        "content-type": "application/pdf",
+        "intended-application": "syndication"
+      }
+    ]
+  }
+}

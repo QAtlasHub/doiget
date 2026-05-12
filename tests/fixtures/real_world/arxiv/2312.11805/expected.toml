@@ -1,0 +1,6 @@
+safekey = "arxiv_2312.11805"
+source  = "arxiv"
+title   = "A representative-shape illustration of a modern arXiv preprint"
+license = "arxiv-default"
+# oa_url intentionally omitted -- the arxiv metadata-only path never
+# surfaces a PDF URL (only the abstract page).

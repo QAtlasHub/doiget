@@ -1,0 +1,4 @@
+safekey = "arxiv_cond-mat_9501001"
+source  = "arxiv"
+title   = "A representative-shape illustration of an old-style arXiv preprint"
+license = "arxiv-default"
