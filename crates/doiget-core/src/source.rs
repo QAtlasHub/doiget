@@ -115,6 +115,18 @@ pub enum FetchError {
         /// Human-readable hint at the offending field/path; not parsed.
         hint: String,
     },
+    /// Batch orchestrator received more refs than
+    /// [`crate::MAX_BATCH_REFS`]. Surfaced to the MCP `doiget_batch_fetch`
+    /// tool as `ErrorCode::InvalidRef` (closest closed-set fit — the
+    /// request shape itself is invalid; no `denial_context` channel
+    /// applies). Slice 2 / `docs/MCP_TOOLS.md` §1.
+    #[error("too many refs: got {got}, max {max}")]
+    TooManyRefs {
+        /// Number of refs the batch orchestrator was handed.
+        got: usize,
+        /// The hard cap ([`crate::MAX_BATCH_REFS`]).
+        max: usize,
+    },
 }
 
 /// Map [`FetchError`] to the closed [`crate::ErrorCode`] set surfaced at
@@ -129,6 +141,11 @@ impl From<FetchError> for crate::ErrorCode {
             FetchError::Log(_) => crate::ErrorCode::LogError,
             FetchError::InvalidRef(_) => crate::ErrorCode::InvalidRef,
             FetchError::SourceSchema { .. } => crate::ErrorCode::InternalError,
+            // Slice 2: a too-large batch is a request-shape failure, so
+            // collapse to `INVALID_REF` (closest closed-set fit). The
+            // `#[non_exhaustive]` wildcard below would otherwise route
+            // it to `INTERNAL_ERROR`, which would mislead agents.
+            FetchError::TooManyRefs { .. } => crate::ErrorCode::InvalidRef,
         }
     }
 }
@@ -159,11 +176,14 @@ impl From<&FetchError> for Option<crate::DenialContext> {
             }),
             // Delegate to the HttpError mapping (ADR-0023 §4 mapping table).
             FetchError::Http(http_err) => http_err.into(),
-            // Non-denial variants map to None per ADR-0023 §4.
+            // Non-denial variants map to None per ADR-0023 §4. (Slice 2:
+            // `TooManyRefs` is a request-shape failure, not a denial —
+            // adding it to the None arm keeps the mapping table consistent.)
             FetchError::NoOaAvailable
             | FetchError::Log(_)
             | FetchError::InvalidRef(_)
-            | FetchError::SourceSchema { .. } => None,
+            | FetchError::SourceSchema { .. }
+            | FetchError::TooManyRefs { .. } => None,
         }
     }
 }
@@ -343,6 +363,12 @@ mod tests {
         }
         .into();
         assert_eq!(e, ErrorCode::InternalError);
+
+        // Slice 2 — TooManyRefs collapses to INVALID_REF, NOT
+        // InternalError (the `#[non_exhaustive]` wildcard would
+        // otherwise misroute this to InternalError).
+        let e: ErrorCode = FetchError::TooManyRefs { got: 101, max: 100 }.into();
+        assert_eq!(e, ErrorCode::InvalidRef);
     }
 
     #[test]

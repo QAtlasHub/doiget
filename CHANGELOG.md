@@ -14,6 +14,41 @@ Phase 0 (design + scaffolding). No version tag is published in this phase; the
 workspace stays at `0.0.0` until Phase 6. See [docs/PHASES.md](docs/PHASES.md)
 for the full Phase 0 deliverable checklist.
 
+### Slice 2 — MCP doiget_fetch_paper + doiget_batch_fetch
+
+- **(C.1)** Extracted the single-fetch and batch-fetch orchestrators
+  out of `doiget-cli::commands::{fetch,batch}` into
+  `doiget_core::orchestrator::{fetch_paper, batch_fetch}` siblings to
+  Slice 1's `metadata_only`. The CLI's `run_with_options` now
+  delegates; behaviour is preserved (the existing CLI fetch/batch
+  e2e suites stay green).
+- **(C.2)** New MCP tools:
+  - `doiget_fetch_paper(ref, dry_run?)` — resolves and downloads one
+    PDF. Honors `dry_run: true` per ADR-0022 (returns a `FetchPlan`
+    envelope without touching network or store). Failure envelope
+    carries `denial_context` per ADR-0023.
+  - `doiget_batch_fetch(refs[], dry_run?)` — bulk variant capped at
+    `MAX_BATCH_REFS = 100`. Returns one result entry per ref;
+    per-ref errors do NOT fail the whole call (matches CLI batch
+    semantics). `dry_run` returns `{ok:true, dry_run:true,
+    plans:[...]}`.
+- **(C.3)** New `pub const doiget_core::MAX_BATCH_REFS: usize = 100;`
+  and `FetchError::TooManyRefs { got, max }` variant (additive on
+  `#[non_exhaustive]` enum; collapses to `ErrorCode::InvalidRef` at
+  the public boundary — `TooManyRefs` is a request-shape failure,
+  not a denial, so `denial_context` stays `None`).
+- **(C.4)** 25 new MCP integration tests in
+  `crates/doiget-mcp/tests/fetch_paper_e2e.rs` plus expanded
+  coverage in `initialize_handshake.rs`: `tools/list` advertises
+  both new tools; INVALID_REF / TOO_MANY_REFS / dry_run /
+  happy-path / partial-failure all exercised.
+
+After Slice 2 the MCP `Server` exposes 5 of the 9 Phase 3 baseline
+tools (`doiget_health`, `doiget_capability_profile`,
+`doiget_metadata_only`, `doiget_fetch_paper`, `doiget_batch_fetch`).
+Remaining: `doiget_resolve_paper`, `doiget_info`, `doiget_search_local`,
+`doiget_list_recent`, `doiget_paper_pdf_path`.
+
 ### Slice 1 — metadata_only orchestrator + arXiv Atom feed
 
 - **(A)** `doiget_metadata_only` non-dry-run path wired through the new
