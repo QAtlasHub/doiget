@@ -34,11 +34,42 @@ use anyhow::{anyhow, Context, Result};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, RowInput};
 use doiget_core::{RateLimits, Ref, MCP_BATCH_MAX_SIZE};
 
-use super::fetch::FetchHarness;
+use super::fetch::{build_fetch_plan, emit_dry_run_plan_to_stdout, FetchHarness};
+use super::resolve_store_root;
 
-/// Run the `doiget batch <path>` subcommand. See module docs for the
+/// Per-batch option bundle threaded from `main.rs` clap dispatch.
+///
+/// Mirrors [`super::fetch::FetchOptions`] for the multi-ref orchestrator.
+/// `Default` reproduces the historical [`run`] behaviour, so existing
+/// integration tests under `crates/doiget-cli/tests/batch_e2e.rs` (which
+/// call `batch::run(...)`) continue to compile unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct BatchOptions {
+    /// When `true`, parse the refs file, emit a [`super::fetch::FetchPlan`]
+    /// JSON line per ref on stdout, and return `Ok(())` without opening
+    /// the provenance log, building the HTTP client, or writing to the
+    /// store. ADR-0022 §1 / §3.
+    pub dry_run: bool,
+}
+
+/// Run the `doiget batch <path>` subcommand with the historical
+/// (dry-run-disabled) defaults. See [`run_with_options`] for the
+/// dry-run-aware entry point and the module docs for the
 /// failure-semantics contract.
 pub async fn run(path: String) -> Result<()> {
+    run_with_options(path, BatchOptions::default()).await
+}
+
+/// Run the `doiget batch <path>` subcommand with the given options.
+///
+/// When `opts.dry_run` is `true` (per ADR-0022 §1 + §3): read the input
+/// file, parse refs, and emit one `FetchPlan` JSON envelope line per ref
+/// on stdout. NO provenance log is opened, NO HTTP client is built, NO
+/// per-ref fetch runs, NO store write happens. Per-ref parse failures
+/// in dry-run mode are still counted and the function returns
+/// `Err(...)` if any ref failed to parse — the input was malformed and
+/// the caller should know.
+pub async fn run_with_options(path: String, opts: BatchOptions) -> Result<()> {
     // Step 1: read the input file. Failures surface before any fetch starts.
     let raw =
         std::fs::read_to_string(&path).with_context(|| format!("reading batch file: {path}"))?;
@@ -61,6 +92,38 @@ pub async fn run(path: String) -> Result<()> {
             inputs.len(),
             MCP_BATCH_MAX_SIZE,
         ));
+    }
+
+    // Step 3a: dry-run branch (ADR-0022). Emit one `FetchPlan` envelope
+    // per ref on stdout WITHOUT opening the provenance log, building the
+    // HTTP client, or writing to the store. Per-ref parse failures still
+    // count toward the exit code so a malformed batch is visible.
+    if opts.dry_run {
+        let store_root = resolve_store_root()?;
+        let mut parse_errors: usize = 0;
+        for input in &inputs {
+            match Ref::parse(input) {
+                Ok(ref_) => {
+                    let plan = build_fetch_plan(&ref_, &store_root);
+                    emit_dry_run_plan_to_stdout(&ref_, &plan)?;
+                }
+                Err(e) => {
+                    parse_errors += 1;
+                    tracing::warn!(
+                        %input,
+                        error = %e,
+                        "skipping malformed batch entry in dry-run mode",
+                    );
+                }
+            }
+        }
+        if parse_errors > 0 {
+            return Err(anyhow!(
+                "dry-run batch: {} parse errors (no fetches attempted)",
+                parse_errors
+            ));
+        }
+        return Ok(());
     }
 
     // Step 4: build the harness once. All spawned tasks share an `Arc` to

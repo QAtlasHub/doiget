@@ -169,4 +169,84 @@ for the full Phase 0 deliverable checklist.
 - Removed an accidentally-committed editor temp file and added `*.tmp.*` to
   `.gitignore` to prevent recurrence.
 
+#### Discussion #12 — external review incorporation (musaabhasan)
+
+This PR lands the spec + Phase-1 implementation slice for the five
+musaabhasan items raised on
+[Discussion #12](https://github.com/sotashimozono/doiget/discussions/12).
+Spec changes are NORMATIVE; implementation is staged so the dry-run preview
+and structured denial channel ship now and the `CanonicalRef` audit identity
+is reserved for Phase 2 (per ADR-0021 §3).
+
+##### Added
+- [ADR-0021](docs/DECISIONS/0021-canonical-tuple-identity.md) (**spec-only**)
+  reserves `CanonicalRef = (source_type, source_id, resolver_profile, version)`
+  as the Phase-2 audit identity; Phase 1 keeps `safekey` keyed on `Ref` so
+  the BiblioFetch.jl round-trip contract from ADR-0007 stays unchanged.
+- [ADR-0022](docs/DECISIONS/0022-dry-run-mode.md) and
+  [ADR-0023](docs/DECISIONS/0023-denial-context-structured.md)
+  (**accepted + implemented this PR**) — `--dry-run` mode and structured
+  `denial_context` on the public error envelope.
+- `doiget-core::DenialReason` (closed enum, 8 variants, snake_case wire)
+  and `doiget-core::DenialContext` (`#[serde(deny_unknown_fields)]`) per
+  [PUBLIC_API.md §8](docs/PUBLIC_API.md). `From<&HttpError> for
+  Option<DenialContext>` (in `crate::http`) and `From<&FetchError> for
+  Option<DenialContext>` (in `crate::source`) implement the ADR-0023 §4
+  mapping table — `RedirectDenied` / `OversizedBody` / `NotAPdf` /
+  `InsecureRedirect` produce a populated context, `Network` /
+  `HttpStatus` / `UnknownSource` map to `None`.
+- `HttpError::RedirectDenied { source_key, host, expected_hosts }` carries
+  an allowlist snapshot so the structured channel can populate
+  `denial_context.expected` without re-looking-up the source allowlist.
+- `doiget-core::dry_run::{FetchPlan, PdfSourcePlan, RateLimitBudget,
+  build_fetch_plan, build_dry_run_envelope}` per ADR-0022 §1 (NORMATIVE
+  wire shape). Lives in `doiget-core` so both `doiget-cli` (the
+  `--dry-run` flag) and `doiget-mcp` (the `dry_run: true` tool variants)
+  emit byte-identical envelopes.
+- `doiget fetch <ref> --dry-run` and `doiget batch <path> --dry-run` CLI
+  flags. The dry-run path emits a `FetchPlan` JSON envelope on stdout and
+  returns `Ok(())` without opening the provenance log, building the HTTP
+  client, or writing to the store — verified by
+  `tests/fetch_dry_run_e2e.rs` (no wiremock; any accidental network hit
+  would fail). The CLI subcommand variants `Command::Fetch { ref_,
+  dry_run }` and `Command::Batch { path, dry_run }` thread the flag
+  through new `pub async fn run_with_options` entry points; the
+  historical `pub async fn run(input)` signatures remain as `Default`-arg
+  delegators so existing in-process integration tests compile unchanged.
+- `doiget_metadata_only` MCP tool ([`docs/MCP_TOOLS.md`](docs/MCP_TOOLS.md)
+  §11). Phase 1 wires the **dry-run** path only (returns the same
+  `FetchPlan` envelope as the CLI); the non-dry-run path returns
+  `{ok:false, error:{code:"INTERNAL_ERROR", message:"metadata_only is not
+  yet wired in Phase 1; only dry_run is supported"}}` with a
+  `// TODO(phase-1.x):` for the metadata-only orchestrator that will land
+  in a follow-up PR.
+- New normative spec sections: [ERRORS.md](docs/ERRORS.md) §3.1 + §5.1
+  (denial_context wire surface), [MCP_TOOLS.md](docs/MCP_TOOLS.md) §5 +
+  §10 + §11 (denial_context envelope, dry-run preview,
+  `doiget_metadata_only`), [PUBLIC_API.md](docs/PUBLIC_API.md) §8
+  (DenialReason / DenialContext) + §9 (forward-looking CanonicalRef
+  note), [SAFEKEY.md](docs/SAFEKEY.md) §3.1 (filename-derivation inputs
+  MUST NOT include `Content-Disposition` / redirect URL path /
+  server-suggested filename — clarifies existing impl posture; no
+  algorithm change).
+
+##### Tests added
+- `denial_*` round-trip + `deny_unknown_fields` tests in
+  `crates/doiget-core/src/lib.rs::tests` (5 tests).
+- `From<&HttpError> for Option<DenialContext>` per-variant tests in
+  `crates/doiget-core/src/http.rs::tests` (5 tests).
+- `From<&FetchError> for Option<DenialContext>` per-variant tests in
+  `crates/doiget-core/src/source.rs::tests` (3 tests).
+- Pure-function `FetchPlan` shape tests in
+  `crates/doiget-core/src/dry_run.rs::tests` (6 tests).
+- `crates/doiget-cli/tests/fetch_dry_run_e2e.rs` end-to-end
+  side-effect-free integration test (4 tests: DOI dry-run no writes,
+  arXiv dry-run no writes, DOI envelope shape pin, arXiv envelope shape
+  pin).
+
+##### Changed
+- `camino` workspace dep gains the `serde1` feature in
+  `crates/doiget-core/Cargo.toml` so `Utf8PathBuf` fields on `FetchPlan`
+  serialize. (`doiget-cli` already enabled the same feature.)
+
 [Unreleased]: https://github.com/sotashimozono/doiget/compare/main...HEAD

@@ -133,6 +133,38 @@ impl From<FetchError> for crate::ErrorCode {
     }
 }
 
+/// Map a [`FetchError`] reference to the structured [`crate::DenialContext`]
+/// channel introduced by ADR-0023 §4.
+///
+/// `&FetchError` (rather than `FetchError`) so the orchestrator can
+/// produce the structured side-channel without consuming the error it
+/// still needs for `error.message` and the `From<FetchError> for
+/// ErrorCode` collapse above. The `Http` arm delegates to the
+/// `From<&HttpError> for Option<DenialContext>` impl in [`crate::http`].
+impl From<&FetchError> for Option<crate::DenialContext> {
+    fn from(e: &FetchError) -> Self {
+        use crate::{DenialContext, DenialReason};
+        match e {
+            FetchError::NotEligible { source_key } => Some(DenialContext {
+                reason: DenialReason::CapabilityNotGranted,
+                source: Some(source_key.clone()),
+                attempted: None,
+                expected: Vec::new(),
+                hop_index: None,
+                cap: None,
+                actual: None,
+            }),
+            // Delegate to the HttpError mapping (ADR-0023 §4 mapping table).
+            FetchError::Http(http_err) => http_err.into(),
+            // Non-denial variants map to None per ADR-0023 §4.
+            FetchError::NoOaAvailable
+            | FetchError::Log(_)
+            | FetchError::InvalidRef(_)
+            | FetchError::SourceSchema { .. } => None,
+        }
+    }
+}
+
 /// The trait implemented by every Tier 1 / 2 / 3 fetcher.
 ///
 /// Binding signature: `docs/PUBLIC_API.md` §2 (NORMATIVE — the wire shape
@@ -328,5 +360,66 @@ mod tests {
             "FetchContext Debug must not dump foundation internals: {}",
             s,
         );
+    }
+
+    // ---------------------------------------------------------------
+    // FetchError -> Option<DenialContext>  (ADR-0023 §4)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn denial_from_not_eligible_carries_source_key() {
+        use crate::{DenialContext, DenialReason};
+        let e = FetchError::NotEligible {
+            source_key: "tdm-elsevier".to_string(),
+        };
+        let dc: Option<DenialContext> = (&e).into();
+        let dc = dc.expect("NotEligible -> Some(DenialContext)");
+        assert_eq!(dc.reason, DenialReason::CapabilityNotGranted);
+        assert_eq!(dc.source.as_deref(), Some("tdm-elsevier"));
+        assert!(dc.attempted.is_none());
+        assert!(dc.expected.is_empty());
+    }
+
+    #[test]
+    fn denial_from_http_delegates_to_http_mapping() {
+        use crate::http::HttpError;
+        use crate::{DenialContext, DenialReason, PDF_MAX_BYTES};
+        // The Http arm must delegate to the HttpError mapping rather than
+        // reinventing it, so an OversizedBody surfaces with cap/actual
+        // populated and the SizeCapExceeded reason — proving delegation
+        // works without per-variant duplication.
+        let e = FetchError::Http(HttpError::OversizedBody {
+            actual: 209_715_200,
+            cap: PDF_MAX_BYTES,
+        });
+        let dc: Option<DenialContext> = (&e).into();
+        let dc = dc.expect("Http(OversizedBody) -> Some(DenialContext)");
+        assert_eq!(dc.reason, DenialReason::SizeCapExceeded);
+        assert_eq!(dc.cap, Some(PDF_MAX_BYTES));
+        assert_eq!(dc.actual, Some(209_715_200));
+    }
+
+    #[test]
+    fn denial_from_non_denial_variants_returns_none() {
+        use crate::DenialContext;
+        // Each of the four non-denial FetchError arms maps to None per
+        // ADR-0023 §4.
+        let e = FetchError::NoOaAvailable;
+        let dc: Option<DenialContext> = (&e).into();
+        assert!(dc.is_none(), "NoOaAvailable must not produce DenialContext");
+
+        let e = FetchError::Log(LogError::Io(std::io::Error::other("synthetic")));
+        let dc: Option<DenialContext> = (&e).into();
+        assert!(dc.is_none(), "Log must not produce DenialContext");
+
+        let e = FetchError::InvalidRef(RefParseError::Empty);
+        let dc: Option<DenialContext> = (&e).into();
+        assert!(dc.is_none(), "InvalidRef must not produce DenialContext");
+
+        let e = FetchError::SourceSchema {
+            hint: "missing field 'license'".into(),
+        };
+        let dc: Option<DenialContext> = (&e).into();
+        assert!(dc.is_none(), "SourceSchema must not produce DenialContext");
     }
 }

@@ -33,7 +33,7 @@ async-trait = { workspace = true }
 tracing     = { workspace = true }
 secrecy     = { workspace = true, optional = true }
 reqwest     = { workspace = true }
-camino      = { workspace = true }
+camino      = { workspace = true, features = ["serde1"] }
 fs2         = { workspace = true }
 tempfile    = { workspace = true }
 parking_lot = { workspace = true }

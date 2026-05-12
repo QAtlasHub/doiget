@@ -31,14 +31,17 @@
 
 use camino::Utf8PathBuf;
 
-use doiget_core::{CapabilityProfile, SCHEMA_VERSION, VERSION};
+use doiget_core::dry_run::{build_dry_run_envelope, build_fetch_plan};
+use doiget_core::{CapabilityProfile, Ref, SCHEMA_VERSION, VERSION};
 use rmcp::{
-    handler::server::router::tool::ToolRouter,
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
+    schemars::{self, JsonSchema},
     tool, tool_handler, tool_router,
     transport::stdio,
     ErrorData, ServerHandler, ServiceExt,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 /// MCP server handle. Owns the resolved [`CapabilityProfile`] plus the
@@ -151,6 +154,120 @@ impl Server {
         let payload = capability_profile_to_json(&self.profile);
         Ok(CallToolResult::structured(payload))
     }
+
+    /// `doiget_metadata_only` — resolve metadata for a DOI / arXiv id
+    /// without paying for or being noticed by a PDF download.
+    ///
+    /// Per `docs/MCP_TOOLS.md` §11 (NORMATIVE).
+    ///
+    /// **Phase 1 status:** only the `dry_run: true` path is wired —
+    /// the orchestrator that performs a real metadata-only fetch (with
+    /// the `metadata-only` provenance tag and no PDF leg) lands in a
+    /// follow-up PR. The non-dry-run path returns
+    /// `{ok:false, error:{code:"INTERNAL_ERROR", ...}}` with a clear
+    /// message. The dry-run path is the user-visible value-add this PR
+    /// ships, per ADR-0022 (the `dry_run` companion ADR).
+    #[tool(
+        description = "WHEN TO USE: User wants metadata for a DOI / arXiv id without paying for or being noticed by a PDF download.\n\
+                       INPUTS: ref (DOI or arXiv id), dry_run (optional bool).\n\
+                       OUTPUTS: { ok: true, ref, source, license?, oa_url, metadata } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, error }.\n\
+                       COSTS: 1-2 s metadata round-trip (or 0 when dry_run).\n\
+                       SIDE EFFECTS: Appends a 'metadata-only' provenance row (unless dry_run). Writes the metadata TOML to the store. Never fetches PDF.\n\
+                       LIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed."
+    )]
+    async fn doiget_metadata_only(
+        &self,
+        Parameters(input): Parameters<MetadataOnlyInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Step 1: parse the ref. Failures collapse to INVALID_REF per
+        // docs/ERRORS.md §2 / docs/PUBLIC_API.md §4.
+        let ref_ = match Ref::parse(&input.ref_) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                    "INVALID_REF",
+                    &format!("invalid ref: {e}"),
+                )));
+            }
+        };
+
+        // Step 2: dry-run branch (ADR-0022 §2). Build the same envelope
+        // the CLI emits and route via JSON-RPC. NO network, NO store
+        // write, NO provenance row.
+        if input.dry_run.unwrap_or(false) {
+            // Use the same store-root resolver as `doiget_health` so the
+            // path projections in `plan.target_*` match what the live
+            // fetch would write to. When neither HOME nor USERPROFILE
+            // resolves (locked-down hosts), fall back to a sentinel
+            // path so the preview still has a complete shape — the
+            // dry-run is a preview, not a writability probe.
+            let store_root = resolve_store_root().unwrap_or_else(|| Utf8PathBuf::from("./papers"));
+            let plan = build_fetch_plan(&ref_, &store_root);
+            return Ok(CallToolResult::structured(build_dry_run_envelope(
+                &ref_, &plan,
+            )));
+        }
+
+        // Step 3: non-dry-run path. The real metadata-only orchestrator
+        // lands in a follow-up PR; surface a clear INTERNAL_ERROR
+        // envelope so an agent doesn't get a confusing default reply.
+        // TODO(phase-1.x): wire the metadata-only orchestrator.
+        // It should: dispatch Crossref + Unpaywall (DOI) or arXiv-meta
+        // (arXiv), write the metadata TOML, append a `Fetch` row tagged
+        // `metadata-only`, and return `{ok:true, ref, source, license?,
+        // oa_url, metadata}` per docs/MCP_TOOLS.md §11. The OA URL is
+        // reported but never followed (that is the contract that
+        // distinguishes this tool from `doiget_fetch_paper`).
+        Ok(CallToolResult::structured(metadata_only_error_envelope(
+            "INTERNAL_ERROR",
+            "metadata_only is not yet wired in Phase 1; only dry_run is supported",
+        )))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// doiget_metadata_only — input schema
+// ---------------------------------------------------------------------------
+
+/// JSON-schema-derived input for [`Server::doiget_metadata_only`].
+///
+/// Mirrors `docs/MCP_TOOLS.md` §11 `inputSchema`. The Rust field name
+/// `ref_` is renamed on the wire to `ref` (the JSON key the spec uses,
+/// reserved in Rust as the `ref` keyword) via `#[serde(rename = "ref")]`.
+/// The matching `#[schemars(rename = "ref")]` keeps the generated JSON
+/// schema field name aligned with the wire form.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct MetadataOnlyInput {
+    /// DOI or arXiv id. Validated via `Ref::parse`; failures surface as
+    /// `INVALID_REF` per `docs/ERRORS.md`.
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+    /// When `true`, returns a [`FetchPlan`](doiget_core::dry_run::FetchPlan)
+    /// preview without touching the network or writing anything (ADR-0022).
+    /// Defaults to `false` (the production metadata-only path, currently
+    /// stubbed in Phase 1).
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+}
+
+/// Build the `{ok:false, error:{...}}` envelope used by
+/// `doiget_metadata_only` for both INVALID_REF (bad input) and
+/// INTERNAL_ERROR (Phase 1 stub) cases. Mirrors the wire shape from
+/// `docs/MCP_TOOLS.md` §5; `denial_context` is omitted (these failure
+/// modes do not produce one — see `docs/ERRORS.md` §3.1).
+fn metadata_only_error_envelope(code: &str, message: &str) -> Value {
+    json!({
+        "ok": false,
+        "error": {
+            "code": code,
+            "message": message,
+            // denial_context is intentionally absent for these envelope
+            // shapes (parse-error / internal-error); ADR-0023 §3 says
+            // consumers MUST tolerate the field being absent.
+        },
+    })
 }
 
 // `tool_handler` wires the router into rmcp's `ServerHandler` trait — it

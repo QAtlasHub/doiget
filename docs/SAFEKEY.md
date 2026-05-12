@@ -95,6 +95,28 @@ end
 The two implementations MUST produce bit-identical output for every entry in the
 reference vector set.
 
+### 3.1 Filename derivation inputs (NORMATIVE)
+
+The safekey is derived **solely from the canonical `Ref` string** (a validated
+DOI or arXiv id, both already path-traversal-checked at parse time). doiget
+MUST NOT use any of the following as filename input:
+
+- HTTP `Content-Disposition` header (`filename=...` or `filename*=...`).
+- Redirect URL path or any URL component returned by the network.
+- Server-suggested filename (any header carrying a string the publisher
+  proposes as a download name).
+- Any byte stream from the network.
+
+This guarantees that an attacker controlling a redirect target or a response
+header cannot influence the on-disk path. The derivation is a pure function
+of `Ref`, computed before the first network byte is sent.
+
+This rule is the spec-side counterpart to the audit-trail
+`canonical_digest` introduced by [ADR-0021](DECISIONS/0021-canonical-tuple-identity.md):
+the on-disk identity stays keyed on `Ref` (so BiblioFetch.jl round-trip
+keeps working — see §7), while the *audit* identity gains the resolver
+profile.
+
 ## 5. Reference test vectors (sample)
 
 Full set: `tests/fixtures/safekey/vectors.json` (100 entries, NORMATIVE).

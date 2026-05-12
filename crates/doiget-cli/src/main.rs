@@ -30,11 +30,24 @@ enum Command {
     Fetch {
         /// DOI (e.g. "10.1234/example") or arXiv id (e.g. "arXiv:2401.12345").
         ref_: String,
+        /// Build a fetch plan and emit it as JSON on stdout without
+        /// touching the network, the store, or the provenance log
+        /// (ADR-0022). The `plan.pdf_sources[].candidate_hosts` list is
+        /// the static allowlist for the resolver, not a prediction of
+        /// the single host the real fetch would hit (ADR-0022 §4).
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Fetch many refs from a newline-separated text file.
     Batch {
         /// Path to a file containing one ref per line.
         path: String,
+        /// Emit one fetch-plan JSON envelope per ref on stdout without
+        /// touching the network, the store, or the provenance log
+        /// (ADR-0022). Per-ref parse failures still cause a non-zero
+        /// exit so a malformed batch is visible.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Show metadata for a stored entry.
     Info {
@@ -99,8 +112,20 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Info { ref_ }) => doiget_cli::commands::info::run(ref_),
         Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit),
         Some(Command::Search { query }) => doiget_cli::commands::search::run(query),
-        Some(Command::Fetch { ref_ }) => doiget_cli::commands::fetch::run(ref_).await,
-        Some(Command::Batch { path }) => doiget_cli::commands::batch::run(path).await,
+        Some(Command::Fetch { ref_, dry_run }) => {
+            doiget_cli::commands::fetch::run_with_options(
+                ref_,
+                doiget_cli::commands::fetch::FetchOptions { dry_run },
+            )
+            .await
+        }
+        Some(Command::Batch { path, dry_run }) => {
+            doiget_cli::commands::batch::run_with_options(
+                path,
+                doiget_cli::commands::batch::BatchOptions { dry_run },
+            )
+            .await
+        }
         Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_),
         Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_),
         // Phase 3 (MCP foundation). The MCP server runs on stdio per

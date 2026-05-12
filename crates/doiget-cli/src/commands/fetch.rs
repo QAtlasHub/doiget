@@ -61,6 +61,41 @@ fn new_session_id() -> String {
     ulid::Ulid::new().to_string()
 }
 
+// ---------------------------------------------------------------------------
+// Dry-run plan / preview (ADR-0022)
+// ---------------------------------------------------------------------------
+
+// The structured `FetchPlan` shape, the `build_fetch_plan` builder, and
+// the `build_dry_run_envelope` JSON-shape helper live in `doiget-core`
+// so the MCP server can produce a bit-identical envelope without
+// depending on `doiget-cli`. The CLI re-exports them here for callers
+// that already `use doiget_cli::commands::fetch`.
+pub use doiget_core::dry_run::{
+    build_dry_run_envelope, build_fetch_plan, FetchPlan, PdfSourcePlan, RateLimitBudget,
+};
+
+/// Serialize the dry-run envelope and write it to stdout. Used by the
+/// `--dry-run` flag on `doiget fetch` and `doiget batch`. The envelope
+/// shape matches ADR-0022 §1 / `docs/MCP_TOOLS.md` §10.
+///
+/// `pub` so `commands::batch` (multi-ref dry-run) can reuse it. The
+/// function lives in `doiget-cli` (not `doiget-core`) because `println!`
+/// is a CLI concern; the MCP server uses [`build_dry_run_envelope`]
+/// directly and routes the bytes via JSON-RPC.
+///
+/// `print_stdout` is workspace-deny for MCP stdio safety (ADR-0001 /
+/// `docs/SECURITY.md` §3); `--dry-run` is a CLI-only path that never
+/// runs under the MCP server, so the localized `#[allow]` is the
+/// minimal intervention — same pattern used by `commands::config`,
+/// `commands::info`, etc.
+#[allow(clippy::print_stdout)]
+pub fn emit_dry_run_plan_to_stdout(ref_: &Ref, plan: &FetchPlan) -> Result<()> {
+    let envelope = build_dry_run_envelope(ref_, plan);
+    let s = serde_json::to_string(&envelope).context("serializing dry-run envelope to JSON")?;
+    println!("{s}");
+    Ok(())
+}
+
 /// Resolve the on-disk store root. `DOIGET_STORE_ROOT` wins; otherwise
 /// fall back to `$HOME/papers` (POSIX) or `%USERPROFILE%\papers` (Windows).
 fn resolve_store_root() -> Result<Utf8PathBuf> {
@@ -370,16 +405,72 @@ impl FetchHarness {
     }
 }
 
-/// Run the `doiget fetch <ref>` subcommand.
+/// Per-fetch option bundle threaded from `main.rs` clap dispatch.
 ///
-/// Returns `Ok(())` on success and writes a one-line success message to
-/// stderr (per ADR-0001 stdio convention — no stdout writes from `fetch`).
-/// On failure, returns an `anyhow::Error` and emits a `SessionEnd` row with
-/// `result=err` to the provenance log before returning.
+/// The bundle is additive: `Default` produces the historical
+/// `pub async fn run(input)` behaviour, so existing callers (integration
+/// tests under `crates/doiget-cli/tests/`) that go through [`run`]
+/// continue to work unchanged. New callers (the binary's
+/// `clap::Subcommand::Fetch` arm and the dry-run integration test) go
+/// through [`run_with_options`].
+///
+/// Currently exposes a single field — `dry_run` per ADR-0022 §1.
+#[derive(Debug, Clone, Default)]
+pub struct FetchOptions {
+    /// When `true`, build a [`FetchPlan`], emit it as JSON on stdout, and
+    /// return `Ok(())` without touching the network or filesystem and
+    /// without appending a provenance row.
+    pub dry_run: bool,
+}
+
+/// Run the `doiget fetch <ref>` subcommand with the historical (dry-run-
+/// disabled) defaults.
+///
+/// Equivalent to `run_with_options(input, FetchOptions::default())`. Kept
+/// at this signature so the existing in-process integration tests under
+/// `crates/doiget-cli/tests/` (which call `fetch::run("...".into())`)
+/// continue to compile unchanged.
+///
+/// On success returns `Ok(())` and writes a one-line success message to
+/// stderr (per ADR-0001 stdio convention — no stdout writes from `fetch`
+/// on the normal path). On failure, returns an `anyhow::Error` and emits
+/// a `SessionEnd` row with `result=err` to the provenance log before
+/// returning.
 pub async fn run(input: String) -> Result<()> {
+    run_with_options(input, FetchOptions::default()).await
+}
+
+/// Run the `doiget fetch <ref>` subcommand with the given options.
+///
+/// When `opts.dry_run` is `true` (per ADR-0022 §1):
+///   - Build a [`FetchPlan`] from the parsed [`Ref`] and the configured
+///     store root.
+///   - Serialize it to JSON and write to stdout.
+///   - Return `Ok(())` immediately, **without** building a
+///     [`FetchHarness`] (no provenance log open), without contacting the
+///     network, without writing to the store, and without appending a
+///     provenance row.
+///
+/// When `opts.dry_run` is `false`, the body is identical to the
+/// historical [`run`] implementation.
+pub async fn run_with_options(input: String, opts: FetchOptions) -> Result<()> {
     // Step 1: parse + safekey. Granular `RefParseError` collapses to anyhow
     // via `?`; the higher-level CLI binary maps the error to its exit code.
     let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
+
+    // Dry-run branch: build the plan and emit it. NO harness, NO network,
+    // NO store write, NO provenance row. Posture-lint ADR-0022 §5 will
+    // verify this branch never reaches `HttpClient::fetch_*`,
+    // `FsStore::write_*`, or `ProvenanceLog::append`.
+    if opts.dry_run {
+        // Resolve store root for path projections. Failures here surface
+        // as a normal CLI error (not as a denial) — same behaviour the
+        // non-dry-run path would exhibit on a misconfigured environment.
+        let store_root = resolve_store_root()?;
+        let plan = build_fetch_plan(&ref_, &store_root);
+        emit_dry_run_plan_to_stdout(&ref_, &plan)?;
+        return Ok(());
+    }
 
     // Step 2: build harness (foundation modules + provenance log).
     let harness = FetchHarness::from_env()?;

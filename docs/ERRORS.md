@@ -48,10 +48,42 @@ Wire form (JSON / MCP): `"INVALID_REF"`, `"NO_OA_AVAILABLE"`, etc.
 
 | Persona | Surface |
 |---|---|
-| Agent (MCP) | Structured `{ ok: false, error: { code, message } }`. Never throws. |
+| Agent (MCP) | Structured `{ ok: false, error: { code, message, denial_context? } }`. Never throws. |
 | Researcher (CLI human) | `cargo`-style stderr: `error[E0007]: rate limited from unpaywall: retry after 1s`. Exit code 1. |
-| CI / Batch (CLI `--json`) | JSON Lines record per ref with `{"ok":false, "error":{"code":"...","message":"..."}}`. Exit code = number of failures (capped at 255). |
+| CI / Batch (CLI `--json`) | JSON Lines record per ref with `{"ok":false, "error":{"code":"...","message":"...","denial_context":{...}?}}`. Exit code = number of failures (capped at 255). |
 | Library (Rust) | `Err(FetchError)` (typed via `thiserror`). |
+
+### 3.1 Structured `denial_context` (NORMATIVE; ADR-0023)
+
+The `error` envelope MAY carry an additional structured `denial_context`
+field for machine-readable recovery. The field is **optional and additive** —
+consumers MUST tolerate both its presence and its absence — and is
+populated by the producer on the denial classes named in the §5 mapping
+table below.
+
+`denial_context.reason` is a **closed** enum (per ADR-0023):
+
+```jsonc
+"denial_context": {
+  "reason":    "redirect_not_in_allowlist",   // closed enum, snake_case
+  "source":    "crossref",                     // resolver source key, optional
+  "attempted": "evil.example.com",             // host/path/value, optional
+  "expected":  ["api.crossref.org",
+                "*.crossref.org"],             // allowlist entries, [] when N/A
+  "hop_index": 1,                              // redirect-chain position, optional
+  "cap":       104857600,                      // size/rate cap, optional
+  "actual":    209715200                       // observed value, optional
+}
+```
+
+Closed `reason` set: `redirect_not_in_allowlist`, `host_in_block_list`,
+`size_cap_exceeded`, `schema_drift`, `capability_not_granted`,
+`rate_limit_window`, `ssrf_private_address`, `content_type_mismatch`. Adding
+a new variant is a minor semver bump; renaming or repurposing one is a
+breaking change.
+
+`error.message` MUST continue to embed the same parameters in human-readable
+form — `denial_context` is a parallel channel, not a replacement.
 
 ## 4. CLI exit codes
 
@@ -74,6 +106,16 @@ Wire form (JSON / MCP): `"INVALID_REF"`, `"NO_OA_AVAILABLE"`, etc.
   presentation per persona.
 - `doiget-mcp` translates `FetchError` to the MCP `{ok: false, error}` shape and never
   throws across the JSON-RPC boundary.
+
+### 5.1 `DenialContext` mapping (ADR-0023 §4)
+
+The producer-side mapping from internal error variants to `DenialContext` is
+defined in [`DECISIONS/0023-denial-context-structured.md`](DECISIONS/0023-denial-context-structured.md)
+§4 (NORMATIVE table). Summary: every `HttpError::RedirectDenied`,
+`OversizedBody`, `NotAPdf`, `InsecureRedirect`, and every
+`FetchError::NotEligible` produces a populated `Option<DenialContext>` via
+`From` impls in `doiget-core`. Other error variants leave `denial_context`
+unset.
 
 ## 6. No silent failures
 

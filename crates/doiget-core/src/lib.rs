@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 // --- Modules ---
+pub mod dry_run;
 pub mod http;
 pub mod provenance;
 pub mod rate_limiter;
@@ -617,6 +618,107 @@ pub enum ErrorCode {
     LockTimeout,
     /// Bug — please open an issue.
     InternalError,
+}
+
+// ---------------------------------------------------------------------------
+// DenialReason / DenialContext (ADR-0023)
+// ---------------------------------------------------------------------------
+
+/// Closed-set reasons a denial-class error envelope can carry on its
+/// optional `denial_context.reason` field.
+///
+/// Wire form (JSON / MCP) is `snake_case` — e.g. `"redirect_not_in_allowlist"`.
+/// The set is **closed** per ADR-0023 §2: adding a new variant is a minor
+/// semver bump; renaming or repurposing one is a breaking change. Mirrors
+/// the stability rule that already governs [`ErrorCode`].
+///
+/// See [`DenialContext`] for the surrounding struct, `docs/ERRORS.md` §3.1
+/// for the wire surface, and `docs/PUBLIC_API.md` §8 for the
+/// semver-locked surface contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DenialReason {
+    /// Redirect target host did not match the source's allowlist
+    /// (`HttpError::RedirectDenied` / `HttpError::InsecureRedirect`).
+    RedirectNotInAllowlist,
+    /// Source produced a URL whose host is on a future blocklist (reserved).
+    HostInBlockList,
+    /// Body exceeded [`PDF_MAX_BYTES`] (`HttpError::OversizedBody`).
+    SizeCapExceeded,
+    /// Store entry's `schema_version` is ahead of this binary
+    /// (reserved — emitted by the store schema-rejection path).
+    SchemaDrift,
+    /// Source not in the runtime [`CapabilityProfile`]
+    /// (`FetchError::NotEligible`).
+    CapabilityNotGranted,
+    /// Rate limiter rejected the call inside the current window
+    /// (reserved — Phase 2+ surfaces this from the limiter).
+    RateLimitWindow,
+    /// SSRF guard rejected a private / link-local / cloud-metadata address
+    /// (reserved — future SSRF check).
+    SsrfPrivateAddress,
+    /// Response Content-Type / magic-byte mismatch (`HttpError::NotAPdf`).
+    ContentTypeMismatch,
+}
+
+/// Structured machine-parseable companion to `error.message` for
+/// recoverable denials.
+///
+/// The field is **optional and additive** on the public error envelope —
+/// every previously-shipped `{code, message}` envelope remains valid, and
+/// agents that ignore this struct continue to work. When present, it
+/// carries the concrete parameters an LLM agent can use to plan a recovery
+/// (e.g. "the redirect to `evil.example.com` was denied because it is not
+/// in the crossref allowlist") without text-mining `error.message`.
+///
+/// ## Wire shape
+///
+/// `#[serde(deny_unknown_fields)]`: forward-compatible field additions on
+/// the wire are forbidden by design — adding a field to this struct is a
+/// **breaking** change. This is why the type is **not** `#[non_exhaustive]`
+/// (per `docs/PUBLIC_API.md` §8): both production rules — Rust struct
+/// construction outside the crate AND wire-level extension — must agree.
+///
+/// All fields except `reason` are optional. Producers populate the fields
+/// relevant to the reason and leave the rest at default (`None` / empty
+/// `Vec`); consumers MUST tolerate any subset of fields being present.
+/// Optional / empty fields are skipped on serialize but accepted as missing
+/// on deserialize via `#[serde(default, skip_serializing_if = ...)]`.
+///
+/// Mapping table: see ADR-0023 §4, plus the
+/// `From<&HttpError> for Option<DenialContext>` and
+/// `From<&FetchError> for Option<DenialContext>` impls in
+/// [`crate::http`] / [`crate::source`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DenialContext {
+    /// Closed-enum reason code; the only required field.
+    pub reason: DenialReason,
+    /// Resolver source key (e.g. `"crossref"`) when one is in scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Concrete value the producer attempted (host, path, hex magic bytes,
+    /// scheme prefix). Shape is reason-specific; consumers MUST treat it
+    /// as opaque text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempted: Option<String>,
+    /// Allowlist entries / acceptable values. `Vec<String>` even when only
+    /// one value is meaningful (e.g. `["%PDF-"]`), so the format does not
+    /// have to flip when multiple values are acceptable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expected: Vec<String>,
+    /// Redirect-chain hop position, 0-indexed. `u8` because the chain is
+    /// hard-capped at [`crate::http`]'s `MAX_REDIRECTS` (= 10) and any
+    /// larger value indicates a bug.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hop_index: Option<u8>,
+    /// Size or rate cap value (e.g. [`PDF_MAX_BYTES`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap: Option<u64>,
+    /// Observed value (e.g. response bytes when [`Self::cap`] is the byte
+    /// cap, or row schema_version when [`Self::cap`] is the binary's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1757,5 +1859,111 @@ mod tests {
         assert_eq!(err, ErrorCode::InvalidRef);
         let err2: ErrorCode = RefParseError::MissingDoiPrefix.into();
         assert_eq!(err2, ErrorCode::InvalidRef);
+    }
+
+    // -----------------------------------------------------------------
+    // DenialReason / DenialContext (ADR-0023) — wire-shape tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn denial_reason_serializes_snake_case() {
+        // ADR-0023 §2 / docs/PUBLIC_API.md §8: wire form is snake_case.
+        let s = serde_json::to_string(&DenialReason::RedirectNotInAllowlist).expect("ser");
+        assert_eq!(s, "\"redirect_not_in_allowlist\"");
+        let s = serde_json::to_string(&DenialReason::SizeCapExceeded).expect("ser");
+        assert_eq!(s, "\"size_cap_exceeded\"");
+        let s = serde_json::to_string(&DenialReason::ContentTypeMismatch).expect("ser");
+        assert_eq!(s, "\"content_type_mismatch\"");
+    }
+
+    #[test]
+    fn denial_reason_round_trip_via_serde() {
+        // Round-trip every closed-set variant so adding a new variant
+        // forces this test to be updated (the closed-set contract).
+        for r in [
+            DenialReason::RedirectNotInAllowlist,
+            DenialReason::HostInBlockList,
+            DenialReason::SizeCapExceeded,
+            DenialReason::SchemaDrift,
+            DenialReason::CapabilityNotGranted,
+            DenialReason::RateLimitWindow,
+            DenialReason::SsrfPrivateAddress,
+            DenialReason::ContentTypeMismatch,
+        ] {
+            let s = serde_json::to_string(&r).expect("ser");
+            let back: DenialReason = serde_json::from_str(&s).expect("de");
+            assert_eq!(back, r, "round-trip mismatch for {:?} -> {}", r, s);
+        }
+    }
+
+    #[test]
+    fn denial_context_round_trips_full_shape() {
+        // A populated context (the redirect-denied case from ADR-0023 §1
+        // example) survives a JSON round-trip.
+        let dc = DenialContext {
+            reason: DenialReason::RedirectNotInAllowlist,
+            source: Some("crossref".to_string()),
+            attempted: Some("evil.example.com".to_string()),
+            expected: vec!["api.crossref.org".to_string(), "*.crossref.org".to_string()],
+            hop_index: Some(1),
+            cap: None,
+            actual: None,
+        };
+        let s = serde_json::to_string(&dc).expect("ser");
+        let back: DenialContext = serde_json::from_str(&s).expect("de");
+        assert_eq!(back.reason, dc.reason);
+        assert_eq!(back.source, dc.source);
+        assert_eq!(back.attempted, dc.attempted);
+        assert_eq!(back.expected, dc.expected);
+        assert_eq!(back.hop_index, dc.hop_index);
+        assert_eq!(back.cap, dc.cap);
+        assert_eq!(back.actual, dc.actual);
+    }
+
+    #[test]
+    fn denial_context_serialize_elides_empty_fields() {
+        // `skip_serializing_if` must keep the wire form lean: None / empty
+        // Vec MUST NOT appear on the wire. Reason is always present.
+        let dc = DenialContext {
+            reason: DenialReason::CapabilityNotGranted,
+            source: None,
+            attempted: None,
+            expected: Vec::new(),
+            hop_index: None,
+            cap: None,
+            actual: None,
+        };
+        let s = serde_json::to_string(&dc).expect("ser");
+        assert_eq!(s, "{\"reason\":\"capability_not_granted\"}");
+    }
+
+    #[test]
+    fn denial_context_deserialize_tolerates_missing_optional_fields() {
+        // Consumer-side contract (ADR-0023 §3): consumers MUST tolerate
+        // any subset of fields being present. Missing optional fields
+        // deserialize to their defaults via `#[serde(default)]`.
+        let wire = r#"{"reason":"size_cap_exceeded","cap":104857600,"actual":209715200}"#;
+        let dc: DenialContext = serde_json::from_str(wire).expect("de");
+        assert_eq!(dc.reason, DenialReason::SizeCapExceeded);
+        assert_eq!(dc.cap, Some(104857600));
+        assert_eq!(dc.actual, Some(209715200));
+        assert!(dc.source.is_none());
+        assert!(dc.attempted.is_none());
+        assert!(dc.expected.is_empty());
+        assert!(dc.hop_index.is_none());
+    }
+
+    #[test]
+    fn denial_context_rejects_unknown_fields() {
+        // `#[serde(deny_unknown_fields)]` (ADR-0023 §3, PUBLIC_API.md §8):
+        // an unknown field on the wire MUST be a deserialize error so
+        // forward-compat field additions stay a breaking change.
+        let wire = r#"{"reason":"capability_not_granted","banana":1}"#;
+        let result: Result<DenialContext, _> = serde_json::from_str(wire);
+        assert!(
+            result.is_err(),
+            "deny_unknown_fields must reject 'banana': {:?}",
+            result.map(|d| d.reason),
+        );
     }
 }
