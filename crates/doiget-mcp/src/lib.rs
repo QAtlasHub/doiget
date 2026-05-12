@@ -668,8 +668,10 @@ fn metadata_only_error_envelope(code: ErrorCode, message: &str) -> Value {
             "code": code,
             "message": message,
             // denial_context is intentionally absent for these envelope
-            // shapes (parse-error / not-implemented); ADR-0023 §3 says
-            // consumers MUST tolerate the field being absent.
+            // shapes (parse-error / not-implemented); ADR-0023 §1 says
+            // the field is optional and consumers MUST tolerate it
+            // being absent (§3 covers the per-subfield optionality
+            // rules that apply when denial_context IS present).
         },
     })
 }

@@ -14,6 +14,60 @@ Phase 0 (design + scaffolding). No version tag is published in this phase; the
 workspace stays at `0.0.0` until Phase 6. See [docs/PHASES.md](docs/PHASES.md)
 for the full Phase 0 deliverable checklist.
 
+### Slice 5 — PR #84 review advisory refactors (code simplification)
+
+This slice addresses the seven Advisory-tier findings (A2 - A8) from
+the PR #84 multi-agent review. Every change is behavior-preserving and
+internal-only — the public Rust API, the CLI wire surface, the MCP
+tool envelopes, and the provenance-log shape are bit-identical before
+and after this slice. (Advisory item A1 — `expected: Option<Vec<String>>`
+— had already landed in PR #85 refinement #3 and required no further
+work here.)
+
+- **(A2 / A3)** Collapsed the single-field `FetchOptions { dry_run: bool }`
+  / `BatchOptions { dry_run: bool }` option bundles and their
+  back-compat `run(input) -> run_with_options(input, default)`
+  wrappers into bare `dry_run: bool` parameters on
+  `doiget_cli::commands::fetch::run_with_options` and
+  `doiget_cli::commands::batch::run_with_options`. The struct shape
+  was YAGNI and the wrappers only existed to spare tests a
+  `..::default()` literal. Call sites (CLI `main.rs` clap dispatch,
+  four `tests/*_e2e.rs` integration tests) updated in the same slice.
+
+- **(A4)** Replaced the duplicate `build_test_client_for_http` helper
+  inside `doiget_core::http::tests` with a one-line delegation to the
+  public `HttpClient::new_for_tests_allow_http` constructor. The two
+  paths had drifted into byte-identical re-implementations; the
+  delegation keeps the security-load-bearing redirect-policy + builder
+  in one place.
+
+- **(A5)** Extracted the `struct EnvGuard` test fixture into the shared
+  `crates/doiget-cli/tests/common/env_guard.rs` module (with
+  `tests/common/mod.rs` declaring `pub mod env_guard;`). Four
+  integration-test binaries (`fetch_arxiv_e2e`, `fetch_dry_run_e2e`,
+  `fetch_doi_oa_pdf_e2e`, `batch_e2e`) had each defined a private
+  `EnvGuard` with subtly different snapshot-and-restore behavior;
+  consolidated on the strictly-safer snapshot-and-restore variant.
+
+- **(A6)** Derived `FetchPlan::redirect_allowlists_loaded` from
+  `tier_1_allowlist() + oa_publisher_allowlist()` instead of a
+  hardcoded `vec!["crossref","unpaywall","arxiv","oa-publisher"]`.
+  Wire output is bit-identical today; the change prevents future drift
+  if a new allowlist source is added to the production HTTP client.
+
+- **(A7)** Fixed a docstring section reference in
+  `crates/doiget-mcp/src/lib.rs` — `metadata_only_error_envelope` now
+  cites ADR-0023 §1 (the top-level optionality of `denial_context`)
+  instead of §3 (which covers per-subfield optionality and applies
+  only when `denial_context` is present).
+
+- **(A8)** Tightened the doc comments on reserved
+  `DenialReason::SchemaDrift`, `HostInBlockList`, `RateLimitWindow`,
+  and `SsrfPrivateAddress` variants — each now states `Reserved — no
+  producer wired yet. Will be emitted by <future component> once that
+  component lands.` so the "unused variant" status is explicit on the
+  public API surface.
+
 ### Slice 4 — CanonicalRef impl + provenance log v1→v2 migration (BREAKING)
 
 This slice ships the audit-identity layer that [ADR-0021](docs/DECISIONS/0021-canonical-tuple-identity.md)
