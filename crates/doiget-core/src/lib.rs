@@ -39,6 +39,12 @@ pub const MAX_FETCHES_PER_SECOND: f32 = 5.0;
 /// Maximum batch size for `doiget batch` and `doiget_batch_fetch`.
 pub const MCP_BATCH_MAX_SIZE: usize = 100;
 
+/// Slice 2 alias for [`MCP_BATCH_MAX_SIZE`] using the
+/// spec-language name (`docs/MCP_TOOLS.md` §1 / Slice 2 plan). The
+/// numeric value MUST equal [`MCP_BATCH_MAX_SIZE`]; an internal test
+/// pins the equivalence so the two constants cannot drift.
+pub const MAX_BATCH_REFS: usize = MCP_BATCH_MAX_SIZE;
+
 /// Maximum queued MCP requests beyond `MAX_CONCURRENT_FETCHES`. Excess returns
 /// `ErrorCode::RateLimited`. See `docs/SECURITY.md` §1.4 / `docs/MCP_TOOLS.md`.
 pub const MCP_QUEUE_DEPTH_MAX: usize = 100;
@@ -1116,6 +1122,9 @@ mod tests {
         assert_eq!(MCP_QUEUE_DEPTH_MAX, 100);
         assert_eq!(DOI_SUFFIX_MAX_LEN, 256);
         assert_eq!(MCP_STDIN_EOF_SHUTDOWN_SEC, 5);
+        // Slice 2: spec-language alias for MCP_BATCH_MAX_SIZE must
+        // numerically agree with the original constant.
+        assert_eq!(MAX_BATCH_REFS, MCP_BATCH_MAX_SIZE);
     }
 
     #[test]

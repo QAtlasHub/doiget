@@ -41,14 +41,21 @@ use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 
-use doiget_core::dry_run::{build_dry_run_envelope, build_fetch_plan};
+use doiget_core::dry_run::{
+    build_dry_run_envelope, build_fetch_plan, rate_limit_budget as core_rate_limit_budget,
+};
 use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, HttpClient};
-use doiget_core::orchestrator::{metadata_only, MetadataOnlyOutcome};
+use doiget_core::orchestrator::{
+    batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
+    metadata_only, FetchPaperOutcome, MetadataOnlyOutcome,
+};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
 use doiget_core::source::{FetchContext, FetchError};
+use doiget_core::store::FsStore;
 use doiget_core::{
-    CapabilityProfile, DenialContext, ErrorCode, RateLimits, Ref, SCHEMA_VERSION, VERSION,
+    CapabilityProfile, DenialContext, ErrorCode, RateLimits, Ref, MAX_BATCH_REFS, SCHEMA_VERSION,
+    VERSION,
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -243,7 +250,7 @@ impl Server {
         // source selection and per-leg politeness; we own the per-call
         // session boundary (SessionStart / SessionEnd bookend rows) and
         // the wire envelope shape (`docs/MCP_TOOLS.md` §11).
-        let ctx = match build_metadata_only_context() {
+        let ctx = match build_fetch_context() {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
@@ -304,6 +311,285 @@ impl Server {
             Err(e) => Ok(CallToolResult::structured(
                 metadata_only_fetch_error_envelope(&e, &input.ref_),
             )),
+        }
+    }
+
+    /// `doiget_fetch_paper` — resolve and download a single PDF.
+    ///
+    /// Per `docs/MCP_TOOLS.md` §4 (NORMATIVE). Slice 2 wires this to
+    /// the live [`core_fetch_paper`] orchestrator and the dry-run
+    /// preview path (ADR-0022 §2).
+    ///
+    /// Per-call boundary semantics mirror the
+    /// [`doiget_metadata_only`](Self::doiget_metadata_only) tool: the
+    /// MCP server owns the SessionStart / SessionEnd bookend rows; each
+    /// consulted [`Source`](doiget_core::source::Source) impl emits its
+    /// own `LogEvent::Fetch` row inside the orchestrator. A successful
+    /// `StoreWrite` row is also emitted by the orchestrator.
+    #[tool(
+        description = "WHEN TO USE: User wants to download a paper PDF given a DOI or arXiv id.\n\
+                       INPUTS: ref (DOI or arXiv id), dry_run (optional bool).\n\
+                       OUTPUTS: { ok: true, ref, source, path, license, size_bytes, schema_version } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, ref, error }.\n\
+                       COSTS: 1-3 s network call (or 0 when dry_run). May fail if not Open Access.\n\
+                       SIDE EFFECTS: Writes PDF (or metadata-only TOML) to the store. Appends a row to the provenance log (unless dry_run).\n\
+                       LIMITS: Max 5 fetches/sec (global). Use doiget_batch_fetch for >5 refs."
+    )]
+    async fn doiget_fetch_paper(
+        &self,
+        Parameters(input): Parameters<FetchPaperInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Step 1: parse the ref. Failures collapse to INVALID_REF.
+        let ref_ = match Ref::parse(&input.ref_) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(CallToolResult::structured(fetch_paper_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &format!("invalid ref: {e}"),
+                )));
+            }
+        };
+
+        // Step 2: dry-run branch (ADR-0022 §2).
+        if input.dry_run {
+            let store_root = resolve_store_root().unwrap_or_else(|| Utf8PathBuf::from("./papers"));
+            let plan = build_fetch_plan(&ref_, &store_root);
+            return Ok(CallToolResult::structured(build_dry_run_envelope(
+                &ref_, &plan,
+            )));
+        }
+
+        // Step 3: non-dry-run path. Build foundation modules + open
+        // FsStore + dispatch through core orchestrator.
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(fetch_paper_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InternalError,
+                    &format!("fetch-paper context initialization failed: {e}"),
+                )));
+            }
+        };
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(fetch_paper_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InternalError,
+                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(fetch_paper_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+
+        // SessionStart bookend (mirrors `doiget_metadata_only`).
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Oa,
+            ref_: Some(input.ref_.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+        }) {
+            return Ok(CallToolResult::structured(fetch_paper_error_envelope(
+                Some(&input.ref_),
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        let outcome = core_fetch_paper(&ref_, &self.profile, &ctx, &store, &store_root).await;
+
+        let session_ok = outcome.is_ok();
+        let _ = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if session_ok {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Oa,
+            ref_: Some(input.ref_.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+        });
+
+        match outcome {
+            Ok(o) => Ok(CallToolResult::structured(fetch_paper_success_envelope(
+                &o,
+                &input.ref_,
+            ))),
+            Err(e) => Ok(CallToolResult::structured(
+                fetch_paper_fetch_error_envelope(&e, &input.ref_),
+            )),
+        }
+    }
+
+    /// `doiget_batch_fetch` — fetch up to [`MAX_BATCH_REFS`] refs in
+    /// one call.
+    ///
+    /// Per `docs/MCP_TOOLS.md` §1 (NORMATIVE Phase 3 baseline).
+    ///
+    /// Per-ref outcomes are independent — a failure on one ref does NOT
+    /// abort sibling refs. The wire envelope is
+    /// `{ok:true, results: [...]}` where each entry has `{ref, ok, ...}`.
+    /// Only whole-call failures (INVALID_REF on a malformed input, the
+    /// over-cap [`FetchError::TooManyRefs`] / TOO_MANY_REFS surfaced as
+    /// INVALID_REF, or context initialization) emit the
+    /// `{ok:false, error:{...}}` envelope.
+    #[tool(
+        description = "WHEN TO USE: User wants to fetch many papers in one call (up to 100).\n\
+                       INPUTS: refs (array of up to 100 DOIs / arXiv ids), dry_run (optional bool).\n\
+                       OUTPUTS: { ok: true, results: [{ref, ok, ...}] } OR { ok: true, dry_run: true, plans: [{ref, plan, rate_limit_budget}] } OR { ok:false, error }.\n\
+                       COSTS: 1-3 s per ref, bounded by the 5/sec global rate cap.\n\
+                       SIDE EFFECTS: Writes PDFs / metadata TOMLs to the store (unless dry_run). Appends one provenance row per attempt.\n\
+                       LIMITS: Max 100 refs per call (TOO_MANY_REFS otherwise). Per-ref errors are reported in `results` and do NOT fail the whole call."
+    )]
+    async fn doiget_batch_fetch(
+        &self,
+        Parameters(input): Parameters<BatchFetchInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Step 1: enforce the cap before any parsing.
+        if input.refs.len() > MAX_BATCH_REFS {
+            return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                ErrorCode::InvalidRef,
+                &format!(
+                    "too many refs: got {}, max {} (TOO_MANY_REFS)",
+                    input.refs.len(),
+                    MAX_BATCH_REFS
+                ),
+            )));
+        }
+
+        // Step 2: parse every ref up-front. Any malformed ref aborts
+        // the whole call with INVALID_REF (per the spec: bulk parse is
+        // all-or-nothing).
+        let mut parsed: Vec<Ref> = Vec::with_capacity(input.refs.len());
+        for raw in &input.refs {
+            match Ref::parse(raw) {
+                Ok(r) => parsed.push(r),
+                Err(e) => {
+                    return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                        ErrorCode::InvalidRef,
+                        &format!("invalid ref {raw:?}: {e}"),
+                    )));
+                }
+            }
+        }
+
+        // Step 3: dry-run branch — one plan per ref.
+        if input.dry_run {
+            let store_root = resolve_store_root().unwrap_or_else(|| Utf8PathBuf::from("./papers"));
+            let plans = match batch_fetch_plans(&parsed, &store_root) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                        ErrorCode::from(e),
+                        "batch dry-run plan build failed",
+                    )));
+                }
+            };
+            let envelope = build_batch_dry_run_envelope(&plans);
+            return Ok(CallToolResult::structured(envelope));
+        }
+
+        // Step 4: non-dry-run — stand up the shared FetchContext +
+        // store, emit a single SessionStart row, fan out via the core
+        // orchestrator.
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                    ErrorCode::InternalError,
+                    &format!("batch-fetch context initialization failed: {e}"),
+                )));
+            }
+        };
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                    ErrorCode::InternalError,
+                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Oa,
+            ref_: None,
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+        }) {
+            return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        let batch_outcome =
+            core_batch_fetch(&parsed, &self.profile, &ctx, &store, &store_root).await;
+
+        let session_ok = batch_outcome
+            .as_ref()
+            .map(|b| b.results.iter().all(|r| r.outcome.is_ok()))
+            .unwrap_or(false);
+
+        let _ = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if session_ok {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Oa,
+            ref_: None,
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+        });
+
+        match batch_outcome {
+            Ok(b) => Ok(CallToolResult::structured(batch_fetch_success_envelope(
+                &b,
+                &input.refs,
+            ))),
+            Err(e) => Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                ErrorCode::from(e),
+                "batch-fetch orchestrator failed",
+            ))),
         }
     }
 }
@@ -428,6 +714,214 @@ fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value 
     })
 }
 
+// ---------------------------------------------------------------------------
+// doiget_fetch_paper — input schema + envelopes (Slice 2)
+// ---------------------------------------------------------------------------
+
+/// JSON-schema-derived input for `doiget_fetch_paper`. Same wire shape
+/// as `MetadataOnlyInput` — just a different orchestrator target.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct FetchPaperInput {
+    /// DOI or arXiv id; validated via `Ref::parse`.
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+    /// When `true`, returns a [`FetchPlan`](doiget_core::dry_run::FetchPlan)
+    /// preview without touching the network or writing anything
+    /// (ADR-0022). Defaults to `false`.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Build the `{ok:true, ref, source, path, ...}` success envelope per
+/// `docs/MCP_TOOLS.md` §5 `FetchResult`.
+fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> Value {
+    json!({
+        "ok": true,
+        "ref": ref_str,
+        "source": outcome.source,
+        "license": outcome.license,
+        "path": outcome.path,
+        "size_bytes": outcome.size_bytes,
+        "schema_version": outcome.schema_version,
+    })
+}
+
+/// Build the `{ok:false, ref, error:{code, message}}` envelope for
+/// input-shape / context-init failures in `doiget_fetch_paper`.
+fn fetch_paper_error_envelope(ref_str: Option<&str>, code: ErrorCode, message: &str) -> Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("ok".into(), json!(false));
+    if let Some(r) = ref_str {
+        obj.insert("ref".into(), json!(r));
+    }
+    obj.insert(
+        "error".into(),
+        json!({
+            "code": code,
+            "message": message,
+        }),
+    );
+    Value::Object(obj)
+}
+
+/// Build the `{ok:false, error:{code, message, denial_context?}}`
+/// envelope for orchestrator failures in `doiget_fetch_paper`.
+fn fetch_paper_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value {
+    let code: ErrorCode = match err {
+        FetchError::NotEligible { .. } => ErrorCode::CapabilityDenied,
+        FetchError::NoOaAvailable => ErrorCode::NoOaAvailable,
+        FetchError::Http(_) => ErrorCode::NetworkError,
+        FetchError::Log(_) => ErrorCode::LogError,
+        FetchError::InvalidRef(_) => ErrorCode::InvalidRef,
+        FetchError::SourceSchema { .. } => ErrorCode::InternalError,
+        FetchError::TooManyRefs { .. } => ErrorCode::InvalidRef,
+        _ => ErrorCode::InternalError,
+    };
+    let denial: Option<DenialContext> = err.into();
+    let mut error_obj = serde_json::Map::new();
+    error_obj.insert("code".into(), json!(code));
+    error_obj.insert("message".into(), json!(err.to_string()));
+    if let Some(dc) = denial {
+        error_obj.insert(
+            "denial_context".into(),
+            serde_json::to_value(&dc).unwrap_or(Value::Null),
+        );
+    }
+    json!({
+        "ok": false,
+        "ref": ref_str,
+        "error": error_obj,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// doiget_batch_fetch — input schema + envelopes (Slice 2)
+// ---------------------------------------------------------------------------
+
+/// JSON-schema-derived input for `doiget_batch_fetch`.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct BatchFetchInput {
+    /// List of DOI / arXiv id refs. Max [`MAX_BATCH_REFS`] entries; the
+    /// cap is enforced inside the tool handler so a 101st ref surfaces
+    /// as an `INVALID_REF` envelope (rather than a JSON schema reject).
+    pub refs: Vec<String>,
+    /// When `true`, return one [`FetchPlan`](doiget_core::dry_run::FetchPlan)
+    /// per ref without touching the network or store.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Build the `{ok:true, results: [...]}` envelope for a successful
+/// batch call. Each per-ref outcome is independent: a network failure
+/// on one ref shows up as `{ref, ok:false, error}` next to siblings'
+/// `{ref, ok:true, ...}`. Mirrors the per-ref shape of
+/// [`fetch_paper_success_envelope`] / [`fetch_paper_fetch_error_envelope`].
+fn batch_fetch_success_envelope(
+    batch: &doiget_core::orchestrator::BatchOutcome,
+    raw_refs: &[String],
+) -> Value {
+    let results: Vec<Value> = batch
+        .results
+        .iter()
+        .zip(raw_refs.iter())
+        .map(|(entry, raw)| match &entry.outcome {
+            Ok(outcome) => json!({
+                "ref": raw,
+                "ok": true,
+                "source": outcome.source,
+                "license": outcome.license,
+                "path": outcome.path,
+                "size_bytes": outcome.size_bytes,
+                "schema_version": outcome.schema_version,
+            }),
+            Err(err) => {
+                let code: ErrorCode = match err {
+                    FetchError::NotEligible { .. } => ErrorCode::CapabilityDenied,
+                    FetchError::NoOaAvailable => ErrorCode::NoOaAvailable,
+                    FetchError::Http(_) => ErrorCode::NetworkError,
+                    FetchError::Log(_) => ErrorCode::LogError,
+                    FetchError::InvalidRef(_) => ErrorCode::InvalidRef,
+                    FetchError::SourceSchema { .. } => ErrorCode::InternalError,
+                    FetchError::TooManyRefs { .. } => ErrorCode::InvalidRef,
+                    _ => ErrorCode::InternalError,
+                };
+                let denial: Option<DenialContext> = err.into();
+                let mut error_obj = serde_json::Map::new();
+                error_obj.insert("code".into(), json!(code));
+                error_obj.insert("message".into(), json!(err.to_string()));
+                if let Some(dc) = denial {
+                    error_obj.insert(
+                        "denial_context".into(),
+                        serde_json::to_value(&dc).unwrap_or(Value::Null),
+                    );
+                } else {
+                    // Per the Slice 2 spec: transport (NETWORK_ERROR)
+                    // entries carry `denial_context: null` so an agent
+                    // can pattern-match on the field's presence rather
+                    // than tolerating absence. This deliberately
+                    // differs from the metadata-only envelope where
+                    // the field is omitted entirely; the batch surface
+                    // makes the null explicit because per-ref entries
+                    // are uniform table rows in the agent's view.
+                    error_obj.insert("denial_context".into(), Value::Null);
+                }
+                json!({
+                    "ref": raw,
+                    "ok": false,
+                    "error": error_obj,
+                })
+            }
+        })
+        .collect();
+    json!({
+        "ok": true,
+        "results": results,
+    })
+}
+
+/// Build the dry-run envelope for `doiget_batch_fetch` —
+/// `{ok:true, dry_run:true, plans:[{ref, plan, rate_limit_budget}]}`.
+fn build_batch_dry_run_envelope(plans: &[(Ref, doiget_core::dry_run::FetchPlan)]) -> Value {
+    let budget = core_rate_limit_budget();
+    let plan_items: Vec<Value> = plans
+        .iter()
+        .map(|(ref_, plan)| {
+            let envelope = build_dry_run_envelope(ref_, plan);
+            // `build_dry_run_envelope` returns the single-ref shape; we
+            // unpack it into per-row entries for the batch envelope.
+            json!({
+                "ref": envelope.get("ref").cloned().unwrap_or(Value::Null),
+                "plan": envelope.get("plan").cloned().unwrap_or(Value::Null),
+                "rate_limit_budget": envelope
+                    .get("rate_limit_budget")
+                    .cloned()
+                    .unwrap_or(serde_json::to_value(budget).unwrap_or(Value::Null)),
+            })
+        })
+        .collect();
+    json!({
+        "ok": true,
+        "dry_run": true,
+        "plans": plan_items,
+    })
+}
+
+/// Build the `{ok:false, error:{code, message}}` envelope for whole-
+/// call failures in `doiget_batch_fetch` (TOO_MANY_REFS, INVALID_REF on
+/// bulk parse, context-init).
+fn batch_fetch_error_envelope(code: ErrorCode, message: &str) -> Value {
+    json!({
+        "ok": false,
+        "error": {
+            "code": code,
+            "message": message,
+        },
+    })
+}
+
 /// Build a [`FetchContext`] for the non-dry-run `doiget_metadata_only`
 /// path.
 ///
@@ -446,7 +940,7 @@ fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value 
 ///   if missing.
 /// - `session_id` — fresh 26-char ULID per call (one tool call = one
 ///   logical session, per `docs/PROVENANCE_LOG.md` §3).
-fn build_metadata_only_context() -> anyhow::Result<FetchContext> {
+fn build_fetch_context() -> anyhow::Result<FetchContext> {
     let log_path = resolve_log_path()?;
     if let Some(parent) = log_path.parent() {
         if !parent.as_str().is_empty() {
@@ -459,7 +953,7 @@ fn build_metadata_only_context() -> anyhow::Result<FetchContext> {
         ProvenanceLog::open(log_path, session_id.clone())
             .map_err(|e| anyhow::anyhow!("opening provenance log: {e}"))?,
     );
-    let http = Arc::new(build_metadata_only_http_client()?);
+    let http = Arc::new(build_http_client_for_fetch()?);
     let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
     Ok(FetchContext {
         http,
@@ -473,7 +967,7 @@ fn build_metadata_only_context() -> anyhow::Result<FetchContext> {
 /// surface that `doiget-cli` honors (`build_http_client` in
 /// `crates/doiget-cli/src/commands/fetch.rs`). When no overrides are
 /// set, returns the production allowlist (Tier 1 ∪ OA publisher).
-fn build_metadata_only_http_client() -> anyhow::Result<HttpClient> {
+fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     let arxiv = std::env::var("DOIGET_ARXIV_BASE").ok();
     let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
     let unpaywall = std::env::var("DOIGET_UNPAYWALL_BASE").ok();

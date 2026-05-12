@@ -88,6 +88,15 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
         names.contains(&"doiget_metadata_only"),
         "tools/list must include doiget_metadata_only; got: {names:?}"
     );
+    // Slice 2: fetch_paper + batch_fetch advertised.
+    assert!(
+        names.contains(&"doiget_fetch_paper"),
+        "tools/list must include doiget_fetch_paper; got: {names:?}"
+    );
+    assert!(
+        names.contains(&"doiget_batch_fetch"),
+        "tools/list must include doiget_batch_fetch; got: {names:?}"
+    );
 
     // -- 3. tools/call doiget_health -----------------------------------
     let health = client

@@ -1,0 +1,470 @@
+//! Slice 2 — end-to-end coverage for `doiget_fetch_paper` and
+//! `doiget_batch_fetch` (wiremock-driven; NO outbound network).
+//!
+//! ## Network purity
+//!
+//! Per the workspace network-purity guard, this file imports `wiremock`
+//! to mount fake origins; no `reqwest::*` items are imported directly.
+//! All HTTP traffic terminates at a `wiremock::MockServer` on
+//! `127.0.0.1:N`. The first-line escape hatch below covers the future
+//! addition of any `reqwest::*` import without further intervention.
+// allow: outbound-network
+
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
+use doiget_core::CapabilityProfile;
+use doiget_mcp::Server;
+use rmcp::{model::CallToolRequestParams, ServiceExt};
+
+/// RAII helper mirroring `initialize_handshake::EnvGuard`. Scoped env
+/// mutations so a panic mid-test does not leak state across the
+/// single-threaded `serial_test::serial` group.
+struct EnvGuard {
+    keys: Vec<&'static str>,
+}
+
+impl EnvGuard {
+    fn new(keys: &[&'static str]) -> Self {
+        for k in keys {
+            std::env::remove_var(k);
+        }
+        Self {
+            keys: keys.to_vec(),
+        }
+    }
+    fn set(&self, key: &str, val: &str) {
+        std::env::set_var(key, val);
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for k in &self.keys {
+            std::env::remove_var(k);
+        }
+    }
+}
+
+const ENV_KEYS: &[&str] = &[
+    "DOIGET_STORE_ROOT",
+    "DOIGET_LOG_PATH",
+    "DOIGET_ARXIV_BASE",
+    "DOIGET_CROSSREF_BASE",
+    "DOIGET_UNPAYWALL_BASE",
+    "DOIGET_OA_PUBLISHER_BASE",
+    "DOIGET_CONTACT_EMAIL",
+    "DOIGET_UNPAYWALL_EMAIL",
+];
+
+async fn boot_in_memory_server() -> anyhow::Result<(
+    rmcp::service::RunningService<rmcp::RoleClient, ()>,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+)> {
+    let profile = CapabilityProfile::from_env().expect("clean env never errors");
+    let server = Server::new(profile);
+    let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+    let server_handle = tokio::spawn(async move {
+        let service = server.serve(server_transport).await?;
+        service.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = ().serve(client_transport).await?;
+    Ok((client, server_handle))
+}
+
+// ---------------------------------------------------------------------------
+// doiget_fetch_paper
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[serial_test::serial]
+async fn fetch_paper_invalid_ref_returns_invalid_ref_envelope() -> anyhow::Result<()> {
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("not a doi"));
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_fetch_paper").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_fetch_paper uses CallToolResult::structured");
+    assert_eq!(structured["ok"], serde_json::json!(false));
+    assert_eq!(
+        structured["error"]["code"],
+        serde_json::json!("INVALID_REF"),
+        "envelope: {structured:?}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn fetch_paper_dry_run_returns_fetch_plan_envelope() -> anyhow::Result<()> {
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+    args.insert("dry_run".to_string(), serde_json::json!(true));
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_fetch_paper").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("dry_run uses structured content");
+    assert_eq!(structured["ok"], serde_json::json!(true));
+    assert_eq!(structured["dry_run"], serde_json::json!(true));
+    assert_eq!(
+        structured["ref"],
+        serde_json::json!({"doi": "10.1234/example"})
+    );
+    // ADR-0022 §4 marker: the candidate_hosts list is an upper bound,
+    // not a prediction. Posture surfaces this as a machine-parseable
+    // boolean inside `plan`.
+    assert_eq!(
+        structured["plan"]["candidate_hosts_are_upper_bound"],
+        serde_json::json!(true)
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+const SAMPLE_PDF_BODY: &[u8] = b"%PDF-fake-bytes\n";
+
+#[tokio::test]
+#[serial_test::serial]
+async fn fetch_paper_arxiv_happy_path_writes_pdf_and_returns_envelope() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/pdf/2401.12345.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(SAMPLE_PDF_BODY.to_vec()))
+        .mount(&mock)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let temp_root = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .to_path_buf();
+    let store_root = temp_root.join("papers");
+    let log_path = temp_root.join("log.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_ARXIV_BASE", &mock.uri());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("2401.12345"));
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_fetch_paper").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    assert_eq!(
+        structured["ok"],
+        serde_json::json!(true),
+        "envelope: {structured:?}"
+    );
+    assert_eq!(structured["source"], serde_json::json!("arxiv"));
+    assert_eq!(structured["ref"], serde_json::json!("2401.12345"));
+    assert_eq!(structured["license"], serde_json::json!("arxiv-default"));
+    assert_eq!(
+        structured["size_bytes"],
+        serde_json::json!(SAMPLE_PDF_BODY.len())
+    );
+    assert_eq!(structured["schema_version"], serde_json::json!("1.0"));
+    // On-disk PDF MUST exist at the path the envelope advertises.
+    let pdf_path = structured["path"].as_str().expect("path field is a string");
+    let on_disk = std::path::Path::new(pdf_path);
+    assert!(
+        on_disk.exists(),
+        "PDF written by orchestrator must exist on disk: {pdf_path}"
+    );
+    let bytes = std::fs::read(on_disk).expect("read PDF");
+    assert_eq!(bytes, SAMPLE_PDF_BODY);
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// doiget_batch_fetch
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[serial_test::serial]
+async fn batch_fetch_too_many_refs_returns_invalid_ref_envelope() -> anyhow::Result<()> {
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    // 101 refs (one over the MAX_BATCH_REFS cap of 100).
+    let refs: Vec<serde_json::Value> = (0..101)
+        .map(|i| serde_json::Value::String(format!("10.1234/n{}", i)))
+        .collect();
+    let mut args = serde_json::Map::new();
+    args.insert("refs".to_string(), serde_json::Value::Array(refs));
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_batch_fetch").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    assert_eq!(structured["ok"], serde_json::json!(false));
+    assert_eq!(
+        structured["error"]["code"],
+        serde_json::json!("INVALID_REF")
+    );
+    let message = structured["error"]["message"]
+        .as_str()
+        .expect("message is string");
+    assert!(
+        message.contains("too many refs"),
+        "TOO_MANY_REFS message must surface the cap; got: {message}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn batch_fetch_one_invalid_ref_aborts_with_invalid_ref_envelope() -> anyhow::Result<()> {
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let refs = serde_json::json!(["2401.12345", "not-a-doi-at-all"]);
+    let mut args = serde_json::Map::new();
+    args.insert("refs".to_string(), refs);
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_batch_fetch").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    assert_eq!(structured["ok"], serde_json::json!(false));
+    assert_eq!(
+        structured["error"]["code"],
+        serde_json::json!("INVALID_REF")
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn batch_fetch_dry_run_returns_plans_array() -> anyhow::Result<()> {
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let refs = serde_json::json!(["2401.12345", "10.1234/foo"]);
+    let mut args = serde_json::Map::new();
+    args.insert("refs".to_string(), refs);
+    args.insert("dry_run".to_string(), serde_json::json!(true));
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_batch_fetch").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    assert_eq!(structured["ok"], serde_json::json!(true));
+    assert_eq!(structured["dry_run"], serde_json::json!(true));
+    let plans = structured["plans"].as_array().expect("plans is an array");
+    assert_eq!(plans.len(), 2);
+    assert_eq!(plans[0]["ref"], serde_json::json!({"arxiv": "2401.12345"}));
+    assert_eq!(plans[1]["ref"], serde_json::json!({"doi": "10.1234/foo"}));
+    // ADR-0022 §4 marker propagates into each per-ref plan.
+    assert_eq!(
+        plans[0]["plan"]["candidate_hosts_are_upper_bound"],
+        serde_json::json!(true)
+    );
+    // Rate-limit budget present per row.
+    assert_eq!(
+        plans[0]["rate_limit_budget"]["global_per_sec"],
+        serde_json::json!(5.0)
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn batch_fetch_three_arxiv_refs_succeed_each_with_ok_true() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock = MockServer::start().await;
+    for id in ["2401.10001", "2401.10002", "2401.10003"] {
+        Mock::given(method("GET"))
+            .and(path(format!("/pdf/{}.pdf", id)))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(SAMPLE_PDF_BODY.to_vec()))
+            .mount(&mock)
+            .await;
+    }
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let temp_root = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .to_path_buf();
+    let store_root = temp_root.join("papers");
+    let log_path = temp_root.join("log.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_ARXIV_BASE", &mock.uri());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+    let refs = serde_json::json!(["2401.10001", "2401.10002", "2401.10003"]);
+    let mut args = serde_json::Map::new();
+    args.insert("refs".to_string(), refs);
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_batch_fetch").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    assert_eq!(
+        structured["ok"],
+        serde_json::json!(true),
+        "envelope: {structured:?}"
+    );
+    let results = structured["results"]
+        .as_array()
+        .expect("results is an array");
+    assert_eq!(results.len(), 3);
+    for (i, entry) in results.iter().enumerate() {
+        assert_eq!(
+            entry["ok"],
+            serde_json::json!(true),
+            "row {i} must report ok:true; entry: {entry:?}"
+        );
+        assert_eq!(entry["source"], serde_json::json!("arxiv"));
+        assert_eq!(
+            entry["size_bytes"],
+            serde_json::json!(SAMPLE_PDF_BODY.len())
+        );
+    }
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn batch_fetch_partial_failure_emits_per_ref_outcomes() -> anyhow::Result<()> {
+    // Two refs that should succeed, plus one that points at an id with
+    // no mounted mock — the PDF leg returns 404 and the orchestrator
+    // surfaces a per-ref `Err`. The whole-call envelope MUST remain
+    // `ok:true` (per-ref errors are independent).
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock = MockServer::start().await;
+    for id in ["2401.20001", "2401.20002"] {
+        Mock::given(method("GET"))
+            .and(path(format!("/pdf/{}.pdf", id)))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(SAMPLE_PDF_BODY.to_vec()))
+            .mount(&mock)
+            .await;
+    }
+    // No mock mounted for `/pdf/2401.99999.pdf` — wiremock returns 404
+    // by default, which the orchestrator surfaces as a NETWORK_ERROR.
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let temp_root = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .to_path_buf();
+    let store_root = temp_root.join("papers");
+    let log_path = temp_root.join("log.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_ARXIV_BASE", &mock.uri());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+    let refs = serde_json::json!(["2401.20001", "2401.99999", "2401.20002"]);
+    let mut args = serde_json::Map::new();
+    args.insert("refs".to_string(), refs);
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_batch_fetch").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    // Whole-call still ok=true; per-ref errors live inside results[].
+    assert_eq!(
+        structured["ok"],
+        serde_json::json!(true),
+        "envelope: {structured:?}"
+    );
+    let results = structured["results"]
+        .as_array()
+        .expect("results is an array");
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0]["ok"], serde_json::json!(true));
+    assert_eq!(results[1]["ok"], serde_json::json!(false));
+    assert_eq!(results[2]["ok"], serde_json::json!(true));
+    // The failing per-ref row carries `denial_context: null` for
+    // transport errors (ADR-0023 §4 — NETWORK_ERROR has no denial
+    // channel).
+    assert!(
+        results[1]["error"].get("denial_context").is_some(),
+        "transport per-ref error must surface denial_context (as null) per Slice 2 spec; got: {:?}",
+        results[1],
+    );
+    assert!(
+        results[1]["error"]["denial_context"].is_null(),
+        "denial_context must be null for NETWORK_ERROR; got: {:?}",
+        results[1]["error"]["denial_context"]
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
