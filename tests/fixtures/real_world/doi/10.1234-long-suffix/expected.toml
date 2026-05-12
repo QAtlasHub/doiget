@@ -1,0 +1,9 @@
+# Boundary test: DOI suffix > 192 chars (the fixture uses 212 'a's so
+# the escaped form crosses the 192-byte truncation boundary in
+# Ref::safekey()). The computed safekey carries the first 192 bytes of
+# the escaped form (`doi_10.1234_` + 180 'a's) plus an 8-hex-char
+# SHA-256 truncation suffix derived from the raw pre-escape string.
+safekey = "doi_10.1234_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_8e637dfe"
+source  = "crossref"
+title   = "A representative-shape illustration of a DOI with a very long suffix"
+# link[] empty -> no oa_url

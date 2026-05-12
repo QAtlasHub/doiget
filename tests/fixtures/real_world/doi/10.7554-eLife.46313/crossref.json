@@ -1,0 +1,25 @@
+{
+  "status": "ok",
+  "message-type": "work",
+  "message-version": "1.0.0",
+  "message": {
+    "DOI": "10.7554/eLife.46313",
+    "type": "journal-article",
+    "title": ["A representative-shape illustration of an eLife article"],
+    "author": [
+      { "family": "Roe", "given": "Carol" },
+      { "family": "Park", "given": "Dan" }
+    ],
+    "container-title": ["eLife"],
+    "publisher": "eLife Sciences Publications, Ltd",
+    "issued": { "date-parts": [[2019, 7, 22]] },
+    "ISSN": ["2050-084X"],
+    "link": [
+      {
+        "URL": "https://elifesciences.org/articles/46313.pdf",
+        "content-type": "application/pdf",
+        "intended-application": "similarity-checking"
+      }
+    ]
+  }
+}

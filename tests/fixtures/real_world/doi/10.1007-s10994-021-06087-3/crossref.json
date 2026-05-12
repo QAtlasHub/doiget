@@ -1,0 +1,25 @@
+{
+  "status": "ok",
+  "message-type": "work",
+  "message-version": "1.0.0",
+  "message": {
+    "DOI": "10.1007/s10994-021-06087-3",
+    "type": "journal-article",
+    "title": ["A representative-shape illustration of a Springer ML-journal article"],
+    "author": [
+      { "family": "Smith", "given": "Alice" },
+      { "family": "Roe",   "given": "Bob" }
+    ],
+    "container-title": ["Machine Learning"],
+    "publisher": "Springer Science and Business Media LLC",
+    "issued": { "date-parts": [[2021, 11, 5]] },
+    "ISSN": ["0885-6125", "1573-0565"],
+    "link": [
+      {
+        "URL": "https://link.springer.com/content/pdf/10.1007/s10994-021-06087-3.pdf",
+        "content-type": "application/pdf",
+        "intended-application": "text-mining"
+      }
+    ]
+  }
+}

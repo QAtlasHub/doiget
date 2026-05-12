@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2304.12244v2</id>
+    <updated>2023-08-01T00:00:00Z</updated>
+    <published>2023-04-24T00:00:00Z</published>
+    <title>A representative-shape illustration of a versioned arXiv preprint</title>
+    <summary>Hand-crafted abstract; this entry exercises the version-suffix path.</summary>
+    <author><name>Dan Versioned</name></author>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>

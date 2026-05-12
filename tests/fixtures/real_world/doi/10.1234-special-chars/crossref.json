@@ -1,0 +1,21 @@
+{
+  "status": "ok",
+  "message-type": "work",
+  "message-version": "1.0.0",
+  "message": {
+    "DOI": "10.1234/abc(2024).foo-bar_baz/v1",
+    "type": "journal-article",
+    "title": ["A representative-shape illustration of a DOI with special chars in the suffix"],
+    "author": [{ "family": "Escape", "given": "Test" }],
+    "container-title": ["Journal of Tests"],
+    "publisher": "doiget test fixtures",
+    "issued": { "date-parts": [[2026, 5, 12]] },
+    "link": [
+      {
+        "URL": "https://example.org/special-chars.pdf",
+        "content-type": "application/pdf",
+        "intended-application": "syndication"
+      }
+    ]
+  }
+}

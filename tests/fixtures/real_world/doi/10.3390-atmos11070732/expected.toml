@@ -1,0 +1,4 @@
+safekey = "doi_10.3390_atmos11070732"
+source  = "crossref"
+title   = "A representative-shape illustration of an MDPI Atmosphere article"
+oa_url  = "https://www.mdpi.com/2073-4433/11/7/732/pdf"

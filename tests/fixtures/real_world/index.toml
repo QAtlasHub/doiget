@@ -1,0 +1,152 @@
+# Master index for the slice-6 real-world fixture set.
+#
+# See README.md for curation policy, license caveats, and the refresh process.
+# The driver test (crates/doiget-core/tests/real_world_fixtures_e2e.rs)
+# walks [[entry]] rows in order. Set disabled = true on an entry to
+# skip it (escape hatch when an upstream shape shifts and we need to
+# keep CI green while updating the snapshot).
+schema_version = "1"
+
+# -- DOI / Crossref happy path: closed-access Nature news (no OA URL) --
+[[entry]]
+id                  = "10.1038-nature.2014.16080"
+kind                = "doi-no-oa"
+ref                 = "10.1038/nature.2014.16080"
+notes               = "Nature news article -- Crossref returns metadata but link[] is empty, exercising the no-OA-available path."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+crossref_response   = "doi/10.1038-nature.2014.16080/crossref.json"
+expected            = "doi/10.1038-nature.2014.16080/expected.toml"
+
+# -- Springer ML journal (Crossref link[] surfaces the OA URL) --
+[[entry]]
+id                  = "10.1007-s10994-021-06087-3"
+kind                = "doi-crossref"
+ref                 = "10.1007/s10994-021-06087-3"
+notes               = "Springer Machine Learning journal -- real publisher OA PDF host. Exercises the Crossref link[] => oa_url path."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+crossref_response   = "doi/10.1007-s10994-021-06087-3/crossref.json"
+expected            = "doi/10.1007-s10994-021-06087-3/expected.toml"
+
+# -- PLOS gold-OA (standard CC-BY shape) --
+[[entry]]
+id                  = "10.1371-journal.pone.0001428"
+kind                = "doi-crossref"
+ref                 = "10.1371/journal.pone.0001428"
+notes               = "PLOS ONE gold-OA article -- standard CC-BY shape, journals.plos.org host."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+crossref_response   = "doi/10.1371-journal.pone.0001428/crossref.json"
+expected            = "doi/10.1371-journal.pone.0001428/expected.toml"
+
+# -- eLife (long DOI suffix that does NOT cross the truncation boundary) --
+[[entry]]
+id                  = "10.7554-eLife.46313"
+kind                = "doi-crossref"
+ref                 = "10.7554/eLife.46313"
+notes               = "eLife article -- DOI suffix with mixed-case eLife literal, exercises camelCase preservation in safekey."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+crossref_response   = "doi/10.7554-eLife.46313/crossref.json"
+expected            = "doi/10.7554-eLife.46313/expected.toml"
+
+# -- MDPI Atmosphere (mdpi.com host) --
+[[entry]]
+id                  = "10.3390-atmos11070732"
+kind                = "doi-crossref"
+ref                 = "10.3390/atmos11070732"
+notes               = "MDPI Atmosphere journal -- exercises the *.mdpi.com publisher-host shape in link[]."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+crossref_response   = "doi/10.3390-atmos11070732/crossref.json"
+expected            = "doi/10.3390-atmos11070732/expected.toml"
+
+# -- Frontiers in Oncology (frontiersin.org host) --
+[[entry]]
+id                  = "10.3389-fonc.2020.567984"
+kind                = "doi-crossref"
+ref                 = "10.3389/fonc.2020.567984"
+notes               = "Frontiers in Oncology -- exercises the *.frontiersin.org publisher-host shape in link[]."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+crossref_response   = "doi/10.3389-fonc.2020.567984/crossref.json"
+expected            = "doi/10.3389-fonc.2020.567984/expected.toml"
+
+# -- bioRxiv preprint (posted-content type) --
+[[entry]]
+id                  = "10.1101-2024.01.01.000001"
+kind                = "doi-crossref"
+ref                 = "10.1101/2024.01.01.000001"
+notes               = "bioRxiv preprint -- exercises the posted-content type and the date-style suffix 2024.01.01.000001."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+crossref_response   = "doi/10.1101-2024.01.01.000001/crossref.json"
+expected            = "doi/10.1101-2024.01.01.000001/expected.toml"
+
+# -- Zenodo (Crossref 404 => Unpaywall fallback path) --
+[[entry]]
+id                  = "10.5281-zenodo.3753745"
+kind                = "doi-crossref-fail-unpaywall"
+ref                 = "10.5281/zenodo.3753745"
+notes               = "Zenodo deposit -- the mocked Crossref endpoint returns 404 with the error body, exercising the orchestrator Unpaywall fallback path. Source becomes unpaywall and license surfaces from best_oa_location."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+crossref_response   = "doi/10.5281-zenodo.3753745/crossref.json"
+unpaywall_response  = "doi/10.5281-zenodo.3753745/unpaywall.json"
+expected            = "doi/10.5281-zenodo.3753745/expected.toml"
+
+# -- DOI with > 192-char suffix (safekey truncation boundary) --
+[[entry]]
+id                  = "10.1234-long-suffix"
+kind                = "doi-long-suffix"
+ref                 = "10.1234/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+notes               = "Boundary test for safekey hash-truncation: suffix is 200 a chars, escaped form > 192 bytes triggers SHA-256 hash-suffix path in Ref::safekey()."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+crossref_response   = "doi/10.1234-long-suffix/crossref.json"
+expected            = "doi/10.1234-long-suffix/expected.toml"
+
+# -- DOI with parens / underscore / slash in the suffix (escape-collapse) --
+[[entry]]
+id                  = "10.1234-special-chars"
+kind                = "doi-special-chars"
+ref                 = "10.1234/abc(2024).foo-bar_baz/v1"
+notes               = "Boundary test for safekey escape-collapse: suffix contains parens, dot, hyphen, underscore, slash. Verifies that (, ), / all collapse to _ and consecutive underscores fuse."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+crossref_response   = "doi/10.1234-special-chars/crossref.json"
+expected            = "doi/10.1234-special-chars/expected.toml"
+
+# -- arXiv new-style id --
+[[entry]]
+id                  = "2312.11805"
+kind                = "arxiv-new"
+ref                 = "2312.11805"
+notes               = "Modern arXiv id with the YYMM.NNNNN shape. Exercises the new-style validator + Atom feed shape."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+atom_response       = "arxiv/2312.11805/atom.xml"
+expected            = "arxiv/2312.11805/expected.toml"
+
+# -- arXiv old-style id (subject-class prefix) --
+[[entry]]
+id                  = "cond-mat-9501001"
+kind                = "arxiv-old"
+ref                 = "cond-mat/9501001"
+notes               = "Old-style arXiv id with the cond-mat/NNNNNNN shape. The / inside the id becomes _ in the safekey; exercises the Url::join path for the Atom feed."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+atom_response       = "arxiv/cond-mat-9501001/atom.xml"
+expected            = "arxiv/cond-mat-9501001/expected.toml"
+
+# -- arXiv id with explicit version suffix --
+[[entry]]
+id                  = "2304.12244v2"
+kind                = "arxiv-versioned"
+ref                 = "2304.12244v2"
+notes               = "Versioned arXiv id (v2 suffix). Exercises the version-suffix arm of validate_arxiv_new and the matching id_list query parameter."
+provenance          = "hand-crafted"
+last_refreshed_iso  = "2026-05-12"
+atom_response       = "arxiv/2304.12244v2/atom.xml"
+expected            = "arxiv/2304.12244v2/expected.toml"

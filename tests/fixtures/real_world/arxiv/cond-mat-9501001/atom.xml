@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/cond-mat/9501001v1</id>
+    <updated>1995-01-04T00:00:00Z</updated>
+    <published>1995-01-04T00:00:00Z</published>
+    <title>A representative-shape illustration of an old-style arXiv preprint</title>
+    <summary>This is a hand-crafted abstract for an old-style arXiv id.</summary>
+    <author><name>Carol Pioneer</name></author>
+    <category term="cond-mat" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>

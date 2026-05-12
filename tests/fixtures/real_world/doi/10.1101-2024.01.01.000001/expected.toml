@@ -1,0 +1,4 @@
+safekey = "doi_10.1101_2024.01.01.000001"
+source  = "crossref"
+title   = "A representative-shape illustration of a bioRxiv preprint"
+oa_url  = "https://www.biorxiv.org/content/10.1101/2024.01.01.000001v1.full.pdf"

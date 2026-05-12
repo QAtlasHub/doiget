@@ -1,0 +1,4 @@
+safekey = "doi_10.1234_abc_2024_.foo-bar_baz_v1"
+source  = "crossref"
+title   = "A representative-shape illustration of a DOI with special chars in the suffix"
+oa_url  = "https://example.org/special-chars.pdf"

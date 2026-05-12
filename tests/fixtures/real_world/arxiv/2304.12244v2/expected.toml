@@ -1,0 +1,4 @@
+safekey = "arxiv_2304.12244v2"
+source  = "arxiv"
+title   = "A representative-shape illustration of a versioned arXiv preprint"
+license = "arxiv-default"
