@@ -1,17 +1,25 @@
 name: safekey-vectors
 
-# Phase 0 scope: validate that `tests/fixtures/safekey/vectors.json` is
-# well-formed and matches the entry schema declared in `docs/SAFEKEY.md` §3.
-# The actual cross-tool parity check (Rust `cargo test --test safekey_vectors`
-# vs. BiblioFetch.jl) lands in Phase 1, gated on the BiblioFetch.jl pre-flight
-# item under `docs/PHASES.md` §2 ("Pre-flight items"). The placeholder step
-# below reserves the workflow contract so Phase 1 only has to flip a flag.
+# Phase 0 final scope (Slice 3): validate that
+# `tests/fixtures/safekey/vectors.json` is well-formed AND that the Rust
+# implementation (`Ref::safekey`) produces bit-identical output for every
+# one of the 100 NORMATIVE entries via the in-crate
+# `safekey_matches_reference_vectors` unit test
+# (`crates/doiget-core/src/lib.rs::tests`).
+#
+# The cross-tool parity check against the Julia reference implementation
+# (BiblioFetch.jl) remains DEFERRED to Phase 2, gated on the
+# BiblioFetch.jl pre-flight item under `docs/PHASES.md` §2 ("Pre-flight
+# items"). Phase 2 will add a separate job that diffs the Julia output
+# against the same fixture; the Rust side does not change when that
+# lands.
 
 on:
   pull_request:
     paths:
       - "tests/fixtures/safekey/**"
       - ".github/workflows/safekey-vectors.yml"
+      - "crates/doiget-core/src/lib.rs"
       - "crates/doiget-core/src/safekey/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -20,6 +28,7 @@ on:
     paths:
       - "tests/fixtures/safekey/**"
       - ".github/workflows/safekey-vectors.yml"
+      - "crates/doiget-core/src/lib.rs"
       - "crates/doiget-core/src/safekey/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -92,7 +101,13 @@ jobs:
           fi
 
           # 4. Report entry count for visibility in the run log + step summary.
+          #    Slice 3 ships the NORMATIVE 100-entry set (docs/SAFEKEY.md §5);
+          #    deviation from 100 indicates a fixture-edit regression.
           COUNT=$(jq '.vectors | length' "$VECTORS")
+          if [[ "$COUNT" != "100" ]]; then
+            echo "::error::$VECTORS must contain exactly 100 entries (NORMATIVE per docs/SAFEKEY.md §5); got $COUNT"
+            exit 1
+          fi
           echo "vectors.json: $COUNT entries OK"
           {
             echo "## safekey vectors"
@@ -102,15 +117,17 @@ jobs:
             echo "- schema: \`{ input: string, expected: string }\` per docs/SAFEKEY.md §3"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run safekey vector tests
-        # Phase 0 placeholder. Enable in Phase 1 once
-        # `cargo test --test safekey_vectors` lands in `crates/doiget-core`
-        # and the BiblioFetch.jl pre-flight item under docs/PHASES.md §2
-        # ("Pre-flight items") is closed. This slot reserves the contract so
-        # Phase 1 only has to flip `if: false` -> `if: true` (and add the
-        # toolchain setup) without renaming or restructuring the workflow.
-        if: false
-        run: |
-          # cargo test --workspace --no-default-features --features oa-only \
-          #   --test safekey_vectors
-          echo "Phase 1 contract slot — intentionally skipped in Phase 0"
+      - name: Install Rust toolchain (MSRV via rust-toolchain.toml)
+        # No explicit version pin needed: the workspace `rust-toolchain.toml`
+        # declares the channel (stable) and the MSRV (1.86). dtolnay's
+        # toolchain action honors that file when no toolchain input is set.
+        uses: dtolnay/rust-toolchain@b95584d8105b9ab200e15821fa671848cf2b7017   # stable, 2025-10-23
+
+      - name: cargo test safekey_matches_reference_vectors
+        # The Rust parity test loads tests/fixtures/safekey/vectors.json via
+        # include_str! and asserts Ref::safekey output matches `expected` for
+        # all 100 NORMATIVE entries (per docs/SAFEKEY.md §5). The test is a
+        # unit test inside doiget-core's lib.rs, hence `--lib`. We also run
+        # the long-input truncation test in the same invocation by filtering
+        # on the `safekey_` prefix.
+        run: cargo test -p doiget-core --lib --no-default-features --features oa-only safekey_

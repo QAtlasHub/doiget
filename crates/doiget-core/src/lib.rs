@@ -1387,13 +1387,15 @@ mod tests {
         let parsed: SafekeyVectorFile =
             serde_json::from_str(raw).expect("vectors.json is valid JSON matching schema");
 
-        // Phase 1 Wave 3 ships the 13-entry placeholder set. The full
-        // 100-entry NORMATIVE set (docs/SAFEKEY.md §5) is a follow-up gated
-        // on BiblioFetch.jl pre-flight. Use a minimum-count guard so the
-        // test catches truncation but does not break when vectors.json grows.
-        assert!(
-            parsed.vectors.len() >= 13,
-            "vectors.json has fewer entries than expected ({}); fixture may be truncated",
+        // Phase 0 final ships the full NORMATIVE 100-entry set
+        // (docs/SAFEKEY.md §5). The fixture is the binding cross-tool
+        // contract with BiblioFetch.jl; tightening the count guard to
+        // `== 100` ensures the set cannot silently grow or shrink without
+        // a coordinated ADR bump (per docs/SAFEKEY.md status block).
+        assert_eq!(
+            parsed.vectors.len(),
+            100,
+            "vectors.json MUST be exactly 100 entries (NORMATIVE per docs/SAFEKEY.md §5); got {}",
             parsed.vectors.len()
         );
 
