@@ -176,15 +176,22 @@ pub fn build_fetch_plan(ref_: &Ref, store_root: &Utf8Path) -> FetchPlan {
         }
     };
 
+    // Slice 5 (PR #84 advisory item A6): derive the loaded-allowlist
+    // list from the same `tier_1_allowlist()` + `oa_publisher_allowlist()`
+    // functions the production `HttpClient` is composed from. A
+    // hardcoded `vec![...]` here would silently drift if a future slice
+    // adds a new allowlist source to the production client — the wire
+    // shape would still claim only the old four.
+    let redirect_allowlists_loaded: Vec<String> = tier_1_allowlist()
+        .iter()
+        .chain(oa_publisher_allowlist().iter())
+        .map(|a| a.source.clone())
+        .collect();
+
     FetchPlan {
         metadata_sources,
         pdf_sources,
-        redirect_allowlists_loaded: vec![
-            "crossref".to_string(),
-            "unpaywall".to_string(),
-            "arxiv".to_string(),
-            "oa-publisher".to_string(),
-        ],
+        redirect_allowlists_loaded,
         target_pdf_path,
         target_metadata_path,
         would_append_provenance: true,

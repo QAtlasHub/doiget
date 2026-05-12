@@ -20,49 +20,13 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use camino::{Utf8Path, Utf8PathBuf};
-use doiget_cli::commands::fetch::{
-    build_dry_run_envelope, build_fetch_plan, run_with_options, FetchOptions,
-};
+use doiget_cli::commands::fetch::{build_dry_run_envelope, build_fetch_plan, run_with_options};
 use doiget_core::Ref;
 use serial_test::serial;
 use tempfile::TempDir;
 
-/// RAII helper that captures the prior values of every named env var on
-/// construction, lets the test mutate them via `set`, then restores
-/// (or removes) them on drop. Modeled on the `EnvGuard` in
-/// `fetch_arxiv_e2e.rs`. Tests holding this guard MUST also be marked
-/// `#[serial]` because env state is process-global.
-struct EnvGuard {
-    keys: Vec<&'static str>,
-    prior: Vec<Option<std::ffi::OsString>>,
-}
-
-impl EnvGuard {
-    fn new(keys: &[&'static str]) -> Self {
-        let prior = keys.iter().map(std::env::var_os).collect();
-        for k in keys {
-            std::env::remove_var(k);
-        }
-        Self {
-            keys: keys.to_vec(),
-            prior,
-        }
-    }
-    fn set(&self, key: &str, val: &str) {
-        std::env::set_var(key, val);
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for (k, prior) in self.keys.iter().zip(self.prior.iter()) {
-            match prior {
-                Some(v) => std::env::set_var(k, v),
-                None => std::env::remove_var(k),
-            }
-        }
-    }
-}
+mod common;
+use common::env_guard::EnvGuard;
 
 #[tokio::test]
 #[serial]
@@ -96,7 +60,7 @@ async fn dry_run_fetch_doi_returns_ok_without_side_effects() {
     // crossref/unpaywall/oa-publisher hosts is not stubbed). The fact
     // that this call returns Ok proves the dry-run path short-circuits
     // before any network call.
-    let result = run_with_options("10.1234/foo".to_string(), FetchOptions { dry_run: true }).await;
+    let result = run_with_options("10.1234/foo".to_string(), true).await;
     result.expect("dry-run fetch::run_with_options succeeds");
 
     // Step 3: assert the on-disk side-effects are empty. The store
@@ -148,11 +112,7 @@ async fn dry_run_fetch_arxiv_returns_ok_without_side_effects() {
     env.set("DOIGET_STORE_ROOT", store_root.as_str());
     env.set("DOIGET_LOG_PATH", log_path.as_str());
 
-    let result = run_with_options(
-        "arxiv:2401.12345".to_string(),
-        FetchOptions { dry_run: true },
-    )
-    .await;
+    let result = run_with_options("arxiv:2401.12345".to_string(), true).await;
     result.expect("dry-run arxiv fetch::run_with_options succeeds");
 
     assert!(

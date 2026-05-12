@@ -140,18 +140,10 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit),
         Some(Command::Search { query }) => doiget_cli::commands::search::run(query),
         Some(Command::Fetch { ref_, dry_run }) => {
-            doiget_cli::commands::fetch::run_with_options(
-                ref_,
-                doiget_cli::commands::fetch::FetchOptions { dry_run },
-            )
-            .await
+            doiget_cli::commands::fetch::run_with_options(ref_, dry_run).await
         }
         Some(Command::Batch { path, dry_run }) => {
-            doiget_cli::commands::batch::run_with_options(
-                path,
-                doiget_cli::commands::batch::BatchOptions { dry_run },
-            )
-            .await
+            doiget_cli::commands::batch::run_with_options(path, dry_run).await
         }
         Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_),
         Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_),

@@ -25,34 +25,8 @@ use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// RAII helper to scope env-var mutations so a panic mid-test does not leak
-/// state across the (single-threaded) `serial` group. Same shape as the one
-/// in `tests/fetch_arxiv_e2e.rs`.
-struct EnvGuard {
-    keys: Vec<&'static str>,
-}
-
-impl EnvGuard {
-    fn new(keys: &[&'static str]) -> Self {
-        for k in keys {
-            std::env::remove_var(k);
-        }
-        Self {
-            keys: keys.to_vec(),
-        }
-    }
-    fn set(&self, key: &str, val: &str) {
-        std::env::set_var(key, val);
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for k in &self.keys {
-            std::env::remove_var(k);
-        }
-    }
-}
+mod common;
+use common::env_guard::EnvGuard;
 
 /// Read every JSONL row from the on-disk provenance log.
 fn read_log_rows(path: &Utf8PathBuf) -> Vec<LogRow> {
@@ -151,9 +125,9 @@ async fn batch_three_arxiv_refs_succeeds_end_to_end() {
     )
     .expect("write refs file");
 
-    batch::run(refs_path.as_str().to_string())
+    batch::run_with_options(refs_path.as_str().to_string(), false)
         .await
-        .expect("batch::run succeeds");
+        .expect("batch::run_with_options succeeds");
 
     // Step 4: assert all three PDFs landed in the store under the expected
     // safekey-derived names.
@@ -263,7 +237,7 @@ async fn batch_with_malformed_ref_continues_and_returns_err() {
     )
     .expect("write refs file");
 
-    let result = batch::run(refs_path.as_str().to_string()).await;
+    let result = batch::run_with_options(refs_path.as_str().to_string(), false).await;
     assert!(
         result.is_err(),
         "batch with a malformed ref must surface an error to the binary"

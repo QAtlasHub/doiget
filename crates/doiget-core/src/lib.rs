@@ -664,21 +664,37 @@ pub enum DenialReason {
     RedirectNotInAllowlist,
     /// Redirect target had a non-HTTPS scheme (`HttpError::InsecureRedirect`).
     InsecureScheme,
-    /// Source produced a URL whose host is on a future blocklist (reserved).
+    /// Source produced a URL whose host is on a future blocklist.
+    ///
+    /// Reserved — no producer wired yet. Will be emitted by the future
+    /// per-source URL host-blocklist guard once that component lands
+    /// (post-Phase-1 supply-chain hardening; see
+    /// `docs/REDIRECT_ALLOWLIST.md` §4 for the staging plan).
     HostInBlockList,
     /// Body exceeded [`PDF_MAX_BYTES`] (`HttpError::OversizedBody`).
     SizeCapExceeded,
-    /// Store entry's `schema_version` is ahead of this binary
-    /// (reserved — emitted by the store schema-rejection path).
+    /// Store entry's `schema_version` is ahead of this binary.
+    ///
+    /// Reserved — no producer wired yet. Will be emitted by the
+    /// `FsStore` schema-rejection path once the read-side bump check
+    /// lands (it currently only writes the current `SCHEMA_VERSION`).
     SchemaDrift,
     /// Source not in the runtime [`CapabilityProfile`]
     /// (`FetchError::NotEligible`).
     CapabilityNotGranted,
-    /// Rate limiter rejected the call inside the current window
-    /// (reserved — Phase 2+ surfaces this from the limiter).
+    /// Rate limiter rejected the call inside the current window.
+    ///
+    /// Reserved — no producer wired yet. Will be emitted by
+    /// [`RateLimiter`](crate::rate_limiter::RateLimiter) once the
+    /// limiter surfaces structured denials (Phase 2+; today the
+    /// limiter only sleeps to enforce the window).
     RateLimitWindow,
-    /// SSRF guard rejected a private / link-local / cloud-metadata address
-    /// (reserved — future SSRF check).
+    /// SSRF guard rejected a private / link-local / cloud-metadata address.
+    ///
+    /// Reserved — no producer wired yet. Will be emitted by the
+    /// future SSRF pre-flight check (post-Phase-1 supply-chain
+    /// hardening; the workspace currently relies on rustls + the
+    /// HTTPS-only redirect policy to keep the attack surface small).
     SsrfPrivateAddress,
     /// Response Content-Type / magic-byte mismatch (`HttpError::NotAPdf`).
     ContentTypeMismatch,

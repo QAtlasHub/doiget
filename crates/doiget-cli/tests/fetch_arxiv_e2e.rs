@@ -32,36 +32,8 @@ use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// RAII helper to scope env-var mutations so a panic mid-test does not leak
-/// state across the (single-threaded) `serial` group.
-struct EnvGuard {
-    keys: Vec<&'static str>,
-}
-
-impl EnvGuard {
-    fn new(keys: &[&'static str]) -> Self {
-        // Snapshot of any pre-existing values so they can be restored on
-        // drop. For simplicity in this test we just clear; serial_test
-        // ensures no concurrent test reads them.
-        for k in keys {
-            std::env::remove_var(k);
-        }
-        Self {
-            keys: keys.to_vec(),
-        }
-    }
-    fn set(&self, key: &str, val: &str) {
-        std::env::set_var(key, val);
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for k in &self.keys {
-            std::env::remove_var(k);
-        }
-    }
-}
+mod common;
+use common::env_guard::EnvGuard;
 
 fn read_log_rows(path: &Utf8PathBuf) -> Vec<LogRow> {
     let raw = std::fs::read_to_string(path.as_std_path()).expect("read log");
@@ -108,9 +80,9 @@ async fn arxiv_2401_12345_end_to_end() {
 
     // Step 3: run the orchestrator end-to-end. No child binary; no real
     // network traffic.
-    fetch::run("arxiv:2401.12345".to_string())
+    fetch::run_with_options("arxiv:2401.12345".to_string(), false)
         .await
-        .expect("fetch::run succeeds");
+        .expect("fetch::run_with_options succeeds");
 
     // Step 4: assert the on-disk PDF.
     let pdf_path = store_root.join("arxiv_2401.12345.pdf");

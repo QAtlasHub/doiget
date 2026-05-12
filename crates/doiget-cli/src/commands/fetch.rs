@@ -394,55 +394,34 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
     }
 }
 
-/// Per-fetch option bundle threaded from `main.rs` clap dispatch.
+/// Run the `doiget fetch <ref>` subcommand.
 ///
-/// The bundle is additive: `Default` produces the historical
-/// `pub async fn run(input)` behaviour, so existing callers (integration
-/// tests under `crates/doiget-cli/tests/`) that go through [`run`]
-/// continue to work unchanged. New callers (the binary's
-/// `clap::Subcommand::Fetch` arm and the dry-run integration test) go
-/// through [`run_with_options`].
+/// `dry_run` (ADR-0022 §1): when `true`, build a [`FetchPlan`] from the
+/// parsed [`Ref`] and the configured store root, serialize it as JSON to
+/// stdout, and return `Ok(())` immediately, **without** building a
+/// `FetchHarness` (no provenance log open), without contacting the
+/// network, without writing to the store, and without appending a
+/// provenance row.
 ///
-/// Currently exposes a single field — `dry_run` per ADR-0022 §1.
-#[derive(Debug, Clone, Default)]
-pub struct FetchOptions {
-    /// When `true`, build a [`FetchPlan`], emit it as JSON on stdout, and
-    /// return `Ok(())` without touching the network or filesystem and
-    /// without appending a provenance row.
-    pub dry_run: bool,
-}
-
-/// Run the `doiget fetch <ref>` subcommand with the historical (dry-run-
-/// disabled) defaults.
-///
-/// Equivalent to `run_with_options(input, FetchOptions::default())`. Kept
-/// at this signature so the existing in-process integration tests under
-/// `crates/doiget-cli/tests/` (which call `fetch::run("...".into())`)
-/// continue to compile unchanged.
+/// When `dry_run` is `false`, the function runs the normal end-to-end
+/// orchestration path: open the provenance log, dispatch the per-kind
+/// orchestrator, emit a `SessionStart` / `SessionEnd` bookend pair.
 ///
 /// On success returns `Ok(())` and writes a one-line success message to
 /// stderr (per ADR-0001 stdio convention — no stdout writes from `fetch`
 /// on the normal path). On failure, returns an `anyhow::Error` and emits
 /// a `SessionEnd` row with `result=err` to the provenance log before
 /// returning.
-pub async fn run(input: String) -> Result<()> {
-    run_with_options(input, FetchOptions::default()).await
-}
-
-/// Run the `doiget fetch <ref>` subcommand with the given options.
 ///
-/// When `opts.dry_run` is `true` (per ADR-0022 §1):
-///   - Build a [`FetchPlan`] from the parsed [`Ref`] and the configured
-///     store root.
-///   - Serialize it to JSON and write to stdout.
-///   - Return `Ok(())` immediately, **without** building a
-///     `FetchHarness` (no provenance log open), without contacting the
-///     network, without writing to the store, and without appending a
-///     provenance row.
+/// # History
 ///
-/// When `opts.dry_run` is `false`, the body is identical to the
-/// historical [`run`] implementation.
-pub async fn run_with_options(input: String, opts: FetchOptions) -> Result<()> {
+/// Slice 5 (PR #84 advisory item A2/A3 refactor): the previous
+/// `FetchOptions { dry_run: bool }` single-field option bundle plus the
+/// thin `run(input)` backwards-compat wrapper were collapsed into this
+/// single `dry_run: bool` parameter — the option bundle's single-bool
+/// shape was YAGNI, and the wrapper only existed to spare integration
+/// tests a `FetchOptions::default()` literal.
+pub async fn run_with_options(input: String, dry_run: bool) -> Result<()> {
     // Step 1: parse + safekey. Granular `RefParseError` collapses to anyhow
     // via `?`; the higher-level CLI binary maps the error to its exit code.
     let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
@@ -451,7 +430,7 @@ pub async fn run_with_options(input: String, opts: FetchOptions) -> Result<()> {
     // NO store write, NO provenance row. Posture-lint ADR-0022 §5 will
     // verify this branch never reaches `HttpClient::fetch_*`,
     // `FsStore::write_*`, or `ProvenanceLog::append`.
-    if opts.dry_run {
+    if dry_run {
         // Resolve store root for path projections. Failures here surface
         // as a normal CLI error (not as a denial) — same behaviour the
         // non-dry-run path would exhibit on a misconfigured environment.

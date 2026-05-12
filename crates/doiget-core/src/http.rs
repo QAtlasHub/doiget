@@ -823,63 +823,18 @@ mod tests {
     // ---------------------------------------------------------------
 
     /// Build a test-only `HttpClient` against an `http://` wiremock
-    /// origin. The redirect closure still rejects insecure schemes — we
-    /// only relax `https_only` at the connection level so wiremock can
-    /// serve. This is acceptable because the redirect closure (which is
-    /// the security-load-bearing path) is exercised separately by the
-    /// `redirect_to_http_is_rejected_by_closure` test.
+    /// origin.
+    ///
+    /// Slice 5 (PR #84 advisory item A4 refactor): this helper now
+    /// delegates to the public
+    /// [`HttpClient::new_for_tests_allow_http`] constructor (defined
+    /// just above the test module) instead of re-implementing the
+    /// redirect-policy + `https_only(false)` builder. The two
+    /// implementations had drifted into duplicates — keeping a private
+    /// re-implementation only meant a future security tweak to the
+    /// builder would silently leave the tests on a stale path.
     fn build_test_client_for_http(source: &str, allowlist_host: &str) -> HttpClient {
-        let allowlist = SourceAllowlist::new(source, vec![allowlist_host.to_string()]);
-        let allowlist_for_closure = allowlist.clone();
-        let redirect_policy = Policy::custom(move |attempt| {
-            let scheme = attempt.url().scheme().to_string();
-            let host_opt = attempt.url().host_str().map(|h| h.to_ascii_lowercase());
-            let prev_count = attempt.previous().len();
-            if scheme != "https" {
-                return attempt.error(HttpError::InsecureRedirect { scheme });
-            }
-            if prev_count >= MAX_REDIRECTS {
-                return attempt.stop();
-            }
-            let host = match host_opt {
-                Some(h) => h,
-                None => {
-                    return attempt.error(HttpError::RedirectDenied {
-                        source_key: allowlist_for_closure.source.clone(),
-                        host: String::new(),
-                        expected_hosts: allowlist_for_closure.redirect_hosts.clone(),
-                    });
-                }
-            };
-            if !allowlist_for_closure.matches(&host) {
-                return attempt.error(HttpError::RedirectDenied {
-                    source_key: allowlist_for_closure.source.clone(),
-                    host,
-                    expected_hosts: allowlist_for_closure.redirect_hosts.clone(),
-                });
-            }
-            attempt.follow()
-        });
-        let client = ClientBuilder::new()
-            // `https_only(false)` only at this scope — production
-            // builders (the public `HttpClient::new`) keep it on.
-            .https_only(false)
-            .redirect(redirect_policy)
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(TOTAL_TIMEOUT)
-            .read_timeout(READ_TIMEOUT)
-            .user_agent(format!(
-                "doiget/{} (+https://github.com/sotashimozono/doiget)",
-                VERSION
-            ))
-            .tls_backend_rustls()
-            .build()
-            .expect("test client builds");
-        let mut map = HashMap::new();
-        map.insert(allowlist.source.clone(), client);
-        HttpClient {
-            clients: Arc::new(map),
-        }
+        HttpClient::new_for_tests_allow_http(source, allowlist_host)
     }
 
     #[tokio::test]

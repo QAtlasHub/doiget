@@ -5,7 +5,7 @@
 //!
 //! ## What is exercised
 //!
-//! - `doiget_cli::commands::fetch::run` end-to-end on a DOI input.
+//! - `doiget_cli::commands::fetch::run_with_options` end-to-end on a DOI input.
 //! - Crossref + Unpaywall fan-out to the wiremock origin.
 //! - The synthetic `oa-publisher` source key with its OA URL host check
 //!   pulled from `HttpClient::new_for_tests_allow_http_multi(...)` over
@@ -33,34 +33,8 @@ use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// RAII guard mirroring the one in `fetch_arxiv_e2e.rs`. Clears any
-/// pre-existing values on construction and on drop so the (single-
-/// threaded `serial`) tests cannot leak env state across each other.
-struct EnvGuard {
-    keys: Vec<&'static str>,
-}
-
-impl EnvGuard {
-    fn new(keys: &[&'static str]) -> Self {
-        for k in keys {
-            std::env::remove_var(k);
-        }
-        Self {
-            keys: keys.to_vec(),
-        }
-    }
-    fn set(&self, key: &str, val: &str) {
-        std::env::set_var(key, val);
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for k in &self.keys {
-            std::env::remove_var(k);
-        }
-    }
-}
+mod common;
+use common::env_guard::EnvGuard;
 
 /// Env-var keys mutated by the tests in this file. Wired through the
 /// `EnvGuard` above so each test's setup is hermetic.
@@ -177,9 +151,9 @@ async fn fetch_doi_oa_pdf_happy_path() {
     env.set("DOIGET_OA_PUBLISHER_BASE", &base_uri);
 
     // Step 3: run the orchestrator end-to-end. No real network traffic.
-    fetch::run(format!("doi:{}", TEST_DOI))
+    fetch::run_with_options(format!("doi:{}", TEST_DOI), false)
         .await
-        .expect("fetch::run succeeds");
+        .expect("fetch::run_with_options succeeds");
 
     // Step 4: assert the on-disk PDF exists and starts with `%PDF-`.
     let pdf_path = store_root.join("doi_10.1234_test.pdf");
@@ -316,9 +290,9 @@ async fn fetch_doi_oa_pdf_falls_back_to_metadata_when_host_off_allowlist() {
 
     // The orchestrator MUST still return Ok(()) — metadata is the
     // partial-success contract from REDIRECT_ALLOWLIST.md §3.
-    fetch::run(format!("doi:{}", TEST_DOI))
+    fetch::run_with_options(format!("doi:{}", TEST_DOI), false)
         .await
-        .expect("fetch::run succeeds (metadata-only fallback)");
+        .expect("fetch::run_with_options succeeds (metadata-only fallback)");
 
     // PDF MUST NOT be written.
     let pdf_path = store_root.join("doi_10.1234_test.pdf");
