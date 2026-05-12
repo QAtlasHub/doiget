@@ -437,7 +437,7 @@ pub async fn run(input: String) -> Result<()> {
 ///     store root.
 ///   - Serialize it to JSON and write to stdout.
 ///   - Return `Ok(())` immediately, **without** building a
-///     [`FetchHarness`] (no provenance log open), without contacting the
+///     `FetchHarness` (no provenance log open), without contacting the
 ///     network, without writing to the store, and without appending a
 ///     provenance row.
 ///

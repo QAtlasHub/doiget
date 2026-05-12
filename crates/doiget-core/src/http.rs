@@ -283,7 +283,7 @@ pub enum HttpError {
 // HttpError -> Option<DenialContext>  (ADR-0023 §4 mapping table)
 // ---------------------------------------------------------------------------
 
-/// Map an [`HttpError`] reference to the structured [`DenialContext`]
+/// Map an [`HttpError`] reference to the structured [`crate::DenialContext`]
 /// channel introduced by ADR-0023.
 ///
 /// Returns `Some(_)` for the four denial classes named in ADR-0023 §4

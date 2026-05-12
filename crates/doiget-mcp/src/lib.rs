@@ -234,7 +234,7 @@ impl Server {
 // doiget_metadata_only — input schema
 // ---------------------------------------------------------------------------
 
-/// JSON-schema-derived input for [`Server::doiget_metadata_only`].
+/// JSON-schema-derived input for the `doiget_metadata_only` MCP tool.
 ///
 /// Mirrors `docs/MCP_TOOLS.md` §11 `inputSchema`. The Rust field name
 /// `ref_` is renamed on the wire to `ref` (the JSON key the spec uses,

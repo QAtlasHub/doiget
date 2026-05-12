@@ -1,6 +1,13 @@
+// allow: outbound-network
 //! C1 fix coverage: production redirect denials surface a `DenialContext`
 //! through the source-chain walk in `From<&HttpError> for
 //! Option<DenialContext>`.
+//!
+//! `// allow: outbound-network` on line 1 opts this file out of the
+//! `network-purity` posture-lint guard. All HTTP terminates at a local
+//! `127.0.0.1:N` wiremock origin (see "Network purity" below); the opt-out
+//! is for the `reqwest::Url` import that the wiremock client builder
+//! requires, NOT for real network access.
 //!
 //! Why this lives here (not in `http.rs::tests`):
 //!
