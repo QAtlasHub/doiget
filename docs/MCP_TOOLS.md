@@ -11,12 +11,13 @@ speaks **stdio only** ([ADR-0001](DECISIONS/), [`SCOPE.md`](SCOPE.md) §non-goal
 | Tool | Purpose |
 |---|---|
 | `doiget_resolve_paper` | Resolve DOI / arXiv id to authoritative metadata. |
-| `doiget_fetch_paper` | Resolve and download a single PDF to the store. |
-| `doiget_batch_fetch` | Up to 100 refs in one call. |
+| `doiget_fetch_paper` | Resolve and download a single PDF to the store. Accepts `dry_run`. |
+| `doiget_metadata_only` | Resolve to metadata. **Guarantees no PDF / publisher fetch.** Accepts `dry_run`. |
+| `doiget_batch_fetch` | Up to 100 refs in one call. Accepts `dry_run`. |
 | `doiget_info` | Retrieve a store entry's metadata. |
 | `doiget_search_local` | Search store metadata (title / authors / venue). |
 | `doiget_list_recent` | Last N fetched entries. |
-| `doiget_paper_pdf_path` | Return the local path of a cached PDF. **Does not read content.** |
+| `doiget_paper_pdf_path` | Return the local path of a cached PDF. **Does not read, parse, or transmit content.** |
 | `doiget_capability_profile` | Report which sources this instance is allowed to use. |
 | `doiget_health` | Operational sanity (store writable, version, schema). |
 
@@ -86,13 +87,31 @@ type FetchResult =
       size_bytes: number,
       schema_version: string,
     }
+  | { ok: true, dry_run: true, ref: RefShape, plan: FetchPlan,
+      rate_limit_budget: { global_per_sec: number, per_source_min_gap_ms: number } }
   | { ok: false,
       ref: string,
-      error: { code: ErrorCode, message: string }
+      error: { code: ErrorCode, message: string, denial_context?: DenialContext }
     };
+
+type DenialContext = {
+  reason: "redirect_not_in_allowlist" | "insecure_scheme"
+        | "host_in_block_list"
+        | "size_cap_exceeded" | "schema_drift" | "capability_not_granted"
+        | "rate_limit_window" | "ssrf_private_address" | "content_type_mismatch",
+  source?: string,
+  attempted?: string,
+  expected: string[],
+  hop_index?: number,
+  cap?: number,
+  actual?: number,
+};
 ```
 
-`ErrorCode` is the closed enum in [`ERRORS.md`](ERRORS.md).
+`ErrorCode` is the closed enum in [`ERRORS.md`](ERRORS.md). `DenialContext`
+is the optional structured-recovery payload defined in
+[ADR-0023](DECISIONS/0023-denial-context-structured.md). `FetchPlan` is the
+dry-run preview shape — see §10 below.
 
 ## 6. Excluded tools (permanent)
 
@@ -136,3 +155,97 @@ type CapabilityProfileResponse = {
 A CI workflow `mcp-smoke.yml` (Phase 3) spawns the server, sends a minimal sequence
 (`initialize` → `tools/list` → `tools/call doiget_health`), asserts the responses, and
 asserts that no stray bytes appeared on stdout outside JSON-RPC frames.
+
+## 10. Dry-run preview (NORMATIVE; ADR-0022)
+
+`doiget_fetch_paper`, `doiget_metadata_only`, and `doiget_batch_fetch` accept
+an optional `dry_run: boolean` input field, defaulting to `false`. When
+`true`:
+
+- The orchestrator builds a `FetchPlan` and returns it without touching the
+  network or the filesystem and without appending a provenance row.
+- The result envelope is `{ ok: true, dry_run: true, ref, plan,
+  rate_limit_budget }`.
+- The `plan.pdf_sources[].candidate_hosts` list is the **static allowlist**
+  for the resolver, not a prediction of the single host the real fetch would
+  hit. doiget cannot resolve the post-Unpaywall OA URL host without making
+  the Unpaywall call, and `dry_run` MUST NOT make it.
+
+```jsonc
+{
+  "ok": true,
+  "dry_run": true,
+  "ref": { "doi": "10.1234/foo" },
+  "plan": {
+    "metadata_sources": ["crossref", "unpaywall"],
+    "pdf_sources":      [{
+      "key":             "oa-publisher",
+      "candidate_hosts": ["*.springer.com", "*.springeropen.com"]
+    }],
+    "redirect_allowlists_loaded": ["crossref", "unpaywall", "arxiv", "oa-publisher"],
+    "target_pdf_path":            "/home/.../store/doi_10.1234_foo.pdf",
+    "target_metadata_path":       "/home/.../store/doi_10.1234_foo.toml",
+    "would_append_provenance":    true
+  },
+  "rate_limit_budget": {
+    "global_per_sec":        5.0,
+    "per_source_min_gap_ms": 200
+  }
+}
+```
+
+Tools where `dry_run` does not apply (`doiget_info`, `doiget_search_local`,
+`doiget_list_recent`, `doiget_paper_pdf_path`, `doiget_capability_profile`,
+`doiget_health`, `doiget_resolve_paper`) reject the field as
+`INVALID_REF`-class — i.e. surface as
+`{ok:false, error:{code:"INVALID_REF", ...}}`.
+
+## 11. `doiget_metadata_only` (NORMATIVE)
+
+`doiget_metadata_only` resolves a `ref` through the configured metadata
+sources (Crossref + Unpaywall + arXiv-meta) and returns the resulting
+metadata. It **MUST NOT** trigger a publisher-side PDF fetch, even when the
+metadata source returns an OA URL. The OA URL, when known, is surfaced in the
+response as `oa_url` (string) for the caller to act on separately.
+
+```jsonc
+{
+  "name": "doiget_metadata_only",
+  "description": "WHEN TO USE: User wants metadata for a DOI / arXiv id without paying for or being noticed by a PDF download.\nINPUTS: ref (DOI or arXiv id), dry_run (optional bool).\nOUTPUTS: { ok: true, ref, source, license?, oa_url:string|null, metadata } or { ok:false, error }.\nCOSTS: 1-2 s metadata round-trip. No publisher fetch.\nSIDE EFFECTS: Appends a provenance row tagged 'metadata-only' (unless dry_run). Writes the metadata TOML to the store.\nLIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed.",
+  "inputSchema": {
+    "type": "object",
+    "required": ["ref"],
+    "properties": {
+      "ref": {
+        "type": "string",
+        "minLength": 7,
+        "maxLength": 256,
+        "pattern": "^(10\\.\\d{4,9}/[A-Za-z0-9._/()-]+|arXiv:\\d{4}\\.\\d{4,5}|\\d{4}\\.\\d{4,5})$"
+      },
+      "dry_run": { "type": "boolean", "default": false }
+    },
+    "additionalProperties": false
+  }
+}
+```
+
+Output:
+
+```typescript
+type MetadataOnlyResult =
+  | { ok: true,
+      ref: string,
+      source: "crossref" | "unpaywall" | "arxiv",
+      license: string,
+      oa_url: string | null,
+      metadata: object,
+      schema_version: string,
+    }
+  | { ok: true, dry_run: true, ref: RefShape, plan: FetchPlan,
+      rate_limit_budget: { global_per_sec: number, per_source_min_gap_ms: number } }
+  | { ok: false, ref: string, error: { code: ErrorCode, message: string, denial_context?: DenialContext } };
+```
+
+Posture: covered by the same posture-lint check as ADR-0022 §5 — a
+`metadata_only` codepath that reaches `HttpClient::fetch_pdf` is a hard
+failure.

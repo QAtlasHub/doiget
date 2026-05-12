@@ -84,6 +84,10 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
         names.contains(&"doiget_capability_profile"),
         "tools/list must include doiget_capability_profile; got: {names:?}"
     );
+    assert!(
+        names.contains(&"doiget_metadata_only"),
+        "tools/list must include doiget_metadata_only; got: {names:?}"
+    );
 
     // -- 3. tools/call doiget_health -----------------------------------
     let health = client
@@ -131,6 +135,163 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
     //
     // Cancel the client; this closes the transport and the server's
     // `waiting()` future then resolves.
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// doiget_metadata_only — per-branch coverage (I1 from PR #84 multi-agent
+// review). Each test stands up its own in-memory duplex pipe so failures
+// localise cleanly.
+// ---------------------------------------------------------------------------
+
+/// Boilerplate: spin up a server side over a duplex pipe with a clean
+/// capability profile and return the connected client + server JoinHandle.
+/// The caller cancels the client to drive `waiting()` to completion.
+async fn boot_in_memory_server() -> anyhow::Result<(
+    rmcp::service::RunningService<rmcp::RoleClient, ()>,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+)> {
+    let profile = CapabilityProfile::from_env().expect("clean env never errors");
+    let server = Server::new(profile);
+    let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+    let server_handle = tokio::spawn(async move {
+        let service = server.serve(server_transport).await?;
+        service.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = ().serve(client_transport).await?;
+    Ok((client, server_handle))
+}
+
+#[tokio::test]
+async fn doiget_metadata_only_invalid_ref_returns_invalid_ref_envelope() -> anyhow::Result<()> {
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    // Build the {"ref":"not a doi"} JsonObject (rmcp's `with_arguments`
+    // takes a `serde_json::Map<String, Value>`).
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("not a doi"));
+
+    let result = client
+        .peer()
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("doiget_metadata_only").with_arguments(args),
+        )
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_metadata_only uses CallToolResult::structured");
+    assert_eq!(structured["ok"], serde_json::json!(false));
+    assert_eq!(
+        structured["error"]["code"],
+        serde_json::json!("INVALID_REF"),
+        "envelope: {structured:?}"
+    );
+    assert!(
+        structured["error"]["message"]
+            .as_str()
+            .map(|s| s.contains("invalid ref"))
+            .unwrap_or(false),
+        "INVALID_REF message must mention 'invalid ref' for diagnosability; got: {structured:?}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn doiget_metadata_only_dry_run_true_returns_fetch_plan_envelope() -> anyhow::Result<()> {
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+    args.insert("dry_run".to_string(), serde_json::json!(true));
+
+    let result = client
+        .peer()
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("doiget_metadata_only").with_arguments(args),
+        )
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_metadata_only dry-run uses CallToolResult::structured");
+
+    assert_eq!(structured["ok"], serde_json::json!(true));
+    assert_eq!(structured["dry_run"], serde_json::json!(true));
+    // ADR-0022 §1: ref shape is `{"doi":"..."}` for a DOI input.
+    assert_eq!(
+        structured["ref"],
+        serde_json::json!({"doi": "10.1234/example"})
+    );
+    // ADR-0022 §1 NORMATIVE plan shape for DOI: metadata_sources =
+    // ["crossref","unpaywall"]; pdf_sources is non-empty under the
+    // `oa-publisher` synthetic key.
+    assert_eq!(
+        structured["plan"]["metadata_sources"],
+        serde_json::json!(["crossref", "unpaywall"])
+    );
+    let pdf_sources = structured["plan"]["pdf_sources"]
+        .as_array()
+        .expect("plan.pdf_sources is an array");
+    assert!(
+        !pdf_sources.is_empty(),
+        "plan.pdf_sources must be non-empty for a DOI ref; got: {structured:?}"
+    );
+    assert_eq!(pdf_sources[0]["key"], serde_json::json!("oa-publisher"));
+    // Rate-limit budget is the static HARD_CODED snapshot.
+    assert_eq!(
+        structured["rate_limit_budget"]["global_per_sec"],
+        serde_json::json!(5.0)
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn doiget_metadata_only_default_dry_run_false_returns_internal_error_stub(
+) -> anyhow::Result<()> {
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    // Omit `dry_run`; defaults to false via `#[serde(default)] dry_run: bool`.
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+
+    let result = client
+        .peer()
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("doiget_metadata_only").with_arguments(args),
+        )
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_metadata_only stub uses CallToolResult::structured");
+
+    // Phase 1: the non-dry-run branch is a documented stub returning
+    // INTERNAL_ERROR with a clear message (see Server::doiget_metadata_only).
+    assert_eq!(structured["ok"], serde_json::json!(false));
+    assert_eq!(
+        structured["error"]["code"],
+        serde_json::json!("INTERNAL_ERROR"),
+        "envelope: {structured:?}"
+    );
+    let msg = structured["error"]["message"]
+        .as_str()
+        .expect("error.message is a string");
+    assert!(
+        msg.contains("not yet wired") || msg.contains("dry_run"),
+        "INTERNAL_ERROR stub message must mention the Phase 1 limitation; \
+         got: {msg:?}"
+    );
+
     client.cancel().await?;
     server_handle.await??;
     Ok(())

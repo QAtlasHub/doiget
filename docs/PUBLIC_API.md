@@ -25,7 +25,7 @@ pub use crate::capability::{
 };
 pub use crate::source::{Source, FetchContext, FetchResult, FetchError};
 pub use crate::store::{Store, Metadata, EntryInfo, StoreError};
-pub use crate::error::ErrorCode;
+pub use crate::error::{ErrorCode, DenialContext, DenialReason};
 pub use crate::provenance::{ProvenanceLog, LogEvent, LogError};
 ```
 
@@ -178,3 +178,52 @@ Raising the declared MSRV is a **minor** version bump and requires a CHANGELOG
 entry. Lowering it requires an ADR (we do not retroactively re-support older
 toolchains without explicit reason). Phase 6 may re-evaluate the policy and
 adopt a stable-channel-tracks-current-stable-minus-N rule at that point.
+
+## 8. Structured denial context (NORMATIVE; ADR-0023)
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DenialReason {
+    RedirectNotInAllowlist,
+    InsecureScheme,
+    HostInBlockList,
+    SizeCapExceeded,
+    SchemaDrift,
+    CapabilityNotGranted,
+    RateLimitWindow,
+    SsrfPrivateAddress,
+    ContentTypeMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DenialContext {
+    pub reason:    DenialReason,
+    pub source:    Option<String>,
+    pub attempted: Option<String>,
+    pub expected:  Vec<String>,
+    pub hop_index: Option<u8>,
+    pub cap:       Option<u64>,
+    pub actual:    Option<u64>,
+}
+
+impl From<&crate::http::HttpError> for Option<DenialContext> { /* … */ }
+impl From<&crate::source::FetchError> for Option<DenialContext> { /* … */ }
+```
+
+The `DenialReason` enum is **closed**: adding a variant is a minor semver
+bump, renaming or repurposing one is breaking. The `DenialContext` struct is
+**not** `#[non_exhaustive]` because `deny_unknown_fields` already prevents
+forward-compatible field additions on the wire — adding a field is a
+breaking change. See [`ERRORS.md`](ERRORS.md) §3.1, §5.1 for the runtime
+surface and [`MCP_TOOLS.md`](MCP_TOOLS.md) §5 for the JSON envelope.
+
+## 9. Forward-looking: `CanonicalRef` (Phase 2; ADR-0021)
+
+`CanonicalRef` is **not** part of the Phase 1 public API. It is reserved by
+[ADR-0021](DECISIONS/0021-canonical-tuple-identity.md) for the audit-identity
+shape that Phase 2 will introduce alongside the `provenance_log`
+`canonical_digest` column. Phase 1 callers continue to use `Ref`; Phase 2
+will add `Ref::promote(&str, Option<&str>) -> CanonicalRef` as a minor bump
+and bump the provenance log schema as a coordinated migration.

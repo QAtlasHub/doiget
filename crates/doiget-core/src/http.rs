@@ -215,12 +215,24 @@ pub enum HttpError {
     /// Field naming: `source_key` rather than `source` because `thiserror`
     /// auto-treats a field literally named `source` as a `#[source]` error
     /// chain link (which would require the field to implement `std::error::Error`).
+    ///
+    /// `expected_hosts` carries a snapshot of the source's allowlist
+    /// patterns at the time of the denial — populated for the structured
+    /// `denial_context.expected` channel introduced by ADR-0023 §4
+    /// (NORMATIVE mapping table). Cloning the patterns into the error
+    /// keeps the `From<&HttpError> for Option<DenialContext>` impl from
+    /// having to re-look-up the allowlist by `source_key`. May be empty
+    /// when the rejection happened before any allowlist was matched
+    /// (e.g. URL had no host component at all).
     #[error("redirect target {host} not in allowlist for source {source_key}")]
     RedirectDenied {
         /// Source key whose allowlist rejected the redirect.
         source_key: String,
         /// The lowercased host that was rejected.
         host: String,
+        /// Snapshot of the source's `redirect_hosts` at denial time.
+        /// Surfaces as `denial_context.expected` (ADR-0023 §4).
+        expected_hosts: Vec<String>,
     },
     /// Redirect target had a scheme other than `https`. See
     /// `docs/SECURITY.md` §1.3.
@@ -265,6 +277,114 @@ pub enum HttpError {
         /// The unregistered source key.
         source_key: String,
     },
+}
+
+// ---------------------------------------------------------------------------
+// HttpError -> Option<DenialContext>  (ADR-0023 §4 mapping table)
+// ---------------------------------------------------------------------------
+
+/// Map an [`HttpError`] reference to the structured [`crate::DenialContext`]
+/// channel introduced by ADR-0023.
+///
+/// Returns `Some(_)` for the four denial classes named in ADR-0023 §4
+/// (`RedirectDenied`, `OversizedBody`, `NotAPdf`, `InsecureRedirect`) and
+/// `None` for every other variant — `Network`, `HttpStatus`,
+/// `UnknownSource` are not denials in the ADR-0023 sense (they are
+/// transport / upstream / programming-error signals, not allowlist or
+/// cap rejections).
+///
+/// The `&HttpError` borrow form is used (rather than `HttpError`) so the
+/// caller — typically the orchestrator that already needs the original
+/// error for `error.message` and the `From<HttpError> for ErrorCode`
+/// collapse — does not have to clone the error to produce the optional
+/// structured side-channel.
+impl From<&HttpError> for Option<crate::DenialContext> {
+    fn from(e: &HttpError) -> Self {
+        use crate::{DenialContext, DenialReason};
+        match e {
+            HttpError::RedirectDenied {
+                source_key,
+                host,
+                expected_hosts,
+            } => Some(DenialContext {
+                reason: DenialReason::RedirectNotInAllowlist,
+                source: Some(source_key.clone()),
+                attempted: Some(host.clone()),
+                expected: expected_hosts.clone(),
+                hop_index: None,
+                cap: None,
+                actual: None,
+            }),
+            HttpError::OversizedBody { actual, cap } => Some(DenialContext {
+                reason: DenialReason::SizeCapExceeded,
+                source: None,
+                attempted: None,
+                expected: Vec::new(),
+                hop_index: None,
+                cap: Some(*cap),
+                actual: Some(*actual),
+            }),
+            HttpError::NotAPdf { got } => Some(DenialContext {
+                reason: DenialReason::ContentTypeMismatch,
+                source: None,
+                // ADR-0023 §4 mapping table: hex-encode the first 5 bytes
+                // for the `attempted` field. `format!("{:02x}...")` is
+                // chosen over `hex::encode` to avoid pulling the
+                // additional dep into this conversion path; the result is
+                // bit-identical (lowercase, zero-padded).
+                attempted: Some(format!(
+                    "{:02x}{:02x}{:02x}{:02x}{:02x}",
+                    got[0], got[1], got[2], got[3], got[4]
+                )),
+                expected: vec!["%PDF-".to_string()],
+                hop_index: None,
+                cap: None,
+                actual: None,
+            }),
+            HttpError::InsecureRedirect { scheme } => Some(DenialContext {
+                reason: DenialReason::InsecureScheme,
+                source: None,
+                attempted: Some(format!("{}:...", scheme)),
+                expected: vec!["https".to_string()],
+                hop_index: None,
+                cap: None,
+                actual: None,
+            }),
+            // `reqwest` wraps a custom error returned by the redirect
+            // policy closure (`attempt.error(HttpError::RedirectDenied{..})`
+            // / `attempt.error(HttpError::InsecureRedirect{..})`) inside a
+            // `reqwest::Error`, which surfaces here as `HttpError::Network`.
+            // Without source-chain walking, production redirect denials —
+            // the most operationally important denial class — would never
+            // produce a `DenialContext`, defeating the whole point of
+            // ADR-0023.
+            //
+            // Walk the `std::error::Error::source()` chain on the inner
+            // `reqwest::Error` and downcast each link to `&HttpError`. If
+            // a wrapped `HttpError` is found, recurse via this same `From`
+            // impl. Otherwise the network error is a "real" transport /
+            // DNS / TLS failure with no denial semantics — return `None`.
+            //
+            // `std::error::Error::source(e)` is fully-qualified to
+            // disambiguate against the inherent (and unrelated)
+            // `reqwest::Error::source()`.
+            HttpError::Network(e) => {
+                let mut source: Option<&(dyn std::error::Error + 'static)> =
+                    std::error::Error::source(e);
+                while let Some(s) = source {
+                    if let Some(http_err) = s.downcast_ref::<HttpError>() {
+                        return Option::<crate::DenialContext>::from(http_err);
+                    }
+                    source = s.source();
+                }
+                None
+            }
+            // The remaining variants are not "denials" in the ADR-0023
+            // sense — HttpStatus/UnknownSource are upstream / programming-
+            // error signals.
+            HttpError::HttpStatus { .. } | HttpError::UnknownSource { .. } => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +592,7 @@ fn build_client_allow_http(allowlist: SourceAllowlist) -> Result<Client, reqwest
                 return attempt.error(HttpError::RedirectDenied {
                     source_key: allowlist_for_closure.source.clone(),
                     host: String::new(),
+                    expected_hosts: allowlist_for_closure.redirect_hosts.clone(),
                 });
             }
         };
@@ -479,6 +600,7 @@ fn build_client_allow_http(allowlist: SourceAllowlist) -> Result<Client, reqwest
             return attempt.error(HttpError::RedirectDenied {
                 source_key: allowlist_for_closure.source.clone(),
                 host,
+                expected_hosts: allowlist_for_closure.redirect_hosts.clone(),
             });
         }
         attempt.follow()
@@ -545,6 +667,7 @@ fn build_client(allowlist: SourceAllowlist) -> Result<Client, reqwest::Error> {
                 return attempt.error(HttpError::RedirectDenied {
                     source_key: allowlist_for_closure.source.clone(),
                     host: String::new(),
+                    expected_hosts: allowlist_for_closure.redirect_hosts.clone(),
                 });
             }
         };
@@ -552,6 +675,7 @@ fn build_client(allowlist: SourceAllowlist) -> Result<Client, reqwest::Error> {
             return attempt.error(HttpError::RedirectDenied {
                 source_key: allowlist_for_closure.source.clone(),
                 host,
+                expected_hosts: allowlist_for_closure.redirect_hosts.clone(),
             });
         }
 
@@ -719,6 +843,7 @@ mod tests {
                     return attempt.error(HttpError::RedirectDenied {
                         source_key: allowlist_for_closure.source.clone(),
                         host: String::new(),
+                        expected_hosts: allowlist_for_closure.redirect_hosts.clone(),
                     });
                 }
             };
@@ -726,6 +851,7 @@ mod tests {
                 return attempt.error(HttpError::RedirectDenied {
                     source_key: allowlist_for_closure.source.clone(),
                     host,
+                    expected_hosts: allowlist_for_closure.redirect_hosts.clone(),
                 });
             }
             attempt.follow()
@@ -1036,6 +1162,7 @@ mod tests {
                     return attempt.error(HttpError::RedirectDenied {
                         source_key: allowlist_for_closure.source.clone(),
                         host: String::new(),
+                        expected_hosts: allowlist_for_closure.redirect_hosts.clone(),
                     });
                 }
             };
@@ -1043,6 +1170,7 @@ mod tests {
                 return attempt.error(HttpError::RedirectDenied {
                     source_key: allowlist_for_closure.source.clone(),
                     host: h,
+                    expected_hosts: allowlist_for_closure.redirect_hosts.clone(),
                 });
             }
             attempt.follow()
@@ -1075,5 +1203,101 @@ mod tests {
         let b = a.clone();
         assert_eq!(a.clients.len(), b.clients.len());
         assert!(Arc::ptr_eq(&a.clients, &b.clients));
+    }
+
+    // ---------------------------------------------------------------
+    // HttpError -> Option<DenialContext>  (ADR-0023 §4 mapping)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn denial_from_redirect_denied_carries_attempted_and_expected() {
+        use crate::{DenialContext, DenialReason};
+        let e = HttpError::RedirectDenied {
+            source_key: "crossref".to_string(),
+            host: "evil.example.com".to_string(),
+            expected_hosts: vec!["api.crossref.org".to_string(), "*.crossref.org".to_string()],
+        };
+        let dc: Option<DenialContext> = (&e).into();
+        let dc = dc.expect("RedirectDenied -> Some(DenialContext)");
+        assert_eq!(dc.reason, DenialReason::RedirectNotInAllowlist);
+        assert_eq!(dc.source.as_deref(), Some("crossref"));
+        assert_eq!(dc.attempted.as_deref(), Some("evil.example.com"));
+        assert_eq!(
+            dc.expected,
+            vec!["api.crossref.org".to_string(), "*.crossref.org".to_string()]
+        );
+        assert!(dc.cap.is_none());
+        assert!(dc.actual.is_none());
+        assert!(dc.hop_index.is_none());
+    }
+
+    #[test]
+    fn denial_from_oversized_body_carries_cap_and_actual() {
+        use crate::{DenialContext, DenialReason};
+        let e = HttpError::OversizedBody {
+            actual: 209_715_200,
+            cap: PDF_MAX_BYTES,
+        };
+        let dc: Option<DenialContext> = (&e).into();
+        let dc = dc.expect("OversizedBody -> Some(DenialContext)");
+        assert_eq!(dc.reason, DenialReason::SizeCapExceeded);
+        assert_eq!(dc.cap, Some(PDF_MAX_BYTES));
+        assert_eq!(dc.actual, Some(209_715_200));
+        assert!(dc.source.is_none());
+        assert!(dc.attempted.is_none());
+        assert!(dc.expected.is_empty());
+    }
+
+    #[test]
+    fn denial_from_not_a_pdf_hex_encodes_got_bytes() {
+        use crate::{DenialContext, DenialReason};
+        // First 5 bytes of "<html" — what the magic-byte check sees when
+        // a publisher returns an HTML interstitial instead of a PDF.
+        let e = HttpError::NotAPdf {
+            got: [0x3c, 0x68, 0x74, 0x6d, 0x6c],
+        };
+        let dc: Option<DenialContext> = (&e).into();
+        let dc = dc.expect("NotAPdf -> Some(DenialContext)");
+        assert_eq!(dc.reason, DenialReason::ContentTypeMismatch);
+        assert_eq!(dc.attempted.as_deref(), Some("3c68746d6c"));
+        assert_eq!(dc.expected, vec!["%PDF-".to_string()]);
+    }
+
+    #[test]
+    fn denial_from_insecure_redirect_marks_insecure_scheme() {
+        use crate::{DenialContext, DenialReason};
+        let e = HttpError::InsecureRedirect {
+            scheme: "http".to_string(),
+        };
+        let dc: Option<DenialContext> = (&e).into();
+        let dc = dc.expect("InsecureRedirect -> Some(DenialContext)");
+        // ADR-0023 §4 (post-incorporation review): InsecureRedirect maps
+        // to its own dedicated `InsecureScheme` reason, not the host-
+        // allowlist reason — they are semantically distinct denials.
+        assert_eq!(dc.reason, DenialReason::InsecureScheme);
+        assert_eq!(dc.attempted.as_deref(), Some("http:..."));
+        assert_eq!(dc.expected, vec!["https".to_string()]);
+    }
+
+    #[test]
+    fn denial_from_non_denial_variants_returns_none() {
+        use crate::DenialContext;
+        // Network / HttpStatus / UnknownSource are not denials; they
+        // map to None per ADR-0023 §4.
+        let e = HttpError::HttpStatus {
+            status: 503,
+            url: "https://api.crossref.org/works/x".to_string(),
+        };
+        let dc: Option<DenialContext> = (&e).into();
+        assert!(dc.is_none(), "HttpStatus must not produce a DenialContext");
+
+        let e = HttpError::UnknownSource {
+            source_key: "ghost".to_string(),
+        };
+        let dc: Option<DenialContext> = (&e).into();
+        assert!(
+            dc.is_none(),
+            "UnknownSource must not produce a DenialContext"
+        );
     }
 }
