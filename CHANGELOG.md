@@ -14,6 +14,106 @@ Phase 0 (design + scaffolding). No version tag is published in this phase; the
 workspace stays at `0.0.0` until Phase 6. See [docs/PHASES.md](docs/PHASES.md)
 for the full Phase 0 deliverable checklist.
 
+### Slice 4 — CanonicalRef impl + provenance log v1→v2 migration (BREAKING)
+
+This slice ships the audit-identity layer that [ADR-0021](docs/DECISIONS/0021-canonical-tuple-identity.md)
+reserved as spec-only at Phase 1 and lands as
+[ADR-0024](docs/DECISIONS/0024-canonical-ref-impl.md). The
+provenance-log row shape changes; existing v1 logs MUST be migrated
+before this binary will read them.
+
+- **(E.1)** New public types `doiget_core::CanonicalRef` and
+  `doiget_core::SourceType` re-exported from the crate root per
+  [`docs/PUBLIC_API.md`](docs/PUBLIC_API.md) §1 + §9. The digest
+  algorithm is the NORMATIVE
+  `SHA256(source_type | 0x00 | source_id | 0x00 | resolver_profile | 0x00 | version_or_empty)`
+  from ADR-0021 §1 — `version_or_empty` is the empty byte sequence
+  when `version` is `None`, NOT a sentinel. Added
+  `impl Ref { pub fn promote(&self, resolver_profile: &str, version: Option<&str>) -> CanonicalRef }`
+  as the ergonomic construction path. 16 golden digest vectors in
+  `crates/doiget-core/src/canonical.rs::tests` cross-check the
+  streaming impl against an in-test reference SHA-256
+  reimplementation.
+
+- **(E.2)** **BREAKING** — provenance log schema bump v1 → v2. New
+  `pub const doiget_core::provenance::LOG_SCHEMA_VERSION: &str = "v2"`.
+  Every `LogRow` now carries two new fields:
+  - `schema_version: String` (literal `"v2"`).
+  - `canonical_digest: Option<String>` (64 lowercase hex chars, or
+    `null` on session bookend rows).
+  Both fields participate in the SHA-256 hash chain. The lex-first
+  top-level key of the canonical-JSON shifts from `capability` to
+  `canonical_digest` (n<p at byte index 2). `#[serde(deny_unknown_fields)]`
+  + non-defaulted `schema_version` mean v1 rows fail to parse loudly
+  rather than producing silent hash mismatches.
+  [`docs/PROVENANCE_LOG.md`](docs/PROVENANCE_LOG.md) §3 + new §3.1
+  document the wire surface and migration recipe.
+
+- **(E.3)** One-shot migration:
+  `doiget_core::provenance::migrate_v1_to_v2(log_path, dry_run) -> Result<MigrationReport, LogError>`.
+  Idempotent (re-running on a v2 log is a no-op) and dry-runnable.
+  Live runs stage to `<log_path>.v2-migrated`, verify the staged file
+  passes `verify()`, back up the original to `<log_path>.v1-backup`,
+  then atomically rename onto the live path. Exposed via the CLI as
+  `doiget provenance migrate [--dry-run]`
+  (`crates/doiget-cli/src/commands/provenance.rs`).
+
+- **(E.4)** `resolver_profile` threaded through every Fetch /
+  StoreWrite provenance-log write. Crossref, Unpaywall, and arXiv
+  source impls now mint a `CanonicalRef` under their own resolver
+  name; the orchestrator mints a distinct digest under
+  `"oa-publisher"` for the DOI PDF leg. A single DOI fetch through
+  Crossref + Unpaywall + oa-publisher therefore produces THREE
+  distinct `canonical_digest` values in the audit log, matching
+  ADR-0021 Context §2.
+
+- **(E.5)** MCP envelope additions per ADR-0021 §4:
+  - `doiget_fetch_paper` result envelope gains a `resolver_profile`
+    string field.
+  - `doiget_metadata_only` result envelope gains a `resolver_profile`
+    string field.
+  - `doiget_batch_fetch` per-row entries gain a `resolver_profile`
+    string field on success rows.
+  In Slice 4 the field equals `source` verbatim; kept distinct so
+  future slices can decouple "which resolver wrote to disk" from
+  "which resolver is the audit identity". `docs/MCP_TOOLS.md` §5 +
+  §11 typescript unions updated.
+
+- **(E.6)** [ADR-0024](docs/DECISIONS/0024-canonical-ref-impl.md)
+  (Accepted) supersedes [ADR-0021](docs/DECISIONS/0021-canonical-tuple-identity.md)'s
+  spec-only posture for implementation; the §1–§4 NORMATIVE shape of
+  ADR-0021 remains binding. INDEX updated.
+
+- **(E.7)** Golden migration fixture at
+  `tests/fixtures/provenance/migration_v1_to_v2.json` (7 representative
+  v1 rows: session bookends, Crossref / Unpaywall / oa-publisher /
+  arXiv fetch legs, a StoreWrite, and a Resolve err for an invalid
+  ref). Four end-to-end migration tests in
+  `crates/doiget-core/tests/provenance_migration_e2e.rs` assert
+  dry-run preview correctness, byte-equality of each row's
+  `canonical_digest` against the independent
+  `CanonicalRef::new(...).digest_hex()` path, idempotency on
+  re-run, and that a dry-run preview on a v2 log does not touch
+  disk.
+
+- **(E.8)** This CHANGELOG entry.
+
+- **(E.9)** Test coverage added: 16 canonical-digest goldens, 4
+  migration e2e tests, and the existing source / orchestrator /
+  MCP / CLI test suites updated to thread `canonical_digest`
+  through every `RowInput` construction site (orchestrator
+  StoreWrite + oa-publisher Fetch, all three Source impls, MCP
+  session bookends, CLI session bookends, batch Resolve err). All
+  192+ pre-existing tests stay green; no behavioral regressions.
+
+**BREAKING.** Existing v1 access logs at `~/.config/doiget/access.log`
+MUST be migrated via `doiget provenance migrate` before this binary
+will read them. The audit-log verifier rejects unmigrated v1 rows
+with a `corrupted log at line N` error.
+
+No new runtime dependencies. `hex` and `sha2` were already in the
+workspace deps (used by `safekey` truncation and existing log hashing).
+
 ### Slice 3 — safekey 100 reference test vectors
 
 - **(D.1)** Expanded `tests/fixtures/safekey/vectors.json` from the

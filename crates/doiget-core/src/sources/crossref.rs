@@ -127,6 +127,10 @@ impl Source for CrossrefSource {
         }
 
         // Step 4: log the fetch event (`docs/PROVENANCE_LOG.md` §3).
+        // ADR-0021 §1 canonical-digest: promote the ref under the
+        // "crossref" resolver profile (no version — Crossref does not
+        // expose a per-call version token in Phase 1).
+        let canonical = ref_.promote(self.name(), None).digest_hex();
         ctx.log.append(RowInput {
             event: LogEvent::Fetch,
             result: LogResult::Ok,
@@ -137,6 +141,7 @@ impl Source for CrossrefSource {
             size_bytes: Some(body.len() as u64),
             license: None,
             store_path: None,
+            canonical_digest: Some(&canonical),
         })?;
 
         Ok(FetchResult {

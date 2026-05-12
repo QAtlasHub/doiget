@@ -164,6 +164,10 @@ pub async fn run_with_options(path: String, opts: BatchOptions) -> Result<()> {
                     size_bytes: None,
                     license: None,
                     store_path: None,
+                    // The input failed to parse as a Ref, so no
+                    // CanonicalRef can be minted (ADR-0021 §1 requires
+                    // a validated source_id).
+                    canonical_digest: None,
                 });
                 tracing::warn!(
                     %input,

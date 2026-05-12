@@ -1,7 +1,7 @@
 # 0021 - Canonical-tuple identity for fetched papers
 
 - **Date:** 2026-05-12
-- **Status:** Proposed (spec-only; implementation deferred to Phase 2+)
+- **Status:** Superseded by [0024](0024-canonical-ref-impl.md) for implementation; the §1–§4 NORMATIVE shape remains binding
 - **Supersedes:** -
 - **Source:** Discussion #12 (musaabhasan, 2026-05-08)
 

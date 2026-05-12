@@ -112,6 +112,9 @@ impl Source for UnpaywallSource {
             .and_then(|loc| loc.license.clone())
             .unwrap_or_else(|| "unknown".to_string());
 
+        // ADR-0021 §1 canonical-digest under the "unpaywall" resolver
+        // profile. Distinct from a Crossref attempt for the same DOI.
+        let canonical = ref_.promote(self.name(), None).digest_hex();
         ctx.log.append(RowInput {
             event: LogEvent::Fetch,
             result: LogResult::Ok,
@@ -122,6 +125,7 @@ impl Source for UnpaywallSource {
             size_bytes: Some(body.len() as u64),
             license: Some(&license),
             store_path: None,
+            canonical_digest: Some(&canonical),
         })?;
 
         // Note: Phase 1 returns metadata only; the actual PDF fetch from the

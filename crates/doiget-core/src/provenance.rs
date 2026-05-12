@@ -73,6 +73,18 @@ use sha2::{Digest, Sha256};
 /// The on-disk wire field names match the spec table; struct-field order is
 /// **not** load-bearing for the hash because canonicalization sorts keys
 /// lexicographically (see PROVENANCE_LOG.md §4).
+///
+/// **Schema version**: this struct is the **v2** row shape (ADR-0024).
+/// Every v2 row carries `schema_version = "v2"` literally; the
+/// `canonical_digest` field carries the ADR-0021 §1 audit identity of
+/// the fetch on rows where one applies (`Fetch` / `Resolve` /
+/// `StoreWrite`) and is `None` on session bookend rows
+/// (`SessionStart` / `SessionEnd` / `CapabilityResolved`) that have no
+/// ref. v1 rows (pre-Slice-4) lack both fields and MUST be migrated via
+/// [`migrate_v1_to_v2`] before the v2 binary can read them — the
+/// `deny_unknown_fields` + non-defaulted `schema_version` shape ensures
+/// v1 rows fail to parse loudly rather than producing silent hash-chain
+/// mismatches.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LogRow {
@@ -102,6 +114,18 @@ pub struct LogRow {
     pub session_id: String,
     /// Stable error code on failure rows.
     pub error_code: Option<String>,
+    /// Row schema version. Always [`LOG_SCHEMA_VERSION`] (`"v2"`) for
+    /// new rows written by this build (ADR-0024). v1 rows lack this
+    /// field; they MUST be migrated via [`migrate_v1_to_v2`] first.
+    pub schema_version: String,
+    /// Canonical-digest of the fetch's audit identity (ADR-0021 §1) as
+    /// 64 lowercase hex chars. Present on rows with a `ref` (`Fetch`,
+    /// `Resolve`, `StoreWrite`); `None` on session bookend rows. The
+    /// digest is computed from a [`crate::CanonicalRef`] whose
+    /// `resolver_profile` matches this row's `source` field for
+    /// migrated v1 rows; new v2 rows MAY pass an explicit
+    /// `resolver_profile` distinct from `source`.
+    pub canonical_digest: Option<String>,
     /// 64 lowercase hex chars, OR the literal string `"GENESIS"` for the
     /// first row of a fresh log file.
     pub prev_hash: String,
@@ -109,6 +133,15 @@ pub struct LogRow {
     /// the `this_hash` field removed. See module docs.
     pub this_hash: String,
 }
+
+/// Provenance-log row schema version this build writes
+/// (`docs/PROVENANCE_LOG.md` §3, ADR-0024).
+///
+/// Bumped from `"v1"` (implicit; pre-Slice-4 rows had no
+/// `schema_version` field) to `"v2"` when the `canonical_digest` column
+/// landed. The v1→v2 migration is one-shot, idempotent, and dry-runnable
+/// via [`migrate_v1_to_v2`].
+pub const LOG_SCHEMA_VERSION: &str = "v2";
 
 /// Event class for a log row (PROVENANCE_LOG.md §3).
 ///
@@ -212,7 +245,16 @@ struct LogState {
 const GENESIS_HASH: &str = "GENESIS";
 
 /// Caller-supplied fields for a row. The writer fills in `ts`, `ts_seq`,
-/// `session_id`, `prev_hash`, and `this_hash`.
+/// `session_id`, `prev_hash`, `this_hash`, and the literal
+/// `schema_version = "v2"` (`LOG_SCHEMA_VERSION`).
+///
+/// Callers SHOULD populate [`Self::canonical_digest`] on rows that have
+/// a meaningful audit identity (`Fetch` / `Resolve` / `StoreWrite` rows
+/// with a `ref`), leaving it `None` on session bookend rows. The digest
+/// is produced by [`crate::CanonicalRef::digest_hex`] from a
+/// `(source_type, source_id, resolver_profile, version)` tuple — see
+/// ADR-0021 §1 for the algorithm and ADR-0024 for the implementation
+/// surface.
 #[derive(Debug, Clone)]
 pub struct RowInput<'a> {
     /// Event class.
@@ -234,6 +276,12 @@ pub struct RowInput<'a> {
     /// Optional store path relative to the store root (set on `event=fetch`,
     /// `result=ok`).
     pub store_path: Option<&'a str>,
+    /// Optional canonical-digest (ADR-0021 §1) as 64 lowercase hex
+    /// chars. `None` for session bookend / capability-resolution rows;
+    /// SHOULD be `Some` for `Fetch` / `Resolve` / `StoreWrite` rows
+    /// whose `source` field names the resolver. Build via
+    /// [`crate::Ref::promote`] + [`crate::CanonicalRef::digest_hex`].
+    pub canonical_digest: Option<&'a str>,
 }
 
 // ---------------------------------------------------------------------------
@@ -250,13 +298,20 @@ pub struct RowInput<'a> {
 //
 // Worked example: for the row fragment `{ts_seq: 1, ts: "..."}` (input order),
 // the canonical bytes after lex sort are `{"ts":"...","ts_seq":1}` because
-// `"ts"` < `"ts_seq"` lexicographically. Similarly, the lex-first top-level
-// key of a full row is `"capability"`.
+// `"ts"` < `"ts_seq"` lexicographically. In v2 (ADR-0024) the lex-first
+// top-level key is `"canonical_digest"` — `"canonical_digest"` < `"capability"`
+// because 'n'(110) < 'p'(112) at byte index 2 (both share the `"ca"`
+// prefix). The pre-v2 lex-first key was `"capability"`.
 // ---------------------------------------------------------------------------
 
 /// Serializable shadow of [`LogRow`] **without** `this_hash`. Used solely as
 /// an intermediate to compute the canonical bytes that `this_hash` is the
 /// SHA-256 of. The wire key names match [`LogRow`]'s `serde` attributes.
+///
+/// v2 shape (ADR-0024): includes `schema_version` and
+/// `canonical_digest`. Both fields participate in the hash chain — a
+/// tampered `canonical_digest` is detected by `audit-log --verify`
+/// exactly like a tampered `ref` or `source` would be.
 #[derive(Serialize)]
 struct RowForHash<'a> {
     ts: DateTime<Utc>,
@@ -272,6 +327,8 @@ struct RowForHash<'a> {
     capability: Capability,
     session_id: &'a str,
     error_code: Option<&'a str>,
+    schema_version: &'a str,
+    canonical_digest: Option<&'a str>,
     prev_hash: &'a str,
 }
 
@@ -393,6 +450,8 @@ impl ProvenanceLog {
             capability: input.capability,
             session_id: &self.session_id,
             error_code: input.error_code,
+            schema_version: LOG_SCHEMA_VERSION,
+            canonical_digest: input.canonical_digest,
             prev_hash: &prev_hash,
         };
 
@@ -413,6 +472,8 @@ impl ProvenanceLog {
             capability: input.capability,
             session_id: self.session_id.clone(),
             error_code: input.error_code.map(str::to_string),
+            schema_version: LOG_SCHEMA_VERSION.to_string(),
+            canonical_digest: input.canonical_digest.map(str::to_string),
             prev_hash,
             this_hash: this_hash.clone(),
         };
@@ -655,6 +716,8 @@ pub fn verify(path: &Utf8Path) -> Result<VerifyReport, LogError> {
             capability: row.capability,
             session_id: &row.session_id,
             error_code: row.error_code.as_deref(),
+            schema_version: &row.schema_version,
+            canonical_digest: row.canonical_digest.as_deref(),
             prev_hash: &row.prev_hash,
         };
         match compute_this_hash(&rfh) {
@@ -749,6 +812,359 @@ pub fn verify(path: &Utf8Path) -> Result<VerifyReport, LogError> {
 }
 
 // ---------------------------------------------------------------------------
+// v1 → v2 migration (ADR-0024, `docs/PROVENANCE_LOG.md` §"Schema migration").
+//
+// v1 rows lack `schema_version` and `canonical_digest`; the v2 binary
+// fails loudly when asked to read them (see `recover_state` /
+// `verify`). The migration recovers a v2 log from a v1 file by:
+//
+//   1. Parsing every v1 row via the [`V1LogRow`] shadow struct.
+//   2. Deriving a [`crate::CanonicalRef`] from the v1 `(ref, source)`
+//      pair — `source` becomes `resolver_profile`, `version` is `None`
+//      (ADR-0021 §1 → ADR-0024 migration recipe).
+//   3. Re-computing the SHA-256 hash chain across the new row
+//      payloads. The v1 chain is invalidated by the schema change; the
+//      v2 chain restarts at the first row's stored `prev_hash` (which
+//      is `"GENESIS"` on a fresh log).
+//   4. Writing the new rows to `<log_path>.v2-migrated`, then
+//      atomically renaming it onto `<log_path>` after backing up the
+//      original to `<log_path>.v1-backup`.
+//
+// The migration is **idempotent**: running it on an already-v2 log
+// re-parses every row as v2, recomputes the same hash chain, and
+// produces a byte-equivalent output.
+//
+// The migration is **dry-runnable**: `dry_run = true` returns a
+// [`MigrationReport`] summarizing what would change without touching
+// disk.
+// ---------------------------------------------------------------------------
+
+/// Summary of a [`migrate_v1_to_v2`] run.
+///
+/// Marked `#[non_exhaustive]` so future fields (e.g. a per-row error
+/// list, an aborted-row count) can be added without breaking callers
+/// that pattern-match.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct MigrationReport {
+    /// Number of rows rewritten (or that WOULD be rewritten under
+    /// `dry_run`).
+    pub rows_rewritten: u64,
+    /// Whether this was a dry-run preview (`true`) or a live rewrite
+    /// (`false`).
+    pub dry_run: bool,
+    /// Stored `this_hash` of the first input row (the v1 chain anchor).
+    /// `"GENESIS"` is reported as the literal `"GENESIS"` when the log
+    /// was empty.
+    pub first_row_v1_chain_hash: String,
+    /// Recomputed `this_hash` of the first migrated row under the v2
+    /// canonicalization. Equal to [`Self::first_row_v1_chain_hash`]
+    /// only if the input was already v2 (idempotent case).
+    pub first_row_v2_chain_hash: String,
+}
+
+/// v1 row shadow struct used ONLY by [`migrate_v1_to_v2`]. The
+/// non-defaulted v2 fields (`schema_version`, `canonical_digest`) are
+/// absent here; `deny_unknown_fields` rejects unexpected v2 fields so a
+/// v2 row on disk fails to parse as v1, letting the migrator detect
+/// already-v2 input via fallback to the v2 parser.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct V1LogRow {
+    ts: DateTime<Utc>,
+    ts_seq: u64,
+    event: LogEvent,
+    #[serde(rename = "ref")]
+    ref_: Option<String>,
+    source: Option<String>,
+    result: LogResult,
+    license: Option<String>,
+    size_bytes: Option<u64>,
+    store_path: Option<String>,
+    capability: Capability,
+    session_id: String,
+    error_code: Option<String>,
+    prev_hash: String,
+    this_hash: String,
+}
+
+/// Minimal in-memory representation a v1 OR v2 row can be promoted to
+/// before re-hashing.
+#[derive(Debug, Clone)]
+struct MigrationRowSeed {
+    ts: DateTime<Utc>,
+    ts_seq: u64,
+    event: LogEvent,
+    ref_: Option<String>,
+    source: Option<String>,
+    result: LogResult,
+    license: Option<String>,
+    size_bytes: Option<u64>,
+    store_path: Option<String>,
+    capability: Capability,
+    session_id: String,
+    error_code: Option<String>,
+    /// `None` for v1 inputs (the digest is computed during migration);
+    /// `Some(...)` for already-v2 inputs (carried through verbatim for
+    /// idempotency).
+    canonical_digest_in: Option<String>,
+    /// As stored on disk in the input. Used only for the
+    /// `first_row_v1_chain_hash` field of [`MigrationReport`].
+    stored_this_hash: String,
+}
+
+/// Migrate a v1 provenance log to v2 (ADR-0024).
+///
+/// Returns a [`MigrationReport`] describing how many rows were (or
+/// would be) rewritten and the first-row chain-anchor delta. The
+/// migration is idempotent: running it twice produces byte-equivalent
+/// output the second time.
+///
+/// On a missing log file, returns a no-op report (`rows_rewritten = 0`,
+/// `first_row_v1_chain_hash = "GENESIS"`, `first_row_v2_chain_hash =
+/// "GENESIS"`) — there is nothing to migrate.
+///
+/// # Errors
+///
+/// Returns [`LogError::Io`] on I/O failures and on rows that fail to
+/// parse as either v1 or v2 (the synthetic message names the line
+/// number). Returns [`LogError::Serialize`] on canonicalization
+/// failures.
+pub fn migrate_v1_to_v2(log_path: &Utf8Path, dry_run: bool) -> Result<MigrationReport, LogError> {
+    use std::io::BufRead;
+
+    // -- 1. Read the input log, parsing each line as v1 OR (idempotent
+    //       fallback) v2. --------------------------------------------------
+    let file = match File::open(log_path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(MigrationReport {
+                rows_rewritten: 0,
+                dry_run,
+                first_row_v1_chain_hash: GENESIS_HASH.to_string(),
+                first_row_v2_chain_hash: GENESIS_HASH.to_string(),
+            });
+        }
+        Err(e) => return Err(LogError::Io(e)),
+    };
+    let reader = BufReader::new(file);
+    let mut seeds: Vec<MigrationRowSeed> = Vec::new();
+
+    for (idx, line_res) in reader.lines().enumerate() {
+        let line_no = idx + 1;
+        let line = line_res?;
+        if line.is_empty() {
+            continue;
+        }
+        // Try v1 first. If it fails, try v2 (idempotency: re-migrating
+        // a v2 log MUST succeed and produce equivalent output).
+        let seed = if let Ok(v1) = serde_json::from_str::<V1LogRow>(&line) {
+            MigrationRowSeed {
+                ts: v1.ts,
+                ts_seq: v1.ts_seq,
+                event: v1.event,
+                ref_: v1.ref_,
+                source: v1.source,
+                result: v1.result,
+                license: v1.license,
+                size_bytes: v1.size_bytes,
+                store_path: v1.store_path,
+                capability: v1.capability,
+                session_id: v1.session_id,
+                error_code: v1.error_code,
+                canonical_digest_in: None,
+                stored_this_hash: v1.this_hash,
+            }
+        } else {
+            match serde_json::from_str::<LogRow>(&line) {
+                Ok(v2) => MigrationRowSeed {
+                    ts: v2.ts,
+                    ts_seq: v2.ts_seq,
+                    event: v2.event,
+                    ref_: v2.ref_,
+                    source: v2.source,
+                    result: v2.result,
+                    license: v2.license,
+                    size_bytes: v2.size_bytes,
+                    store_path: v2.store_path,
+                    capability: v2.capability,
+                    session_id: v2.session_id,
+                    error_code: v2.error_code,
+                    canonical_digest_in: v2.canonical_digest,
+                    stored_this_hash: v2.this_hash,
+                },
+                Err(e) => {
+                    return Err(LogError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("migration: line {line_no} is neither v1 nor v2: {e}"),
+                    )));
+                }
+            }
+        };
+        seeds.push(seed);
+    }
+
+    // -- 2. Derive `canonical_digest` for each seed that lacks one. ------
+    //
+    // For v1 rows: build a CanonicalRef from
+    //   - source_type from `event`/`ref` shape (DOI prefix `10.` vs
+    //     arXiv) — we use a heuristic that matches `Ref::parse`'s rule
+    //     (`starts_with "10."` ⇒ DOI; else arXiv).
+    //   - source_id = ref value (verbatim).
+    //   - resolver_profile = source value (verbatim, ADR-0021 §3
+    //     migration recipe).
+    //   - version = None.
+    //
+    // Rows without a `ref` (session bookend) keep `canonical_digest =
+    // None` per the v2 row contract.
+
+    fn derive_digest(seed: &MigrationRowSeed) -> Option<String> {
+        let ref_str = seed.ref_.as_deref()?;
+        let source_key = seed.source.as_deref().unwrap_or("");
+        // Heuristic: bare DOIs always start `10.`; everything else is
+        // treated as an arXiv id. Mirrors `Ref::parse` rule 3/4.
+        let source_type = if ref_str.starts_with("10.") {
+            crate::SourceType::Doi
+        } else {
+            crate::SourceType::Arxiv
+        };
+        let c = crate::CanonicalRef::new(source_type, ref_str, source_key, None);
+        Some(c.digest_hex())
+    }
+
+    let digests: Vec<Option<String>> = seeds
+        .iter()
+        .map(|s| s.canonical_digest_in.clone().or_else(|| derive_digest(s)))
+        .collect();
+
+    // -- 3. Rebuild the hash chain across the v2 payloads. ----------------
+    let mut out_rows: Vec<LogRow> = Vec::with_capacity(seeds.len());
+    let mut prev_hash: String = GENESIS_HASH.to_string();
+
+    for (seed, digest) in seeds.iter().zip(digests.iter()) {
+        let rfh = RowForHash {
+            ts: seed.ts,
+            ts_seq: seed.ts_seq,
+            event: seed.event,
+            ref_: seed.ref_.as_deref(),
+            source: seed.source.as_deref(),
+            result: seed.result,
+            license: seed.license.as_deref(),
+            size_bytes: seed.size_bytes,
+            store_path: seed.store_path.as_deref(),
+            capability: seed.capability,
+            session_id: &seed.session_id,
+            error_code: seed.error_code.as_deref(),
+            schema_version: LOG_SCHEMA_VERSION,
+            canonical_digest: digest.as_deref(),
+            prev_hash: &prev_hash,
+        };
+        let this_hash = compute_this_hash(&rfh)?;
+        let row = LogRow {
+            ts: seed.ts,
+            ts_seq: seed.ts_seq,
+            event: seed.event,
+            ref_: seed.ref_.clone(),
+            source: seed.source.clone(),
+            result: seed.result,
+            license: seed.license.clone(),
+            size_bytes: seed.size_bytes,
+            store_path: seed.store_path.clone(),
+            capability: seed.capability,
+            session_id: seed.session_id.clone(),
+            error_code: seed.error_code.clone(),
+            schema_version: LOG_SCHEMA_VERSION.to_string(),
+            canonical_digest: digest.clone(),
+            prev_hash: prev_hash.clone(),
+            this_hash: this_hash.clone(),
+        };
+        prev_hash = this_hash;
+        out_rows.push(row);
+    }
+
+    // -- 4. Build the report. --------------------------------------------
+    let first_v1_hash = seeds
+        .first()
+        .map(|s| s.stored_this_hash.clone())
+        .unwrap_or_else(|| GENESIS_HASH.to_string());
+    let first_v2_hash = out_rows
+        .first()
+        .map(|r| r.this_hash.clone())
+        .unwrap_or_else(|| GENESIS_HASH.to_string());
+    let report = MigrationReport {
+        rows_rewritten: out_rows.len() as u64,
+        dry_run,
+        first_row_v1_chain_hash: first_v1_hash,
+        first_row_v2_chain_hash: first_v2_hash,
+    };
+
+    if dry_run {
+        return Ok(report);
+    }
+
+    // -- 5. Live write: stage to `<log_path>.v2-migrated`, back up the
+    //       v1, then atomically rename. -----------------------------------
+    let staged_path = with_suffix(log_path, ".v2-migrated");
+    let backup_path = with_suffix(log_path, ".v1-backup");
+
+    {
+        let staged_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&staged_path)?;
+        let mut writer = BufWriter::new(staged_file);
+        for row in &out_rows {
+            let mut bytes = serde_json::to_vec(row)?;
+            bytes.push(b'\n');
+            writer.write_all(&bytes)?;
+        }
+        writer.flush()?;
+        let file = writer.into_inner().map_err(|e| {
+            LogError::Io(std::io::Error::other(format!(
+                "migration buf writer flush failed: {}",
+                e.error()
+            )))
+        })?;
+        file.sync_all()?;
+    }
+
+    // Sanity-check: the staged file MUST verify clean before we
+    // commit the swap. If it doesn't, the migration is buggy — abort
+    // without touching the live log.
+    let verify_report = verify(&staged_path)?;
+    if !verify_report.errors.is_empty() {
+        return Err(LogError::Io(std::io::Error::other(format!(
+            "migration: staged v2 log failed verify; first issue: {:?}",
+            verify_report.errors.first()
+        ))));
+    }
+
+    // Move the original aside as `<log_path>.v1-backup`. Overwriting
+    // any prior backup is intentional — the user re-running migrate
+    // expects the most recent original preserved.
+    if log_path.exists() {
+        if backup_path.exists() {
+            std::fs::remove_file(&backup_path)?;
+        }
+        std::fs::rename(log_path, &backup_path)?;
+    }
+    // Atomically promote the staged file to the live path.
+    std::fs::rename(&staged_path, log_path)?;
+
+    Ok(report)
+}
+
+/// Append a literal suffix to a [`Utf8Path`], producing a sibling path
+/// in the same directory. Avoids `std::path::PathBuf` per the workspace
+/// posture rule (`docs/SECURITY.md` §3 — camino-only file paths in
+/// production code).
+fn with_suffix(path: &Utf8Path, suffix: &str) -> Utf8PathBuf {
+    let s = format!("{path}{suffix}");
+    Utf8PathBuf::from(s)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -788,6 +1204,7 @@ mod tests {
             size_bytes: None,
             license: None,
             store_path: None,
+            canonical_digest: None,
         }
     }
 
@@ -817,6 +1234,8 @@ mod tests {
             capability: row.capability,
             session_id: &row.session_id,
             error_code: row.error_code.as_deref(),
+            schema_version: &row.schema_version,
+            canonical_digest: row.canonical_digest.as_deref(),
             prev_hash: &row.prev_hash,
         };
         let recomputed = compute_this_hash(&rfh).expect("hash");
@@ -997,6 +1416,8 @@ mod tests {
             capability: Capability::Oa,
             session_id: TEST_SESSION_ID,
             error_code: None,
+            schema_version: LOG_SCHEMA_VERSION,
+            canonical_digest: None,
             prev_hash: GENESIS_HASH,
         };
         let bytes = canonical_json_for_hash(&rfh).expect("canonicalize");
@@ -1024,13 +1445,19 @@ mod tests {
             capability: Capability::Oa,
             session_id: TEST_SESSION_ID,
             error_code: None,
+            schema_version: LOG_SCHEMA_VERSION,
+            canonical_digest: Some(
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
             prev_hash: GENESIS_HASH,
         };
         let bytes = canonical_json_for_hash(&rfh).expect("canonicalize");
         let s = std::str::from_utf8(&bytes).expect("utf8");
+        // v2: lex-first key is `canonical_digest` (< `capability` because
+        // 'n' < 'p' at byte index 2). Pre-v2 it was `capability`.
         assert!(
-            s.starts_with("{\"capability\":"),
-            "canonical bytes must start with lex-first key, got: {}",
+            s.starts_with("{\"canonical_digest\":"),
+            "canonical bytes must start with lex-first v2 key, got: {}",
             s
         );
         // Spot-check ordering: `prev_hash` (p) must come before `ref` (r),

@@ -46,6 +46,13 @@ pub struct MetadataOnlyOutcome {
     /// `"crossref"`, `"unpaywall"`, `"arxiv"` (the closed set named in
     /// `docs/MCP_TOOLS.md` §11 type alias).
     pub source: String,
+    /// Resolver profile under which the canonical-digest (ADR-0021 §1)
+    /// was minted for this call. In Slice 4 this equals
+    /// [`Self::source`] verbatim (the metadata-only path emits one row
+    /// per consulted resolver); future slices that introduce overlapping
+    /// resolvers MAY have `resolver_profile != source`. Surfaced through
+    /// the `doiget_metadata_only` MCP envelope per ADR-0021 §4.
+    pub resolver_profile: String,
     /// OA license string when the resolver could supply one (today only
     /// the Unpaywall fallback path populates this). `None` when the
     /// primary source did not surface a license.
@@ -120,6 +127,7 @@ pub async fn metadata_only(
             // orchestrator path is proven.
             Ok(MetadataOnlyOutcome {
                 source: arxiv.name().to_string(),
+                resolver_profile: arxiv.name().to_string(),
                 license: Some("arxiv-default".to_string()),
                 oa_url: None,
                 metadata,
@@ -192,6 +200,7 @@ async fn metadata_only_doi(
             // orchestrator path is proven.
             Ok(MetadataOnlyOutcome {
                 source: crossref.name().to_string(),
+                resolver_profile: crossref.name().to_string(),
                 // Crossref does not surface a license directly; the
                 // license channel for DOI metadata is Unpaywall's
                 // `best_oa_location.license`. Leave `None` here; the
@@ -217,6 +226,7 @@ async fn metadata_only_doi(
                     };
                     Ok(MetadataOnlyOutcome {
                         source: unpaywall.name().to_string(),
+                        resolver_profile: unpaywall.name().to_string(),
                         license,
                         oa_url,
                         metadata,
@@ -284,6 +294,16 @@ pub struct FetchPaperOutcome {
     /// fell back to metadata-only. Mirrors the value written to
     /// `[doiget].source` in the metadata TOML.
     pub source: String,
+    /// Resolver profile under which the canonical-digest (ADR-0021 §1)
+    /// was minted for the final artifact. For an arXiv fetch this is
+    /// `"arxiv"`; for a successful DOI OA PDF leg this is
+    /// `"oa-publisher"`; for the DOI metadata-only fallback this is the
+    /// metadata source key (`"crossref"` / `"unpaywall"`). Equal to
+    /// [`Self::source`] verbatim in Slice 4 but kept distinct so future
+    /// slices can decouple "which resolver wrote to disk" from "which
+    /// resolver is the audit identity". Surfaced through the
+    /// `doiget_fetch_paper` MCP envelope per ADR-0021 §4.
+    pub resolver_profile: String,
     /// OA license string (`"CC-BY-4.0"`, `"cc-by"`, `"arxiv-default"`,
     /// `"unknown"`). Mirrors `[doiget].license`.
     pub license: String,
@@ -431,6 +451,7 @@ async fn fetch_paper_arxiv(
     let path = store_root.join(format!("{}.pdf", safekey.as_str()));
     Ok(FetchPaperOutcome {
         source: "arxiv".to_string(),
+        resolver_profile: "arxiv".to_string(),
         license,
         path,
         size_bytes,
@@ -545,7 +566,8 @@ async fn fetch_paper_doi(
             .join(format!("{}.toml", safekey.as_str()))
     };
     Ok(FetchPaperOutcome {
-        source: final_source_label,
+        source: final_source_label.clone(),
+        resolver_profile: final_source_label,
         license,
         path,
         size_bytes,
@@ -583,6 +605,21 @@ fn write_metadata_and_pdf(
     let license = metadata.doiget.as_ref().map(|d| d.license.as_str());
     let source_name = metadata.doiget.as_ref().map(|d| d.source.as_str());
 
+    // ADR-0021 §1 canonical-digest for the StoreWrite row. The store
+    // entry is keyed on the ref + the resolver that produced its
+    // metadata (already captured in `metadata.doiget.source`). Build a
+    // CanonicalRef from whichever id slot is populated.
+    let canonical_digest: Option<String> = match (metadata.doi.as_ref(), metadata.arxiv_id.as_ref())
+    {
+        (Some(d), _) => source_name.map(|s| {
+            crate::CanonicalRef::new(crate::SourceType::Doi, d.as_str(), s, None).digest_hex()
+        }),
+        (None, Some(a)) => source_name.map(|s| {
+            crate::CanonicalRef::new(crate::SourceType::Arxiv, a.as_str(), s, None).digest_hex()
+        }),
+        (None, None) => None,
+    };
+
     match store.write(safekey, metadata, pdf_src) {
         Ok(()) => {
             ctx.log.append(RowInput {
@@ -599,6 +636,7 @@ fn write_metadata_and_pdf(
                 size_bytes: Some(size_bytes),
                 license,
                 store_path: Some(&store_path_relative),
+                canonical_digest: canonical_digest.as_deref(),
             })?;
             Ok(())
         }
@@ -622,6 +660,7 @@ fn write_metadata_and_pdf(
                 size_bytes: None,
                 license: None,
                 store_path: Some(&store_path_relative),
+                canonical_digest: canonical_digest.as_deref(),
             });
             Err(FetchError::SourceSchema {
                 hint: format!("store write failed: {e}"),
@@ -638,6 +677,13 @@ async fn try_fetch_oa_pdf(
 ) -> Option<(Vec<u8>, url::Url)> {
     const SOURCE: &str = "oa-publisher";
     let _permit = ctx.rate_limiter.acquire(SOURCE).await;
+    // ADR-0021 §1: the oa-publisher PDF leg is a DISTINCT audit
+    // identity from the Crossref/Unpaywall metadata legs even though
+    // the ref is the same DOI — that's the whole point of carrying
+    // `resolver_profile` into the digest. Compute once and re-use for
+    // both the ok and err row variants below.
+    let canonical =
+        crate::CanonicalRef::new(crate::SourceType::Doi, doi.as_str(), SOURCE, None).digest_hex();
     match ctx.http.fetch_pdf(SOURCE, url.clone()).await {
         Ok((body, final_url)) => {
             let size_bytes = body.len() as u64;
@@ -651,6 +697,7 @@ async fn try_fetch_oa_pdf(
                 size_bytes: Some(size_bytes),
                 license: None,
                 store_path: None,
+                canonical_digest: Some(&canonical),
             }) {
                 tracing::warn!(error = %e, "appending oa-publisher Fetch ok row failed");
             }
@@ -689,6 +736,7 @@ async fn try_fetch_oa_pdf(
                 size_bytes: None,
                 license: None,
                 store_path: None,
+                canonical_digest: Some(&canonical),
             });
             None
         }

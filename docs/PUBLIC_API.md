@@ -27,6 +27,8 @@ pub use crate::source::{Source, FetchContext, FetchResult, FetchError};
 pub use crate::store::{Store, Metadata, EntryInfo, StoreError};
 pub use crate::error::{ErrorCode, DenialContext, DenialReason};
 pub use crate::provenance::{ProvenanceLog, LogEvent, LogError};
+// Slice 4 / ADR-0024 — audit-identity surface:
+pub use crate::canonical::{CanonicalRef, SourceType};
 ```
 
 ## 2. Trait surface
@@ -219,11 +221,55 @@ forward-compatible field additions on the wire — adding a field is a
 breaking change. See [`ERRORS.md`](ERRORS.md) §3.1, §5.1 for the runtime
 surface and [`MCP_TOOLS.md`](MCP_TOOLS.md) §5 for the JSON envelope.
 
-## 9. Forward-looking: `CanonicalRef` (Phase 2; ADR-0021)
+## 9. Audit-identity: `CanonicalRef` (NORMATIVE; ADR-0021, ADR-0024)
 
-`CanonicalRef` is **not** part of the Phase 1 public API. It is reserved by
-[ADR-0021](DECISIONS/0021-canonical-tuple-identity.md) for the audit-identity
-shape that Phase 2 will introduce alongside the `provenance_log`
-`canonical_digest` column. Phase 1 callers continue to use `Ref`; Phase 2
-will add `Ref::promote(&str, Option<&str>) -> CanonicalRef` as a minor bump
-and bump the provenance log schema as a coordinated migration.
+Slice 4 ships the four-tuple audit identity reserved by
+[ADR-0021](DECISIONS/0021-canonical-tuple-identity.md) and implemented per
+[ADR-0024](DECISIONS/0024-canonical-ref-impl.md). The re-exports are listed
+in §1 (`CanonicalRef`, `SourceType`).
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum SourceType {
+    Doi,
+    Arxiv,
+    // future: Pmid, Handle, ...
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct CanonicalRef {
+    pub source_type: SourceType,
+    pub source_id: String,
+    pub resolver_profile: String, // e.g. "crossref", "unpaywall", "arxiv", "oa-publisher"
+    pub version: Option<String>,  // e.g. arXiv "v2"; None encodes the empty trailing input
+}
+
+impl CanonicalRef {
+    pub fn new(
+        source_type: SourceType,
+        source_id: impl Into<String>,
+        resolver_profile: impl Into<String>,
+        version: Option<String>,
+    ) -> Self;
+    pub fn digest(&self) -> [u8; 32];
+    pub fn digest_hex(&self) -> String;
+}
+
+impl Ref {
+    /// Promote a `Ref` to a `CanonicalRef` with the given resolver
+    /// profile and optional version (ADR-0021 §1).
+    pub fn promote(&self, resolver_profile: &str, version: Option<&str>) -> CanonicalRef;
+}
+```
+
+The digest algorithm is the NORMATIVE
+`SHA256(source_type | 0x00 | source_id | 0x00 | resolver_profile | 0x00 | version_or_empty)`
+shape — `version_or_empty` is the empty byte sequence when `version` is
+`None`, NOT a sentinel.
+
+The companion provenance-log row schema bump (v1 → v2) is documented in
+[`PROVENANCE_LOG.md`](PROVENANCE_LOG.md) §3 + §3.1. The one-shot
+migration ships as `doiget provenance migrate [--dry-run]`.

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 // --- Modules ---
+pub mod canonical;
 pub mod dry_run;
 pub mod http;
 pub mod orchestrator;
@@ -23,6 +24,11 @@ pub mod rate_limiter;
 pub mod source;
 pub mod sources;
 pub mod store;
+
+// Re-export the canonical-tuple audit-identity types at the crate root
+// per ADR-0024 / `docs/PUBLIC_API.md` §1. The types themselves live in
+// the [`canonical`] submodule.
+pub use crate::canonical::{CanonicalRef, SourceType};
 
 /// Crate version. Used by `doiget-cli --version` and `doiget_health`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

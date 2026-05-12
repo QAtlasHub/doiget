@@ -151,6 +151,12 @@ impl ArxivSource {
         let (body, _final_url) = ctx.http.fetch_bytes(self.name(), url).await?;
         let metadata = parse_atom_feed(&body)?;
 
+        // ADR-0021 §1 canonical-digest under the "arxiv" resolver
+        // profile. version=None until a follow-up slice threads the
+        // Atom-feed-discovered version (`v2`, etc.) into this row.
+        let canonical =
+            crate::CanonicalRef::new(crate::SourceType::Arxiv, id.as_str(), self.name(), None)
+                .digest_hex();
         ctx.log.append(RowInput {
             event: LogEvent::Fetch,
             result: LogResult::Ok,
@@ -165,6 +171,7 @@ impl ArxivSource {
             size_bytes: Some(body.len() as u64),
             license: Some("arxiv-default"),
             store_path: None,
+            canonical_digest: Some(&canonical),
         })?;
 
         Ok(metadata)
@@ -263,6 +270,10 @@ impl Source for ArxivSource {
         // One `event=fetch` row per attempt, per `docs/ARCHITECTURE.md` §6
         // and `docs/PROVENANCE_LOG.md` §3. Per `docs/SECURITY.md` §1.8 a
         // log write failure is fail-closed — the `?` aborts the fetch.
+        // ADR-0021 §1 canonical-digest: build under the "arxiv" resolver
+        // profile. version=None in Slice 4 — a follow-up may surface
+        // the `vN` discriminator from the Atom-feed `id` element.
+        let canonical = ref_.promote(self.name(), None).digest_hex();
         ctx.log.append(RowInput {
             event: LogEvent::Fetch,
             result: LogResult::Ok,
@@ -278,6 +289,7 @@ impl Source for ArxivSource {
             // claiming a specific Creative Commons license.
             license: Some("arxiv-default"),
             store_path: None,
+            canonical_digest: Some(&canonical),
         })?;
 
         Ok(FetchResult {

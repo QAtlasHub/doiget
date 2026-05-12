@@ -53,6 +53,7 @@ fn seed_log(n: usize) -> (TempDir, Utf8PathBuf) {
             size_bytes: None,
             license: None,
             store_path: None,
+            canonical_digest: None,
         })
         .expect("append seed row");
     }
