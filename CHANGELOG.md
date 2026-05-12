@@ -251,8 +251,8 @@ is reserved for Phase 2 (per ADR-0021 §3).
 
 ##### Post-incorporation review refinements (items 2/3/4/5)
 
-Four refinements landed on top of the C1/C2/I1–I7 review-fix commit
-(`6ba435a`) to harden the wire contracts the previous commits introduced:
+Four refinements landed on top of the C1/C2/I1–I7 review-fix commit to
+harden the wire contracts the previous commits introduced:
 
 - **(2)** ADR-0021 §1 (canonical-digest): made the `version_or_empty`
   byte-sequence semantics fully unambiguous — `version = None` MUST
