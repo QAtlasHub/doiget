@@ -27,6 +27,15 @@ serde_json         = { workspace = true }
 # `camino::Utf8PathBuf` for the store-root probe — the workspace `clippy.toml`
 # bans `std::path::PathBuf` for user-facing paths.
 camino             = { workspace = true }
+# 26-char ULID per tool-call session_id (Slice 1: the non-dry-run
+# `doiget_metadata_only` path opens a per-call provenance log session;
+# the CLI uses `ulid` for the same purpose in
+# `crates/doiget-cli/src/commands/fetch.rs::new_session_id`).
+ulid               = { workspace = true }
+# URL parsing for the test-mode `DOIGET_*_BASE` overrides in
+# `build_metadata_only_http_client` (mirrors the CLI's
+# `build_http_client`).
+url                = { workspace = true }
 # Official Rust MCP SDK. Feature set is locked at the workspace root —
 # stdio-only (`transport-io`), no HTTP server, no oauth, no `__reqwest`.
 # See ADR-0001 / docs/SECURITY.md §3.
@@ -42,3 +51,9 @@ rmcp        = { workspace = true, features = ["client"] }
 # Match the test's `tokio::io::duplex` + `AsyncReadExt` use.
 tokio       = { workspace = true, features = ["io-util"] }
 serde_json  = { workspace = true }
+# Serializes env-var-mutating MCP integration tests (the Slice 1
+# `doiget_metadata_only` e2e tests stage `DOIGET_*_BASE` to redirect at
+# wiremock origins). Mirrors `doiget-cli/Cargo.toml`'s usage.
+serial_test = "3"
+wiremock    = { workspace = true }
+tempfile    = { workspace = true }

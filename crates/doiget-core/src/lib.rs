@@ -17,6 +17,7 @@ use sha2::Digest;
 // --- Modules ---
 pub mod dry_run;
 pub mod http;
+pub mod orchestrator;
 pub mod provenance;
 pub mod rate_limiter;
 pub mod source;

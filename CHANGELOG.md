@@ -14,6 +14,51 @@ Phase 0 (design + scaffolding). No version tag is published in this phase; the
 workspace stays at `0.0.0` until Phase 6. See [docs/PHASES.md](docs/PHASES.md)
 for the full Phase 0 deliverable checklist.
 
+### Slice 1 — metadata_only orchestrator + arXiv Atom feed
+
+- **(A)** `doiget_metadata_only` non-dry-run path wired through the new
+  `doiget_core::orchestrator::metadata_only` function. Replaces the
+  Phase 1 `NOT_IMPLEMENTED` stub. The MCP envelope follows
+  [`docs/MCP_TOOLS.md`](docs/MCP_TOOLS.md) §11 NORMATIVE shape
+  (`{ok:true, ref, source, license, oa_url, metadata, schema_version}`).
+  Failure envelopes carry a structured `denial_context` channel for
+  denial-class errors per
+  [ADR-0023](docs/DECISIONS/0023-denial-context-structured.md);
+  transport-level (`NETWORK_ERROR`) failures omit it. DOI dispatch is
+  Crossref-first with Unpaywall as a fallback; the Crossref OA URL
+  (`message.link[].URL`) is surfaced in `oa_url` but never followed
+  (the spec contract that distinguishes this tool from
+  `doiget_fetch_paper`). The orchestrator honors the same
+  `DOIGET_*_BASE` test-override surface the CLI already accepts so a
+  single wiremock fixture drives both crates. Existing `dry_run: true`
+  preview behavior (ADR-0022) is unchanged.
+- **(B)** `doiget_core::sources::arxiv::ArxivSource` now produces
+  `FetchResult::metadata_json` populated from the arXiv Atom feed
+  (`https://export.arxiv.org/api/query?id_list=<id>`). XML parsing
+  uses [`quick-xml`](https://crates.io/crates/quick-xml) as a
+  streaming event walker — no DOM allocation, no `serde-xml-rs`
+  (deprecated). The Atom call is best-effort during a full fetch: a
+  failure logs `tracing::warn!` and falls back to a PDF-only result
+  (`metadata_json = None`) so existing end-to-end tests are unchanged.
+  A new public helper `ArxivSource::fetch_metadata_only` is the entry
+  point for the orchestrator's arXiv branch; it MUST NOT touch the
+  PDF endpoint and emits its provenance row under
+  `Capability::Metadata` to distinguish metadata-only from full
+  fetches without breaking
+  [`docs/PROVENANCE_LOG.md`](docs/PROVENANCE_LOG.md) §3.
+- Test surface added: 3 `parse_atom_feed` unit tests, 3 new arXiv
+  `Source::fetch` / `fetch_metadata_only` wiremock-driven unit tests,
+  6 `orchestrator` helper unit tests, a new
+  `crates/doiget-core/tests/arxiv_metadata_e2e.rs` integration suite,
+  and 3 new `doiget_metadata_only` MCP integration tests (arXiv happy
+  path, DOI Crossref happy path, simulated network failure). The
+  pre-existing `doiget_metadata_only_default_dry_run_false_returns_not_implemented_stub`
+  test was deleted (the stub is gone). All `cargo fmt --check`,
+  `cargo build --workspace`, `cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, and
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+  --no-default-features --features oa-only` are green locally.
+
 ### Added
 
 #### Workspace skeleton

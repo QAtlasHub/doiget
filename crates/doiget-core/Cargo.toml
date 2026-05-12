@@ -50,6 +50,9 @@ ulid        = { workspace = true }
 url         = { workspace = true }
 bytes        = { workspace = true }
 futures-util = { workspace = true }
+# Streaming XML parser for the arXiv Atom feed. See B.1 in
+# `crates/doiget-core/src/sources/arxiv.rs::parse_atom_feed`.
+quick-xml    = { workspace = true }
 
 [dev-dependencies]
 wiremock     = { workspace = true }
