@@ -214,6 +214,7 @@ mod tests {
                 size_bytes: None,
                 license: None,
                 store_path: None,
+                canonical_digest: None,
             })
             .expect("append");
         }

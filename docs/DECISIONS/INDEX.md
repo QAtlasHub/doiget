@@ -34,9 +34,10 @@ See [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) §"ADR workflow".
 | 0018 | Obsidian export is one-direction, optional Phase 7 | Proposed | #15 |
 | 0019 | Eight-safeguard legal posture (5 social + 3 technical) | Proposed | #16 |
 | 0020 | reqwest TLS feature stack (rustls-only, webpki bundled) | Proposed | PR #30 / PR #49 |
-| 0021 | Canonical-tuple identity for fetched papers (spec-only) | Proposed | #12 |
+| 0021 | Canonical-tuple identity for fetched papers (spec-only) | Superseded by 0024 (impl); §1–§4 NORMATIVE remains binding | #12 |
 | 0022 | Dry-run mode for fetch operations | Proposed | #12 |
 | 0023 | Structured `denial_context` on error envelopes | Proposed | #12 |
+| 0024 | CanonicalRef implementation + provenance log v1 → v2 migration | Accepted | Slice 4 |
 
 ## Conventions
 

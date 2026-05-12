@@ -324,6 +324,8 @@ impl FetchHarness {
                 size_bytes: None,
                 license: None,
                 store_path: None,
+                // Session bookend — no audit identity (ADR-0021 §1).
+                canonical_digest: None,
             })
             .context("appending SessionStart row")?;
         Ok(())
@@ -345,6 +347,8 @@ impl FetchHarness {
             size_bytes: None,
             license: None,
             store_path: None,
+            // Session bookend — no audit identity (ADR-0021 §1).
+            canonical_digest: None,
         });
     }
 

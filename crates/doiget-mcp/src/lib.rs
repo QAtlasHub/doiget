@@ -274,6 +274,10 @@ impl Server {
             size_bytes: None,
             license: None,
             store_path: None,
+            // Session bookend rows carry no audit identity — they
+            // bracket the call, they do not mint a CanonicalRef
+            // (ADR-0021 §1; ADR-0024).
+            canonical_digest: None,
         }) {
             return Ok(CallToolResult::structured(metadata_only_error_envelope(
                 ErrorCode::LogError,
@@ -301,6 +305,10 @@ impl Server {
             size_bytes: None,
             license: None,
             store_path: None,
+            // Session bookend rows carry no audit identity — they
+            // bracket the call, they do not mint a CanonicalRef
+            // (ADR-0021 §1; ADR-0024).
+            canonical_digest: None,
         });
 
         match outcome {
@@ -403,6 +411,10 @@ impl Server {
             size_bytes: None,
             license: None,
             store_path: None,
+            // Session bookend rows carry no audit identity — they
+            // bracket the call, they do not mint a CanonicalRef
+            // (ADR-0021 §1; ADR-0024).
+            canonical_digest: None,
         }) {
             return Ok(CallToolResult::structured(fetch_paper_error_envelope(
                 Some(&input.ref_),
@@ -428,6 +440,10 @@ impl Server {
             size_bytes: None,
             license: None,
             store_path: None,
+            // Session bookend rows carry no audit identity — they
+            // bracket the call, they do not mint a CanonicalRef
+            // (ADR-0021 §1; ADR-0024).
+            canonical_digest: None,
         });
 
         match outcome {
@@ -550,6 +566,10 @@ impl Server {
             size_bytes: None,
             license: None,
             store_path: None,
+            // Session bookend rows carry no audit identity — they
+            // bracket the call, they do not mint a CanonicalRef
+            // (ADR-0021 §1; ADR-0024).
+            canonical_digest: None,
         }) {
             return Ok(CallToolResult::structured(batch_fetch_error_envelope(
                 ErrorCode::LogError,
@@ -579,6 +599,10 @@ impl Server {
             size_bytes: None,
             license: None,
             store_path: None,
+            // Session bookend rows carry no audit identity — they
+            // bracket the call, they do not mint a CanonicalRef
+            // (ADR-0021 §1; ADR-0024).
+            canonical_digest: None,
         });
 
         match batch_outcome {
@@ -659,6 +683,11 @@ fn metadata_only_success_envelope(outcome: &MetadataOnlyOutcome, ref_str: &str) 
         "ok": true,
         "ref": ref_str,
         "source": outcome.source,
+        // ADR-0021 §4: surface the resolver_profile under which the
+        // canonical-digest was minted. In Slice 4 this equals `source`
+        // verbatim; the field is kept distinct so future slices can
+        // decouple the two when overlapping resolvers ship.
+        "resolver_profile": outcome.resolver_profile,
         "license": outcome.license,
         "oa_url": outcome.oa_url,
         "metadata": outcome.metadata,
@@ -741,6 +770,9 @@ fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> V
         "ok": true,
         "ref": ref_str,
         "source": outcome.source,
+        // ADR-0021 §4 / ADR-0024: the audit-identity resolver under
+        // which the canonical-digest for this fetch was minted.
+        "resolver_profile": outcome.resolver_profile,
         "license": outcome.license,
         "path": outcome.path,
         "size_bytes": outcome.size_bytes,
@@ -832,6 +864,7 @@ fn batch_fetch_success_envelope(
                 "ref": raw,
                 "ok": true,
                 "source": outcome.source,
+                "resolver_profile": outcome.resolver_profile,
                 "license": outcome.license,
                 "path": outcome.path,
                 "size_bytes": outcome.size_bytes,

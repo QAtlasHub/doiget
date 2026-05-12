@@ -10,6 +10,22 @@
 
 use clap::{Parser, Subcommand};
 
+/// `doiget provenance ...` action selector. Ships only the v1→v2
+/// migration in Slice 4 (ADR-0024); further actions (e.g. `compact`,
+/// `rotate`) land in later slices.
+#[derive(Subcommand, Debug)]
+enum ProvenanceAction {
+    /// Migrate the provenance log from v1 to v2 (one-shot, idempotent,
+    /// dry-runnable per ADR-0024).
+    Migrate {
+        /// Preview the migration without touching disk. Prints the
+        /// resulting [`MigrationReport`](doiget_core::provenance::MigrationReport)
+        /// summary and exits.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "doiget",
@@ -81,6 +97,12 @@ enum Command {
         #[arg(long)]
         verify: bool,
     },
+    /// Provenance-log lifecycle operations (migrate v1 → v2 per
+    /// ADR-0024).
+    Provenance {
+        #[command(subcommand)]
+        action: ProvenanceAction,
+    },
     /// Run as an MCP server over stdio.
     Serve,
     /// Show or doctor the resolved configuration.
@@ -108,6 +130,11 @@ async fn main() -> anyhow::Result<()> {
         // of this crate (see `src/lib.rs`) so integration tests can drive them
         // in-process.
         Some(Command::AuditLog { verify }) => doiget_cli::commands::audit_log::run(verify),
+        Some(Command::Provenance { action }) => match action {
+            ProvenanceAction::Migrate { dry_run } => {
+                doiget_cli::commands::provenance::migrate(dry_run)
+            }
+        },
         Some(Command::Config { action }) => doiget_cli::commands::config::run(action),
         Some(Command::Info { ref_ }) => doiget_cli::commands::info::run(ref_),
         Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit),

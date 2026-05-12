@@ -80,8 +80,13 @@ type FetchResult =
   | { ok: true,
       ref: string,
       source: "crossref" | "unpaywall" | "arxiv"
-            | "openalex" | "s2" | "doaj"
+            | "openalex" | "s2" | "doaj" | "oa-publisher"
             | "tdm-elsevier" | "tdm-aps" | "tdm-springer",
+      // ADR-0021 §4 / ADR-0024 (Slice 4): the resolver profile under
+      // which the canonical-digest for this fetch was minted. Equal to
+      // `source` verbatim in Slice 4; kept distinct so future slices
+      // can decouple the two when overlapping resolvers ship.
+      resolver_profile: string,
       path: string,
       license: string,
       size_bytes: number,
@@ -245,6 +250,10 @@ type MetadataOnlyResult =
   | { ok: true,
       ref: string,
       source: "crossref" | "unpaywall" | "arxiv",
+      // ADR-0021 §4 / ADR-0024: the resolver profile under which the
+      // canonical-digest for this metadata-only call was minted.
+      // Equal to `source` verbatim in Slice 4.
+      resolver_profile: string,
       license: string,
       oa_url: string | null,
       metadata: object,
