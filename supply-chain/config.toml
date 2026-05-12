@@ -470,16 +470,16 @@ criteria = "safe-to-deploy"
 version = "1.11.0"
 criteria = "safe-to-run"
 
+[[exemptions.quick-xml]]
+version = "0.36.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.quinn]]
 version = "0.11.9"
 criteria = "safe-to-deploy"
 
 [[exemptions.quinn-proto]]
 version = "0.11.14"
-criteria = "safe-to-deploy"
-
-[[exemptions.quick-xml]]
-version = "0.36.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.quote]]
