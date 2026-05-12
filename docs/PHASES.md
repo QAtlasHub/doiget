@@ -99,7 +99,7 @@ Phase 0 is complete when **all** of the following are committed.
 
 ### Test fixtures
 
-- [ ] `tests/fixtures/safekey/vectors.json` — 100 reference test vectors. (13/100; full set Phase 0 final)
+- [x] `tests/fixtures/safekey/vectors.json` — 100 reference test vectors.
 - [x] `tests/fixtures/golden/` — placeholder.
 
 ### Pre-flight items (must be confirmed before Phase 0 begins)

@@ -14,6 +14,77 @@ Phase 0 (design + scaffolding). No version tag is published in this phase; the
 workspace stays at `0.0.0` until Phase 6. See [docs/PHASES.md](docs/PHASES.md)
 for the full Phase 0 deliverable checklist.
 
+### Slice 3 — safekey 100 reference test vectors
+
+- **(D.1)** Expanded `tests/fixtures/safekey/vectors.json` from the
+  13-entry Phase 0 placeholder to the full NORMATIVE 100-entry set
+  declared by [docs/SAFEKEY.md](docs/SAFEKEY.md) §5 and ADR-0007.
+  Vectors are grouped by purpose so every branch of the algorithm
+  (`docs/SAFEKEY.md` §3) is exercised:
+  - 25 × Group A — canonical DOI mapping (varied registrant widths
+    4-7 digits, slash/dot/dash/mixed-case suffixes, real-publisher-shape
+    patterns from synthetic Crossref test prefixes).
+  - 25 × Group B — escape/collapse/trim edges: spaces, `+`, `;`, `:`,
+    `,`, `&`, `=`, `?`, `#`, `*`, `|`, parentheses/brackets/braces,
+    extra slashes, dash runs (NOT collapsed), underscore runs
+    (collapsed), dot runs (NOT collapsed), leading `-`/`_`, trailing
+    `.`/`_`, and an all-forbidden suffix that collapses to the bare
+    `doi_10.<reg>` prefix.
+  - 10 × Group C — length > 192 truncation + 8-hex SHA-256 suffix
+    branch: 181-char, 200-char, 250-char, and 500-char `aaaa…` cases,
+    a mixed `abab…` repeat, a `xyz-` repeat, a forbidden-char repeat
+    (`foo bar foo bar…`), an `A1B2C3.` repeat, a `pqr-stu.` repeat,
+    and a `mixed.case-data_` repeat. Each pins the exact byte 192/
+    `_`/8-hex-suffix output produced by `Ref::safekey`.
+  - 20 × Group D — arXiv basic + version + old-style category/serial:
+    modern `YYMM.NNNNN`, `vN` and `vNN` version suffixes, old-style
+    `hep-th/9711200`, `math.AG/0301001`, `cond-mat/9501001v3`,
+    `gr-qc`, `hep-ph`, `astro-ph`, `math.DG`, `cs.LG`, and 5-digit
+    serial corner cases.
+  - 10 × Group E — non-ASCII inputs covering CJK (Chinese, Japanese
+    kanji + katakana), Greek, Cyrillic, Arabic, Hebrew, mixed
+    ASCII + non-ASCII, and emoji. Each uses a distinct ASCII prefix
+    so the resulting safekeys do not collide (per the existing
+    collision-caveat note in the fixture).
+  - 10 × Group F — synthetic stress: all-underscore suffix, single-
+    char suffix, the exact 192-byte boundary (no hash), 191-byte
+    under-boundary, all-dots, all-dashes, alternating dot/dash, all-
+    forbidden punctuation, the one-of-each-allowed-special `a-b.c_d`,
+    and a surrounding-whitespace case.
+
+  The two intentionally-colliding vectors (`foo bar` and `foo  bar`)
+  are preserved and called out in the fixture header so the
+  `_`-run-collapse step stays pinned.
+
+- **(D.2)** Tightened `safekey_matches_reference_vectors` in
+  `crates/doiget-core/src/lib.rs::tests` from `assert!(len >= 13)` to
+  `assert_eq!(len, 100)`, so the fixture cannot silently grow or shrink
+  without a coordinated ADR-0007 / SAFEKEY.md bump. The iteration body
+  already covers every entry — no other test changes were needed.
+
+- **(D.3)** Upgraded `.github/workflows/safekey-vectors.yml` from a
+  fixture-schema-only validator to a full parity gate: a new
+  `cargo test -p doiget-core --lib --no-default-features --features
+  oa-only safekey_` step runs the NORMATIVE 100-vector test and the
+  pre-existing `safekey_truncates_long_inputs_with_sha256_suffix`
+  long-input test on every PR/push that touches `safekey/**`,
+  `lib.rs`, or the workflow file. Added a hard `100`-count check in
+  the `jq` schema step. The cross-tool Julia parity check
+  (BiblioFetch.jl ↔ doiget) remains DEFERRED to Phase 2 per
+  `docs/PHASES.md` §2 ("Pre-flight items"); the workflow header
+  comment now states this explicitly.
+
+- **(D.4)** Flipped the `tests/fixtures/safekey/vectors.json` entry in
+  `docs/PHASES.md` §"Test fixtures" from `- [ ] … (13/100; full set
+  Phase 0 final)` to `- [x] … 100 reference test vectors.`
+
+No new runtime dependencies. No public API changes. Verification:
+`cargo fmt --check`, `cargo build --workspace`, `cargo test
+--workspace`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+--no-default-features --features oa-only`, `cargo deny check` all
+green locally.
+
 ### Slice 2 — MCP doiget_fetch_paper + doiget_batch_fetch
 
 - **(C.1)** Extracted the single-fetch and batch-fetch orchestrators
