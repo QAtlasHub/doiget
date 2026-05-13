@@ -52,7 +52,7 @@ use doiget_core::orchestrator::{
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
 use doiget_core::source::{FetchContext, FetchError};
-use doiget_core::store::FsStore;
+use doiget_core::store::{EntryInfo, FsStore, Store};
 use doiget_core::{
     CapabilityProfile, DenialContext, ErrorCode, RateLimits, Ref, MAX_BATCH_REFS, SCHEMA_VERSION,
     VERSION,
@@ -616,6 +616,277 @@ impl Server {
             ))),
         }
     }
+
+    /// `doiget_info` — read the metadata for a stored entry. Read-only.
+    ///
+    /// Per `docs/MCP_TOOLS.md` §1 (Phase 3 baseline). Mirrors the CLI's
+    /// `doiget info <ref>` subcommand: opens the configured store, reads
+    /// the metadata TOML for the supplied ref's safekey, and surfaces it
+    /// as a JSON object in the success envelope. No network. No
+    /// provenance row (this is a local-only inspection).
+    #[tool(
+        description = "WHEN TO USE: Inspect a stored entry's metadata locally; the entry must already have been fetched.\n\
+                       INPUTS: ref (DOI or arXiv id).\n\
+                       OUTPUTS: { ok: true, ref, safekey, metadata: <object>|null } OR { ok:false, ref, error }.\n\
+                       COSTS: <10 ms local read.\n\
+                       SIDE EFFECTS: none.\n\
+                       LIMITS: A missing entry surfaces as { ok: true, metadata: null } — NOT an error envelope. Check `metadata !== null` to confirm presence; call doiget_fetch_paper first when `metadata` is null."
+    )]
+    async fn doiget_info(
+        &self,
+        Parameters(input): Parameters<InfoInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let ref_ = match Ref::parse(&input.ref_) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &format!("invalid ref: {e}"),
+                )));
+            }
+        };
+        let safekey = ref_.safekey();
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InternalError,
+                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+        match store.read(&safekey) {
+            Ok(Some(m)) => {
+                let payload = match serde_json::to_value(&m) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Ok(CallToolResult::structured(read_path_error_envelope(
+                            Some(&input.ref_),
+                            ErrorCode::InternalError,
+                            &format!("metadata serialization failed: {e}"),
+                        )));
+                    }
+                };
+                Ok(CallToolResult::structured(json!({
+                    "ok": true,
+                    "ref": input.ref_,
+                    "safekey": safekey.as_str(),
+                    "metadata": payload,
+                })))
+            }
+            Ok(None) => {
+                // "Not in store" is NOT an error envelope — the closed
+                // ErrorCode set has no NotFound variant. Surface as a
+                // success envelope with `metadata: null` so agents can
+                // pattern-match on the field without parsing an error.
+                Ok(CallToolResult::structured(json!({
+                    "ok": true,
+                    "ref": input.ref_,
+                    "safekey": safekey.as_str(),
+                    "metadata": Value::Null,
+                })))
+            }
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(&input.ref_),
+                ErrorCode::StoreError,
+                &format!("store read failed: {e}"),
+            ))),
+        }
+    }
+
+    /// `doiget_search_local` — case-insensitive substring search over the
+    /// local store's metadata. Read-only.
+    ///
+    /// Per `docs/MCP_TOOLS.md` §1. Backed by `Store::search`, which today
+    /// is a linear scan of `<root>/.metadata/*.toml` (a Phase 2+ tantivy
+    /// or sqlite-fts index will swap in transparently).
+    #[tool(
+        description = "WHEN TO USE: Find stored entries whose title / authors / venue / publisher contain a query substring (case-insensitive).\n\
+                       INPUTS: query (string), limit (optional integer, default 50, max 200).\n\
+                       OUTPUTS: { ok: true, query, entries: [{ safekey, title, year, fetched_at }] } OR { ok:false, error }.\n\
+                       COSTS: O(N) over the local store; <100 ms for a few thousand entries.\n\
+                       SIDE EFFECTS: none.\n\
+                       LIMITS: Returns at most `limit` entries (capped at 200)."
+    )]
+    async fn doiget_search_local(
+        &self,
+        Parameters(input): Parameters<SearchLocalInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let limit = clamp_list_limit(input.limit);
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    None,
+                    ErrorCode::InternalError,
+                    "could not resolve store root",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    None,
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+        match store.search(&input.query, limit) {
+            Ok(entries) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "query": input.query,
+                "entries": entries.iter().map(entry_info_to_json).collect::<Vec<_>>(),
+            }))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                None,
+                ErrorCode::StoreError,
+                &format!("store search failed: {e}"),
+            ))),
+        }
+    }
+
+    /// `doiget_list_recent` — most-recent stored entries by
+    /// `[doiget].fetched_at`. Read-only.
+    ///
+    /// Per `docs/MCP_TOOLS.md` §1. Backed by `Store::list_recent`.
+    #[tool(
+        description = "WHEN TO USE: List the most-recently fetched entries in the local store.\n\
+                       INPUTS: limit (optional integer, default 50, max 200).\n\
+                       OUTPUTS: { ok: true, entries: [{ safekey, title, year, fetched_at }] } OR { ok:false, error }.\n\
+                       COSTS: <100 ms for a few thousand entries.\n\
+                       SIDE EFFECTS: none.\n\
+                       LIMITS: Returns at most `limit` entries (capped at 200)."
+    )]
+    async fn doiget_list_recent(
+        &self,
+        Parameters(input): Parameters<ListRecentInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let limit = clamp_list_limit(input.limit);
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    None,
+                    ErrorCode::InternalError,
+                    "could not resolve store root",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    None,
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+        match store.list_recent(limit) {
+            Ok(entries) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "entries": entries.iter().map(entry_info_to_json).collect::<Vec<_>>(),
+            }))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                None,
+                ErrorCode::StoreError,
+                &format!("store list_recent failed: {e}"),
+            ))),
+        }
+    }
+
+    /// `doiget_paper_pdf_path` — return the absolute path of a cached PDF.
+    /// **Does not read, parse, or transmit the PDF content.**
+    ///
+    /// Per `docs/MCP_TOOLS.md` §1 — the spec emphasizes that this tool
+    /// returns a path *string*, not bytes. The tool verifies the entry
+    /// exists via `Store::read`, then returns the projected
+    /// `<root>/<safekey>.pdf` path. If the metadata entry exists but no
+    /// PDF was fetched (e.g. the metadata-only fallback path), `path`
+    /// is `null` and `pdf_exists` is `false`.
+    #[tool(
+        description = "WHEN TO USE: Locate the local PDF file for a stored entry (returns a path, NOT the PDF bytes).\n\
+                       INPUTS: ref (DOI or arXiv id).\n\
+                       OUTPUTS: { ok: true, ref, safekey, path: string|null, pdf_exists: bool } OR { ok:false, ref, error }.\n\
+                       COSTS: <10 ms local read.\n\
+                       SIDE EFFECTS: none. NEVER reads or transmits PDF bytes.\n\
+                       LIMITS: Both 'no metadata entry' and 'metadata exists but PDF file missing' surface as { ok: true, path: null, pdf_exists: false } — call doiget_info to distinguish the two cases. Returns an ok:false envelope only on invalid ref / store-open failure."
+    )]
+    async fn doiget_paper_pdf_path(
+        &self,
+        Parameters(input): Parameters<PaperPdfPathInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let ref_ = match Ref::parse(&input.ref_) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &format!("invalid ref: {e}"),
+                )));
+            }
+        };
+        let safekey = ref_.safekey();
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InternalError,
+                    "could not resolve store root",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+        match store.read(&safekey) {
+            Ok(Some(_)) => {
+                let pdf_path = store_root.join(format!("{}.pdf", safekey.as_str()));
+                let exists = pdf_path.exists();
+                Ok(CallToolResult::structured(json!({
+                    "ok": true,
+                    "ref": input.ref_,
+                    "safekey": safekey.as_str(),
+                    "path": if exists { Value::String(pdf_path.to_string()) } else { Value::Null },
+                    "pdf_exists": exists,
+                })))
+            }
+            Ok(None) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "ref": input.ref_,
+                "safekey": safekey.as_str(),
+                "path": Value::Null,
+                "pdf_exists": false,
+            }))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(&input.ref_),
+                ErrorCode::StoreError,
+                &format!("store read failed: {e}"),
+            ))),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -646,6 +917,115 @@ pub struct MetadataOnlyInput {
     /// either omit the field or pass `false`.
     #[serde(default)]
     pub dry_run: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Slice 8 read-path inputs + helpers
+// ---------------------------------------------------------------------------
+
+/// JSON-schema-derived input for the `doiget_info` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct InfoInput {
+    /// DOI or arXiv id. Validated via `Ref::parse`; failures surface as
+    /// `INVALID_REF`.
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+}
+
+/// JSON-schema-derived input for the `doiget_search_local` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct SearchLocalInput {
+    /// Case-insensitive substring matched against title / authors /
+    /// venue / publisher.
+    pub query: String,
+    /// Maximum number of results to return. `None` means default (50);
+    /// values >200 are clamped to 200.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// JSON-schema-derived input for the `doiget_list_recent` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct ListRecentInput {
+    /// Maximum number of results to return. `None` means default (50);
+    /// values >200 are clamped to 200.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// JSON-schema-derived input for the `doiget_paper_pdf_path` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PaperPdfPathInput {
+    /// DOI or arXiv id. Validated via `Ref::parse`; failures surface as
+    /// `INVALID_REF`.
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+}
+
+/// Default + max clamp for the `limit` field on `doiget_search_local`
+/// and `doiget_list_recent`. The cap mirrors the
+/// `crates/doiget-cli/src/commands/search.rs::DEFAULT_LIMIT` ceiling.
+///
+/// `Some(0)` is treated as "use default" rather than literal zero — a
+/// caller passing `limit: 0` would otherwise get an empty array that
+/// is indistinguishable from "store is empty / no matches", which is
+/// a silent-failure trap. Callers that genuinely want "return nothing"
+/// should not call the tool at all.
+fn clamp_list_limit(limit: Option<u32>) -> usize {
+    const DEFAULT: u32 = 50;
+    const MAX: u32 = 200;
+    let v = match limit {
+        None | Some(0) => DEFAULT,
+        Some(n) => n,
+    };
+    let clamped = v.min(MAX);
+    clamped as usize
+}
+
+/// Project an [`EntryInfo`] summary into the JSON envelope shape used by
+/// `doiget_search_local` and `doiget_list_recent`.
+///
+/// `fetched_at` is rendered as RFC3339 UTC (`%Y-%m-%dT%H:%M:%SZ`) to
+/// match the `docs/STORE.md` §2 on-disk wire format. `null` when the
+/// stored entry pre-dates the `fetched_at` field.
+fn entry_info_to_json(entry: &EntryInfo) -> Value {
+    json!({
+        "safekey": entry.safekey.as_str(),
+        "title": entry.title,
+        "year": entry.year,
+        "fetched_at": entry.fetched_at.map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+    })
+}
+
+/// Build the `{ok:false, error:{code, message}, ref}` envelope used
+/// by all four Slice-8 read-path tools. Mirrors
+/// `metadata_only_error_envelope` but additionally surfaces `ref` so
+/// the envelope is self-describing without inspecting the request.
+///
+/// `ref` is **always** emitted — `null` when the caller had no ref to
+/// surface (e.g., a `doiget_search_local` store-open failure with no
+/// per-ref context). This shape-symmetry with the success envelopes
+/// (which always carry `"ref"`) means consumers can pattern-match
+/// uniformly across `ok:true` / `ok:false` envelopes.
+fn read_path_error_envelope(ref_str: Option<&str>, code: ErrorCode, message: &str) -> Value {
+    json!({
+        "ok": false,
+        "ref": ref_str.map(Value::from).unwrap_or(Value::Null),
+        "error": {
+            "code": code,
+            "message": message,
+        },
+    })
 }
 
 /// Build the `{ok:false, error:{...}}` envelope used by
