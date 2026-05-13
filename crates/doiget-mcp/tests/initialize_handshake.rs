@@ -97,6 +97,12 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
         names.contains(&"doiget_batch_fetch"),
         "tools/list must include doiget_batch_fetch; got: {names:?}"
     );
+    // Slice 7: doiget_resolve_paper advertised — metadata resolution with
+    // no local persistence (audit log row only).
+    assert!(
+        names.contains(&"doiget_resolve_paper"),
+        "tools/list must include doiget_resolve_paper; got: {names:?}"
+    );
     // Slice 8: 4x read-path tools advertised.
     assert!(
         names.contains(&"doiget_info"),
