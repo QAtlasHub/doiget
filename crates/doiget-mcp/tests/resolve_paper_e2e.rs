@@ -197,7 +197,10 @@ async fn doiget_resolve_paper_arxiv_happy_path_returns_metadata_envelope() -> an
     // Bind the store root to the same tempdir so the no-store-write
     // assertion below is meaningful — without this, an accidental
     // store write would target the developer's real ~/papers/.
-    env.set("DOIGET_STORE_ROOT", td.path().to_str().expect("utf-8 tempdir"));
+    env.set(
+        "DOIGET_STORE_ROOT",
+        td.path().to_str().expect("utf-8 tempdir"),
+    );
 
     let (client, server_handle) = boot_in_memory_server().await?;
 
@@ -287,7 +290,10 @@ async fn doiget_resolve_paper_doi_crossref_happy_path_returns_metadata_envelope(
     env.set("DOIGET_LOG_PATH", log_path.as_str());
     env.set("DOIGET_CONTACT_EMAIL", "test@example.org");
     // Bind store root to the tempdir; see arxiv test for rationale.
-    env.set("DOIGET_STORE_ROOT", td.path().to_str().expect("utf-8 tempdir"));
+    env.set(
+        "DOIGET_STORE_ROOT",
+        td.path().to_str().expect("utf-8 tempdir"),
+    );
 
     let (client, server_handle) = boot_in_memory_server().await?;
 
@@ -309,7 +315,10 @@ async fn doiget_resolve_paper_doi_crossref_happy_path_returns_metadata_envelope(
         "envelope: {structured:?}"
     );
     assert_eq!(structured["source"], serde_json::json!("crossref"));
-    assert_eq!(structured["resolver_profile"], serde_json::json!("crossref"));
+    assert_eq!(
+        structured["resolver_profile"],
+        serde_json::json!("crossref")
+    );
     assert_eq!(structured["ref"], serde_json::json!("10.1234/example"));
     // Crossref does not surface a license directly; the channel for
     // license is Unpaywall (not consulted on the happy path).
