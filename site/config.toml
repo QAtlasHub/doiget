@@ -13,12 +13,11 @@ base_url = "https://sotashimozono.github.io/doiget"
 title = "doiget"
 description = "DOIs and arXiv ids -> local PDFs, through official APIs. The agent-facing companion to BiblioFetch.jl."
 default_language = "en"
-theme = ""
 
 compile_sass = false
 minify_html = false
 build_search_index = true
-generate_feed = false
+generate_feeds = false
 
 taxonomies = []
 
