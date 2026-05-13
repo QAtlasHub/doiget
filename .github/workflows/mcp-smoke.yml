@@ -1,29 +1,23 @@
-# mcp-smoke — MCP server stdio smoke test
+# mcp-smoke — MCP server stdio smoke test (Slice 9 / Phase 3).
 #
-# STATUS (Phase 0): placeholder. Reserves the workflow slot referenced by
-# docs/MCP_TOOLS.md §9 ("A CI workflow `mcp-smoke.yml` (Phase 3) spawns the
-# server, sends a minimal sequence ...") so the path filter below already
-# triggers on changes that will matter once the real check lands.
+# Two complementary jobs:
 #
-# PHASE 3 SCOPE (the work this file will do once doiget-mcp exists):
-#   1. Install the rust toolchain pinned by rust-toolchain.toml.
-#   2. `cargo build -p doiget-mcp` (default features = oa-only).
-#   3. Spawn the resulting binary as a child process.
-#   4. Write a minimal JSON-RPC sequence to its stdin per ADR-0001
-#      (stdio only, no network transport): `initialize` then `tools/list`
-#      then `tools/call doiget_health`.
-#   5. Assert the `tools/list` response shape: exactly the 9 Phase 3
-#      tools enumerated in docs/MCP_TOOLS.md §1, all snake_case with the
-#      `doiget_` prefix per ADR-0012.
-#   6. Assert that no stray bytes appear on stdout outside JSON-RPC frames
-#      (per docs/SECURITY.md §3 — banner / log / progress on stdout is
-#      forbidden; tracing must go to stderr).
-#   7. Assert no telemetry / outbound network calls during the smoke run
-#      per ADR-0015 (no-telemetry posture).
+#   1. `in-process-smoke` — runs the cargo-side MCP smoke tests
+#      (initialize_handshake + the per-tool e2e binaries). These tests
+#      stand up the rmcp server inside the same process via a duplex
+#      pipe and exercise `initialize`, `tools/list`, `tools/call` for
+#      every wired Phase-3 tool. Hermetic and OS-independent on the
+#      Cargo side; ubuntu-latest is enough.
 #
-# Until Phase 3, this workflow only prints a placeholder line and exits 0
-# so the path-filter trigger and required-check wiring can be validated
-# end-to-end without blocking unrelated PRs.
+#   2. `stdout-purity` — exercises the REAL `doiget serve` subprocess
+#      stdout path. The in-process tests cannot see whether the binary
+#      accidentally writes diagnostics to stdout outside JSON-RPC
+#      frames (docs/SECURITY.md §3 forbids that — tracing must go to
+#      stderr). This job spawns `target/release/doiget serve`, sends a
+#      minimal initialize + tools/list sequence via stdin, captures
+#      stdout to a file, and asserts every line of captured stdout
+#      parses as a JSON object. Any line that fails to parse (a
+#      banner, a log line, a progress message) is a hard failure.
 
 name: mcp-smoke
 
@@ -31,12 +25,16 @@ on:
   pull_request:
     paths:
       - "crates/doiget-mcp/**"
+      - "crates/doiget-cli/**"
+      - "crates/doiget-core/**"
       - "docs/MCP_TOOLS.md"
       - ".github/workflows/mcp-smoke.yml"
   push:
     branches: [main]
     paths:
       - "crates/doiget-mcp/**"
+      - "crates/doiget-cli/**"
+      - "crates/doiget-core/**"
       - "docs/MCP_TOOLS.md"
       - ".github/workflows/mcp-smoke.yml"
 
@@ -48,12 +46,132 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  placeholder:
-    name: placeholder (Phase 0)
+  in-process-smoke:
+    name: in-process smoke (cargo test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
-      - name: Announce placeholder
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4   # v2.9.1
+      - name: cargo test (doiget-mcp)
         run: |
-          echo "mcp-smoke: Phase 0 placeholder — no MCP server invocation."
-          echo "Phase 3 will pipe a JSON-RPC initialize request to doiget-mcp and assert the tools/list response per ADR-0001 (stdio only) and ADR-0012 (tool naming)."
+          cargo test -p doiget-mcp --tests
+
+  stdout-purity:
+    name: stdout purity (doiget serve subprocess)
+    runs-on: ubuntu-latest
+    needs: in-process-smoke
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4   # v2.9.1
+      - name: Build doiget-cli (release)
+        run: |
+          cargo build -p doiget-cli --release
+      - name: Run stdout-purity probe
+        # Send `initialize` + initialized notification + `tools/list` +
+        # `tools/call doiget_health` over stdin (the full §9 sequence
+        # documented in docs/MCP_TOOLS.md), close stdin to trigger
+        # graceful shutdown, capture stdout. Every non-blank line of
+        # stdout MUST parse as JSON (rmcp's stdio transport emits one
+        # JSON object per line). Stderr is allowed to carry tracing
+        # output (docs/SECURITY.md §3 reserves stdout, not stderr).
+        #
+        # Hard-failure cases (each surfaces as `::error::...`):
+        #   - server exits with a status other than 0 (clean exit) or
+        #     124 (timeout on stdin EOF — the expected graceful path);
+        #   - stdout is empty;
+        #   - any non-blank stdout line is not valid JSON;
+        #   - the `tools/list` response does not advertise `doiget_health`;
+        #   - the `tools/call doiget_health` response is not `ok: true`.
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/mcp-smoke
+          # `timeout` exits 124 when it kills the child; in this script
+          # that is the expected case because the child completes its
+          # JSON-RPC responses but the rmcp service loop waits for
+          # stdin EOF before unwinding. We separate that benign exit
+          # from real failures (panic = 101, SIGSEGV = 139, binary
+          # missing = 127, etc.) so a crash mid-stream cannot slip
+          # through as a silent green.
+          set +e
+          (
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"mcp-smoke","version":"0.0.0"}}}'
+            printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+            printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+            printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"doiget_health"}}'
+          ) | timeout 10s ./target/release/doiget serve \
+              > /tmp/mcp-smoke/stdout.log \
+              2> /tmp/mcp-smoke/stderr.log
+          serve_exit=$?
+          # Restore BOTH errexit and pipefail — `set +e` above may have
+          # implicitly cleared pipefail in some bash builds; `set -e`
+          # alone would leave pipefail off and silently break future
+          # pipeline-using commands appended below.
+          set -eo pipefail
+          echo "doiget serve exit code: $serve_exit"
+          echo "----- stdout -----"
+          cat /tmp/mcp-smoke/stdout.log
+          echo "----- stderr (informational) -----"
+          # stderr.log is always created by `2> ...` redirection above
+          # (even on serve failure), so no -f guard needed.
+          tail -n 50 /tmp/mcp-smoke/stderr.log
+          if [ "$serve_exit" -ne 0 ] && [ "$serve_exit" -ne 124 ]; then
+            echo "::error::doiget serve exited $serve_exit (only 0 or 124 are accepted)"
+            exit 1
+          fi
+          if [ ! -s /tmp/mcp-smoke/stdout.log ]; then
+            echo "::error::doiget serve produced empty stdout — no JSON-RPC responses written"
+            exit 1
+          fi
+          # Single-invocation Python validator: parses every non-blank
+          # line, asserts the tools/list response advertises
+          # doiget_health, and asserts the doiget_health response shape.
+          # Per-line error messages include line numbers for fast triage.
+          python3 <<'PYEOF'
+          import json, sys
+          lines = []
+          for i, raw in enumerate(open("/tmp/mcp-smoke/stdout.log"), 1):
+              line = raw.rstrip('\n')
+              if not line:
+                  continue
+              try:
+                  lines.append((i, json.loads(line)))
+              except json.JSONDecodeError as e:
+                  print(f"::error::Non-JSON line {i}: {line!r} ({e})")
+                  sys.exit(1)
+
+          # tools/list response (id=2): the rmcp server MUST advertise
+          # doiget_health (per docs/MCP_TOOLS.md §1 baseline).
+          tl = next((obj for _, obj in lines if obj.get("id") == 2), None)
+          if tl is None:
+              print("::error::no tools/list response (id=2) on stdout")
+              sys.exit(1)
+          tools = (tl.get("result") or {}).get("tools") or []
+          names = [t.get("name") for t in tools]
+          if "doiget_health" not in names:
+              print(f"::error::tools/list did not advertise doiget_health; got: {names}")
+              sys.exit(1)
+          print(f"tools/list advertises {len(names)} tools: {names}")
+
+          # tools/call doiget_health response (id=3): structured
+          # content MUST report ok=true.
+          th = next((obj for _, obj in lines if obj.get("id") == 3), None)
+          if th is None:
+              print("::error::no tools/call doiget_health response (id=3) on stdout")
+              sys.exit(1)
+          result = th.get("result") or {}
+          structured = result.get("structuredContent") or {}
+          if structured.get("ok") is not True:
+              print(f"::error::doiget_health did not return ok=true; got: {result}")
+              sys.exit(1)
+          print("doiget_health returned ok=true")
+          PYEOF
+          echo "stdout-purity: OK"
+      - name: Upload logs (always)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+        with:
+          name: mcp-smoke-logs
+          path: /tmp/mcp-smoke/
+          retention-days: 7
