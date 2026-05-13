@@ -627,10 +627,10 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: Inspect a stored entry's metadata locally; the entry must already have been fetched.\n\
                        INPUTS: ref (DOI or arXiv id).\n\
-                       OUTPUTS: { ok: true, ref, safekey, metadata } OR { ok:false, ref, error }.\n\
+                       OUTPUTS: { ok: true, ref, safekey, metadata: <object>|null } OR { ok:false, ref, error }.\n\
                        COSTS: <10 ms local read.\n\
                        SIDE EFFECTS: none.\n\
-                       LIMITS: Returns NOT_FOUND-class error when the entry is not present in the store."
+                       LIMITS: A missing entry surfaces as { ok: true, metadata: null } — NOT an error envelope. Check `metadata !== null` to confirm presence; call doiget_fetch_paper first when `metadata` is null."
     )]
     async fn doiget_info(
         &self,
@@ -824,7 +824,7 @@ impl Server {
                        OUTPUTS: { ok: true, ref, safekey, path: string|null, pdf_exists: bool } OR { ok:false, ref, error }.\n\
                        COSTS: <10 ms local read.\n\
                        SIDE EFFECTS: none. NEVER reads or transmits PDF bytes.\n\
-                       LIMITS: Returns NOT_FOUND-class error when the metadata entry is not present."
+                       LIMITS: Both 'no metadata entry' and 'metadata exists but PDF file missing' surface as { ok: true, path: null, pdf_exists: false } — call doiget_info to distinguish the two cases. Returns an ok:false envelope only on invalid ref / store-open failure."
     )]
     async fn doiget_paper_pdf_path(
         &self,
@@ -925,6 +925,7 @@ pub struct MetadataOnlyInput {
 
 /// JSON-schema-derived input for the `doiget_info` MCP tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct InfoInput {
     /// DOI or arXiv id. Validated via `Ref::parse`; failures surface as
@@ -936,6 +937,7 @@ pub struct InfoInput {
 
 /// JSON-schema-derived input for the `doiget_search_local` MCP tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct SearchLocalInput {
     /// Case-insensitive substring matched against title / authors /
@@ -949,6 +951,7 @@ pub struct SearchLocalInput {
 
 /// JSON-schema-derived input for the `doiget_list_recent` MCP tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct ListRecentInput {
     /// Maximum number of results to return. `None` means default (50);
@@ -959,6 +962,7 @@ pub struct ListRecentInput {
 
 /// JSON-schema-derived input for the `doiget_paper_pdf_path` MCP tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct PaperPdfPathInput {
     /// DOI or arXiv id. Validated via `Ref::parse`; failures surface as
@@ -971,10 +975,19 @@ pub struct PaperPdfPathInput {
 /// Default + max clamp for the `limit` field on `doiget_search_local`
 /// and `doiget_list_recent`. The cap mirrors the
 /// `crates/doiget-cli/src/commands/search.rs::DEFAULT_LIMIT` ceiling.
+///
+/// `Some(0)` is treated as "use default" rather than literal zero — a
+/// caller passing `limit: 0` would otherwise get an empty array that
+/// is indistinguishable from "store is empty / no matches", which is
+/// a silent-failure trap. Callers that genuinely want "return nothing"
+/// should not call the tool at all.
 fn clamp_list_limit(limit: Option<u32>) -> usize {
     const DEFAULT: u32 = 50;
     const MAX: u32 = 200;
-    let v = limit.unwrap_or(DEFAULT);
+    let v = match limit {
+        None | Some(0) => DEFAULT,
+        Some(n) => n,
+    };
     let clamped = v.min(MAX);
     clamped as usize
 }
@@ -994,24 +1007,25 @@ fn entry_info_to_json(entry: &EntryInfo) -> Value {
     })
 }
 
-/// Build the `{ok:false, error:{code, message}}` envelope used by all
-/// four Slice-8 read-path tools. Mirrors `metadata_only_error_envelope`
-/// but additionally surfaces `ref` (when the caller had one) so the
-/// envelope is self-describing without inspecting the request.
+/// Build the `{ok:false, error:{code, message}, ref}` envelope used
+/// by all four Slice-8 read-path tools. Mirrors
+/// `metadata_only_error_envelope` but additionally surfaces `ref` so
+/// the envelope is self-describing without inspecting the request.
+///
+/// `ref` is **always** emitted — `null` when the caller had no ref to
+/// surface (e.g., a `doiget_search_local` store-open failure with no
+/// per-ref context). This shape-symmetry with the success envelopes
+/// (which always carry `"ref"`) means consumers can pattern-match
+/// uniformly across `ok:true` / `ok:false` envelopes.
 fn read_path_error_envelope(ref_str: Option<&str>, code: ErrorCode, message: &str) -> Value {
-    let mut env = json!({
+    json!({
         "ok": false,
+        "ref": ref_str.map(Value::from).unwrap_or(Value::Null),
         "error": {
             "code": code,
             "message": message,
         },
-    });
-    if let Some(r) = ref_str {
-        env.as_object_mut()
-            .expect("error envelope is a JSON object")
-            .insert("ref".to_string(), Value::String(r.to_string()));
-    }
-    env
+    })
 }
 
 /// Build the `{ok:false, error:{...}}` envelope used by

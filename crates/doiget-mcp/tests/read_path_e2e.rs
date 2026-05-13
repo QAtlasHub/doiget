@@ -288,3 +288,65 @@ async fn doiget_paper_pdf_path_no_entry_returns_null_path() -> anyhow::Result<()
     drop(env);
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// deny_unknown_fields enforcement
+// ---------------------------------------------------------------------------
+
+/// Per `docs/MCP_TOOLS.md` §10, the 4 read-path tools are in the
+/// "dry_run does not apply" set. All four `*Input` structs carry both
+/// `#[serde(deny_unknown_fields)]` and `#[schemars(deny_unknown_fields)]`
+/// so an attempted `dry_run` field is rejected at the deserialize
+/// boundary regardless of whether rmcp validates against the
+/// advertised JSON schema.
+///
+/// This test sends `{"ref": "10.1234/example", "dry_run": true}` to
+/// `doiget_info` and asserts the call surfaces as an error — it MUST
+/// NOT be silently accepted (which would happen if only the
+/// schemars-side attribute were present and rmcp didn't pre-validate).
+#[tokio::test]
+#[serial_test::serial]
+async fn doiget_info_dry_run_field_is_rejected() -> anyhow::Result<()> {
+    let (_td, root) = temp_store_root();
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", root.as_str());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+    args.insert("dry_run".to_string(), serde_json::json!(true));
+
+    let outcome = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_info").with_arguments(args))
+        .await;
+
+    match outcome {
+        Err(_) => {
+            // Transport-level rejection — expected with
+            // #[serde(deny_unknown_fields)] in place.
+        }
+        Ok(result) => {
+            // Some MCP hosts surface deserialize errors as
+            // is_error=true CallToolResult; that's also acceptable.
+            // The thing that MUST NOT happen is a success envelope
+            // with the dry_run field silently dropped.
+            assert!(
+                result.is_error.unwrap_or(false)
+                    || result
+                        .structured_content
+                        .as_ref()
+                        .map(|s| s["ok"] == serde_json::json!(false))
+                        .unwrap_or(false),
+                "dry_run field was silently accepted on doiget_info; \
+                 deny_unknown_fields enforcement is missing. result: {result:?}"
+            );
+        }
+    }
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    Ok(())
+}
