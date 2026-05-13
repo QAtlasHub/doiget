@@ -105,7 +105,10 @@ async fn doiget_info_invalid_ref_returns_invalid_ref_envelope() -> anyhow::Resul
         .as_ref()
         .expect("doiget_info uses CallToolResult::structured");
     assert_eq!(structured["ok"], serde_json::json!(false));
-    assert_eq!(structured["error"]["code"], serde_json::json!("INVALID_REF"));
+    assert_eq!(
+        structured["error"]["code"],
+        serde_json::json!("INVALID_REF")
+    );
 
     client.cancel().await?;
     server_handle.await??;
@@ -135,7 +138,10 @@ async fn doiget_info_no_entry_returns_null_metadata() -> anyhow::Result<()> {
         .expect("doiget_info uses CallToolResult::structured");
     assert_eq!(structured["ok"], serde_json::json!(true));
     assert_eq!(structured["ref"], serde_json::json!("10.1234/example"));
-    assert!(structured["safekey"].is_string(), "envelope: {structured:?}");
+    assert!(
+        structured["safekey"].is_string(),
+        "envelope: {structured:?}"
+    );
     assert_eq!(
         structured["metadata"],
         serde_json::Value::Null,
@@ -245,7 +251,10 @@ async fn doiget_paper_pdf_path_invalid_ref_returns_invalid_ref_envelope() -> any
         .as_ref()
         .expect("doiget_paper_pdf_path uses CallToolResult::structured");
     assert_eq!(structured["ok"], serde_json::json!(false));
-    assert_eq!(structured["error"]["code"], serde_json::json!("INVALID_REF"));
+    assert_eq!(
+        structured["error"]["code"],
+        serde_json::json!("INVALID_REF")
+    );
 
     client.cancel().await?;
     server_handle.await??;
@@ -275,7 +284,10 @@ async fn doiget_paper_pdf_path_no_entry_returns_null_path() -> anyhow::Result<()
         .expect("doiget_paper_pdf_path uses CallToolResult::structured");
     assert_eq!(structured["ok"], serde_json::json!(true));
     assert_eq!(structured["ref"], serde_json::json!("10.1234/example"));
-    assert!(structured["safekey"].is_string(), "envelope: {structured:?}");
+    assert!(
+        structured["safekey"].is_string(),
+        "envelope: {structured:?}"
+    );
     assert_eq!(
         structured["path"],
         serde_json::Value::Null,
