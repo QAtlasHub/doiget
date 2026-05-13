@@ -104,12 +104,18 @@ jobs:
               > /tmp/mcp-smoke/stdout.log \
               2> /tmp/mcp-smoke/stderr.log
           serve_exit=$?
-          set -e
+          # Restore BOTH errexit and pipefail — `set +e` above may have
+          # implicitly cleared pipefail in some bash builds; `set -e`
+          # alone would leave pipefail off and silently break future
+          # pipeline-using commands appended below.
+          set -eo pipefail
           echo "doiget serve exit code: $serve_exit"
           echo "----- stdout -----"
           cat /tmp/mcp-smoke/stdout.log
           echo "----- stderr (informational) -----"
-          [ -f /tmp/mcp-smoke/stderr.log ] && tail -n 50 /tmp/mcp-smoke/stderr.log
+          # stderr.log is always created by `2> ...` redirection above
+          # (even on serve failure), so no -f guard needed.
+          tail -n 50 /tmp/mcp-smoke/stderr.log
           if [ "$serve_exit" -ne 0 ] && [ "$serve_exit" -ne 124 ]; then
             echo "::error::doiget serve exited $serve_exit (only 0 or 124 are accepted)"
             exit 1
@@ -122,11 +128,10 @@ jobs:
           # line, asserts the tools/list response advertises
           # doiget_health, and asserts the doiget_health response shape.
           # Per-line error messages include line numbers for fast triage.
-          python3 - /tmp/mcp-smoke/stdout.log <<'PYEOF'
+          python3 <<'PYEOF'
           import json, sys
-          path = sys.argv[1]
           lines = []
-          for i, raw in enumerate(open(path), 1):
+          for i, raw in enumerate(open("/tmp/mcp-smoke/stdout.log"), 1):
               line = raw.rstrip('\n')
               if not line:
                   continue
