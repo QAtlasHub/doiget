@@ -1,29 +1,23 @@
-# mcp-smoke — MCP server stdio smoke test
+# mcp-smoke — MCP server stdio smoke test (Slice 9 / Phase 3).
 #
-# STATUS (Phase 0): placeholder. Reserves the workflow slot referenced by
-# docs/MCP_TOOLS.md §9 ("A CI workflow `mcp-smoke.yml` (Phase 3) spawns the
-# server, sends a minimal sequence ...") so the path filter below already
-# triggers on changes that will matter once the real check lands.
+# Two complementary jobs:
 #
-# PHASE 3 SCOPE (the work this file will do once doiget-mcp exists):
-#   1. Install the rust toolchain pinned by rust-toolchain.toml.
-#   2. `cargo build -p doiget-mcp` (default features = oa-only).
-#   3. Spawn the resulting binary as a child process.
-#   4. Write a minimal JSON-RPC sequence to its stdin per ADR-0001
-#      (stdio only, no network transport): `initialize` then `tools/list`
-#      then `tools/call doiget_health`.
-#   5. Assert the `tools/list` response shape: exactly the 9 Phase 3
-#      tools enumerated in docs/MCP_TOOLS.md §1, all snake_case with the
-#      `doiget_` prefix per ADR-0012.
-#   6. Assert that no stray bytes appear on stdout outside JSON-RPC frames
-#      (per docs/SECURITY.md §3 — banner / log / progress on stdout is
-#      forbidden; tracing must go to stderr).
-#   7. Assert no telemetry / outbound network calls during the smoke run
-#      per ADR-0015 (no-telemetry posture).
+#   1. `in-process-smoke` — runs the cargo-side MCP smoke tests
+#      (initialize_handshake + the per-tool e2e binaries). These tests
+#      stand up the rmcp server inside the same process via a duplex
+#      pipe and exercise `initialize`, `tools/list`, `tools/call` for
+#      every wired Phase-3 tool. Hermetic and OS-independent on the
+#      Cargo side; ubuntu-latest is enough.
 #
-# Until Phase 3, this workflow only prints a placeholder line and exits 0
-# so the path-filter trigger and required-check wiring can be validated
-# end-to-end without blocking unrelated PRs.
+#   2. `stdout-purity` — exercises the REAL `doiget serve` subprocess
+#      stdout path. The in-process tests cannot see whether the binary
+#      accidentally writes diagnostics to stdout outside JSON-RPC
+#      frames (docs/SECURITY.md §3 forbids that — tracing must go to
+#      stderr). This job spawns `target/release/doiget serve`, sends a
+#      minimal initialize + tools/list sequence via stdin, captures
+#      stdout to a file, and asserts every line of captured stdout
+#      parses as a JSON object. Any line that fails to parse (a
+#      banner, a log line, a progress message) is a hard failure.
 
 name: mcp-smoke
 
@@ -31,12 +25,16 @@ on:
   pull_request:
     paths:
       - "crates/doiget-mcp/**"
+      - "crates/doiget-cli/**"
+      - "crates/doiget-core/**"
       - "docs/MCP_TOOLS.md"
       - ".github/workflows/mcp-smoke.yml"
   push:
     branches: [main]
     paths:
       - "crates/doiget-mcp/**"
+      - "crates/doiget-cli/**"
+      - "crates/doiget-core/**"
       - "docs/MCP_TOOLS.md"
       - ".github/workflows/mcp-smoke.yml"
 
@@ -48,12 +46,74 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  placeholder:
-    name: placeholder (Phase 0)
+  in-process-smoke:
+    name: in-process smoke (cargo test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
-      - name: Announce placeholder
+      - name: Install Rust toolchain
+        # rust-toolchain.toml at the repo root pins the channel.
         run: |
-          echo "mcp-smoke: Phase 0 placeholder — no MCP server invocation."
-          echo "Phase 3 will pipe a JSON-RPC initialize request to doiget-mcp and assert the tools/list response per ADR-0001 (stdio only) and ADR-0012 (tool naming)."
+          rustc --version
+          cargo --version
+      - name: cargo test (doiget-mcp)
+        run: |
+          cargo test -p doiget-mcp --tests
+
+  stdout-purity:
+    name: stdout purity (doiget serve subprocess)
+    runs-on: ubuntu-latest
+    needs: in-process-smoke
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
+      - name: Install Rust toolchain
+        run: |
+          rustc --version
+          cargo --version
+      - name: Build doiget-cli (release)
+        run: |
+          cargo build -p doiget-cli --release
+      - name: Run stdout-purity probe
+        # Send `initialize` + initialized notification + `tools/list`
+        # over stdin, close stdin to trigger graceful shutdown, capture
+        # stdout. Every non-blank line of stdout MUST parse as JSON
+        # (the JSON-RPC framing rmcp uses is one JSON object per line
+        # on stdio transport). Stderr is allowed to carry tracing
+        # output; we redirect it to a separate file but do not assert
+        # on its contents (docs/SECURITY.md §3 reserves stdout, not
+        # stderr).
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/mcp-smoke
+          (
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"mcp-smoke","version":"0.0.0"}}}'
+            printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+            printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+          ) | timeout 10s ./target/release/doiget serve \
+              > /tmp/mcp-smoke/stdout.log \
+              2> /tmp/mcp-smoke/stderr.log || true
+          echo "----- stdout -----"
+          cat /tmp/mcp-smoke/stdout.log
+          echo "----- stderr (informational) -----"
+          tail -n 50 /tmp/mcp-smoke/stderr.log || true
+          echo "----- assert stdout is pure JSON (one object per line) -----"
+          # Empty stdout is a failure: the server should have answered.
+          if [ ! -s /tmp/mcp-smoke/stdout.log ]; then
+            echo "::error::doiget serve produced empty stdout — initialize/tools-list never received a response."
+            exit 1
+          fi
+          # Every non-blank line of stdout MUST parse as JSON. python3
+          # is always available on ubuntu-latest runners.
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            echo "$line" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' \
+              || { echo "::error::Non-JSON line on stdout: $line"; exit 1; }
+          done < /tmp/mcp-smoke/stdout.log
+          echo "stdout-purity: OK"
+      - name: Upload logs (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-smoke-logs
+          path: /tmp/mcp-smoke/
+          retention-days: 7

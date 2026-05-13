@@ -165,6 +165,35 @@ sees the difference without consulting the spec.
   documentation slice may add a §N normative subsection mirroring
   the `metadata_only` §11 / `fetch_paper` §4 detail blocks.
 
+### Slice 9 — `mcp-smoke.yml` Phase-0 placeholder → real CI gate
+
+Replaces the placeholder `mcp-smoke.yml` workflow with the actual
+Phase-3 gate documented in `docs/MCP_TOOLS.md` §9. Two jobs:
+
+- **`in-process-smoke`** — runs `cargo test -p doiget-mcp --tests`,
+  exercising all rmcp tool-router methods via the in-process duplex
+  pipe (`initialize_handshake`, `fetch_paper_e2e`, and any per-slice
+  e2e binary that has landed — Slice 7 `resolve_paper_e2e` and
+  Slice 8 `read_path_e2e` if those PRs have merged). Hermetic.
+
+- **`stdout-purity`** — builds `doiget-cli` in release, spawns
+  `target/release/doiget serve`, pipes
+  `initialize` + `notifications/initialized` + `tools/list` to
+  stdin, closes stdin, captures stdout, and asserts every non-blank
+  line of stdout parses as a JSON object. This catches the failure
+  mode that the in-process pipe cannot see: a banner / log / progress
+  line accidentally written to the real stdout. Per
+  `docs/SECURITY.md` §3, stdout is reserved for JSON-RPC frames
+  only; this job is the load-bearing CI check for that invariant.
+
+- **Logs uploaded as artifact** (`/tmp/mcp-smoke/`) on every run so a
+  failed smoke is debuggable without re-running.
+
+The previous workflow's `placeholder` job is replaced (it only
+echoed a Phase-0 notice). The path filter is expanded to include
+`crates/doiget-cli/**` and `crates/doiget-core/**` since the
+subprocess-style probe depends on both crates.
+
 ### Slice 6 — Real-world DOI / arXiv fixture set
 
 This slice curates a **frozen-snapshot fixture set** under
