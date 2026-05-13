@@ -51,11 +51,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
-      - name: Install Rust toolchain
-        # rust-toolchain.toml at the repo root pins the channel.
-        run: |
-          rustc --version
-          cargo --version
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4   # v2.9.1
       - name: cargo test (doiget-mcp)
         run: |
           cargo test -p doiget-mcp --tests
@@ -66,53 +63,109 @@ jobs:
     needs: in-process-smoke
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
-      - name: Install Rust toolchain
-        run: |
-          rustc --version
-          cargo --version
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4   # v2.9.1
       - name: Build doiget-cli (release)
         run: |
           cargo build -p doiget-cli --release
       - name: Run stdout-purity probe
-        # Send `initialize` + initialized notification + `tools/list`
-        # over stdin, close stdin to trigger graceful shutdown, capture
-        # stdout. Every non-blank line of stdout MUST parse as JSON
-        # (the JSON-RPC framing rmcp uses is one JSON object per line
-        # on stdio transport). Stderr is allowed to carry tracing
-        # output; we redirect it to a separate file but do not assert
-        # on its contents (docs/SECURITY.md §3 reserves stdout, not
-        # stderr).
+        # Send `initialize` + initialized notification + `tools/list` +
+        # `tools/call doiget_health` over stdin (the full §9 sequence
+        # documented in docs/MCP_TOOLS.md), close stdin to trigger
+        # graceful shutdown, capture stdout. Every non-blank line of
+        # stdout MUST parse as JSON (rmcp's stdio transport emits one
+        # JSON object per line). Stderr is allowed to carry tracing
+        # output (docs/SECURITY.md §3 reserves stdout, not stderr).
+        #
+        # Hard-failure cases (each surfaces as `::error::...`):
+        #   - server exits with a status other than 0 (clean exit) or
+        #     124 (timeout on stdin EOF — the expected graceful path);
+        #   - stdout is empty;
+        #   - any non-blank stdout line is not valid JSON;
+        #   - the `tools/list` response does not advertise `doiget_health`;
+        #   - the `tools/call doiget_health` response is not `ok: true`.
         run: |
           set -euo pipefail
           mkdir -p /tmp/mcp-smoke
+          # `timeout` exits 124 when it kills the child; in this script
+          # that is the expected case because the child completes its
+          # JSON-RPC responses but the rmcp service loop waits for
+          # stdin EOF before unwinding. We separate that benign exit
+          # from real failures (panic = 101, SIGSEGV = 139, binary
+          # missing = 127, etc.) so a crash mid-stream cannot slip
+          # through as a silent green.
+          set +e
           (
             printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"mcp-smoke","version":"0.0.0"}}}'
             printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
             printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+            printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"doiget_health"}}'
           ) | timeout 10s ./target/release/doiget serve \
               > /tmp/mcp-smoke/stdout.log \
-              2> /tmp/mcp-smoke/stderr.log || true
+              2> /tmp/mcp-smoke/stderr.log
+          serve_exit=$?
+          set -e
+          echo "doiget serve exit code: $serve_exit"
           echo "----- stdout -----"
           cat /tmp/mcp-smoke/stdout.log
           echo "----- stderr (informational) -----"
-          tail -n 50 /tmp/mcp-smoke/stderr.log || true
-          echo "----- assert stdout is pure JSON (one object per line) -----"
-          # Empty stdout is a failure: the server should have answered.
-          if [ ! -s /tmp/mcp-smoke/stdout.log ]; then
-            echo "::error::doiget serve produced empty stdout — initialize/tools-list never received a response."
+          [ -f /tmp/mcp-smoke/stderr.log ] && tail -n 50 /tmp/mcp-smoke/stderr.log
+          if [ "$serve_exit" -ne 0 ] && [ "$serve_exit" -ne 124 ]; then
+            echo "::error::doiget serve exited $serve_exit (only 0 or 124 are accepted)"
             exit 1
           fi
-          # Every non-blank line of stdout MUST parse as JSON. python3
-          # is always available on ubuntu-latest runners.
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            echo "$line" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' \
-              || { echo "::error::Non-JSON line on stdout: $line"; exit 1; }
-          done < /tmp/mcp-smoke/stdout.log
+          if [ ! -s /tmp/mcp-smoke/stdout.log ]; then
+            echo "::error::doiget serve produced empty stdout — no JSON-RPC responses written"
+            exit 1
+          fi
+          # Single-invocation Python validator: parses every non-blank
+          # line, asserts the tools/list response advertises
+          # doiget_health, and asserts the doiget_health response shape.
+          # Per-line error messages include line numbers for fast triage.
+          python3 - /tmp/mcp-smoke/stdout.log <<'PYEOF'
+          import json, sys
+          path = sys.argv[1]
+          lines = []
+          for i, raw in enumerate(open(path), 1):
+              line = raw.rstrip('\n')
+              if not line:
+                  continue
+              try:
+                  lines.append((i, json.loads(line)))
+              except json.JSONDecodeError as e:
+                  print(f"::error::Non-JSON line {i}: {line!r} ({e})")
+                  sys.exit(1)
+
+          # tools/list response (id=2): the rmcp server MUST advertise
+          # doiget_health (per docs/MCP_TOOLS.md §1 baseline).
+          tl = next((obj for _, obj in lines if obj.get("id") == 2), None)
+          if tl is None:
+              print("::error::no tools/list response (id=2) on stdout")
+              sys.exit(1)
+          tools = (tl.get("result") or {}).get("tools") or []
+          names = [t.get("name") for t in tools]
+          if "doiget_health" not in names:
+              print(f"::error::tools/list did not advertise doiget_health; got: {names}")
+              sys.exit(1)
+          print(f"tools/list advertises {len(names)} tools: {names}")
+
+          # tools/call doiget_health response (id=3): structured
+          # content MUST report ok=true.
+          th = next((obj for _, obj in lines if obj.get("id") == 3), None)
+          if th is None:
+              print("::error::no tools/call doiget_health response (id=3) on stdout")
+              sys.exit(1)
+          result = th.get("result") or {}
+          structured = result.get("structuredContent") or {}
+          if structured.get("ok") is not True:
+              print(f"::error::doiget_health did not return ok=true; got: {result}")
+              sys.exit(1)
+          print("doiget_health returned ok=true")
+          PYEOF
           echo "stdout-purity: OK"
       - name: Upload logs (always)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@6f51ac03b9356b520e9a168e888d8d25c6e1d9f1   # v4
         with:
           name: mcp-smoke-logs
           path: /tmp/mcp-smoke/
