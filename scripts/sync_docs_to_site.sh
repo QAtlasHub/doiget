@@ -81,14 +81,26 @@ for mapping in "${MAPPINGS[@]}"; do
   mkdir -p "$(dirname "$out")"
 
   # First non-empty non-directive prose line becomes the description
-  # (truncated to 200 chars). Skip H1/H2 headings and blockquote markers.
+  # (truncated to 200 chars). Skip blanks, H1/H2 headings, blockquote
+  # markers, horizontal rules (`---`), and HTML comments (`<!--`) so
+  # the extracted description is real prose rather than markdown
+  # chrome.
   description=$(awk '
     /^[[:space:]]*$/ { next }
     /^# / { next }
     /^## / { next }
     /^> / { next }
+    /^---[[:space:]]*$/ { next }
+    /^<!--/ { next }
     { print; exit }
   ' "$src" | head -c 200 | tr -d '\r' | sed 's/"/\\"/g')
+
+  # Fall back to the title if the source had no prose line we could
+  # extract — emitting `description = ""` produces a misleading empty
+  # `<meta description>` SEO tag downstream.
+  if [ -z "$description" ]; then
+    description="$title"
+  fi
 
   {
     printf '+++\n'
@@ -107,5 +119,12 @@ done
 echo
 echo "projected $projected docs/*.md page(s) to site/content/*."
 if [ "$skipped" -gt 0 ]; then
-  echo "skipped $skipped mapping(s) due to missing docs/ source."
+  # Skipped mappings cause silent partial projection: the drift check
+  # in site.yml uses `git diff --exit-code site/content/`, which
+  # passes when the on-disk projection happens to match what was
+  # previously committed for that mapping. So a partial sync can ship
+  # a stale page without a CI signal. Fail the script explicitly so
+  # the partial-projection failure is loud.
+  echo "::error::skipped $skipped mapping(s) due to missing docs/ source — fix MAPPINGS or add the source." >&2
+  exit 1
 fi

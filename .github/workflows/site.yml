@@ -35,11 +35,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
 
       - name: Install Zola
         # Zola is a single static binary; no toolchain setup needed.
+        #
+        # `set -o pipefail` is critical: without it, a curl failure
+        # (404 / network timeout / DNS) exits non-zero on the left
+        # side of the pipe, but tar receives empty stdin and exits 0
+        # — the step would then pass with no zola binary extracted.
+        # The subsequent `zola --version` would catch the missing
+        # binary, but the failure mode would be confusing. pipefail
+        # surfaces the curl failure directly.
         run: |
+          set -euo pipefail
           ZOLA_VERSION="v0.19.2"
           curl -fsSL "https://github.com/getzola/zola/releases/download/${ZOLA_VERSION}/zola-${ZOLA_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
             | tar -xz -C /usr/local/bin
@@ -68,7 +77,7 @@ jobs:
           zola build --base-url "https://sotashimozono.github.io/doiget/"
 
       - name: Upload site artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@6f51ac03b9356b520e9a168e888d8d25c6e1d9f1   # v4
         with:
           name: site-public
           path: site/public/
@@ -83,16 +92,16 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
 
       - name: Download site artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16   # v4
         with:
           name: site-public
           path: site/public/
 
       - name: Publish to gh-pages
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e   # v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site/public

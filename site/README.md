@@ -16,8 +16,25 @@ Hosting target: GitHub Pages on `https://sotashimozono.github.io/doiget/`.
 
 ## Local build
 
+Install Zola (one-time). The `zola` crate on crates.io is a stub, so
+`cargo install zola` does NOT work — use one of these instead:
+
 ```sh
-cargo install zola         # one-time, ~30s
+# macOS (Homebrew):
+brew install zola
+
+# Linux (Snap):
+sudo snap install --edge zola
+
+# Any platform — direct binary from GH releases:
+ZOLA_VERSION="v0.19.2"
+curl -fsSL "https://github.com/getzola/zola/releases/download/${ZOLA_VERSION}/zola-${ZOLA_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+  | tar -xz -C /usr/local/bin/   # adjust path for your OS
+```
+
+Then preview the site locally:
+
+```sh
 cd site
 zola serve                 # http://127.0.0.1:1111, live reload
 ```
