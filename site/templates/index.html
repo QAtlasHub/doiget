@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+  <h1>doiget</h1>
+  <p class="tagline">
+    DOIs and arXiv ids &rarr; local PDFs, through official APIs.<br>
+    The agent-facing companion to
+    <a href="https://github.com/sotashimozono/BiblioFetch.jl">BiblioFetch.jl</a>.
+  </p>
+
+  <pre class="demo"><code>$ doiget fetch 10.1103/PhysRevLett.130.200601
+wrote ~/papers/2L/2LpQ.../paper.pdf  (412 KB, license: cc-by)
+</code></pre>
+</section>
+
+<section class="posture">
+  <strong>Posture.</strong>
+  doiget does <em>not</em> bypass paywalls, host content, run as a SaaS, or
+  bundle publisher API keys. Open Access by default; TDM credentials are
+  user-supplied and compile-time opt-in.
+  <a href="{{ get_url(path='@/use/posture-and-legal.md') | safe }}">Read the scope &amp; legal page</a>.
+</section>
+
+<section class="audience">
+  <h2>Who is reading this?</h2>
+  <div class="cards">
+    <a class="card" href="{{ get_url(path='@/use/_index.md') | safe }}">
+      <h3>End user</h3>
+      <p>Use the CLI to fetch papers by DOI or arXiv id. Install, batch, inspect what landed.</p>
+    </a>
+    <a class="card" href="{{ get_url(path='@/developer/_index.md') | safe }}">
+      <h3>Developer</h3>
+      <p>Wire doiget into an agent host (Claude Desktop, Cursor, Codex) via MCP, or use <code>doiget-core</code> from Rust.</p>
+    </a>
+    <a class="card" href="{{ get_url(path='@/contribute/_index.md') | safe }}">
+      <h3>Contributor</h3>
+      <p>Read the architecture, the phase plan, and the ADRs before sending a PR.</p>
+    </a>
+  </div>
+</section>
+
+<section class="why">
+  <h2>Why doiget?</h2>
+  <ul>
+    <li>OA-first by default; institutional TDM is opt-in and compile-time gated.</li>
+    <li>Cryptographic provenance log (JSON Lines + SHA-256 hash chain, fail-closed).</li>
+    <li>Shares its on-disk store format with BiblioFetch.jl &mdash; same <code>~/papers/</code> directory.</li>
+    <li>No telemetry, no auto-update, no phone-home (ADR-0015).</li>
+    <li>Single static binary; stdio-only MCP server.</li>
+  </ul>
+</section>
+
+<section class="roadmap">
+  <h2>Roadmap</h2>
+  <p>
+    <span class="done">Phase 0 done</span> &middot;
+    <span class="done">Phase 1 done</span> &middot;
+    <span class="done">Phase 2 done</span> &middot;
+    <span class="active">Phase 3 in progress</span> &middot;
+    <span>Phase 4-6 upcoming</span>
+  </p>
+  <p>
+    MVP ships at the end of Phase 6 (release plumbing: OIDC trusted
+    publishing + sigstore + SBOM). Until then the workspace stays at
+    <code>0.0.0</code>; see <a href="{{ get_url(path='@/contribute/phases.md') | safe }}">the phase plan</a>.
+  </p>
+</section>
+{% endblock %}

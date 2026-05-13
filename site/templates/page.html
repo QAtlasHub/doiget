@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page.title }} &middot; {{ config.title }}{% endblock %}
+{% block description %}{{ page.description | default(value=config.description) }}{% endblock %}
+
+{% block content %}
+<article class="page-content">
+  <header class="page-head">
+    <h1>{{ page.title }}</h1>
+    {% if page.description %}<p class="lede">{{ page.description }}</p>{% endif %}
+  </header>
+
+  {{ page.content | safe }}
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="{{ config.extra.github_url }}/blob/main/site/content/{{ page.relative_path }}">
+      site/content/{{ page.relative_path }}
+    </a>
+  </p>
+</article>
+{% endblock %}

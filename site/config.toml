@@ -1,0 +1,47 @@
+# Zola configuration for the doiget public site.
+#
+# Hosting target: GitHub Pages on `sotashimozono.github.io/doiget/`.
+# The repo's existing `codes.sota-shimozono.com` CNAME continues to be
+# managed at the user-site level; this project-site is served from its
+# own `/doiget/` prefix (no separate CNAME row needed today).
+#
+# `base_url` may be overridden in CI via `--base-url` when a custom
+# domain is wired up. Keep this value aligned with the GH Pages
+# project-site URL.
+
+base_url = "https://sotashimozono.github.io/doiget"
+title = "doiget"
+description = "DOIs and arXiv ids -> local PDFs, through official APIs. The agent-facing companion to BiblioFetch.jl."
+default_language = "en"
+theme = ""
+
+compile_sass = false
+minify_html = false
+build_search_index = true
+generate_feed = false
+
+taxonomies = []
+
+[markdown]
+highlight_code = true
+highlight_theme = "ayu-light"
+smart_punctuation = false
+external_links_target_blank = true
+external_links_no_follow = false
+external_links_no_referrer = false
+
+[search]
+include_title = true
+include_description = true
+include_path = false
+include_content = true
+
+[extra]
+# Surfaced in templates so we can show the current development phase in
+# the footer without editing the template. Update when the phase plan
+# advances.
+phase_status = "Phase 3 in progress"
+github_url = "https://github.com/sotashimozono/doiget"
+crates_io_url = "https://crates.io/crates/doiget-core"
+docs_rs_url = "https://docs.rs/doiget-core"
+contact_email = "souta.shimozono@gmail.com"
