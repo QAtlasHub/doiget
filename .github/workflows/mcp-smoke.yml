@@ -170,7 +170,7 @@ jobs:
           echo "stdout-purity: OK"
       - name: Upload logs (always)
         if: always()
-        uses: actions/upload-artifact@6f51ac03b9356b520e9a168e888d8d25c6e1d9f1   # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
         with:
           name: mcp-smoke-logs
           path: /tmp/mcp-smoke/
