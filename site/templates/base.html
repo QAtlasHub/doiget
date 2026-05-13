@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="{{ config.default_language }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ config.title }}{% endblock %}</title>
+  <meta name="description" content="{% block description %}{{ config.description }}{% endblock %}">
+  <link rel="stylesheet" href="{{ get_url(path='style.css') | safe }}">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="{{ get_url(path='@/_index.md') | safe }}">doiget</a>
+    <nav class="site-nav">
+      <a href="{{ get_url(path='@/use/_index.md') | safe }}">Use</a>
+      <a href="{{ get_url(path='@/developer/_index.md') | safe }}">Developer</a>
+      <a href="{{ get_url(path='@/contribute/_index.md') | safe }}">Contribute</a>
+      <a href="{{ config.extra.github_url }}" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>{{ config.extra.phase_status }}</span>
+      &middot;
+      <a href="{{ config.extra.github_url }}">repo</a>
+      &middot;
+      <a href="{{ config.extra.crates_io_url }}">crates.io</a>
+      &middot;
+      <a href="{{ config.extra.docs_rs_url }}">docs.rs</a>
+      &middot;
+      <a href="{{ get_url(path='@/use/contact.md') | safe }}">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="{{ get_url(path='@/use/posture-and-legal.md') | safe }}">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

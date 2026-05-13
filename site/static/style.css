@@ -1,0 +1,142 @@
+/* doiget — minimal stylesheet.
+ * Black on white, serif body, monospace code. No JS, no framework.
+ * Target: Rust-book / OpenAI-docs feel without bespoke design.
+ */
+
+:root {
+  --fg: #222;
+  --bg: #fff;
+  --muted: #666;
+  --link: #0366d6;
+  --code-bg: #f6f8fa;
+  --side: #fafafa;
+  --rule: #e1e4e8;
+  --accent: #b58900;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e1e4e8;
+    --bg: #0d1117;
+    --muted: #8b949e;
+    --link: #58a6ff;
+    --code-bg: #161b22;
+    --side: #161b22;
+    --rule: #30363d;
+    --accent: #d29922;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 17px/1.6 Charter, "Bitstream Charter", "Source Serif Pro", Georgia, serif;
+}
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, pre, kbd, samp {
+  font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+pre { background: var(--code-bg); padding: 1rem; overflow-x: auto; border-radius: 4px; }
+pre code { background: none; padding: 0; }
+
+hr { border: none; border-top: 1px solid var(--rule); margin: 2rem 0; }
+
+/* ---------- site shell ---------- */
+
+.site-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 1rem 2rem;
+  border-bottom: 1px solid var(--rule);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.site-header .brand { font-weight: bold; font-size: 1.2rem; }
+.site-nav a { margin-left: 1.5rem; color: var(--fg); }
+
+.page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.site-footer {
+  max-width: 760px;
+  margin: 4rem auto 2rem;
+  padding: 2rem;
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.site-footer .legal { margin-top: 0.5rem; }
+
+/* ---------- landing ---------- */
+
+.hero h1 { font-size: 2.2rem; margin-bottom: 0.25em; }
+.hero .tagline { font-size: 1.1rem; color: var(--muted); }
+.hero .demo { margin-top: 1.5rem; }
+
+.posture {
+  margin: 2rem 0;
+  padding: 1rem 1.2rem;
+  border-left: 4px solid var(--accent);
+  background: var(--code-bg);
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 2rem;
+}
+.card {
+  display: block;
+  padding: 1.2rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  color: var(--fg);
+}
+.card:hover { border-color: var(--link); text-decoration: none; }
+.card h3 { margin-top: 0; }
+.card p { color: var(--muted); }
+
+.roadmap .done { color: var(--muted); }
+.roadmap .active { color: var(--accent); font-weight: bold; }
+
+/* ---------- section + page ---------- */
+
+.section-head .lede,
+.page-head .lede {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.index { list-style: none; padding: 0; }
+.index li { padding: 0.4rem 0; border-bottom: 1px solid var(--rule); }
+.index .lede { color: var(--muted); font-style: italic; }
+
+.meta { color: var(--muted); font-size: 0.85rem; }
+
+/* ---------- typography ---------- */
+
+h1, h2, h3 { line-height: 1.25; }
+h2 { margin-top: 2rem; border-bottom: 1px solid var(--rule); padding-bottom: 0.3rem; }
+h3 { margin-top: 1.5rem; }
+blockquote {
+  margin: 1rem 0;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--rule);
+  color: var(--muted);
+}
+table { border-collapse: collapse; }
+th, td { padding: 0.4rem 0.8rem; border: 1px solid var(--rule); }
