@@ -65,6 +65,11 @@ impl Drop for EnvGuard {
 }
 
 const ENV_KEYS: &[&str] = &[
+    // DOIGET_STORE_ROOT is included so any accidental store write
+    // (a regression that violates the resolve_only no-persistence
+    // contract) lands inside the test's TempDir rather than the
+    // developer's real ~/papers/.
+    "DOIGET_STORE_ROOT",
     "DOIGET_LOG_PATH",
     "DOIGET_ARXIV_BASE",
     "DOIGET_CROSSREF_BASE",
@@ -72,6 +77,22 @@ const ENV_KEYS: &[&str] = &[
     "DOIGET_CONTACT_EMAIL",
     "DOIGET_UNPAYWALL_EMAIL",
 ];
+
+/// Count regular files under `<store_root>/.metadata/`. The binding
+/// contract for `resolve_only` (and therefore `doiget_resolve_paper`)
+/// is that this count remains 0 after any successful resolve, even
+/// after Phase 2.x adds the store-write to `metadata_only`. The two
+/// happy-path tests below use this to assert the contract.
+fn count_metadata_files(store_root: &std::path::Path) -> usize {
+    let meta = store_root.join(".metadata");
+    match std::fs::read_dir(&meta) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+            .count(),
+        Err(_) => 0,
+    }
+}
 
 async fn boot_in_memory_server() -> anyhow::Result<(
     rmcp::service::RunningService<rmcp::RoleClient, ()>,
@@ -173,6 +194,10 @@ async fn doiget_resolve_paper_arxiv_happy_path_returns_metadata_envelope() -> an
     let env = EnvGuard::new(ENV_KEYS);
     env.set("DOIGET_ARXIV_BASE", &server.uri());
     env.set("DOIGET_LOG_PATH", log_path.as_str());
+    // Bind the store root to the same tempdir so the no-store-write
+    // assertion below is meaningful — without this, an accidental
+    // store write would target the developer's real ~/papers/.
+    env.set("DOIGET_STORE_ROOT", td.path().to_str().expect("utf-8 tempdir"));
 
     let (client, server_handle) = boot_in_memory_server().await?;
 
@@ -216,6 +241,17 @@ async fn doiget_resolve_paper_arxiv_happy_path_returns_metadata_envelope() -> an
         "provenance log not created at {log_path}"
     );
 
+    // Binding contract (resolve_only's doc-comment): NO metadata TOML
+    // is written to the store, even after Phase 2.x adds the store
+    // write to `metadata_only`. Today the two functions are equivalent
+    // because metadata_only itself doesn't write; this assertion is
+    // the regression guard for that future divergence.
+    assert_eq!(
+        count_metadata_files(td.path()),
+        0,
+        "doiget_resolve_paper MUST NOT write metadata TOML to the store"
+    );
+
     client.cancel().await?;
     server_handle.await??;
     drop(env);
@@ -250,6 +286,8 @@ async fn doiget_resolve_paper_doi_crossref_happy_path_returns_metadata_envelope(
     env.set("DOIGET_CROSSREF_BASE", &server.uri());
     env.set("DOIGET_LOG_PATH", log_path.as_str());
     env.set("DOIGET_CONTACT_EMAIL", "test@example.org");
+    // Bind store root to the tempdir; see arxiv test for rationale.
+    env.set("DOIGET_STORE_ROOT", td.path().to_str().expect("utf-8 tempdir"));
 
     let (client, server_handle) = boot_in_memory_server().await?;
 
@@ -291,9 +329,77 @@ async fn doiget_resolve_paper_doi_crossref_happy_path_returns_metadata_envelope(
         "provenance log not created at {log_path}"
     );
 
+    // Binding contract: NO metadata TOML written. See arxiv test for
+    // the full rationale; this assertion guards the same invariant on
+    // the DOI/Crossref branch.
+    assert_eq!(
+        count_metadata_files(td.path()),
+        0,
+        "doiget_resolve_paper MUST NOT write metadata TOML to the store"
+    );
+
     client.cancel().await?;
     server_handle.await??;
     drop(env);
     drop(td);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 4. dry_run field rejection
+// ---------------------------------------------------------------------------
+
+/// Per `docs/MCP_TOOLS.md` §10 / §211, `doiget_resolve_paper` is in the
+/// "dry_run does not apply" set. The `ResolvePaperInput` struct carries
+/// both `#[serde(deny_unknown_fields)]` and `#[schemars(deny_unknown_fields)]`
+/// so an attempted `dry_run` field is rejected at the deserialize
+/// boundary BEFORE the tool body runs.
+///
+/// This test sends `{"ref": "10.1234/example", "dry_run": true}` and
+/// asserts the call surfaces as an error from the transport layer — it
+/// MUST NOT be silently accepted (which would happen if only the
+/// schemars-side attribute were present).
+#[tokio::test]
+async fn doiget_resolve_paper_dry_run_field_is_rejected() -> anyhow::Result<()> {
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+    args.insert("dry_run".to_string(), serde_json::json!(true));
+
+    let outcome = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_resolve_paper").with_arguments(args))
+        .await;
+
+    // rmcp surfaces deserialize failures as a transport-level error
+    // (the call_tool future resolves to Err(...)) rather than an
+    // ok:false envelope. Either way, the call MUST NOT succeed with
+    // `dry_run` silently dropped.
+    match outcome {
+        Err(_) => {
+            // Transport-level rejection. Expected path with
+            // #[serde(deny_unknown_fields)] in place.
+        }
+        Ok(result) => {
+            // Some MCP hosts may translate the deserialize error into
+            // an `is_error: true` CallToolResult instead. Accept that
+            // shape too — but the call MUST NOT return a normal
+            // success envelope with the dry_run field ignored.
+            assert!(
+                result.is_error.unwrap_or(false)
+                    || result
+                        .structured_content
+                        .as_ref()
+                        .map(|s| s["ok"] == serde_json::json!(false))
+                        .unwrap_or(false),
+                "dry_run field was silently accepted on doiget_resolve_paper; \
+                 deny_unknown_fields enforcement is missing. result: {result:?}"
+            );
+        }
+    }
+
+    client.cancel().await?;
+    server_handle.await??;
     Ok(())
 }
