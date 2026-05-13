@@ -2,7 +2,6 @@
 title = "doiget"
 description = "DOIs and arXiv ids -> local PDFs, through official APIs. The agent-facing companion to BiblioFetch.jl."
 template = "index.html"
-sort_by = "none"
 +++
 
 # doiget
