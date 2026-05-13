@@ -97,6 +97,23 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
         names.contains(&"doiget_batch_fetch"),
         "tools/list must include doiget_batch_fetch; got: {names:?}"
     );
+    // Slice 8: 4x read-path tools advertised.
+    assert!(
+        names.contains(&"doiget_info"),
+        "tools/list must include doiget_info; got: {names:?}"
+    );
+    assert!(
+        names.contains(&"doiget_search_local"),
+        "tools/list must include doiget_search_local; got: {names:?}"
+    );
+    assert!(
+        names.contains(&"doiget_list_recent"),
+        "tools/list must include doiget_list_recent; got: {names:?}"
+    );
+    assert!(
+        names.contains(&"doiget_paper_pdf_path"),
+        "tools/list must include doiget_paper_pdf_path; got: {names:?}"
+    );
 
     // -- 3. tools/call doiget_health -----------------------------------
     let health = client

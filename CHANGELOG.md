@@ -23,6 +23,82 @@ Slice 6: real-world fixture set). With this slice merged the
 roadmap is complete; subsequent work tracks back to the normal
 phase plan in [docs/PHASES.md](docs/PHASES.md).
 
+**Phase 3 close-out, read-path branch.** Slice 8 wires the four
+local-only MCP tools (`doiget_info`, `doiget_search_local`,
+`doiget_list_recent`, `doiget_paper_pdf_path`) that close out the
+Phase 3 baseline alongside `doiget_resolve_paper` (Slice 7,
+parallel PR).
+
+### Slice 8 — Read-path MCP tools (4 tools)
+
+Wires the four 100% local read-path MCP tools from the
+`docs/MCP_TOOLS.md` §1 baseline. These tools never touch the
+network, never write to the store, and never append provenance
+rows — they expose the existing `Store` trait surface
+(`Store::read`, `Store::list_recent`, `Store::search`) through
+JSON-RPC.
+
+- **`doiget_info(ref)`** — read the metadata TOML for a stored
+  entry. Returns `{ ok: true, ref, safekey, metadata: <object>|null }`.
+  A missing entry surfaces as `metadata: null` on a success
+  envelope (not an error envelope) — the closed `ErrorCode` set
+  has no `NotFound` variant, so the null-payload convention keeps
+  the wire surface consistent with how `doiget_paper_pdf_path`
+  reports a missing PDF.
+
+- **`doiget_search_local(query, limit?)`** — case-insensitive
+  substring search over title / authors / venue / publisher.
+  Backed by `Store::search`, which today is a linear scan over
+  `<root>/.metadata/*.toml` (a Phase 2+ tantivy or sqlite-fts
+  index swaps in transparently behind the trait). `limit` defaults
+  to 50 and is clamped to a maximum of 200.
+
+- **`doiget_list_recent(limit?)`** — most-recently fetched entries
+  by `[doiget].fetched_at` (RFC3339 UTC, `%Y-%m-%dT%H:%M:%SZ`).
+  `limit` defaults to 50, capped at 200.
+
+- **`doiget_paper_pdf_path(ref)`** — return the absolute path of a
+  cached PDF if and only if the entry has one. **Never reads,
+  parses, or transmits PDF content.** Returns
+  `{ ok: true, ref, safekey, path: <string>|null, pdf_exists: bool }`.
+  A missing metadata entry or a missing PDF file both surface as
+  `path: null`. The path is computed as
+  `<store_root>/<safekey>.pdf` and probed for existence with a
+  single `Path::exists` call.
+
+- **Input shape**
+  `InfoInput { ref }`, `SearchLocalInput { query, limit? }`,
+  `ListRecentInput { limit? }`, `PaperPdfPathInput { ref }`. All
+  carry `schemars(deny_unknown_fields)` so an unknown wire field
+  is rejected at the rmcp transport boundary.
+
+- **No `dry_run` support** on any of these tools per
+  `docs/MCP_TOOLS.md` §10 (`doiget_info`, `doiget_search_local`,
+  `doiget_list_recent`, `doiget_paper_pdf_path` are in the "dry_run
+  does not apply" set). The closed `deny_unknown_fields` schema is
+  the enforcement point.
+
+- **New e2e coverage**
+  `crates/doiget-mcp/tests/read_path_e2e.rs` (6 tests, all
+  green): two invalid-ref tests (`doiget_info`,
+  `doiget_paper_pdf_path`), two empty-store tests
+  (`doiget_search_local`, `doiget_list_recent`), and two
+  no-entry success tests (`doiget_info`, `doiget_paper_pdf_path`).
+  The empty-store path exercises an `FsStore` rooted at a
+  `tempfile::TempDir` so the tests are hermetic and parallel-safe
+  via `serial_test::serial` (env var mutation).
+
+- **tools/list assertion update**
+  `crates/doiget-mcp/tests/initialize_handshake.rs` now also
+  asserts that all four Slice-8 tools appear in the `tools/list`
+  response. All 6 existing handshake tests + 4 new assertions
+  pass.
+
+### Slice 7 — `doiget_resolve_paper` MCP tool
+
+(Parallel PR — see the dedicated CHANGELOG entry on
+`feat/slice-7-mcp-resolve-paper`.)
+
 ### Slice 6 — Real-world DOI / arXiv fixture set
 
 This slice curates a **frozen-snapshot fixture set** under
