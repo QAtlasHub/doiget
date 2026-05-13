@@ -135,6 +135,39 @@ pub fn tier_1_allowlist() -> Vec<SourceAllowlist> {
     ]
 }
 
+/// Hard-coded Phase 4 allowlist for Tier 2 metadata sources (OpenAlex,
+/// Semantic Scholar, DOAJ). Sourced from `docs/SOURCES.md` §1 (the Tier 2
+/// table) and `docs/REDIRECT_ALLOWLIST.md` §3 (same redirect-allowlist
+/// policy as Tier 1, distinct source keys).
+///
+/// Returned hosts:
+///
+/// - `"openalex"` → `api.openalex.org` (production OpenAlex REST API).
+/// - `"semantic_scholar"` → `api.semanticscholar.org` (S2 Graph API base).
+/// - `"doaj"` → `doaj.org` + `*.doaj.org` (DOAJ public API; wildcard
+///   covers `api.doaj.org` and any v4+ subdomain split).
+///
+/// Per `docs/SOURCES.md` §4 "OpenAlex / Semantic Scholar / DOAJ", these
+/// sources are **metadata-only**: their `Source::fetch` impls MUST
+/// return `pdf_bytes: None`. The redirect closure in [`HttpClient`]
+/// uses this list to deny redirects to off-list hosts under each Tier
+/// 2 source key — identical mechanism to Tier 1, but the per-tool
+/// capability gate (`profile.metadata.openalex` etc.) is layered on
+/// top so the network surface remains capability-aware.
+pub fn tier_2_allowlist() -> Vec<SourceAllowlist> {
+    vec![
+        SourceAllowlist::new("openalex", vec!["api.openalex.org".to_string()]),
+        SourceAllowlist::new(
+            "semantic_scholar",
+            vec!["api.semanticscholar.org".to_string()],
+        ),
+        SourceAllowlist::new(
+            "doaj",
+            vec!["doaj.org".to_string(), "*.doaj.org".to_string()],
+        ),
+    ]
+}
+
 /// Hard-coded Phase 1 allowlist for the synthetic `"oa-publisher"` source —
 /// the publisher / preprint / repository hosts to which Unpaywall's
 /// `best_oa_location.url` (or `url_for_pdf`) typically resolves.
