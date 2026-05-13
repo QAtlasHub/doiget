@@ -23,11 +23,13 @@ Slice 6: real-world fixture set). With this slice merged the
 roadmap is complete; subsequent work tracks back to the normal
 phase plan in [docs/PHASES.md](docs/PHASES.md).
 
-**Phase 3 close-out, read-path branch.** Slice 8 wires the four
-local-only MCP tools (`doiget_info`, `doiget_search_local`,
-`doiget_list_recent`, `doiget_paper_pdf_path`) that close out the
-Phase 3 baseline alongside `doiget_resolve_paper` (Slice 7,
-parallel PR).
+**Phase 3 close-out begins.** Post-roadmap, the MCP tool surface
+returns to the Phase 3 baseline (`docs/MCP_TOOLS.md` §1 — ten tools).
+Five tools were wired during Slice 1 / Slice 2 (`doiget_health`,
+`doiget_capability_profile`, `doiget_metadata_only`,
+`doiget_fetch_paper`, `doiget_batch_fetch`); Slice 7 onward closes
+out the remaining five (`doiget_resolve_paper`, `doiget_info`,
+`doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`).
 
 ### Slice 8 — Read-path MCP tools (4 tools)
 
@@ -96,8 +98,72 @@ JSON-RPC.
 
 ### Slice 7 — `doiget_resolve_paper` MCP tool
 
-(Parallel PR — see the dedicated CHANGELOG entry on
-`feat/slice-7-mcp-resolve-paper`.)
+This slice wires the **sixth** Phase-3 tool: `doiget_resolve_paper`,
+the audit-trail-preserving sibling of `doiget_metadata_only`. The new
+tool resolves a DOI / arXiv id to live metadata through Crossref /
+Unpaywall / arXiv (each consulted resolver still emits its own
+`LogEvent::Fetch` provenance row, preserving the audit chain), but the
+orchestrator MUST NOT write the metadata TOML to the store under any
+code path — present or future. This is the binding contract that
+distinguishes `resolve_paper` from `metadata_only`, codified directly
+in the doc-comment on the new orchestrator function and re-stated in
+the MCP tool description so an agent picking between the two tools
+sees the difference without consulting the spec.
+
+- **New core orchestrator**
+  `doiget_core::orchestrator::resolve_only`. Today this delegates to
+  `metadata_only` (which itself does not yet write to the store —
+  the Phase 2.x TODO). The function's doc-comment fixes the
+  future-divergence contract: when Phase 2.x lands the store-write
+  for `metadata_only`, `resolve_only` MUST be refactored to call the
+  inner dispatchers (`metadata_only_doi` + the arXiv-Atom path) with
+  the store-write step excluded, NOT continue delegating. Splitting
+  the function out as a named symbol now reserves the API slot so
+  that future refactor lands purely inside `doiget-core` without
+  touching the MCP tool wiring.
+
+- **New MCP tool** `doiget_resolve_paper`
+  (`crates/doiget-mcp/src/lib.rs`). Per-call semantics mirror
+  `doiget_metadata_only`: the MCP server emits the
+  `SessionStart` / `SessionEnd` bookend rows, each consulted
+  `Source` emits its own `LogEvent::Fetch` row, and the orchestrator
+  emits **no** `StoreWrite` row (no store mutation). `dry_run` is
+  not a supported input field per `docs/MCP_TOOLS.md` §10/§211 — the
+  new `ResolvePaperInput` struct uses `schemars(deny_unknown_fields)`
+  so an attempted `dry_run` is rejected at the rmcp transport
+  boundary before reaching the tool body. The tool description
+  explicitly redirects agents to `metadata_only` with `dry_run: true`
+  for preview use cases.
+
+- **New e2e coverage**
+  `crates/doiget-mcp/tests/resolve_paper_e2e.rs`:
+  - `doiget_resolve_paper_invalid_ref_returns_invalid_ref_envelope`
+    — a malformed `ref` collapses to the closed `INVALID_REF` error
+    code via the same `Ref::parse` shim used by other tools.
+  - `doiget_resolve_paper_arxiv_happy_path_returns_metadata_envelope`
+    — an arXiv id is resolved through a wiremocked Atom feed; the
+    success envelope carries `source = "arxiv"`,
+    `license = "arxiv-default"`, `oa_url = null`, and the parsed
+    metadata.
+  - `doiget_resolve_paper_doi_crossref_happy_path_returns_metadata_envelope`
+    — a DOI is resolved through a wiremocked Crossref response; the
+    OA URL is extracted from `message.link[]` and surfaced in
+    `oa_url`, `license` is `null` (Crossref does not carry a
+    license; that channel is Unpaywall's).
+  - All three tests carry the `// allow: outbound-network` posture
+    marker; no `reqwest::*` imports are introduced — all HTTP
+    terminates at `127.0.0.1` wiremock servers.
+
+- **tools/list assertion update**
+  `crates/doiget-mcp/tests/initialize_handshake.rs` now also asserts
+  that `doiget_resolve_paper` appears in the `tools/list` response,
+  matching the §1 table in `docs/MCP_TOOLS.md`.
+
+- **No spec drift.** `docs/MCP_TOOLS.md` §1 already lists
+  `doiget_resolve_paper` in the Phase-3 baseline table; this slice
+  ships the implementation, not a new spec section. A follow-up
+  documentation slice may add a §N normative subsection mirroring
+  the `metadata_only` §11 / `fetch_paper` §4 detail blocks.
 
 ### Slice 6 — Real-world DOI / arXiv fixture set
 

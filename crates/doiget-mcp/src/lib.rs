@@ -47,7 +47,7 @@ use doiget_core::dry_run::{
 use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, HttpClient};
 use doiget_core::orchestrator::{
     batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
-    metadata_only, FetchPaperOutcome, MetadataOnlyOutcome,
+    metadata_only, resolve_only as core_resolve_only, FetchPaperOutcome, MetadataOnlyOutcome,
 };
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
@@ -308,6 +308,122 @@ impl Server {
             // Session bookend rows carry no audit identity — they
             // bracket the call, they do not mint a CanonicalRef
             // (ADR-0021 §1; ADR-0024).
+            canonical_digest: None,
+        });
+
+        match outcome {
+            Ok(o) => Ok(CallToolResult::structured(metadata_only_success_envelope(
+                &o,
+                &input.ref_,
+            ))),
+            Err(e) => Ok(CallToolResult::structured(
+                metadata_only_fetch_error_envelope(&e, &input.ref_),
+            )),
+        }
+    }
+
+    /// `doiget_resolve_paper` — resolve a DOI / arXiv id to metadata with
+    /// **no local persistence**.
+    ///
+    /// Per `docs/MCP_TOOLS.md` §1 (Phase 3 baseline tool list — Slice 7).
+    ///
+    /// Delegates to [`core_resolve_only`], whose binding contract is that
+    /// no metadata TOML is ever written to the store — present or future
+    /// (when Phase 2.x adds the store-write to `metadata_only`, the
+    /// orchestrator-level divergence kicks in there, not here).
+    ///
+    /// Per-call boundary semantics mirror [`Self::doiget_metadata_only`]:
+    /// the MCP server emits `SessionStart` / `SessionEnd` bookend rows,
+    /// each consulted [`Source`](doiget_core::source::Source) emits its
+    /// own `LogEvent::Fetch` row inside the orchestrator. No `StoreWrite`
+    /// row is emitted (no store mutation).
+    ///
+    /// `dry_run` is **not** a supported input field per
+    /// `docs/MCP_TOOLS.md` §10/§211 (the spec lists `doiget_resolve_paper`
+    /// in the "dry_run does not apply" set). The schema's
+    /// `deny_unknown_fields` posture rejects an attempted `dry_run`
+    /// field at deserialize time, which surfaces as the rmcp transport's
+    /// own input-validation error rather than reaching the tool body.
+    /// Agents that intend "preview the resolve" must call
+    /// `doiget_metadata_only` with `dry_run: true` instead.
+    #[tool(
+        description = "WHEN TO USE: User wants metadata for a DOI / arXiv id with no local persistence (audit log row only).\n\
+                       INPUTS: ref (DOI or arXiv id).\n\
+                       OUTPUTS: { ok: true, ref, source, resolver_profile, license?, oa_url, metadata, schema_version } OR { ok:false, ref, error }.\n\
+                       COSTS: 1-2 s metadata round-trip.\n\
+                       SIDE EFFECTS: Appends one provenance row per consulted resolver. NEVER writes a metadata TOML to the store. NEVER fetches PDF.\n\
+                       LIMITS: Subject to the same rate cap as metadata_only (5/sec). The OA URL is reported but never followed. dry_run is not supported; use metadata_only with dry_run for a preview."
+    )]
+    async fn doiget_resolve_paper(
+        &self,
+        Parameters(input): Parameters<ResolvePaperInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Step 1: parse the ref. Failures collapse to INVALID_REF per
+        // docs/ERRORS.md §2 / docs/PUBLIC_API.md §4.
+        let ref_ = match Ref::parse(&input.ref_) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                    ErrorCode::InvalidRef,
+                    &format!("invalid ref: {e}"),
+                )));
+            }
+        };
+
+        // Step 2: build the per-call context. Failures here surface as
+        // INTERNAL_ERROR per the metadata_only pattern.
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                    ErrorCode::InternalError,
+                    &format!("resolve-paper context initialization failed: {e}"),
+                )));
+            }
+        };
+
+        // SessionStart bookend (mirrors doiget_metadata_only). A
+        // log-append failure here is fail-closed per
+        // `docs/PROVENANCE_LOG.md` §5 — abort the call.
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Metadata,
+            ref_: Some(input.ref_.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            // Session bookend rows carry no audit identity — they
+            // bracket the call, they do not mint a CanonicalRef
+            // (ADR-0021 §1; ADR-0024).
+            canonical_digest: None,
+        }) {
+            return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        let outcome = core_resolve_only(&ref_, &self.profile, &ctx).await;
+
+        // SessionEnd bookend. Best-effort.
+        let session_ok = outcome.is_ok();
+        let _ = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if session_ok {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Metadata,
+            ref_: Some(input.ref_.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
             canonical_digest: None,
         });
 
@@ -917,6 +1033,25 @@ pub struct MetadataOnlyInput {
     /// either omit the field or pass `false`.
     #[serde(default)]
     pub dry_run: bool,
+}
+
+/// JSON-schema-derived input for the `doiget_resolve_paper` MCP tool.
+///
+/// Mirrors `docs/MCP_TOOLS.md` §1 (the tool name and shape) and §10
+/// (`dry_run` does **not** apply to `doiget_resolve_paper`).
+/// `deny_unknown_fields` rejects an attempted `dry_run` field as a
+/// schema violation at the rmcp transport boundary, so the tool body
+/// never observes it. Agents that need a preview must call
+/// `doiget_metadata_only` with `dry_run: true` instead.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct ResolvePaperInput {
+    /// DOI or arXiv id. Validated via `Ref::parse`; failures surface as
+    /// `INVALID_REF` per `docs/ERRORS.md`.
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
 }
 
 // ---------------------------------------------------------------------------

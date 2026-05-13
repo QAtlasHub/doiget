@@ -136,6 +136,63 @@ pub async fn metadata_only(
     }
 }
 
+/// Resolve a [`Ref`] to metadata with **no local persistence**.
+///
+/// This is the audit-trail-preserving sibling of [`metadata_only`]: each
+/// consulted [`Source`] still emits its own `LogEvent::Fetch` row
+/// through `ctx.log` (so the provenance hash chain remains continuous,
+/// per `docs/PROVENANCE_LOG.md`), but the orchestrator MUST NOT write
+/// the metadata TOML to the store under any code path — present or
+/// future.
+///
+/// Binding spec: `docs/MCP_TOOLS.md` §1 (the `doiget_resolve_paper`
+/// tool — Slice 7).
+///
+/// # Why this exists as a distinct orchestrator
+///
+/// Today [`metadata_only`] does not write to the store (the Phase 2.x
+/// TODO inside `metadata_only_doi` and the arXiv branch), so the two
+/// functions are functionally identical. When Phase 2.x lands the store
+/// write for `metadata_only`, [`resolve_only`] MUST NOT pick it up —
+/// the future divergence is the entire reason this function exists.
+///
+/// Concretely: when the Phase 2.x change happens, this function must be
+/// refactored to call the **inner** dispatchers (`metadata_only_doi` for
+/// DOI, the arXiv-Atom path for arXiv) directly with the store-write
+/// step **excluded**, rather than continuing to delegate to
+/// [`metadata_only`]. The audit-trail / provenance-row emission is
+/// retained either way.
+///
+/// # Dispatch
+///
+/// Identical to [`metadata_only`] (DOI → Crossref-first with Unpaywall
+/// fallback; arXiv → Atom feed only). The `oa_url` and `license`
+/// outputs follow the same rules.
+///
+/// # Side effects
+///
+/// One `LogEvent::Fetch` row per consulted resolver, written by the
+/// underlying [`Source`] impls. No metadata TOML write. No PDF fetch.
+/// No store mutation.
+///
+/// # Errors
+///
+/// Returns [`FetchError`] from the underlying [`Source`] dispatch,
+/// identical to [`metadata_only`].
+pub async fn resolve_only(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+) -> Result<MetadataOnlyOutcome, FetchError> {
+    // Slice 7: delegate to `metadata_only` because the latter does not
+    // yet write to the store. When Phase 2.x adds the store-write to
+    // `metadata_only`, this delegation MUST be replaced with a direct
+    // call to the inner dispatchers (`metadata_only_doi` + the arXiv
+    // Atom path) with the store-write step excluded. See the function
+    // doc-comment for the binding contract.
+    metadata_only(ref_, profile, ctx).await
+}
+
 // ---------------------------------------------------------------------------
 // Env-aware source constructors (mirrors doiget-cli::commands::fetch::build_*)
 //
