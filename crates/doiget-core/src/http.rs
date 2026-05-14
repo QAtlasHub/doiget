@@ -216,6 +216,28 @@ pub fn tier_3_aps_allowlist() -> Vec<SourceAllowlist> {
     )]
 }
 
+/// Hard-coded Phase 5c allowlist for the Elsevier ScienceDirect TDM
+/// source. Compile-gated by the `tdm-elsevier` Cargo feature so
+/// default release binaries never include the host pattern (per
+/// ADR-0002 and `docs/SOURCES.md` §3).
+///
+/// Returned entry:
+/// - `"tdm-elsevier"` → `api.elsevier.com` (production base) +
+///   `*.elsevier.com` (covers load-balancing subdomains; the
+///   redirect closure denies anything outside the wildcard).
+///
+/// Three-gate activation: Cargo feature compiled in,
+/// `DOIGET_KEY_ELSEVIER` env var present, and
+/// `DOIGET_AGREE_TDM_ELSEVIER=1`. The `CapabilityProfile` gate
+/// enforces the env-var pair; this allowlist is the transport gate.
+#[cfg(feature = "tdm-elsevier")]
+pub fn tier_3_elsevier_allowlist() -> Vec<SourceAllowlist> {
+    vec![SourceAllowlist::new(
+        "tdm-elsevier",
+        vec!["api.elsevier.com".to_string(), "*.elsevier.com".to_string()],
+    )]
+}
+
 /// Hard-coded Phase 1 allowlist for the synthetic `"oa-publisher"` source —
 /// the publisher / preprint / repository hosts to which Unpaywall's
 /// `best_oa_location.url` (or `url_for_pdf`) typically resolves.

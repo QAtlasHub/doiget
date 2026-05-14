@@ -36,3 +36,6 @@ pub mod tdm_springer;
 
 #[cfg(feature = "tdm-aps")]
 pub mod tdm_aps;
+
+#[cfg(feature = "tdm-elsevier")]
+pub mod tdm_elsevier;

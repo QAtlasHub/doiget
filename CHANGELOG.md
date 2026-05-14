@@ -31,6 +31,38 @@ Five tools were wired during Slice 1 / Slice 2 (`doiget_health`,
 out the remaining five (`doiget_resolve_paper`, `doiget_info`,
 `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`).
 
+### Slice 19 — Elsevier ScienceDirect TDM source (Phase 5c)
+
+Third Phase-5 / Tier-3 slice — closes the Phase 5a/b/c trio. Adds
+the `tdm-elsevier` source: a metadata-only Elsevier ScienceDirect
+TDM fetcher that turns a DOI into the
+`{full-text-retrieval-response: {coredata, ...}}` envelope from
+`/content/article/doi/<DOI>?httpAccept=application/json`. Whole
+module compile-gated by the `tdm-elsevier` Cargo feature.
+
+- **New module** `crates/doiget-core/src/sources/tdm_elsevier.rs`,
+  declared in `sources/mod.rs` under
+  `#[cfg(feature = "tdm-elsevier")] pub mod tdm_elsevier;`.
+- **Three-gate activation**: Cargo feature `tdm-elsevier` compiled
+  in + `DOIGET_KEY_ELSEVIER=<api-key>` +
+  `DOIGET_AGREE_TDM_ELSEVIER=1`.
+- **Transport gate**: new `tier_3_elsevier_allowlist()` in
+  `crates/doiget-core/src/http.rs` mapping `"tdm-elsevier"` to
+  `api.elsevier.com` + `*.elsevier.com`.
+- **Provenance**: emits `LogEvent::Fetch` rows with
+  `capability: Capability::TdmElsevier`.
+- **Metadata-only**: `FetchResult.pdf_bytes` is always `None`.
+- **Known limitation** (shared with Slice 18): Elsevier requires
+  `X-ELS-APIKey`. `HttpClient` has no per-source header hook yet, so
+  the header is NOT attached on the wire. Wiremock tests pass with
+  header matching disabled. A follow-up slice will add the hook
+  used by BOTH APS and Elsevier.
+- **Tests**: three wiremock cases — happy path (DOI percent-encoded
+  in path + `httpAccept=application/json` query param), no-grant
+  `NotEligible`, missing-wrapper `SourceSchema`.
+  `#[serial_test::serial]` because the happy-path mutates
+  `DOIGET_KEY_ELSEVIER`.
+
 ### Slice 18 — APS Harvest TDM source (Phase 5b)
 
 Second Phase-5 / Tier-3 slice. Adds the `tdm-aps` source: a
