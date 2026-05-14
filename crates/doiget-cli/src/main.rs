@@ -110,6 +110,24 @@ enum Command {
         /// `show` / `path` / `doctor`
         action: String,
     },
+    /// Expand a DOI's citation neighborhood via OpenAlex (BFS,
+    /// ADR-0010 hard caps). Requires `--features citation` AND
+    /// `DOIGET_ENABLE_OPENALEX` in env.
+    #[cfg(feature = "citation")]
+    Graph {
+        /// DOI seed. arXiv ids are rejected (OpenAlex's
+        /// `referenced_works` is DOI-keyed).
+        ref_: String,
+        /// Max BFS depth (1..=3). Default = 3 (ADR-0010 maximum).
+        #[arg(long)]
+        depth: Option<u32>,
+        /// Max total nodes (1..=100). Default = 100.
+        #[arg(long)]
+        total: Option<u32>,
+        /// Max children per parent (1..=20). Default = 20.
+        #[arg(long)]
+        per_paper: Option<u32>,
+    },
 }
 
 #[tokio::main]
@@ -156,5 +174,14 @@ async fn main() -> anyhow::Result<()> {
             let profile = doiget_core::CapabilityProfile::from_env()?;
             doiget_mcp::Server::new(profile).run().await
         }
+        // Phase 4 / Slice 16. Feature-gated to keep default release
+        // binaries free of the OpenAlex-only citation walker.
+        #[cfg(feature = "citation")]
+        Some(Command::Graph {
+            ref_,
+            depth,
+            total,
+            per_paper,
+        }) => doiget_cli::commands::graph::run(ref_, depth, total, per_paper).await,
     }
 }
