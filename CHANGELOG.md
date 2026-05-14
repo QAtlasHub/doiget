@@ -31,6 +31,35 @@ Five tools were wired during Slice 1 / Slice 2 (`doiget_health`,
 out the remaining five (`doiget_resolve_paper`, `doiget_info`,
 `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`).
 
+### Slice 20 — Per-source HTTP header hook (Phase 5 follow-up)
+
+Closes the Slice 18/19 known-limitation by letting Tier-3 TDM
+sources attach authentication headers on the wire.
+
+- **New API** `HttpClient::fetch_bytes_with_headers(source, url,
+  headers: &[(&str, &str)])` (`crates/doiget-core/src/http.rs`).
+  Header names/values are validated up-front against the
+  visible-ASCII subset (RFC 7230 §3.2); invalid headers return
+  the new `HttpError::InvalidHeader { name, reason }` variant
+  before the request is sent. `fetch_bytes` / `fetch_pdf` keep
+  their existing signatures and pass `&[]` internally — no caller
+  needs to change.
+- **APS source** now sends `X-API-Key: $DOIGET_KEY_APS` on the
+  outgoing GET. Wiremock happy-path test asserts the header is
+  present (`header("x-api-key", TEST_KEY)` matcher); removing the
+  header would now fail the test.
+- **Elsevier source** now sends `X-ELS-APIKey: $DOIGET_KEY_ELSEVIER`
+  on the outgoing GET, with the matching `header("x-els-apikey",
+  TEST_KEY)` wiremock assertion.
+- **`HttpError::InvalidHeader`** is mapped to `None` in the
+  `From<&HttpError> for Option<DenialContext>` table — it is a
+  caller-bug signal, not an ADR-0023 denial, and collapses to
+  `ErrorCode::InternalError` via the existing wildcard arm in
+  `From<HttpError> for ErrorCode`.
+- **Stale notes removed**: the "header not on wire" `NOTE:` blocks
+  inside `tdm_aps.rs` / `tdm_elsevier.rs::fetch` and the
+  `KEY_ENV_VAR` doc-comments now describe the wired behaviour.
+
 ### Slice 19 — Elsevier ScienceDirect TDM source (Phase 5c)
 
 Third Phase-5 / Tier-3 slice — closes the Phase 5a/b/c trio. Adds

@@ -49,9 +49,8 @@ const DEFAULT_BASE: &str = "https://api.elsevier.com";
 
 /// Env var holding the per-tenant API key. Presence is one of the
 /// three activation gates (`docs/CAPABILITY.md` §2); the value is
-/// read at fetch time and would be sent as the `X-ELS-APIKey`
-/// header once `HttpClient` grows a per-source header hook (TODO
-/// in `fetch`).
+/// read at fetch time and sent as the `X-ELS-APIKey` header via
+/// [`HttpClient::fetch_bytes_with_headers`].
 const KEY_ENV_VAR: &str = "DOIGET_KEY_ELSEVIER";
 
 /// Elsevier ScienceDirect [`Source`] impl — DOI →
@@ -146,15 +145,6 @@ impl Source for TdmElsevierSource {
         // Defensive gate (2/3): re-read the key env var. A missing
         // key here means env changed mid-process — fail-close as
         // NotEligible so the orchestrator can fall through.
-        //
-        // NOTE: Phase 5c relies on the shared `FetchContext.http`
-        // for the GET, which does not yet surface a per-source
-        // header hook. The `X-ELS-APIKey` header is therefore NOT
-        // attached on the wire in this slice; the call would 401 in
-        // production until the HttpClient is extended (the same
-        // hook Slice 18 / APS needs). The wiremock test below
-        // exercises the path with header matching disabled. See
-        // `docs/SOURCES.md` §4 "TDM sources (Phase 5)" follow-up.
         let api_key = std::env::var(KEY_ENV_VAR).map_err(|_| FetchError::NotEligible {
             source_key: "tdm-elsevier".into(),
         })?;
@@ -167,7 +157,13 @@ impl Source for TdmElsevierSource {
         let _permit = ctx.rate_limiter.acquire(self.name()).await;
 
         let url = self.request_url(doi)?;
-        let (body, final_url) = ctx.http.fetch_bytes(self.name(), url).await?;
+        // Elsevier authenticates via the `X-ELS-APIKey` request
+        // header (Slice 20 wiring). The header value is sent on
+        // the wire only; it is never logged or echoed back.
+        let (body, final_url) = ctx
+            .http
+            .fetch_bytes_with_headers(self.name(), url, &[("X-ELS-APIKey", &api_key)])
+            .await?;
 
         let envelope: serde_json::Value =
             serde_json::from_slice(&body).map_err(|e| FetchError::SourceSchema {
@@ -254,7 +250,7 @@ mod tests {
 
     use camino::Utf8PathBuf;
     use tempfile::TempDir;
-    use wiremock::matchers::{method, path, query_param};
+    use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::http::HttpClient;
@@ -317,6 +313,8 @@ mod tests {
             // Elsevier path with percent-encoded DOI (`/` → `%2F`).
             .and(path("/content/article/doi/10.1016%2Fj.example.2024.001"))
             .and(query_param("httpAccept", "application/json"))
+            // Slice 20: X-ELS-APIKey header MUST be present on the wire.
+            .and(header("x-els-apikey", TEST_KEY))
             .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_ARTICLE_HIT))
             .mount(&server)
             .await;

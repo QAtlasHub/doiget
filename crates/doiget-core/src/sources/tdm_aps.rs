@@ -49,9 +49,8 @@ const DEFAULT_BASE: &str = "https://harvest.aps.org";
 
 /// Env var holding the per-tenant API key. Presence is one of the
 /// three activation gates (`docs/CAPABILITY.md` §2); the value is
-/// read at fetch time and would be sent as the `X-API-Key` header
-/// once `HttpClient` grows a per-source header hook (TODO in
-/// `fetch`).
+/// read at fetch time and sent as the `X-API-Key` header via
+/// [`HttpClient::fetch_bytes_with_headers`].
 const KEY_ENV_VAR: &str = "DOIGET_KEY_APS";
 
 /// APS Harvest [`Source`] impl — DOI → `/v2/article/<DOI>` JSON
@@ -132,15 +131,6 @@ impl Source for TdmApsSource {
         // Defensive gate (2/3): re-read the key env var. A missing
         // key here means env changed mid-process — fail-close as
         // NotEligible so the orchestrator can fall through.
-        //
-        // NOTE: Phase 5b relies on the shared `FetchContext.http`
-        // for the GET, which does not yet surface a per-source
-        // header hook. The `X-API-Key` header is therefore NOT
-        // attached on the wire in this slice; the call would 401 in
-        // production until the HttpClient is extended (the same
-        // hook Slice 19 / Elsevier needs). The wiremock test below
-        // exercises the path with header matching disabled. See
-        // `docs/SOURCES.md` §4 "TDM sources (Phase 5)" follow-up.
         let api_key = std::env::var(KEY_ENV_VAR).map_err(|_| FetchError::NotEligible {
             source_key: "tdm-aps".into(),
         })?;
@@ -153,7 +143,15 @@ impl Source for TdmApsSource {
         let _permit = ctx.rate_limiter.acquire(self.name()).await;
 
         let url = self.request_url(doi)?;
-        let (body, final_url) = ctx.http.fetch_bytes(self.name(), url).await?;
+        // APS Harvest authenticates via the `X-API-Key` request
+        // header. Slice 20 wired `fetch_bytes_with_headers` into
+        // `HttpClient` for this and Elsevier's `X-ELS-APIKey`. The
+        // header value is sent on the wire only; it is never logged
+        // or echoed back in error messages.
+        let (body, final_url) = ctx
+            .http
+            .fetch_bytes_with_headers(self.name(), url, &[("X-API-Key", &api_key)])
+            .await?;
 
         let envelope: serde_json::Value =
             serde_json::from_slice(&body).map_err(|e| FetchError::SourceSchema {
@@ -238,7 +236,7 @@ mod tests {
 
     use camino::Utf8PathBuf;
     use tempfile::TempDir;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::http::HttpClient;
@@ -297,6 +295,8 @@ mod tests {
         Mock::given(method("GET"))
             // APS path with percent-encoded DOI (`/` → `%2F`).
             .and(path("/v2/article/10.1103%2FPhysRevX.10.011001"))
+            // Slice 20: X-API-Key header MUST be present on the wire.
+            .and(header("x-api-key", TEST_KEY))
             .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_ARTICLE_HIT))
             .mount(&server)
             .await;
