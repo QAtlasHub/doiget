@@ -25,6 +25,12 @@ pub mod source;
 pub mod sources;
 pub mod store;
 
+// Phase 4 citation graph (ADR-0010). Compile-gated by the `citation`
+// Cargo feature, which itself enables the `metadata` feature so the
+// Tier-2 source impls are available.
+#[cfg(feature = "citation")]
+pub mod citation_graph;
+
 // Re-export the canonical-tuple audit-identity types at the crate root
 // per ADR-0024 / `docs/PUBLIC_API.md` §1. The types themselves live in
 // the [`canonical`] submodule.
