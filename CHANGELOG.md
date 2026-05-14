@@ -31,6 +31,35 @@ Five tools were wired during Slice 1 / Slice 2 (`doiget_health`,
 out the remaining five (`doiget_resolve_paper`, `doiget_info`,
 `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`).
 
+### Slice 18 — APS Harvest TDM source (Phase 5b)
+
+Second Phase-5 / Tier-3 slice. Adds the `tdm-aps` source: a
+metadata-only APS Harvest TDM fetcher that turns a DOI into the
+single article record from `/v2/article/<DOI>`. Whole module
+compile-gated by the `tdm-aps` Cargo feature.
+
+- **New module** `crates/doiget-core/src/sources/tdm_aps.rs`,
+  declared in `sources/mod.rs` under
+  `#[cfg(feature = "tdm-aps")] pub mod tdm_aps;`.
+- **Three-gate activation**: Cargo feature `tdm-aps` compiled in +
+  `DOIGET_KEY_APS=<api-key>` + `DOIGET_AGREE_TDM_APS=1`.
+- **Transport gate**: new `tier_3_aps_allowlist()` in
+  `crates/doiget-core/src/http.rs` mapping `"tdm-aps"` to
+  `harvest.aps.org` + `*.aps.org`.
+- **Provenance**: emits `LogEvent::Fetch` rows with
+  `capability: Capability::TdmAps`.
+- **Metadata-only**: `FetchResult.pdf_bytes` is always `None`.
+- **Known limitation**: APS expects the API key in the `X-API-Key`
+  header. `HttpClient` does not yet expose a per-source header hook,
+  so the header is NOT attached on the wire in this slice — wiremock
+  tests pass with header matching disabled. The wiring will be added
+  alongside Slice 19 (Elsevier needs the same hook). See in-file
+  TODO and `docs/SOURCES.md` §4 follow-up.
+- **Tests**: three wiremock cases — happy path (DOI percent-encoded
+  in path), no-grant `NotEligible`, non-object response
+  `SourceSchema`. `#[serial_test::serial]` because the happy-path
+  mutates `DOIGET_KEY_APS`.
+
 ### Slice 17 — Springer Nature OA TDM source (Phase 5a)
 
 First Phase-5 / Tier-3 slice. Adds the `tdm-springer` source: a
