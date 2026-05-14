@@ -21,3 +21,6 @@ pub mod openalex;
 
 #[cfg(feature = "metadata")]
 pub mod s2;
+
+#[cfg(feature = "metadata")]
+pub mod doaj;

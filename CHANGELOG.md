@@ -149,6 +149,34 @@ S2-specific differences:
 2 unit tests in `sources::s2::tests` green: happy path (asserts
 `title` + `references[0].paperId`), capability-flag-off rejection.
 
+### Slice 13 — DOAJ source implementation (Phase 4 / Tier 2)
+
+Third concrete Tier 2 source. Adds `DoajSource` behind the
+`metadata` Cargo feature gate. DOAJ has no direct DOI-lookup
+endpoint, so doiget queries the article search API and takes the
+first result.
+
+- **Endpoint**: `GET <base>/api/search/articles/doi:<doi>?pageSize=1`
+  (Lucene-style `doi:` filter; DOI suffix is percent-encoded but the
+  `doi:` separator stays literal).
+- **`Source` impl**: `name() = "doaj"`,
+  `can_serve = profile.metadata.doaj && Ref::Doi(_)`, `fetch` emits
+  one provenance row under `Capability::Metadata` and returns
+  `pdf_bytes: None` (metadata-only contract per
+  `docs/SOURCES.md` §4).
+- **Empty results → `FetchError::SourceSchema`** with a synthetic
+  "doaj search returned 0 results for this DOI" message, so the
+  orchestrator's Tier 2 fallback chain can move on to the next
+  source cleanly.
+- **`percent_encode_path_segment` helper**: hand-rolled (no
+  `percent-encoding` crate) to keep the dependency surface stable;
+  preserves the RFC 3986 unreserved set + `:` for the Lucene
+  separator.
+
+3 unit tests in `sources::doaj::tests` green: happy path (asserts
+`bibjson.title`), empty-results-returns-SourceSchema, capability-
+flag-off rejection.
+
 ### Slice 10 — Tier 2 redirect-allowlist scaffolding (Phase 4 starts)
 
 First Phase-4 slice: lands the redirect-allowlist data for the three
