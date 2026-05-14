@@ -343,8 +343,7 @@ mod tests {
     #[serial_test::serial]
     async fn fetch_without_grant_is_not_eligible() {
         let (_td, ctx) = build_test_context("http://127.0.0.1:1");
-        let src =
-            TdmElsevierSource::with_base(Url::parse("http://127.0.0.1:1").expect("parses"));
+        let src = TdmElsevierSource::with_base(Url::parse("http://127.0.0.1:1").expect("parses"));
         let profile = CapabilityProfile::from_env().expect("clean env never errors");
         let ref_ = Ref::Doi(Doi::parse("10.1016/j.example.2024.001").expect("DOI parses"));
 

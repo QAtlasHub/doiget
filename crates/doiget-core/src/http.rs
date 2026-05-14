@@ -234,10 +234,7 @@ pub fn tier_3_aps_allowlist() -> Vec<SourceAllowlist> {
 pub fn tier_3_elsevier_allowlist() -> Vec<SourceAllowlist> {
     vec![SourceAllowlist::new(
         "tdm-elsevier",
-        vec![
-            "api.elsevier.com".to_string(),
-            "*.elsevier.com".to_string(),
-        ],
+        vec!["api.elsevier.com".to_string(), "*.elsevier.com".to_string()],
     )]
 }
 
