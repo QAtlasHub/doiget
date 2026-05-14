@@ -33,3 +33,6 @@ pub mod doaj;
 
 #[cfg(feature = "tdm-springer")]
 pub mod tdm_springer;
+
+#[cfg(feature = "tdm-aps")]
+pub mod tdm_aps;
