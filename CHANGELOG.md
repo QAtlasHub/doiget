@@ -125,6 +125,30 @@ First concrete Tier 2 source. Adds `OpenalexSource` behind the
   arXiv ref rejection, capability-flag-off rejection, malformed
   response → `SourceSchema`.
 
+### Slice 12 — Semantic Scholar source implementation (Phase 4 / Tier 2)
+
+Second concrete Tier 2 source. Adds `S2Source` behind the `metadata`
+Cargo feature gate. Same shape as `OpenalexSource` (Slice 11) with
+S2-specific differences:
+
+- **Endpoint**: `GET <base>/graph/v1/paper/DOI:<doi>?fields=title,year,citationCount,references`
+- **Optional `api_key`**: stored as `Option<String>`; absent means the
+  request is sent unauthenticated (S2's public Graph API rate limit
+  applies). The `x-api-key` header is not yet threaded through
+  `HttpClient::fetch_bytes` — adding it is a follow-up; the
+  `api_key` field exists to reserve the API surface so a future
+  per-request header hook lands without changing constructors.
+- **Defensive shape check**: an S2 response missing the `paperId`
+  field surfaces as `FetchError::SourceSchema`.
+- **`Source` impl**: `name() = "semantic_scholar"`,
+  `can_serve = profile.metadata.semantic_scholar && Ref::Doi(_)`,
+  `fetch` emits one provenance row under `Capability::Metadata` and
+  returns `pdf_bytes: None` (metadata-only contract per
+  `docs/SOURCES.md` §4).
+
+2 unit tests in `sources::s2::tests` green: happy path (asserts
+`title` + `references[0].paperId`), capability-flag-off rejection.
+
 ### Slice 10 — Tier 2 redirect-allowlist scaffolding (Phase 4 starts)
 
 First Phase-4 slice: lands the redirect-allowlist data for the three

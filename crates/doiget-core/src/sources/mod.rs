@@ -18,3 +18,6 @@ pub mod unpaywall;
 
 #[cfg(feature = "metadata")]
 pub mod openalex;
+
+#[cfg(feature = "metadata")]
+pub mod s2;
