@@ -44,7 +44,7 @@ use camino::Utf8PathBuf;
 use doiget_core::dry_run::{
     build_dry_run_envelope, build_fetch_plan, rate_limit_budget as core_rate_limit_budget,
 };
-use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, HttpClient};
+use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, tier_2_allowlist, HttpClient};
 use doiget_core::orchestrator::{
     batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
     metadata_only, resolve_only as core_resolve_only, FetchPaperOutcome, MetadataOnlyOutcome,
@@ -1003,6 +1003,180 @@ impl Server {
             ))),
         }
     }
+
+    /// `doiget_expand_citation_graph` — BFS citation walk via OpenAlex.
+    ///
+    /// Per `docs/MCP_TOOLS.md` §1 (Phase 4 baseline). Compile-gated by
+    /// the `citation` Cargo feature; default release binaries ship
+    /// without this tool.
+    ///
+    /// Wraps `doiget_core::citation_graph::expand`:
+    /// - The seed `ref` (DOI only) is resolved through `OpenalexSource`
+    ///   for the audit trail.
+    /// - Subsequent Works are walked via `ctx.http` under the
+    ///   `openalex` source key from `tier_2_allowlist()`.
+    /// - ADR-0010 hard caps (depth=3, total=100, per-paper=20) apply
+    ///   regardless of caller input. `truncated: true` surfaces when
+    ///   any cap is hit.
+    #[tool(
+        description = "WHEN TO USE: Expand a DOI's citation neighborhood via OpenAlex BFS.\n\
+                       INPUTS: ref (DOI), depth (optional 1-3, default 3), total (optional 1-100, default 100), per_paper (optional 1-20, default 20).\n\
+                       OUTPUTS: { ok: true, ref, seed_work_id, nodes, edges, truncated, total_visited } OR { ok:false, ref, error }.\n\
+                       COSTS: O(total) OpenAlex requests; expect 1-30 s for a depth-3 walk.\n\
+                       SIDE EFFECTS: Emits one provenance row per consulted Work under Capability::Metadata. NEVER writes to the store. NEVER fetches PDF.\n\
+                       LIMITS: ADR-0010 hard caps applied regardless of inputs: depth<=3, total<=100, per_paper<=20. Requires DOIGET_ENABLE_OPENALEX in env. Returns NOT_IMPLEMENTED when this binary was built without the `citation` Cargo feature."
+    )]
+    async fn doiget_expand_citation_graph(
+        &self,
+        Parameters(input): Parameters<ExpandCitationGraphInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // The body is conditionally compiled. Default release binaries
+        // are built WITHOUT `--features citation` and return
+        // NOT_IMPLEMENTED for this tool so the wire surface stays
+        // stable across feature configurations. With the feature on,
+        // the call dispatches into `citation_graph::expand`.
+        #[cfg(not(feature = "citation"))]
+        {
+            let _ = input;
+            return Ok(CallToolResult::structured(json!({
+                "ok": false,
+                "error": {
+                    "code": ErrorCode::NotImplemented,
+                    "message": "doiget_expand_citation_graph requires the `citation` Cargo feature; this binary was built without it",
+                },
+            })));
+        }
+        #[cfg(feature = "citation")]
+        {
+            let ref_ = match Ref::parse(&input.ref_) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(CallToolResult::structured(read_path_error_envelope(
+                        Some(&input.ref_),
+                        ErrorCode::InvalidRef,
+                        &format!("invalid ref: {e}"),
+                    )));
+                }
+            };
+            let doi = match &ref_ {
+                Ref::Doi(d) => d.clone(),
+                Ref::Arxiv(_) => {
+                    return Ok(CallToolResult::structured(read_path_error_envelope(
+                        Some(&input.ref_),
+                        ErrorCode::InvalidRef,
+                        "expand_citation_graph requires a DOI seed (arXiv ids are not supported)",
+                    )));
+                }
+            };
+
+            let ctx = match build_fetch_context() {
+                Ok(c) => c,
+                Err(e) => {
+                    return Ok(CallToolResult::structured(read_path_error_envelope(
+                        Some(&input.ref_),
+                        ErrorCode::InternalError,
+                        &format!("expand-graph context init failed: {e}"),
+                    )));
+                }
+            };
+
+            let contact_email = std::env::var("DOIGET_CONTACT_EMAIL")
+                .unwrap_or_else(|_| "doiget@localhost".to_string());
+            let source = if let Ok(base) = std::env::var("DOIGET_OPENALEX_BASE") {
+                if let Ok(url) = url::Url::parse(&base) {
+                    doiget_core::sources::openalex::OpenalexSource::with_base(url, contact_email)
+                } else {
+                    doiget_core::sources::openalex::OpenalexSource::new(contact_email)
+                }
+            } else {
+                doiget_core::sources::openalex::OpenalexSource::new(contact_email)
+            };
+
+            if let Err(e) = ctx.log.append(RowInput {
+                event: LogEvent::SessionStart,
+                result: LogResult::Ok,
+                capability: Capability::Metadata,
+                ref_: Some(input.ref_.as_str()),
+                source: None,
+                error_code: None,
+                size_bytes: None,
+                license: None,
+                store_path: None,
+                canonical_digest: None,
+            }) {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::LogError,
+                    &format!("SessionStart append failed: {e}"),
+                )));
+            }
+
+            let caps = doiget_core::citation_graph::GraphCaps {
+                depth: input
+                    .depth
+                    .map(|d| d as usize)
+                    .unwrap_or(doiget_core::citation_graph::GraphCaps::MAX_DEPTH),
+                total: input
+                    .total
+                    .map(|t| t as usize)
+                    .unwrap_or(doiget_core::citation_graph::GraphCaps::MAX_TOTAL),
+                per_paper: input
+                    .per_paper
+                    .map(|p| p as usize)
+                    .unwrap_or(doiget_core::citation_graph::GraphCaps::MAX_PER_PAPER),
+            };
+
+            let outcome =
+                doiget_core::citation_graph::expand(&doi, caps, &source, &self.profile, &ctx).await;
+
+            let session_ok = outcome.is_ok();
+            let _ = ctx.log.append(RowInput {
+                event: LogEvent::SessionEnd,
+                result: if session_ok {
+                    LogResult::Ok
+                } else {
+                    LogResult::Err
+                },
+                capability: Capability::Metadata,
+                ref_: Some(input.ref_.as_str()),
+                source: None,
+                error_code: None,
+                size_bytes: None,
+                license: None,
+                store_path: None,
+                canonical_digest: None,
+            });
+
+            match outcome {
+                Ok(graph) => Ok(CallToolResult::structured(json!({
+                    "ok": true,
+                    "ref": input.ref_,
+                    "seed_work_id": graph.seed_work_id,
+                    "nodes": graph.nodes,
+                    "edges": graph.edges,
+                    "truncated": graph.truncated,
+                    "total_visited": graph.total_visited,
+                }))),
+                Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    match &e {
+                        doiget_core::citation_graph::GraphError::CapabilityDenied => {
+                            ErrorCode::CapabilityDenied
+                        }
+                        doiget_core::citation_graph::GraphError::SeedNotIndexed => {
+                            ErrorCode::NoOaAvailable
+                        }
+                        doiget_core::citation_graph::GraphError::Log(_) => ErrorCode::LogError,
+                        doiget_core::citation_graph::GraphError::Source(_) => {
+                            ErrorCode::NetworkError
+                        }
+                        _ => ErrorCode::InternalError,
+                    },
+                    &format!("citation graph expansion failed: {e}"),
+                ))),
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1105,6 +1279,38 @@ pub struct PaperPdfPathInput {
     #[serde(rename = "ref")]
     #[schemars(rename = "ref")]
     pub ref_: String,
+}
+
+/// JSON-schema-derived input for the `doiget_expand_citation_graph`
+/// MCP tool. **Always present** in the type system — the
+/// `#[tool_router]` macro references this type unconditionally and a
+/// cfg-gated `pub struct` would cause an `unresolved type` error in
+/// the default build. The feature-gate is applied only to the tool
+/// body, which returns `NOT_IMPLEMENTED` when built without
+/// `--features citation`. ADR-0010 hard caps (depth<=3, total<=100,
+/// per_paper<=20) are applied inside the tool body via
+/// `GraphCaps::clamped` — the `Option<u32>` fields below are caller
+/// hints, not authoritative.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct ExpandCitationGraphInput {
+    /// DOI seed. arXiv ids are rejected with `INVALID_REF`.
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+    /// Max BFS depth (1..=3). Default is the ADR-0010 maximum (3).
+    #[serde(default)]
+    pub depth: Option<u32>,
+    /// Max total nodes (1..=100). Default is the ADR-0010 maximum
+    /// (100). `truncated: true` is set on the response when this
+    /// cap is hit.
+    #[serde(default)]
+    pub total: Option<u32>,
+    /// Max children expanded per parent (1..=20). Default is the
+    /// ADR-0010 maximum (20).
+    #[serde(default)]
+    pub per_paper: Option<u32>,
 }
 
 /// Default + max clamp for the `limit` field on `doiget_search_local`
@@ -1523,9 +1729,23 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     let unpaywall = std::env::var("DOIGET_UNPAYWALL_BASE").ok();
     let oa_publisher = std::env::var("DOIGET_OA_PUBLISHER_BASE").ok();
 
-    if arxiv.is_none() && crossref.is_none() && unpaywall.is_none() && oa_publisher.is_none() {
+    let openalex_base = std::env::var("DOIGET_OPENALEX_BASE").ok();
+
+    if arxiv.is_none()
+        && crossref.is_none()
+        && unpaywall.is_none()
+        && oa_publisher.is_none()
+        && openalex_base.is_none()
+    {
         let mut allowlists = tier_1_allowlist();
         allowlists.extend(oa_publisher_allowlist());
+        // Slice 15: Tier 2 allowlist is unioned in unconditionally —
+        // the runtime `metadata.openalex` / `.semantic_scholar` /
+        // `.doaj` capability flags gate whether the source impls
+        // even call `HttpClient::fetch_bytes` under these keys, so
+        // including the hosts here cannot widen the network surface
+        // beyond what the CapabilityProfile already permits.
+        allowlists.extend(tier_2_allowlist());
         return HttpClient::new(allowlists)
             .map_err(|e| anyhow::anyhow!("building production HTTP client: {e}"));
     }
@@ -1536,6 +1756,7 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
         ("crossref", crossref.as_deref()),
         ("unpaywall", unpaywall.as_deref()),
         ("oa-publisher", oa_publisher.as_deref()),
+        ("openalex", openalex_base.as_deref()),
     ] {
         if let Some(b) = base {
             let url = url::Url::parse(b)

@@ -120,6 +120,13 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
         names.contains(&"doiget_paper_pdf_path"),
         "tools/list must include doiget_paper_pdf_path; got: {names:?}"
     );
+    // Slice 15: doiget_expand_citation_graph is always advertised
+    // (the tool method is always present; body returns NOT_IMPLEMENTED
+    // when this binary was built without --features citation).
+    assert!(
+        names.contains(&"doiget_expand_citation_graph"),
+        "tools/list must include doiget_expand_citation_graph; got: {names:?}"
+    );
 
     // -- 3. tools/call doiget_health -----------------------------------
     let health = client
