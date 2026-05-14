@@ -31,6 +31,49 @@ Five tools were wired during Slice 1 / Slice 2 (`doiget_health`,
 out the remaining five (`doiget_resolve_paper`, `doiget_info`,
 `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`).
 
+### Slice 11 — OpenAlex source implementation (Phase 4 / Tier 2)
+
+First concrete Tier 2 source. Adds `OpenalexSource` behind the
+`metadata` Cargo feature gate plus runtime capability check
+(`profile.metadata.openalex`).
+
+- **New module** `crates/doiget-core/src/sources/openalex.rs`
+  declared in `sources/mod.rs` under
+  `#[cfg(feature = "metadata")] pub mod openalex;`. Default build
+  (`oa-only`) excludes the module entirely so no Tier 2 code paths
+  ship in the default release binary.
+
+- **Production constructor `OpenalexSource::new(contact_email)`**
+  hard-codes `https://api.openalex.org` as the base URL.
+  **Test-only constructor `with_base`** lets wiremock substitute an
+  `http://127.0.0.1:N` origin via a future `DOIGET_OPENALEX_BASE`
+  env var (orchestrator wiring lands in a follow-up).
+
+- **`Source` impl wire shape:**
+  - `name() = "openalex"`
+  - `can_serve(profile, ref_) = profile.metadata.openalex && Ref::Doi(_)`
+  - `fetch`: `GET <base>/works/<doi>?mailto=<contact>`, parses the
+    Work record JSON, emits one `LogEvent::Fetch` provenance row
+    under `Capability::Metadata` (per `docs/PROVENANCE_LOG.md` §3),
+    returns `FetchResult { source: "openalex", license: "unknown",
+    pdf_bytes: None, metadata_json: Some(work) }`.
+  - Metadata-only contract: `pdf_bytes` is always `None`
+    (`docs/SOURCES.md` §4).
+
+- **Defensive shape check**: an OpenAlex response missing the `id`
+  field is treated as an error payload and surfaces as
+  `FetchError::SourceSchema` with the first 200 chars of the body
+  in the hint.
+
+- **Defense-in-depth capability gate**: even if `can_serve` is
+  bypassed, `fetch` rejects with `FetchError::NotEligible` when
+  `profile.metadata.openalex == false`.
+
+- **4 unit tests** in `sources::openalex::tests` (all green):
+  happy path (asserts `display_name` + `referenced_works[0]`),
+  arXiv ref rejection, capability-flag-off rejection, malformed
+  response → `SourceSchema`.
+
 ### Slice 10 — Tier 2 redirect-allowlist scaffolding (Phase 4 starts)
 
 First Phase-4 slice: lands the redirect-allowlist data for the three
