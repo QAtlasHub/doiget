@@ -31,6 +31,41 @@ Five tools were wired during Slice 1 / Slice 2 (`doiget_health`,
 out the remaining five (`doiget_resolve_paper`, `doiget_info`,
 `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`).
 
+### Slice 17 — Springer Nature OA TDM source (Phase 5a)
+
+First Phase-5 / Tier-3 slice. Adds the `tdm-springer` source: a
+metadata-only Springer Nature TDM fetcher that turns a DOI into the
+first matching `records[]` entry from `/openaccess/json`. Whole
+module compile-gated by the `tdm-springer` Cargo feature so default
+release binaries never include the host pattern or env-var read
+path (ADR-0002).
+
+- **New module** `crates/doiget-core/src/sources/tdm_springer.rs`,
+  declared in `sources/mod.rs` under
+  `#[cfg(feature = "tdm-springer")] pub mod tdm_springer;`.
+- **Three-gate activation** (`docs/CAPABILITY.md` §2): Cargo feature
+  `tdm-springer` compiled in + `DOIGET_KEY_SPRINGER=<api-key>` +
+  `DOIGET_AGREE_TDM_SPRINGER=1`. `can_serve` checks
+  `profile.tdm_springer.is_some()`; `fetch` re-checks the grant AND
+  re-reads the key env var defensively, fail-closing as
+  `NotEligible` if either is missing at fetch time.
+- **Transport gate**: new `tier_3_springer_allowlist()` in
+  `crates/doiget-core/src/http.rs` (also feature-gated) maps the
+  source key `"tdm-springer"` to `api.springernature.com` plus the
+  `*.springernature.com` wildcard. The orchestrator unions this into
+  the active allowlist only when the feature is on.
+- **Provenance**: emits `LogEvent::Fetch` rows with
+  `capability: Capability::TdmSpringer` (already defined in
+  `provenance.rs` from Phase 0).
+- **Metadata-only**: `FetchResult.pdf_bytes` is always `None` for
+  Phase 5a. Following the OA PDF link in the returned record is
+  deferred until the eight ADR-0019 safeguards are wired through the
+  orchestrator.
+- **Tests**: three wiremock cases — happy path (asserts
+  `?q=doi:...&api_key=...` query params), no-grant `NotEligible`,
+  empty-`records` `SourceSchema`. `#[serial_test::serial]` because
+  the happy-path test mutates `DOIGET_KEY_SPRINGER`.
+
 ### Slice 16 — `doiget graph <ref>` CLI subcommand (Phase 4)
 
 Final Phase-4 slice. Adds the `doiget graph <ref>` subcommand that
