@@ -31,6 +31,11 @@ pub mod list_recent;
 pub mod provenance;
 pub mod search;
 
+// Phase 4 / Slice 16. Compile-gated by the `citation` Cargo feature
+// (which itself enables `doiget-core/citation`).
+#[cfg(feature = "citation")]
+pub mod graph;
+
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 

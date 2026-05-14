@@ -45,6 +45,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use camino::Utf8PathBuf;
 
+#[cfg(feature = "citation")]
+use doiget_core::http::tier_2_allowlist;
 use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, HttpClient};
 use doiget_core::orchestrator::{fetch_paper as core_fetch_paper, FetchPaperOutcome};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
@@ -165,10 +167,28 @@ fn build_http_client() -> Result<HttpClient> {
     let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
     let unpaywall = std::env::var("DOIGET_UNPAYWALL_BASE").ok();
     let oa_publisher = std::env::var("DOIGET_OA_PUBLISHER_BASE").ok();
+    // Slice 16: `DOIGET_OPENALEX_BASE` selects a wiremock host for the
+    // citation-graph BFS. Only meaningful with `--features citation`,
+    // but reading the env unconditionally keeps the branch logic
+    // simple and is harmless for default builds.
+    let openalex_base = std::env::var("DOIGET_OPENALEX_BASE").ok();
 
-    if arxiv.is_none() && crossref.is_none() && unpaywall.is_none() && oa_publisher.is_none() {
+    if arxiv.is_none()
+        && crossref.is_none()
+        && unpaywall.is_none()
+        && oa_publisher.is_none()
+        && openalex_base.is_none()
+    {
         let mut allowlists = tier_1_allowlist();
         allowlists.extend(oa_publisher_allowlist());
+        // Slice 16: when the `citation` feature is compiled in, the
+        // graph subcommand walks OpenAlex Work IDs via
+        // `ctx.http.fetch_bytes("openalex", ...)`. The Tier 2
+        // allowlist registers the `api.openalex.org` host under
+        // that source key. CapabilityProfile.metadata.openalex is
+        // the runtime gate; the allowlist is the transport gate.
+        #[cfg(feature = "citation")]
+        allowlists.extend(tier_2_allowlist());
         return HttpClient::new(allowlists).context("building HTTP client");
     }
 
@@ -179,6 +199,7 @@ fn build_http_client() -> Result<HttpClient> {
         ("crossref", crossref.as_deref()),
         ("unpaywall", unpaywall.as_deref()),
         ("oa-publisher", oa_publisher.as_deref()),
+        ("openalex", openalex_base.as_deref()),
     ] {
         if let Some(b) = base {
             let url = url::Url::parse(b)

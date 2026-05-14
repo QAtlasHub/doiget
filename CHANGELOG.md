@@ -31,6 +31,45 @@ Five tools were wired during Slice 1 / Slice 2 (`doiget_health`,
 out the remaining five (`doiget_resolve_paper`, `doiget_info`,
 `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`).
 
+### Slice 16 — `doiget graph <ref>` CLI subcommand (Phase 4)
+
+Final Phase-4 slice. Adds the `doiget graph <ref>` subcommand that
+wraps `doiget_core::citation_graph::expand` and emits the result
+as pretty-printed JSON on stdout. Mirrors the
+`doiget_expand_citation_graph` MCP tool (Slice 15) wire shape.
+
+- **New module** `crates/doiget-cli/src/commands/graph.rs`, declared
+  in `commands/mod.rs` under
+  `#[cfg(feature = "citation")] pub mod graph;`. Default build
+  (`oa-only`) excludes the module entirely.
+- **CLI surface**:
+  `doiget graph <ref> [--depth N] [--total N] [--per-paper N]`
+  (feature-gated `Command::Graph` variant). DOI seeds only; arXiv
+  ids are rejected at the orchestrator layer.
+- **`build_http_client` fix**: production path now also unions
+  `tier_2_allowlist()` (gated on the `citation` feature) so the
+  `openalex` source key passes the redirect closure. Test path
+  recognizes `DOIGET_OPENALEX_BASE` env var for wiremock routing.
+  Mirrors the parallel fix applied to `doiget-mcp/src/lib.rs`
+  during Slice 15.
+- **Output**: pretty JSON of `GraphResult { seed_work_id, nodes,
+  edges, truncated, total_visited }` on stdout. Uses
+  `writeln!(stdout().lock(), ...)` per `docs/SECURITY.md` §3 (the
+  workspace `print_stdout` lint is denied; `writeln!` against an
+  explicit `stdout().lock()` is the sanctioned escape hatch).
+- **2 e2e tests** in new `tests/graph_e2e.rs` (whole file
+  `#![cfg(feature = "citation")]`-gated): subprocess run via
+  `assert_cmd` against a wiremocked OpenAlex; asserts the stdout
+  JSON shape (`seed_work_id`, `total_visited`, `nodes` / `edges`
+  array lengths, `truncated`). Plus a non-async test that
+  rejects arXiv seeds with non-zero exit.
+
+This closes Phase 4. Eleven Phase-4-baseline MCP tools wired,
+3 Tier 2 metadata sources implemented, citation-graph BFS
+orchestrator with ADR-0010 hard caps in place, and the
+`doiget graph` CLI subcommand now lets users walk graphs
+without standing up an MCP host.
+
 ### Slice 15 — `doiget_expand_citation_graph` MCP tool (Phase 4)
 
 Wires the 11th MCP tool (Phase 4 from `docs/MCP_TOOLS.md` §1).
