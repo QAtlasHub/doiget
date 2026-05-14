@@ -15,6 +15,15 @@ readme                 = "README.md"
 [lints]
 workspace = true
 
+[features]
+default = []
+# Phase 4 / Slice 15. Enables the `doiget_expand_citation_graph` MCP
+# tool by turning on `doiget-core/citation` (which itself enables
+# `doiget-core/metadata`). Default release binaries (built without
+# `--features citation`) ship without the graph tool; `tools/list`
+# advertises 12 tools instead of 13 in that build.
+citation = ["doiget-core/citation"]
+
 [dependencies]
 doiget-core        = { workspace = true }
 tokio              = { workspace = true }

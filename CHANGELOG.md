@@ -31,6 +31,46 @@ Five tools were wired during Slice 1 / Slice 2 (`doiget_health`,
 out the remaining five (`doiget_resolve_paper`, `doiget_info`,
 `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`).
 
+### Slice 15 — `doiget_expand_citation_graph` MCP tool (Phase 4)
+
+Wires the 11th MCP tool (Phase 4 from `docs/MCP_TOOLS.md` §1).
+The tool always advertises in `tools/list`; the body returns
+`NOT_IMPLEMENTED` when this binary was built without the `citation`
+Cargo feature, and runs the live BFS expansion when it was.
+
+- **New `citation` Cargo feature** on `doiget-mcp` that turns on
+  `doiget-core/citation` (which itself enables `doiget-core/metadata`,
+  pulling in `OpenalexSource`).
+- **`doiget_expand_citation_graph(ref, depth?, total?, per_paper?)`**
+  tool method on `Server`. Always present in the type system —
+  the `#[tool_router]` macro can't see cfg-gated methods, so the
+  feature gate lives only in the body. `ExpandCitationGraphInput`
+  is similarly unconditional.
+- **Wire envelope** (success):
+  `{ ok: true, ref, seed_work_id, nodes, edges, truncated, total_visited }`.
+  Error path uses the existing `read_path_error_envelope` shape,
+  mapping `GraphError::CapabilityDenied` → `CAPABILITY_DENIED`,
+  `SeedNotIndexed` → `NO_OA_AVAILABLE`, `Log` → `LOG_ERROR`,
+  `Source` → `NETWORK_ERROR`.
+- **`build_fetch_context` HTTP allowlist update**: production path
+  now unions `tier_2_allowlist()` (from Slice 10) so the `openalex`
+  source key is accepted by the redirect closure. Test path
+  recognizes `DOIGET_OPENALEX_BASE` env var for wiremock routing.
+- **`tools/list` assertion** added to `initialize_handshake.rs`.
+- **3 e2e tests** in new `tests/expand_citation_graph_e2e.rs`
+  (whole file `#![cfg(feature = "citation")]`-gated): a 3-node
+  wiremocked graph (W0001 → W0002, W0003), invalid-ref →
+  `INVALID_REF`, arXiv seed → `INVALID_REF`.
+
+### Scope deferred to Slice 15b
+
+`doiget_bibtex_export` and `doiget_csl_export` were originally part of
+Slice 15 but defer to a follow-up slice because they require new
+BibTeX/CSL renderer helpers in `doiget-core::store::metadata` that
+the CLI's `bib.rs` / `csl.rs` currently keep CLI-internal. Slice
+15b will move those renderers into `doiget-core` and add the two
+MCP tools as thin wrappers over `Store::read + renderer`.
+
 ### Slice 14 — Citation graph BFS expansion (ADR-0010, Phase 4)
 
 Citation-graph orchestrator backing the upcoming
