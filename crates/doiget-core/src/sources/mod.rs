@@ -24,3 +24,12 @@ pub mod s2;
 
 #[cfg(feature = "metadata")]
 pub mod doaj;
+
+// ---------------------------------------------------------------------------
+// Tier 3 (Phase 5) — compile-gated by per-publisher Cargo features.
+// Default release binaries ship NONE of these; opt-in builds enable one
+// or more via `--features tdm-<publisher>` (ADR-0002).
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "tdm-springer")]
+pub mod tdm_springer;

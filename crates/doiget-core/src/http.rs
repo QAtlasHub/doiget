@@ -168,6 +168,32 @@ pub fn tier_2_allowlist() -> Vec<SourceAllowlist> {
     ]
 }
 
+/// Hard-coded Phase 5a allowlist for the Springer Nature OA TDM
+/// source. Compile-gated by the `tdm-springer` Cargo feature so
+/// default release binaries never include the host pattern (per
+/// ADR-0002 and `docs/SOURCES.md` §3).
+///
+/// Returned entry:
+/// - `"tdm-springer"` → `api.springernature.com` (production base) +
+///   `*.springernature.com` (covers load-balancing subdomains; the
+///   redirect closure denies anything outside the wildcard).
+///
+/// Per `docs/SOURCES.md` §4 "TDM sources (Phase 5)", a fetch under
+/// this source key requires ALL THREE gates: Cargo feature compiled
+/// in, `DOIGET_KEY_SPRINGER` env var present, and
+/// `DOIGET_AGREE_TDM_SPRINGER=1`. The `CapabilityProfile` gate
+/// enforces the env-var pair; this allowlist is the transport gate.
+#[cfg(feature = "tdm-springer")]
+pub fn tier_3_springer_allowlist() -> Vec<SourceAllowlist> {
+    vec![SourceAllowlist::new(
+        "tdm-springer",
+        vec![
+            "api.springernature.com".to_string(),
+            "*.springernature.com".to_string(),
+        ],
+    )]
+}
+
 /// Hard-coded Phase 1 allowlist for the synthetic `"oa-publisher"` source —
 /// the publisher / preprint / repository hosts to which Unpaywall's
 /// `best_oa_location.url` (or `url_for_pdf`) typically resolves.
