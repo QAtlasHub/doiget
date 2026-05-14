@@ -31,6 +31,57 @@ Five tools were wired during Slice 1 / Slice 2 (`doiget_health`,
 out the remaining five (`doiget_resolve_paper`, `doiget_info`,
 `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`).
 
+### Slice 14 — Citation graph BFS expansion (ADR-0010, Phase 4)
+
+Citation-graph orchestrator backing the upcoming
+`doiget_expand_citation_graph` MCP tool (Slice 15) and `doiget graph`
+CLI subcommand (Slice 16).
+
+- **New module** `crates/doiget-core/src/citation_graph.rs`,
+  compile-gated by the `citation` Cargo feature (which itself
+  enables `metadata` so `OpenalexSource` is available).
+
+- **`expand(seed_doi, caps, source, profile, ctx)`** runs a BFS
+  walk via OpenAlex. The seed `Doi` is resolved through
+  `OpenalexSource::fetch` (so the seed lands in the audit trail
+  via the documented path); subsequent works are fetched directly
+  via `ctx.http.fetch_bytes("openalex", url)` for Work-ID lookups
+  (the redirect allowlist already permits the `openalex` source
+  key from Slice 10). Each successful fetch appends one
+  `LogEvent::Fetch` row under `Capability::Metadata`. Failed
+  fetches log `LogResult::Err` rows and continue the walk with
+  `truncated = true`.
+
+- **ADR-0010 hard caps enforced via `GraphCaps::clamped`**:
+  `MAX_DEPTH = 3`, `MAX_TOTAL = 100`, `MAX_PER_PAPER = 20`. Any
+  caller-supplied value is clamped before walking — this is the
+  load-bearing enforcement point per the ADR's binding contract.
+  `truncated: true` is set on the result when any cap is hit.
+
+- **Cycle detection** via `HashSet<String>` of visited Work IDs.
+  Duplicate parents still get edges added (so structural cycles
+  are visible in the result) but are not re-queued.
+
+- **TDM-free invariant**: per ADR-0010, this module never consults
+  any Tier 3 source. Even S2 / DOAJ are not used — only OpenAlex
+  exposes `referenced_works[]` in a single round-trip, so the
+  walker is OpenAlex-only by design.
+
+- **New `GraphError` enum**: `Source(FetchError)`, `Log(LogError)`,
+  `SeedNotIndexed`, `CapabilityDenied`. Provenance-log failures
+  abort the expansion (fail-closed per
+  `docs/PROVENANCE_LOG.md` §5).
+
+- **`DOIGET_OPENALEX_BASE` env var** is read at Work-ID fetch
+  time so wiremock tests can swap the origin. Production callers
+  leave the env unset and the default `https://api.openalex.org`
+  applies.
+
+- **3 unit tests** in `citation_graph::tests` green:
+  `caps_clamps_to_adr_0010_maxima`, `expand_walks_depth_2_graph`
+  (a 4-node wiremocked graph: W0001 seed → W0002/W0003 → W0004),
+  `expand_without_capability_flag_errors`.
+
 ### Slice 11 — OpenAlex source implementation (Phase 4 / Tier 2)
 
 First concrete Tier 2 source. Adds `OpenalexSource` behind the
