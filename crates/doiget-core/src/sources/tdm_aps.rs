@@ -84,15 +84,10 @@ impl TdmApsSource {
     /// APS encodes the DOI directly in the path; the `/` separator
     /// in the DOI suffix must be percent-encoded.
     fn request_url(&self, doi: &crate::Doi) -> Result<Url, FetchError> {
-        let path = format!(
-            "/v2/article/{}",
-            percent_encode_path_segment(doi.as_str())
-        );
-        self.base
-            .join(&path)
-            .map_err(|e| FetchError::SourceSchema {
-                hint: format!("tdm-aps URL construction failed: {e}"),
-            })
+        let path = format!("/v2/article/{}", percent_encode_path_segment(doi.as_str()));
+        self.base.join(&path).map_err(|e| FetchError::SourceSchema {
+            hint: format!("tdm-aps URL construction failed: {e}"),
+        })
     }
 }
 
