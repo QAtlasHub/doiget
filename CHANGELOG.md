@@ -31,6 +31,36 @@ Five tools were wired during Slice 1 / Slice 2 (`doiget_health`,
 out the remaining five (`doiget_resolve_paper`, `doiget_info`,
 `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`).
 
+### Slice 10 — Tier 2 redirect-allowlist scaffolding (Phase 4 starts)
+
+First Phase-4 slice: lands the redirect-allowlist data for the three
+Tier 2 metadata sources (`docs/SOURCES.md` §1 Tier-2 row). No source
+impls yet — subsequent slices add OpenAlex (11), Semantic Scholar
+(12), and DOAJ (13) concretely.
+
+- **New `tier_2_allowlist()` function** in
+  `crates/doiget-core/src/http.rs`. Sibling to the existing
+  `tier_1_allowlist()` and `oa_publisher_allowlist()`. Returns three
+  `SourceAllowlist` entries with the production hosts:
+  - `"openalex"` → `api.openalex.org`
+  - `"semantic_scholar"` → `api.semanticscholar.org`
+  - `"doaj"` → `doaj.org` + `*.doaj.org`
+
+- **No behavioral change yet.** The function is declared but not
+  consumed by any source impl. Tier 2 source impls (Slice 11/12/13)
+  will pass this list into `HttpClient::new` so the redirect closure
+  denies off-list hosts under each Tier 2 source key.
+
+- **Capability gate, unchanged.** `CapabilityProfile.metadata.{openalex,
+  semantic_scholar, doaj}` and the `DOIGET_ENABLE_OPENALEX` /
+  `DOIGET_ENABLE_S2` / `DOIGET_ENABLE_DOAJ` env vars were already
+  wired during Phase 0; this slice does not touch them.
+
+- **No new tests in this slice.** `tier_2_allowlist()` is pure data;
+  a sibling unit test (mirroring `tier_1_allowlist_includes_crossref`)
+  lands in Slice 11 alongside the first concrete source impl, so the
+  assertion has a producer to protect.
+
 ### Slice 8 — Read-path MCP tools (4 tools)
 
 Wires the four 100% local read-path MCP tools from the
