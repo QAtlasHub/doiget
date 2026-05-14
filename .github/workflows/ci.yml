@@ -41,6 +41,15 @@ jobs:
           toolchain: stable
           components: clippy
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          # rust-cache v2.9 turned `cache-bin: true` on by default. The
+          # macOS-arm64 cache slot has captured a poisoned
+          # `~/.cargo/bin/cargo` (resolves to `rustup-init`, so
+          # `cargo test ...` fails with `unexpected argument 'test'`).
+          # `dtolnay/rust-toolchain` above already installs cargo fresh;
+          # we don't want a stale binary cache restored over it.
+          # `target/` and the registry stay cached as before.
+          cache-bin: false
       - name: clippy
         run: cargo clippy --workspace --all-targets --no-default-features --features "${{ matrix.features }}" -- -D warnings
 
@@ -57,6 +66,10 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          # See clippy job above for the cache-bin rationale (macOS-arm64
+          # cache slot shadows the freshly-installed cargo with rustup-init).
+          cache-bin: false
       # Aligned with clippy job: --no-default-features --features oa-only,
       # so test and clippy exercise an identical feature surface.
       - run: cargo test --workspace --all-targets --no-default-features --features oa-only
