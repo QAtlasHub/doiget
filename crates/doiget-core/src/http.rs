@@ -380,6 +380,21 @@ pub enum HttpError {
         /// The unregistered source key.
         source_key: String,
     },
+    /// A header name or value passed to
+    /// [`HttpClient::fetch_bytes_with_headers`] was not a valid HTTP
+    /// header. The header parser only accepts the visible-ASCII subset
+    /// per RFC 7230 §3.2; control characters and non-ASCII bytes are
+    /// rejected before the request is even built. Surfaces as
+    /// `ErrorCode::InternalError` at the public boundary (callers
+    /// supplying bad headers are responsible for fixing the call site;
+    /// not a denial in the ADR-0023 sense).
+    #[error("invalid HTTP header `{name}`: {reason}")]
+    InvalidHeader {
+        /// The header name as supplied by the caller.
+        name: String,
+        /// `"name"` or `"value"` — which side failed parsing.
+        reason: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -488,8 +503,10 @@ impl From<&HttpError> for Option<crate::DenialContext> {
             }
             // The remaining variants are not "denials" in the ADR-0023
             // sense — HttpStatus/UnknownSource are upstream / programming-
-            // error signals.
-            HttpError::HttpStatus { .. } | HttpError::UnknownSource { .. } => None,
+            // error signals; InvalidHeader is a caller-bug signal.
+            HttpError::HttpStatus { .. }
+            | HttpError::UnknownSource { .. }
+            | HttpError::InvalidHeader { .. } => None,
         }
     }
 }
@@ -546,7 +563,28 @@ impl HttpClient {
     ///
     /// Any [`HttpError`] variant.
     pub async fn fetch_bytes(&self, source: &str, url: Url) -> Result<(Bytes, Url), HttpError> {
-        self.fetch_inner(source, url, false).await
+        self.fetch_inner(source, url, &[], false).await
+    }
+
+    /// Like [`Self::fetch_bytes`] but attaches additional request
+    /// headers to the outgoing GET. The headers are validated up-front
+    /// against the visible-ASCII subset (RFC 7230 §3.2); any failure
+    /// returns [`HttpError::InvalidHeader`] before the request is sent.
+    ///
+    /// Used by Tier-3 TDM sources that authenticate via a header
+    /// (APS Harvest `X-API-Key`, Elsevier ScienceDirect `X-ELS-APIKey`).
+    /// Header values appear on the wire only — they are never logged.
+    ///
+    /// # Errors
+    ///
+    /// Any [`HttpError`] variant including [`HttpError::InvalidHeader`].
+    pub async fn fetch_bytes_with_headers(
+        &self,
+        source: &str,
+        url: Url,
+        headers: &[(&str, &str)],
+    ) -> Result<(Bytes, Url), HttpError> {
+        self.fetch_inner(source, url, headers, false).await
     }
 
     /// Fetch a URL expected to be a PDF. Same as [`Self::fetch_bytes`] plus
@@ -558,13 +596,14 @@ impl HttpClient {
     ///
     /// Any [`HttpError`] variant including [`HttpError::NotAPdf`].
     pub async fn fetch_pdf(&self, source: &str, url: Url) -> Result<(Bytes, Url), HttpError> {
-        self.fetch_inner(source, url, true).await
+        self.fetch_inner(source, url, &[], true).await
     }
 
     async fn fetch_inner(
         &self,
         source: &str,
         url: Url,
+        headers: &[(&str, &str)],
         check_pdf_magic: bool,
     ) -> Result<(Bytes, Url), HttpError> {
         let client = self
@@ -574,7 +613,27 @@ impl HttpClient {
                 source_key: source.to_string(),
             })?;
 
-        let response = client.get(url).send().await?;
+        // Parse headers up-front so an invalid name/value fails BEFORE
+        // we touch the network. `HeaderName::from_bytes` / `HeaderValue::from_str`
+        // accept the visible-ASCII subset only (RFC 7230 §3.2).
+        let mut header_map = reqwest::header::HeaderMap::with_capacity(headers.len());
+        for (name, value) in headers {
+            let hn = reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+                HttpError::InvalidHeader {
+                    name: (*name).to_string(),
+                    reason: "name".to_string(),
+                }
+            })?;
+            let hv = reqwest::header::HeaderValue::from_str(value).map_err(|_| {
+                HttpError::InvalidHeader {
+                    name: (*name).to_string(),
+                    reason: "value".to_string(),
+                }
+            })?;
+            header_map.insert(hn, hv);
+        }
+
+        let response = client.get(url).headers(header_map).send().await?;
         let final_url = response.url().clone();
 
         // Status check before body read so we can fail fast.
