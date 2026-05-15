@@ -31,6 +31,34 @@ Five tools were wired during Slice 1 / Slice 2 (`doiget_health`,
 out the remaining five (`doiget_resolve_paper`, `doiget_info`,
 `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`).
 
+### Slice 21 — release-plz integration (Phase 6 foundation)
+
+First Phase-6 slice. Wires `release-plz` so every push to `main`
+opens or updates a single "release PR" that bumps the workspace
+version (currently `0.0.0`) and prepends a versioned section to
+`CHANGELOG.md`. Tagging, GitHub releases, and `cargo publish` are
+intentionally NOT enabled in this slice — those land alongside
+OIDC trusted-publishing and sigstore signing in subsequent Phase 6
+slices.
+
+- **New** `release-plz.toml` at the repo root. `git_release_enable
+  = false`, `publish = false`, `publish_no_verify = true`,
+  `changelog_path = "CHANGELOG.md"`. Lists `doiget-core` /
+  `doiget-cli` / `doiget-mcp` as managed packages (they share a
+  single workspace version).
+- **New** `.github/workflows/release-plz.yml`. Triggers on `push:
+  main` and `workflow_dispatch`. Permissions: `contents: write` +
+  `pull-requests: write` (only enough to open / update the release
+  PR). Concurrency group `release-plz-${{ github.ref }}` prevents
+  duplicate runs. SHA-pinned actions:
+  - `actions/checkout@de0fac2e…` (v6.0.2) with `fetch-depth: 0`
+    so release-plz can walk the full conventional-commit history.
+  - `dtolnay/rust-toolchain@29eef336…` (stable, for the workspace
+    `cargo` invocation release-plz makes internally).
+  - `MarcoIeni/release-plz-action@064f4d1e…` (v0.5.129) with
+    `command: release-pr` — never `release`, so it cannot tag or
+    publish.
+
 ### Slice 20 — Per-source HTTP header hook (Phase 5 follow-up)
 
 Closes the Slice 18/19 known-limitation by letting Tier-3 TDM

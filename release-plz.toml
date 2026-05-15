@@ -1,0 +1,46 @@
+# release-plz workspace config — Phase 6 / Slice 21.
+#
+# This slice ships ONLY the release-PR side of release-plz:
+#   - On every push to `main`, release-plz inspects conventional-commit
+#     messages and opens (or updates) a single "release PR" that bumps
+#     the workspace version and updates CHANGELOG.md.
+#   - The `release` side of release-plz (which tags, GitHub-releases,
+#     and `cargo publish`es each crate) is intentionally DISABLED here.
+#     Tag + GitHub-release + crates.io publish wiring lands with the
+#     Phase 6 OIDC / sigstore / SBOM follow-up slices.
+#
+# Reference: https://release-plz.dev/docs/config
+
+[workspace]
+# Do NOT create GitHub releases yet. The `release` job is not enabled
+# in `.github/workflows/release-plz.yml` either; this is belt-and-braces.
+git_release_enable    = false
+# Do NOT publish to crates.io yet. Crates.io trusted-publishing via OIDC
+# lands in a later slice; until then, leave the registry untouched.
+publish               = false
+# Skip the "is this commit already in the registry?" check while
+# publishing is off — speeds up release-PR generation and avoids
+# spurious network calls.
+publish_no_verify     = true
+# We maintain ONE workspace-wide CHANGELOG.md at the repo root
+# (already in place; Slices 1-20 entries live there). release-plz will
+# append new sections to it on each release PR.
+changelog_update      = true
+changelog_path        = "CHANGELOG.md"
+# Group all workspace crates' bumps into a single release PR. Per-crate
+# split adds churn without value while we have just three crates.
+release_always        = false
+
+# Per-crate entries. The three published crates share a single workspace
+# version (via `version.workspace = true`) so per-crate version pinning
+# is unnecessary — listing them here only declares which crates
+# release-plz manages.
+
+[[package]]
+name                  = "doiget-core"
+
+[[package]]
+name                  = "doiget-cli"
+
+[[package]]
+name                  = "doiget-mcp"
