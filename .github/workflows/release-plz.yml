@@ -1,0 +1,62 @@
+name: release-plz
+
+# Phase 6 / Slice 21 — release-plz integration (PR side only).
+#
+# On every push to `main`, this workflow runs `release-plz release-pr`,
+# which inspects the conventional-commit history and opens (or updates)
+# a single "release PR" that:
+#   - bumps the workspace version in `Cargo.toml`
+#   - prepends a new versioned section to `CHANGELOG.md`
+#
+# Tagging, GitHub-releases, and `cargo publish` are intentionally NOT
+# wired in this slice. They land alongside crates.io trusted-publishing
+# via OIDC in a follow-up Phase 6 slice. See `release-plz.toml`
+# (`git_release_enable = false`, `publish = false`).
+#
+# `workflow_dispatch` is enabled so the workflow can be exercised
+# manually on the slice-21 branch before any push lands on `main`.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# release-plz needs write access to create / update the release PR.
+# Nothing else in the job writes to the repo or the registry.
+permissions:
+  contents: write
+  pull-requests: write
+
+# Single global lock — never let two release-plz runs race for the
+# same release PR.
+concurrency:
+  group: release-plz-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-plz-pr:
+    name: release-plz release-pr
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for release-plz)
+        # release-plz walks conventional-commit history to compute the
+        # next version, so it needs the full git log.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust toolchain (stable)
+        # release-plz invokes `cargo` internally to read the workspace.
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+      - name: release-plz release-pr
+        # SHA-pinned to v0.5.129 (released 2026-05-10).
+        uses: MarcoIeni/release-plz-action@064f4d1e36c843611ddf013be726beaa4ad804db
+        with:
+          # Only open / update the release PR; never tag or publish.
+          # The `release` side stays off until OIDC trusted-publishing
+          # is wired (later Phase 6 slice).
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
