@@ -10,6 +10,62 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.0.0](https://github.com/sotashimozono/doiget/releases/tag/doiget-core-v0.0.0) - 2026-05-15
+
+### Added
+
+- *(core)* Slice 20 — per-source HTTP header hook
+- *(core)* Slice 18 — APS Harvest TDM source (Phase 5b)
+- *(core)* Slice 17 — Springer Nature OA TDM source (Phase 5a)
+- *(slice-13)* DOAJ source impl (Tier 2, Phase 4)
+- *(slice-12)* Semantic Scholar source impl (Tier 2, Phase 4)
+- *(slice-14)* citation_graph BFS expansion (ADR-0010, Phase 4)
+- *(slice-11)* OpenAlex source impl (Tier 2, Phase 4)
+- *(slice-10)* tier_2_allowlist() — Phase 4 redirect-allowlist scaffolding
+- *(slice-7)* doiget_resolve_paper MCP tool + no-persistence orchestrator
+- *(slice-4)* [**breaking**] CanonicalRef impl + provenance log v1->v2 migration
+- *(slice-3)* safekey reference vectors 13 -> 100 + real CI parity
+- *(slice-2)* MCP doiget_fetch_paper + doiget_batch_fetch wired
+- *(slice-1)* metadata_only orchestrator + arxiv Atom feed parse
+- incorporate musaabhasan feedback from Discussion #12
+- *(cli)* OA PDF fetch from DOI via Unpaywall best_oa_location (Phase 1) ([#78](https://github.com/sotashimozono/doiget/pull/78))
+- *(cli)* doiget audit-log --verify (Phase 1) ([#74](https://github.com/sotashimozono/doiget/pull/74))
+- *(cli)* doiget fetch <ref> orchestrator (Phase 1) ([#72](https://github.com/sotashimozono/doiget/pull/72))
+- *(sources)* Unpaywall source impl (Phase 1 Tier 1) ([#69](https://github.com/sotashimozono/doiget/pull/69))
+- *(sources)* arXiv source impl (Phase 1 Tier 1) ([#68](https://github.com/sotashimozono/doiget/pull/68))
+- *(sources)* Crossref source impl (Phase 1 Tier 1) ([#67](https://github.com/sotashimozono/doiget/pull/67))
+- *(core)* Store trait + Metadata + FsStore impl (Phase 1) ([#66](https://github.com/sotashimozono/doiget/pull/66))
+- *(core)* CapabilityProfile::from_env real impl (Phase 1) ([#65](https://github.com/sotashimozono/doiget/pull/65))
+- *(core)* Source trait + FetchContext + FetchResult + FetchError (Phase 1) ([#64](https://github.com/sotashimozono/doiget/pull/64))
+- *(core)* provenance log writer (JSON Lines + SHA-256 chain) ([#61](https://github.com/sotashimozono/doiget/pull/61))
+- *(core)* rate limiter (5/sec global + 200ms per-source backoff) ([#63](https://github.com/sotashimozono/doiget/pull/63))
+- *(core)* centralized HTTP client with security defaults ([#62](https://github.com/sotashimozono/doiget/pull/62))
+- *(core)* Doi::parse + ArxivId::parse + Ref::parse with validation (Phase 1) ([#55](https://github.com/sotashimozono/doiget/pull/55))
+- *(core)* Safekey derivation per docs/SAFEKEY.md (Phase 1) ([#39](https://github.com/sotashimozono/doiget/pull/39))
+
+### Fixed
+
+- *(ci)* green up posture-lint, rustdoc; let Windows clippy re-run
+- address PR #84 multi-agent review findings (C1, C2, I1-I7)
+- *(ci)* allow expect/unwrap in tests; allow CDLA-Permissive-2.0
+- address re-review findings (serde transparent, ADR status, CI alignment)
+- address PR-review findings (encapsulation, non_exhaustive, ADR stubs, CI)
+
+### Other
+
+- rustfmt fixes for tdm_elsevier.rs and tier_3_elsevier_allowlist
+- Merge branch 'feat/slice-18-tdm-aps' into feat/slice-19-tdm-elsevier
+- rustfmt fixes for tdm_aps.rs
+- *(slice-6)* real-world DOI fixture set
+- *(slice-5)* apply 7 advisory refactors from PR #84 review
+- 4 design refinements from post-incorporation review
+- *(fuzz)* cargo-fuzz harness for Doi/ArxivId/Ref::parse + smoke CI ([#59](https://github.com/sotashimozono/doiget/pull/59))
+- *(security)* assert no outbound network in Phase 0 tests ([#60](https://github.com/sotashimozono/doiget/pull/60))
+- *(core)* defensive vector count + truncation branch coverage ([#48](https://github.com/sotashimozono/doiget/pull/48))
+- *(doiget-core)* add per-crate README for crates.io presentation ([#41](https://github.com/sotashimozono/doiget/pull/41))
+- *(review)* philosophy/structure/drift fixes from doc review round 2
+- Phase 0 skeleton — repo structure, normative specs, ADR scaffolding
+
 Phase 0 (design + scaffolding). No version tag is published in this phase; the
 workspace stays at `0.0.0` until Phase 6. See [docs/PHASES.md](docs/PHASES.md)
 for the full Phase 0 deliverable checklist.
