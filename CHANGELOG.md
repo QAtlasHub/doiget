@@ -87,6 +87,39 @@ Five tools were wired during Slice 1 / Slice 2 (`doiget_health`,
 out the remaining five (`doiget_resolve_paper`, `doiget_info`,
 `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`).
 
+### Slice 22 — OIDC crates.io trusted-publishing
+
+Phase 6 continuation. Turns on the `release` side of release-plz
+so the workflow now (a) pushes an annotated git tag, (b) opens a
+GitHub release with the CHANGELOG section as the body, and (c)
+publishes each crate to crates.io — using OIDC trusted-publishing
+instead of a long-lived `CARGO_REGISTRY_TOKEN`.
+
+- **`release-plz.toml`**: `publish` and `git_release_enable` flipped
+  to `true`. `publish_no_verify` stays on (CI already builds every
+  commit; the registry-side dry-run is redundant).
+- **`.github/workflows/release-plz.yml`**: split into two jobs.
+  - `release-plz-pr`: unchanged behaviour, narrowed permissions
+    (`contents: write` + `pull-requests: write` only — no
+    `id-token`).
+  - `release-plz-release` (new): runs after the PR job, has
+    `id-token: write` so release-plz can mint a short-lived
+    crates.io token via OIDC. Idempotent — on non-release pushes
+    the step is a no-op.
+  - Both jobs now use the canonical `release-plz/action@SHA` ref
+    (the prior `MarcoIeni/release-plz-action` is a redirect; same
+    SHA, same release).
+  - Workflow-level `permissions: contents: read` is the new least-
+    common-denominator; each job widens only what it needs.
+
+**Prerequisite (manual, one-time, before merge or first release-PR
+merge):** the three crates (`doiget-core`, `doiget-cli`,
+`doiget-mcp`) must be registered as Trusted Publishers on
+crates.io. Without this, the `release` job will fail to publish.
+Per crates.io's policy, the FIRST publish of each new crate has to
+be done manually (Trusted Publishing only works for existing
+crates).
+
 ### Slice 21 — release-plz integration (Phase 6 foundation)
 
 First Phase-6 slice. Wires `release-plz` so every push to `main`
