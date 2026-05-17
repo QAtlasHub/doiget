@@ -1,7 +1,7 @@
 # 0006 - Provenance log is JSON Lines + SHA-256 hash chain (fail-closed)
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented; provenance writer (JSON Lines + SHA-256 chain, PR #61) + v1→v2 fail-closed migration (Slice 4 / ADR-0024); citation-graph fail-closed on log error (Slice 14)
 - **Supersedes:** -
 - **Source:** Discussion #12 / #17
 

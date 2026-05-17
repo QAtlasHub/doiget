@@ -21,14 +21,46 @@
 | 6 | Release: OIDC + sigstore + SBOM + landing page polish + auto-tag (`release-plz`) | 1 week |
 | 7 | Optional features (`vault`, `obsidian`) | per feature |
 
-> **Phase 6 auto-tag note.** Version bumps and tags are deferred to Phase 6 via
-> [`release-plz`](https://release-plz.dev) — Conventional Commits drive a
-> Cargo.toml version bump PR, which when merged tags and (with OIDC trusted
-> publishing) ships to crates.io. Phase 0 carries no `release-plz.toml` yet;
-> until Phase 6 the version stays `0.0.0` and tags are not minted.
+> **Phase 6 auto-tag note (live as of 2026-05-17).** Phase 6 has landed.
+> [`release-plz`](https://release-plz.dev) is wired (Slice 21) and trusted
+> publishing is on (Slice 22): every push to `main` opens/updates a release PR
+> that bumps the shared workspace version and prepends a versioned `CHANGELOG.md`
+> section; merging it pushes annotated `doiget-{core,cli,mcp}-vX.Y.Z` tags,
+> opens a GitHub release, and publishes to crates.io via OIDC. The workspace is
+> **no longer `0.0.0`** — `Cargo.toml` is `0.1.3` and the `v0.1.0`–`v0.1.3`
+> tag triplets exist. See [`CHANGELOG.md`](../CHANGELOG.md) for the released
+> versions and [`release-plz.toml`](../release-plz.toml) for the configuration.
 
 **Phase 5 may be skipped or deferred indefinitely**; the decision is data-driven from
-Phase 0–4 production usage and any publisher-side correspondence.
+Phase 0–4 production usage and any publisher-side correspondence. *(Not skipped: all
+three TDM sub-phases shipped — see status table below.)*
+
+### Per-phase completion status
+
+Status is derived from the [`CHANGELOG.md`](../CHANGELOG.md) section headings and
+the slice entries within them, with the annotated `doiget-{core,cli,mcp}-v0.1.x`
+git tags backing the `0.1.1`–`0.1.3` lines. No dates are invented: the `0.0.0`
+cut date (2026-05-15) is the `## [0.0.0]` CHANGELOG heading only — there is no
+`v0.0.0` tag — while the `0.1.1`–`0.1.3` tags are dated 2026-05-17. The TDM work
+(Slices 17–19) is recorded under the `## [0.0.0]` CHANGELOG section, i.e. the
+2026-05-15 dev cut, not the later `0.1.x` tags.
+
+| Phase | Status | Evidence (CHANGELOG slice / version) |
+|---|---|---|
+| **0** | Complete (2026-05-15) | Phase-0 skeleton + normative specs + ADRs + 9 CI workflows; `0.0.0` section |
+| **1** | Complete (2026-05-15) | Core resolver, Tier 1 Crossref/Unpaywall/arXiv, `fetch`/`batch`/audit-log (#64–#78); Slices 1–6 |
+| **2** | Complete (2026-05-17) | Store + metadata read path; `bib`/`csl` exports via Slice 15b (`0.1.1`); BiblioFetch round-trip (#121, `0.1.2`) |
+| **3** | Complete (2026-05-17) | MCP server + 10-tool baseline (Slices 7–9); strict stdio (Slice 9 `stdout-purity`) |
+| **4** | Complete | Tier 2 OpenAlex/S2/DOAJ + citation graph (Slices 10–16, ADR-0010) |
+| **5a** | Complete | Springer Nature OA TDM (Slice 17) |
+| **5b** | Complete | APS Harvest TDM (Slice 18) |
+| **5c** | Complete | Elsevier ScienceDirect TDM (Slice 19) + per-source header hook (Slice 20) |
+| **6** | Complete (live) | `release-plz` PR flow (Slice 21) + OIDC trusted publishing (Slice 22); `0.1.0`–`0.1.3` released |
+| **7** | Not started | Optional `vault`/`obsidian` crate is `exclude`d in `Cargo.toml` (ADR-0008) |
+
+The Phase-0 checklist in §2 below is retained as the historical deliverable record;
+its boxes reflect what was committed. Per-version release dates live in
+[`CHANGELOG.md`](../CHANGELOG.md).
 
 ## 2. Phase 0 deliverable checklist
 
@@ -93,9 +125,14 @@ Phase 0 is complete when **all** of the following are committed.
 ### Repo-level settings (manual; cannot be committed)
 
 - [ ] Branch protection on `main`: required PR review, required status checks, signed
-      commits.
+      commits. *(unverified: repo-settings/external — not observable from the tree.)*
 - [ ] 2FA mandatory on the maintainer account.
+      *(unverified: repo-settings/external.)*
 - [ ] Default branch protection includes Action SHA pinning policy.
+      *(unverified: repo-settings/external — note: the workflow actions themselves
+      are SHA-pinned in-tree, e.g. `.github/workflows/release-plz.yml`
+      `actions/checkout@de0fac2…`, `release-plz/action@064f4d1…`; the branch-level
+      enforcement *policy* is still a repo-settings claim.)*
 
 ### Test fixtures
 
@@ -104,11 +141,23 @@ Phase 0 is complete when **all** of the following are committed.
 
 ### Pre-flight items (must be confirmed before Phase 0 begins)
 
-- [ ] Confirm BiblioFetch.jl's current safekey algorithm matches
+- [x] Confirm BiblioFetch.jl's current safekey algorithm matches
       [`SAFEKEY.md`](SAFEKEY.md) §3, or arrange a coordinated bump.
-- [ ] Confirm BiblioFetch.jl's current TOML `schema_version`.
+      *(verified: the 100-vector NORMATIVE parity set landed in Slice 3 and the
+      cross-tool store round-trip — typed `[bibliofetch]` table + unknown scalar
+      preservation — landed in CHANGELOG `0.1.2` / issue #121, exercised in
+      `crates/doiget-core/src/store/metadata.rs`.)*
+- [x] Confirm BiblioFetch.jl's current TOML `schema_version`.
+      *(verified: `schema_version = "1.0"` is the binding value in
+      [`STORE.md`](STORE.md) §; the round-trip test asserts unknown/foreign
+      tables survive read-modify-write, so a BiblioFetch-written schema is
+      preserved.)*
 - [ ] Verify maintainer's `crates.io` account is set up for trusted publishing (OIDC).
+      *(partial — the OIDC release job is wired in-tree (Slice 22,
+      `.github/workflows/release-plz.yml`), but the one-time crates.io Trusted
+      Publisher registration is unverified: repo-settings/external.)*
 - [ ] Verify GitHub Environment is configurable for the release workflow.
+      *(unverified: repo-settings/external.)*
 
 ## 3. Phase 0 working principles
 
@@ -133,9 +182,15 @@ have been confirmed. Phase 1's success criterion is:
 
 Phase progress is tracked through:
 
-- This file's checklist.
-- `CHANGELOG.md` `[Unreleased]` section.
-- GitHub issues labeled `phase-0`, `phase-1`, etc.
+- The **per-phase completion status table** in §1 above (the authoritative
+  current-state view).
+- `CHANGELOG.md` — each unit of work lands as a numbered **Slice** entry tagging
+  its phase (e.g. *"Slice 14 — Citation graph BFS expansion (ADR-0010, Phase 4)"*);
+  released versions carry their date in the `## [X.Y.Z] - YYYY-MM-DD` heading.
+  This is the real tracking mechanism — there are **no** `phase-N` GitHub issue
+  labels (the original plan to use them was never adopted).
+- `git log` / git tags (`doiget-{core,cli,mcp}-vX.Y.Z`) for release dates.
 
-When a Phase completes, this document gets updated with the completion date and a brief
-summary, and the next Phase's checklist becomes active.
+When a Phase completes, the §1 status table is updated with the completion date
+(derived from the CHANGELOG slice / tag, never invented) and a one-line evidence
+pointer; the next Phase's slices then begin landing in `CHANGELOG.md`.

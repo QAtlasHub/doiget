@@ -1,7 +1,7 @@
 # 0017 - Output mode resolution (flag > env > implicit > TTY > quiet)
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented (load-bearing invariant); MCP mode forbids non-JSON stdout and tracing is redirected to stderr — enforced by the Slice 9 `stdout-purity` CI job + Slice 1 `metadata_only` wiring. *(Judgment call: the full `--mode`/`DOIGET_MODE`/TTY resolution ladder has no dedicated CHANGELOG slice; the security-critical half of the decision is verifiably shipped, so this is Accepted rather than Proposed.)*
 - **Supersedes:** -
 - **Source:** Discussion #14
 

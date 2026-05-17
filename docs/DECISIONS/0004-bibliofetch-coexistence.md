@@ -1,7 +1,7 @@
 # 0004 - BiblioFetch.jl coexistence — shared store contract
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented; Store contract in `doiget-core/src/store/` (Phase 1) + BiblioFetch round-trip preservation test (CHANGELOG `0.1.2`, issue #121)
 - **Supersedes:** -
 - **Source:** Discussion #1 / #2
 

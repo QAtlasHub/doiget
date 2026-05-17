@@ -163,14 +163,16 @@ impl Server {
 
     /// `doiget_capability_profile` — report the runtime capability tiers.
     ///
-    /// Per `docs/MCP_TOOLS.md` §7 ("Capability awareness"), agents call
-    /// this first to plan whether a TDM-class fetch will succeed. The
-    /// output shape is `{ tier_1: [...], tier_2: [...], tier_3: [...] }`
-    /// alongside boolean roll-ups and the (always-5) rate cap.
+    /// Per `docs/MCP_TOOLS.md` §7 ("Capability awareness", NORMATIVE),
+    /// agents call this first to plan whether a TDM-class fetch will
+    /// succeed. The spec'd output shape is
+    /// `{ oa_enabled, metadata_sources: string[], tdm_enabled,
+    /// tdm_elsevier, tdm_aps, tdm_springer, rate_limit_per_sec }`;
+    /// `ok` and `tier_1/2/3` are emitted additively for back-compat.
     #[tool(
         description = "WHEN TO USE: Determine which sources the running doiget instance is allowed to use.\n\
                        INPUTS: none.\n\
-                       OUTPUTS: { ok: true, tier_1, tier_2, tier_3, oa_enabled, tdm_enabled, rate_limit_per_sec }.\n\
+                       OUTPUTS: { oa_enabled, metadata_sources, tdm_enabled, tdm_elsevier, tdm_aps, tdm_springer, rate_limit_per_sec } (plus additive ok, tier_1, tier_2, tier_3).\n\
                        COSTS: <1 ms.\n\
                        SIDE EFFECTS: none.\n\
                        LIMITS: none."
@@ -1240,6 +1242,7 @@ impl Server {
 /// The matching `#[schemars(rename = "ref")]` keeps the generated JSON
 /// schema field name aligned with the wire form.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct MetadataOnlyInput {
     /// DOI or arXiv id. Validated via `Ref::parse`; failures surface as
@@ -1603,6 +1606,32 @@ fn metadata_only_success_envelope(outcome: &MetadataOnlyOutcome, ref_str: &str) 
     })
 }
 
+/// Serialize a [`DenialContext`] to its wire [`Value`], logging a
+/// `tracing::warn!` on the (today unreachable) serialization-failure
+/// branch instead of silently substituting `null` (#154).
+///
+/// `DenialContext` is a typed `Serialize` struct with only optional
+/// scalar/string/array fields, so `serde_json::to_value` cannot fail in
+/// practice. The fallback exists purely so a future non-serializable
+/// field cannot panic the server — but a silent `null` would strip the
+/// structured recovery payload an agent depends on, with zero trace.
+/// `tracing` writes to stderr only (stdout is the JSON-RPC channel and
+/// `clippy::print_stdout` is denied crate-wide), so this is safe to log.
+fn denial_context_to_value(dc: &DenialContext, surface: &str) -> Value {
+    match serde_json::to_value(dc) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                surface,
+                error = %e,
+                "denial_context serialization failed; emitting null and losing the \
+                 structured ADR-0023 recovery payload for this {surface} error envelope"
+            );
+            Value::Null
+        }
+    }
+}
+
 /// Build the `{ok:false, error:{code, message, denial_context?}}`
 /// envelope for orchestrator failures. Maps the [`FetchError`] to the
 /// closed [`ErrorCode`] set via the existing
@@ -1636,12 +1665,15 @@ fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value 
     error_obj.insert("message".into(), json!(message));
     if let Some(dc) = denial {
         // `DenialContext` is `Serialize` (`#[serde(deny_unknown_fields)]`,
-        // optional fields). `serde_json::to_value` cannot fail on a
-        // typed struct; the `unwrap_or` defensively returns `null` if a
-        // future field becomes non-serializable (defensive only).
+        // optional fields) and `serde_json::to_value` cannot fail on a
+        // typed struct today. The fallback to `null` is defensive only
+        // (a future non-serializable field), but a silent swallow loses
+        // the structured recovery payload with no trace — so log it on
+        // stderr (#154). stdout is the JSON-RPC channel; `tracing` is
+        // stderr-only.
         error_obj.insert(
             "denial_context".into(),
-            serde_json::to_value(&dc).unwrap_or(Value::Null),
+            denial_context_to_value(&dc, "metadata_only"),
         );
     }
     json!({
@@ -1658,6 +1690,7 @@ fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value 
 /// JSON-schema-derived input for `doiget_fetch_paper`. Same wire shape
 /// as `MetadataOnlyInput` — just a different orchestrator target.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct FetchPaperInput {
     /// DOI or arXiv id; validated via `Ref::parse`.
@@ -1692,7 +1725,18 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             o.insert("code".into(), json!(code));
             o.insert("message".into(), json!(message));
             if let Some(dc) = denial {
-                o.insert("denial_context".into(), json!(dc));
+                // Route through the logged helper (#154): a bare
+                // `json!(dc)` here would silently coerce a future
+                // serialization failure to `null` inside the
+                // `fetch_paper` SUCCESS envelope with no trace —
+                // exactly the silent-swallow class #154 eliminates.
+                // The other three denial-context sites already use
+                // this helper; keep this consistent. `tracing` is
+                // stderr-only (stdout is the JSON-RPC channel).
+                o.insert(
+                    "denial_context".into(),
+                    denial_context_to_value(dc, "fetch_paper_pdf_leg"),
+                );
             }
             Value::Object(o)
         }
@@ -1758,7 +1802,7 @@ fn fetch_paper_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value {
     if let Some(dc) = denial {
         error_obj.insert(
             "denial_context".into(),
-            serde_json::to_value(&dc).unwrap_or(Value::Null),
+            denial_context_to_value(&dc, "fetch_paper"),
         );
     }
     json!({
@@ -1829,17 +1873,19 @@ fn batch_fetch_success_envelope(
                 if let Some(dc) = denial {
                     error_obj.insert(
                         "denial_context".into(),
-                        serde_json::to_value(&dc).unwrap_or(Value::Null),
+                        denial_context_to_value(&dc, "batch_fetch"),
                     );
                 } else {
                     // Per the Slice 2 spec: transport (NETWORK_ERROR)
                     // entries carry `denial_context: null` so an agent
                     // can pattern-match on the field's presence rather
                     // than tolerating absence. This deliberately
-                    // differs from the metadata-only envelope where
-                    // the field is omitted entirely; the batch surface
-                    // makes the null explicit because per-ref entries
-                    // are uniform table rows in the agent's view.
+                    // differs from the single-paper envelopes
+                    // (`doiget_fetch_paper` / `doiget_metadata_only`)
+                    // where the field is OMITTED entirely when `None`.
+                    // The asymmetry is intentional and documented in
+                    // `docs/MCP_TOOLS.md` §5; `tests/fetch_paper_e2e.rs`
+                    // pins the explicit-null batch shape (#154).
                     error_obj.insert("denial_context".into(), Value::Null);
                 }
                 json!({
@@ -2088,25 +2134,40 @@ fn probe_store_writable(path: &camino::Utf8Path) -> bool {
 }
 
 /// Serialize a [`CapabilityProfile`] to the JSON surface defined by
-/// `docs/MCP_TOOLS.md` §7.
+/// `docs/MCP_TOOLS.md` §7 (NORMATIVE).
 ///
+/// The §7 contract requires
+/// `{ oa_enabled, metadata_sources: string[], tdm_enabled, tdm_elsevier,
+/// tdm_aps, tdm_springer, rate_limit_per_sec }`. We emit exactly those
+/// fields and additionally retain `ok` and `tier_1/2/3` as **additive**
+/// fields — the e2e handshake test and pre-#141 agents rely on them and
+/// §7 (a TypeScript object type, structurally open) does not forbid
+/// extra keys. `metadata_sources` is the spec-canonical view of the
+/// enabled Tier-2 metadata sources.
+///
+/// - `metadata_sources` reflects the `MetadataAccess` booleans (the
+///   enabled Tier-2 source names; always-on Tier-1 sources are reported
+///   separately via the additive `tier_1` field).
 /// - Tier 1 is always `["arxiv", "crossref", "unpaywall"]` (sorted for
 ///   deterministic output).
-/// - Tier 2 reflects the `MetadataAccess` booleans.
 /// - Tier 3 reflects which `tdm_*` slots are `Some(...)`.
 fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
     let tier_1 = vec!["arxiv", "crossref", "unpaywall"];
 
-    let mut tier_2: Vec<&str> = Vec::new();
+    // `metadata_sources` (spec §7) == the enabled Tier-2 metadata
+    // sources. Order is deterministic (declaration order).
+    let mut metadata_sources: Vec<&str> = Vec::new();
     if profile.metadata.openalex {
-        tier_2.push("openalex");
+        metadata_sources.push("openalex");
     }
     if profile.metadata.semantic_scholar {
-        tier_2.push("semantic_scholar");
+        metadata_sources.push("semantic_scholar");
     }
     if profile.metadata.doaj {
-        tier_2.push("doaj");
+        metadata_sources.push("doaj");
     }
+    // Additive alias kept for back-compat with pre-#141 consumers.
+    let tier_2 = metadata_sources.clone();
 
     let mut tier_3: Vec<&str> = Vec::new();
     if profile.tdm_elsevier.is_some() {
@@ -2122,16 +2183,19 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
     let tdm_enabled = !tier_3.is_empty();
 
     json!({
-        "ok": true,
-        "tier_1": tier_1,
-        "tier_2": tier_2,
-        "tier_3": tier_3,
+        // -- NORMATIVE §7 contract fields --
         "oa_enabled": true,
+        "metadata_sources": metadata_sources,
         "tdm_enabled": tdm_enabled,
         "tdm_elsevier": profile.tdm_elsevier.is_some(),
         "tdm_aps": profile.tdm_aps.is_some(),
         "tdm_springer": profile.tdm_springer.is_some(),
         "rate_limit_per_sec": profile.rate_limits.max_fetches_per_second(),
+        // -- additive (back-compat; not part of the §7 contract) --
+        "ok": true,
+        "tier_1": tier_1,
+        "tier_2": tier_2,
+        "tier_3": tier_3,
     })
 }
 
@@ -2148,10 +2212,20 @@ mod tests {
         // and assert the always-true invariants.
         let profile = CapabilityProfile::from_env().expect("clean env never errors");
         let v = capability_profile_to_json(&profile);
+        // NORMATIVE §7 contract fields.
+        assert_eq!(v["oa_enabled"], true);
+        assert!(
+            v["metadata_sources"].is_array(),
+            "§7 requires metadata_sources: string[]; got: {v:?}"
+        );
+        assert_eq!(v["tdm_enabled"], json!(false));
+        assert_eq!(v["tdm_elsevier"], json!(false));
+        assert_eq!(v["tdm_aps"], json!(false));
+        assert_eq!(v["tdm_springer"], json!(false));
+        assert_eq!(v["rate_limit_per_sec"], 5.0);
+        // Additive back-compat fields.
         assert_eq!(v["ok"], true);
         assert_eq!(v["tier_1"], json!(["arxiv", "crossref", "unpaywall"]));
-        assert_eq!(v["oa_enabled"], true);
-        assert_eq!(v["rate_limit_per_sec"], 5.0);
     }
 
     #[test]

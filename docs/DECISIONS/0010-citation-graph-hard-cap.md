@@ -1,7 +1,7 @@
 # 0010 - Citation graph hard-cap (depth=3, total=100, per-paper=20)
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented; `GraphCaps::clamped` enforces MAX_DEPTH=3 / MAX_TOTAL=100 / MAX_PER_PAPER=20 with cycle detection and no TDM use (Slice 14; exposed via Slice 15 MCP tool + Slice 16 CLI)
 - **Supersedes:** -
 - **Source:** Discussion #6
 

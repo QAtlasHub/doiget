@@ -1,7 +1,7 @@
 # 0014 - Docs split into NORMATIVE / INFORMATIVE with ADR change-control
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented; every doc carries a `Status: NORMATIVE`/`INFORMATIVE` banner, ADRs live in `docs/DECISIONS/` (Nygard format), and NORMATIVE changes require an ADR (CODEOWNERS-gated). In force since Phase 0
 - **Supersedes:** -
 - **Source:** Discussion #11
 

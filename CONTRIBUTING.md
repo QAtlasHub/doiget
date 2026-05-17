@@ -135,6 +135,28 @@ When proposing a binding decision:
 Do not edit accepted ADRs in place. To revise a decision, write a new ADR that supersedes
 the old one (the old ADR's `Status:` becomes `Superseded by NNNN`).
 
+### ADR acceptance closes the source Discussion
+
+An ADR flips from `Proposed` to `Accepted` when its decision is merged (the
+implementing slice/PR is recorded in the ADR `Status:` line and in
+`docs/DECISIONS/INDEX.md`). When that happens, the **source GitHub Discussion**
+(the `Source Discussion` column in `INDEX.md`) is **locked** and a closing
+comment links the superseding ADR, e.g.:
+
+> Resolved by [ADR-0010](docs/DECISIONS/0010-citation-graph-hard-cap.md)
+> (Accepted, Slice 14). Binding decision now lives in the ADR; this thread is
+> locked for history.
+
+This keeps the binding decision in the source tree (per the ADR rationale —
+Discussions may be deleted) and prevents a resolved Discussion from looking
+like an open question. Locking is a deliberate human action via the GitHub UI
+/ `gh`; it is **not** automated by CI.
+
+> **Follow-up (noted, not done here):** the 19 design Discussions whose ADRs
+> were reconciled to `Accepted` in issue #150 still need this lock + closing
+> comment back-filled. That is tracked separately and is out of scope for the
+> docs-reconciliation PR that introduced this rule.
+
 ## Posture lint
 
 A CI workflow (`.github/workflows/posture-lint.yml`) scans the repository for:

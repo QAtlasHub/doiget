@@ -137,6 +137,16 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
         "tools/list must include doiget_csl_export; got: {names:?}"
     );
 
+    // -- 2b. negative scope guard (#152) -------------------------------
+    //
+    // `docs/SCOPE.md` permanent non-goals: these tool names must NEVER
+    // be advertised. A future refactor that reintroduces one (e.g. an
+    // SSRF-prone `doiget_fetch_url`, a credential sink, a destructive
+    // store op, or a generic shell/exec escape) must fail here rather
+    // than ship silently. See also the dedicated
+    // `tools_list_excludes_scope_nongoals` test below.
+    assert_forbidden_tools_absent(&names);
+
     // -- 3. tools/call doiget_health -----------------------------------
     let health = client
         .peer()
@@ -171,13 +181,29 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
         .structured_content
         .as_ref()
         .expect("doiget_capability_profile uses CallToolResult::structured");
-    assert_eq!(cap_struct["ok"], serde_json::json!(true));
+    // NORMATIVE `docs/MCP_TOOLS.md` §7 contract fields (#141).
     assert_eq!(cap_struct["oa_enabled"], serde_json::json!(true));
+    assert!(
+        cap_struct["metadata_sources"].is_array(),
+        "§7 requires metadata_sources: string[]; got: {cap_struct:?}"
+    );
+    // Clean (Tier-1-only) env: no Tier-2 metadata sources enabled.
+    assert_eq!(
+        cap_struct["metadata_sources"],
+        serde_json::json!([]),
+        "clean env must report empty metadata_sources; got: {cap_struct:?}"
+    );
+    assert_eq!(cap_struct["tdm_enabled"], serde_json::json!(false));
+    assert_eq!(cap_struct["tdm_elsevier"], serde_json::json!(false));
+    assert_eq!(cap_struct["tdm_aps"], serde_json::json!(false));
+    assert_eq!(cap_struct["tdm_springer"], serde_json::json!(false));
+    assert_eq!(cap_struct["rate_limit_per_sec"], serde_json::json!(5.0));
+    // Additive back-compat fields (not part of the §7 contract).
+    assert_eq!(cap_struct["ok"], serde_json::json!(true));
     assert_eq!(
         cap_struct["tier_1"],
         serde_json::json!(["arxiv", "crossref", "unpaywall"])
     );
-    assert_eq!(cap_struct["rate_limit_per_sec"], serde_json::json!(5.0));
 
     // -- Shutdown -------------------------------------------------------
     //
@@ -211,6 +237,68 @@ async fn boot_in_memory_server() -> anyhow::Result<(
     });
     let client = ().serve(client_transport).await?;
     Ok((client, server_handle))
+}
+
+/// `docs/SCOPE.md` permanent non-goals (#152). Any tool name in this set
+/// — or any name that *looks* like a generic shell / exec / eval escape
+/// — must never appear in `tools/list`. Reintroducing one (even behind a
+/// feature flag) is a hard scope violation, not a regression to triage.
+const FORBIDDEN_TOOL_NAMES: &[&str] = &[
+    "doiget_fetch_url",
+    "doiget_set_credentials",
+    "doiget_delete_paper",
+];
+
+/// Substrings that betray a generic command/eval escape hatch. Matched
+/// case-insensitively against each advertised tool name so a future
+/// `doiget_run_shell`, `doiget_exec`, `doiget_eval`, `doiget_system`,
+/// etc. trips the guard without needing an exact-name entry.
+const FORBIDDEN_TOOL_SUBSTRINGS: &[&str] = &[
+    "shell",
+    "exec",
+    "eval",
+    "spawn",
+    "system",
+    "command",
+    "subprocess",
+];
+
+/// Assert no `docs/SCOPE.md` non-goal tool is advertised. Shared by the
+/// roundtrip smoke test and the dedicated negative test below.
+fn assert_forbidden_tools_absent(names: &[&str]) {
+    for forbidden in FORBIDDEN_TOOL_NAMES {
+        assert!(
+            !names.contains(forbidden),
+            "SCOPE.md non-goal tool `{forbidden}` must NEVER be in tools/list; got: {names:?}"
+        );
+    }
+    for name in names {
+        let lower = name.to_ascii_lowercase();
+        for needle in FORBIDDEN_TOOL_SUBSTRINGS {
+            assert!(
+                !lower.contains(needle),
+                "tool `{name}` matches forbidden generic-escape substring `{needle}` \
+                 (SCOPE.md non-goal); got: {names:?}"
+            );
+        }
+    }
+}
+
+/// #152: dedicated negative scope guard. The roundtrip test also calls
+/// `assert_forbidden_tools_absent`, but this standalone test localises a
+/// scope-violation failure cleanly and documents the invariant on its
+/// own.
+#[tokio::test]
+async fn tools_list_excludes_scope_nongoals() -> anyhow::Result<()> {
+    let (client, server_handle) = boot_in_memory_server().await?;
+    let tools = client.peer().list_all_tools().await?;
+    let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+
+    assert_forbidden_tools_absent(&names);
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
 }
 
 #[tokio::test]
