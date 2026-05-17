@@ -53,6 +53,68 @@ const READ_TIMEOUT: Duration = Duration::from_secs(60);
 /// Total per-request timeout per `docs/SECURITY.md` §1.2.
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Max retry attempts AFTER the first try, for transient failures only
+/// (connect/timeout/mid-stream network errors and the transient HTTP
+/// status set). 3 retries → up to 4 total attempts. See issue #117.
+const MAX_FETCH_RETRIES: u32 = 3;
+
+/// Base delay for the exponential backoff (`base * 2^attempt`, jittered).
+const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
+
+/// Hard ceiling on any single backoff / `Retry-After` sleep. Keeps the
+/// worst-case retry chain comfortably inside [`TOTAL_TIMEOUT`].
+const RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+
+/// HTTP status codes worth retrying: request timeout, rate-limited, and
+/// the transient 5xx family. A plain 500 is included because upstreams
+/// (Crossref/Unpaywall) intermittently 500 under load. 4xx other than
+/// 408/429 are caller/permanent and never retried.
+fn is_transient_status(code: u16) -> bool {
+    matches!(code, 408 | 429 | 500 | 502 | 503 | 504)
+}
+
+/// A `reqwest::Error` is transient iff it is a connect or timeout
+/// failure or a mid-body transfer error. Redirect-policy aborts
+/// (allowlist denial), builder errors, and decode errors are NOT
+/// transient — retrying them cannot help and would mask a real denial.
+fn reqwest_is_transient(e: &reqwest::Error) -> bool {
+    (e.is_timeout() || e.is_connect() || e.is_body()) && !e.is_redirect()
+}
+
+/// Parse a `Retry-After` header expressed as integer seconds (the
+/// HTTP-date form is accepted by the RFC but rare for these APIs and
+/// deliberately ignored for the MVP — we fall back to exponential
+/// backoff in that case). Capped at [`RETRY_MAX_DELAY`].
+fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let secs: u64 = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(Duration::from_secs(secs).min(RETRY_MAX_DELAY))
+}
+
+/// Exponential backoff with decorrelated jitter. `RETRY_BASE_DELAY *
+/// 2^attempt`, capped at [`RETRY_MAX_DELAY`], plus 0..base jitter so a
+/// fleet of clients does not thunder back in lockstep. Jitter is derived
+/// from the wall-clock subsec nanos rather than pulling in an RNG
+/// dependency — adequate decorrelation for backoff, not a security
+/// primitive.
+fn backoff_delay(attempt: u32) -> Duration {
+    let factor = 1u64 << attempt.min(20);
+    let base_ms = RETRY_BASE_DELAY.as_millis() as u64;
+    let capped_ms = base_ms
+        .saturating_mul(factor)
+        .min(RETRY_MAX_DELAY.as_millis() as u64);
+    let jitter_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| (d.subsec_nanos() as u64) % base_ms.max(1))
+        .unwrap_or(0);
+    Duration::from_millis(capped_ms.saturating_add(jitter_ms))
+}
+
 // ---------------------------------------------------------------------------
 // SourceAllowlist
 // ---------------------------------------------------------------------------
@@ -633,61 +695,135 @@ impl HttpClient {
             header_map.insert(hn, hv);
         }
 
-        let response = client.get(url).headers(header_map).send().await?;
-        let final_url = response.url().clone();
+        // Bounded retry loop (issue #117). Only transient classes are
+        // retried — connect/timeout/mid-stream network errors and the
+        // transient HTTP status set. Allowlist denials, NotAPdf,
+        // OversizedBody, 4xx (non-408/429) are deterministic and return
+        // on the first occurrence. GET is idempotent so a retried
+        // attempt re-streams the body from scratch.
+        let mut attempt: u32 = 0;
+        loop {
+            let send_result = client
+                .get(url.clone())
+                .headers(header_map.clone())
+                .send()
+                .await;
+            let response = match send_result {
+                Ok(r) => r,
+                Err(e) => {
+                    if attempt < MAX_FETCH_RETRIES && reqwest_is_transient(&e) {
+                        let d = backoff_delay(attempt);
+                        tracing::warn!(
+                            source,
+                            attempt,
+                            delay_ms = d.as_millis() as u64,
+                            error = %e,
+                            "transient send failure; retrying"
+                        );
+                        tokio::time::sleep(d).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(HttpError::Network(e));
+                }
+            };
+            let final_url = response.url().clone();
 
-        // Status check before body read so we can fail fast.
-        let status = response.status();
-        if !status.is_success() {
-            return Err(HttpError::HttpStatus {
-                status: status.as_u16(),
-                url: final_url.to_string(),
-            });
-        }
+            // Status check before body read so we can fail fast.
+            let status = response.status();
+            if !status.is_success() {
+                let code = status.as_u16();
+                if attempt < MAX_FETCH_RETRIES && is_transient_status(code) {
+                    // Prefer the server's `Retry-After` over our backoff
+                    // when present (429/503 commonly carry it).
+                    let d = parse_retry_after(response.headers())
+                        .unwrap_or_else(|| backoff_delay(attempt));
+                    tracing::warn!(
+                        source,
+                        attempt,
+                        status = code,
+                        delay_ms = d.as_millis() as u64,
+                        "transient HTTP status; retrying"
+                    );
+                    tokio::time::sleep(d).await;
+                    attempt += 1;
+                    continue;
+                }
+                return Err(HttpError::HttpStatus {
+                    status: code,
+                    url: final_url.to_string(),
+                });
+            }
 
-        // Content-Length fast-path: if header is present and exceeds the
-        // cap, fail without reading any body. Per `docs/SECURITY.md` §1.2.
-        if let Some(len) = response.content_length() {
-            if len > PDF_MAX_BYTES {
+            // Content-Length fast-path: if header is present and exceeds
+            // the cap, fail without reading any body (deterministic — not
+            // retried). Per `docs/SECURITY.md` §1.2.
+            if let Some(len) = response.content_length() {
+                if len > PDF_MAX_BYTES {
+                    return Err(HttpError::OversizedBody {
+                        actual: len,
+                        cap: PDF_MAX_BYTES,
+                    });
+                }
+            }
+
+            // Stream body and enforce the cap as bytes accumulate. A
+            // mid-stream transport error is transient (retry); an
+            // oversized body is deterministic (return).
+            let mut buf = BytesMut::new();
+            let mut stream = response.bytes_stream();
+            let mut oversized_at: Option<u64> = None;
+            let mut stream_err: Option<reqwest::Error> = None;
+            while let Some(chunk) = stream.next().await {
+                let chunk = match chunk {
+                    Ok(c) => c,
+                    Err(e) => {
+                        stream_err = Some(e);
+                        break;
+                    }
+                };
+                let projected = (buf.len() as u64).saturating_add(chunk.len() as u64);
+                if projected > PDF_MAX_BYTES {
+                    oversized_at = Some(projected);
+                    break;
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            if let Some(actual) = oversized_at {
                 return Err(HttpError::OversizedBody {
-                    actual: len,
+                    actual,
                     cap: PDF_MAX_BYTES,
                 });
             }
-        }
-
-        // Stream body and enforce the cap as bytes accumulate. We use
-        // `bytes_stream` rather than `.bytes()` so that an oversized body
-        // is rejected after at most one chunk past the cap, not after the
-        // entire transfer completes.
-        let mut buf = BytesMut::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            // Saturating-add into a u64 for the error report; the actual
-            // accumulator never grows past the cap because we abort as
-            // soon as we cross it.
-            let projected = (buf.len() as u64).saturating_add(chunk.len() as u64);
-            if projected > PDF_MAX_BYTES {
-                return Err(HttpError::OversizedBody {
-                    actual: projected,
-                    cap: PDF_MAX_BYTES,
-                });
+            if let Some(e) = stream_err {
+                if attempt < MAX_FETCH_RETRIES && reqwest_is_transient(&e) {
+                    let d = backoff_delay(attempt);
+                    tracing::warn!(
+                        source,
+                        attempt,
+                        delay_ms = d.as_millis() as u64,
+                        error = %e,
+                        "transient mid-stream failure; retrying"
+                    );
+                    tokio::time::sleep(d).await;
+                    attempt += 1;
+                    continue;
+                }
+                return Err(HttpError::Network(e));
             }
-            buf.extend_from_slice(&chunk);
-        }
-        let body = buf.freeze();
+            let body = buf.freeze();
 
-        if check_pdf_magic {
-            let mut got = [0u8; 5];
-            let n = body.len().min(5);
-            got[..n].copy_from_slice(&body[..n]);
-            if got != PDF_MAGIC {
-                return Err(HttpError::NotAPdf { got });
+            if check_pdf_magic {
+                let mut got = [0u8; 5];
+                let n = body.len().min(5);
+                got[..n].copy_from_slice(&body[..n]);
+                if got != PDF_MAGIC {
+                    return Err(HttpError::NotAPdf { got });
+                }
             }
-        }
 
-        Ok((body, final_url))
+            return Ok((body, final_url));
+        }
     }
 }
 
@@ -1423,5 +1559,123 @@ mod tests {
             dc.is_none(),
             "UnknownSource must not produce a DenialContext"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #117 — transient retry / backoff. Real time: wiremock
+    // serves over real localhost IO and tokio `start_paused` is
+    // incompatible with that (it auto-advances past reqwest's
+    // timeout). Backoff is small enough that the slowest case
+    // (persistent 503, 3 retries ≈ 3.5s) stays within the suite budget.
+    // ---------------------------------------------------------------
+
+    fn host_of(server: &MockServer) -> String {
+        server
+            .uri()
+            .parse::<Url>()
+            .unwrap()
+            .host_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn transient_503_then_200_succeeds() {
+        let server = MockServer::start().await;
+        // Catch-all 200 mounted first (lowest precedence); the
+        // single-shot 503 mounted last takes precedence for the first
+        // request only, then falls through to the 200.
+        Mock::given(method("GET"))
+            .and(path("/p"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"ok":1}"#))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/p"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        let client = build_test_client_for_http("crossref", &host_of(&server));
+        let url: Url = format!("{}/p", server.uri()).parse().unwrap();
+        let (body, _) = client
+            .fetch_bytes("crossref", url)
+            .await
+            .expect("503-then-200 must succeed after one retry");
+        assert_eq!(&body[..], br#"{"ok":1}"#);
+    }
+
+    #[tokio::test]
+    async fn persistent_503_exhausts_and_returns_httpstatus() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/p"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let client = build_test_client_for_http("crossref", &host_of(&server));
+        let url: Url = format!("{}/p", server.uri()).parse().unwrap();
+        let err = client
+            .fetch_bytes("crossref", url)
+            .await
+            .expect_err("persistent 503 must exhaust retries");
+        match err {
+            HttpError::HttpStatus { status, .. } => assert_eq!(status, 503),
+            other => panic!("expected HttpStatus 503, got {other:?}"),
+        }
+        // First attempt + MAX_FETCH_RETRIES retries.
+        let reqs = server
+            .received_requests()
+            .await
+            .expect("wiremock records requests");
+        assert_eq!(reqs.len(), (MAX_FETCH_RETRIES + 1) as usize);
+    }
+
+    #[tokio::test]
+    async fn retry_after_429_then_200_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/p"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/p"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "1"))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        let client = build_test_client_for_http("crossref", &host_of(&server));
+        let url: Url = format!("{}/p", server.uri()).parse().unwrap();
+        let (body, _) = client
+            .fetch_bytes("crossref", url)
+            .await
+            .expect("429+Retry-After then 200 must succeed");
+        assert_eq!(&body[..], b"ok");
+    }
+
+    #[tokio::test]
+    async fn permanent_404_is_not_retried() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/p"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let client = build_test_client_for_http("crossref", &host_of(&server));
+        let url: Url = format!("{}/p", server.uri()).parse().unwrap();
+        let _ = client
+            .fetch_bytes("crossref", url)
+            .await
+            .expect_err("404 must fail");
+        let reqs = server
+            .received_requests()
+            .await
+            .expect("wiremock records requests");
+        assert_eq!(reqs.len(), 1, "4xx (non-408/429) must NOT be retried");
     }
 }

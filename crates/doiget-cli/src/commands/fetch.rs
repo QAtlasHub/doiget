@@ -48,7 +48,7 @@ use camino::Utf8PathBuf;
 #[cfg(feature = "citation")]
 use doiget_core::http::tier_2_allowlist;
 use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, HttpClient};
-use doiget_core::orchestrator::{fetch_paper as core_fetch_paper, FetchPaperOutcome};
+use doiget_core::orchestrator::{fetch_paper as core_fetch_paper, FetchPaperOutcome, PdfLegStatus};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
 use doiget_core::source::FetchContext;
@@ -402,16 +402,50 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
         Ref::Arxiv(id) => format!("arxiv:{}", id.as_str()),
         Ref::Doi(doi) => format!("doi:{}", doi.as_str()),
     };
-    if outcome.size_bytes == 0 {
-        print_success(format_args!(
-            "fetched {} (metadata-only) -> {}",
-            label, outcome.path
-        ));
-    } else {
-        print_success(format_args!(
-            "fetched {} ({} bytes) -> {}",
-            label, outcome.size_bytes, outcome.path
-        ));
+    match &outcome.pdf_leg {
+        PdfLegStatus::Fetched => {
+            print_success(format_args!(
+                "fetched {} ({} bytes) -> {}",
+                label, outcome.size_bytes, outcome.path
+            ));
+        }
+        PdfLegStatus::NoOaUrl => {
+            print_success(format_args!(
+                "fetched {} (metadata-only: no OA PDF available) -> {}",
+                label, outcome.path
+            ));
+        }
+        // Issue #118: an OA PDF existed but could not be retrieved.
+        // The metadata WAS written, so this is still a (partial)
+        // success — but we MUST tell the user why the PDF is missing
+        // instead of an indistinguishable "metadata-only" line.
+        PdfLegStatus::Blocked { code, message, .. } => {
+            print_success(format_args!(
+                "fetched {} (metadata-only) -> {}",
+                label, outcome.path
+            ));
+            print_success(format_args!(
+                "  note: an OA PDF was found but could not be retrieved [{}]: {}",
+                code.as_wire(),
+                message
+            ));
+        }
+        // `PdfLegStatus` is `#[non_exhaustive]`; a future variant
+        // degrades to the size-based wording rather than failing the
+        // downstream-crate build.
+        _ => {
+            if outcome.size_bytes == 0 {
+                print_success(format_args!(
+                    "fetched {} (metadata-only) -> {}",
+                    label, outcome.path
+                ));
+            } else {
+                print_success(format_args!(
+                    "fetched {} ({} bytes) -> {}",
+                    label, outcome.size_bytes, outcome.path
+                ));
+            }
+        }
     }
 }
 

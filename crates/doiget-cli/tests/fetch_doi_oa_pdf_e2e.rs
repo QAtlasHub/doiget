@@ -350,3 +350,68 @@ async fn fetch_doi_oa_pdf_falls_back_to_metadata_when_host_off_allowlist() {
     drop(env);
     drop(td);
 }
+
+/// Issue #120: a Crossref failure must NOT abort the DOI fetch when
+/// Unpaywall alone can still deliver the OA PDF. Mount Unpaywall +
+/// OA-publisher normally but DO NOT mount `/works/<doi>` (wiremock
+/// 404 → `CrossrefSource` returns `Err`). The PDF must still land on
+/// disk; metadata title falls back to the DOI (Crossref gave nothing).
+#[tokio::test]
+#[serial]
+async fn fetch_doi_crossref_down_unpaywall_oa_still_yields_pdf() {
+    let server = MockServer::start().await;
+    let base_uri = server.uri();
+    let oa_url = format!("{}/oa/file.pdf", base_uri);
+
+    // NO `/works/<doi>` mock — Crossref gets 404 and fails.
+    Mock::given(method("GET"))
+        .and(path(format!("/v2/{}", TEST_DOI_ENCODED)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(unpaywall_body(&oa_url)))
+        .mount(&server)
+        .await;
+    let pdf_body = b"%PDF-fake-bytes\n".to_vec();
+    Mock::given(method("GET"))
+        .and(path("/oa/file.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(pdf_body.clone()))
+        .mount(&server)
+        .await;
+
+    let td = TempDir::new().expect("tempdir");
+    let temp_root: Utf8PathBuf = Utf8Path::from_path(td.path())
+        .expect("temp dir is utf-8")
+        .to_path_buf();
+    let store_root = temp_root.join("papers");
+    let log_path = temp_root.join("log.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_CROSSREF_BASE", &base_uri);
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", base_uri));
+    env.set("DOIGET_OA_PUBLISHER_BASE", &base_uri);
+
+    fetch::run_with_options(format!("doi:{}", TEST_DOI), false)
+        .await
+        .expect("fetch must succeed via Unpaywall even though Crossref failed");
+
+    let pdf_path = store_root.join("doi_10.1234_test.pdf");
+    assert!(
+        pdf_path.exists(),
+        "PDF must be written even though Crossref failed; tree: {:?}",
+        std::fs::read_dir(temp_root.as_std_path())
+            .map(|d| d.flatten().map(|e| e.path()).collect::<Vec<_>>())
+    );
+    let pdf_bytes = std::fs::read(pdf_path.as_std_path()).expect("read pdf");
+    assert_eq!(pdf_bytes, pdf_body);
+
+    let meta_path = store_root.join(".metadata").join("doi_10.1234_test.toml");
+    let meta_raw = std::fs::read_to_string(meta_path.as_std_path()).expect("read metadata toml");
+    let metadata: Metadata = toml::from_str(&meta_raw).expect("metadata round-trips");
+    let doiget = metadata.doiget.expect("[doiget] table present");
+    assert_eq!(doiget.source, "oa-publisher");
+    // Crossref produced nothing, so the title falls back to the DOI.
+    assert_eq!(metadata.title, TEST_DOI);
+
+    drop(env);
+    drop(td);
+}

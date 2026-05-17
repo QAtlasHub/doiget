@@ -48,6 +48,7 @@ use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, tier_2_allowli
 use doiget_core::orchestrator::{
     batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
     metadata_only, resolve_only as core_resolve_only, FetchPaperOutcome, MetadataOnlyOutcome,
+    PdfLegStatus,
 };
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
@@ -1661,6 +1662,36 @@ pub struct FetchPaperInput {
 
 /// Build the `{ok:true, ref, source, path, ...}` success envelope per
 /// `docs/MCP_TOOLS.md` §5 `FetchResult`.
+/// Render [`PdfLegStatus`] for the wire. `Blocked` carries the
+/// closed-set `code`, a human `message`, and (when the failure was an
+/// allowlist / scheme denial) the structured ADR-0023 `denial_context`
+/// so an agent can act on WHY the PDF was not retrieved instead of
+/// seeing an indistinguishable "metadata-only" success (issue #118).
+fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
+    match leg {
+        PdfLegStatus::Fetched => json!({ "status": "fetched" }),
+        PdfLegStatus::NoOaUrl => json!({ "status": "no_oa_url" }),
+        PdfLegStatus::Blocked {
+            code,
+            message,
+            denial,
+        } => {
+            let mut o = serde_json::Map::new();
+            o.insert("status".into(), json!("blocked"));
+            o.insert("code".into(), json!(code));
+            o.insert("message".into(), json!(message));
+            if let Some(dc) = denial {
+                o.insert("denial_context".into(), json!(dc));
+            }
+            Value::Object(o)
+        }
+        // `PdfLegStatus` is `#[non_exhaustive]`; a future variant
+        // surfaces as a forward-compatible neutral status rather than
+        // failing the build in this downstream crate.
+        _ => json!({ "status": "unknown" }),
+    }
+}
+
 fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> Value {
     json!({
         "ok": true,
@@ -1673,6 +1704,8 @@ fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> V
         "path": outcome.path,
         "size_bytes": outcome.size_bytes,
         "schema_version": outcome.schema_version,
+        // Issue #118: never a silent metadata-only success.
+        "pdf": pdf_leg_json(&outcome.pdf_leg),
     })
 }
 
@@ -1765,6 +1798,7 @@ fn batch_fetch_success_envelope(
                 "path": outcome.path,
                 "size_bytes": outcome.size_bytes,
                 "schema_version": outcome.schema_version,
+                "pdf": pdf_leg_json(&outcome.pdf_leg),
             }),
             Err(err) => {
                 let code: ErrorCode = match err {

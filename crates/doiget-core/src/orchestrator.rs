@@ -342,6 +342,47 @@ fn extract_unpaywall_oa_url(meta: &Value) -> Option<String> {
 /// host off the `oa-publisher` allowlist, or PDF leg failed for another
 /// transport reason — `docs/REDIRECT_ALLOWLIST.md` §3 informed-best-
 /// effort posture) this is `<root>/.metadata/<safekey>.toml`.
+/// Outcome of the DOI OA-PDF leg, carried on [`FetchPaperOutcome`] so a
+/// caller can NEVER silently report a blocked PDF as a plain
+/// "metadata-only" success (issue #118). The product promise is
+/// "immediately explain WHY a paper can't be fetched" — the distinction
+/// between "there was no OA PDF to fetch" and "an OA PDF existed but we
+/// were blocked, and here is the reason" is exactly that explanation.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum PdfLegStatus {
+    /// A PDF was fetched and written to disk (arXiv always; DOI when
+    /// the OA-publisher leg succeeded).
+    Fetched,
+    /// No OA URL was discovered (Unpaywall reported no
+    /// `best_oa_location`). Metadata-only is the correct, expected
+    /// result here — not a failure.
+    NoOaUrl,
+    /// An OA URL *was* discovered but the PDF could not be retrieved
+    /// (host outside the oa-publisher allowlist, not-a-PDF body,
+    /// transport failure, …). Metadata was still written, but the
+    /// caller MUST surface this reason rather than pretending the
+    /// fetch was a clean metadata-only success.
+    Blocked {
+        /// Closed-set code, mapped from the underlying transport error
+        /// via the canonical `From<FetchError> for ErrorCode`.
+        code: crate::ErrorCode,
+        /// Human-readable one-line reason (the `FetchError` display).
+        message: String,
+        /// Structured denial side-channel (ADR-0023) when the failure
+        /// was an allowlist / scheme denial; `None` otherwise.
+        denial: Option<crate::DenialContext>,
+    },
+}
+
+/// What `fetch_paper` wrote to disk and how.
+///
+/// `path` is the PDF (`<root>/<safekey>.pdf`) on a successful PDF
+/// fetch, or the metadata TOML (`<root>/.metadata/<safekey>.toml`)
+/// when the DOI path fell back to metadata-only. [`Self::pdf_leg`]
+/// disambiguates *why* there is no PDF (genuinely none available vs.
+/// available-but-blocked) so callers never report a blocked PDF as a
+/// silent success (issue #118).
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct FetchPaperOutcome {
@@ -374,6 +415,11 @@ pub struct FetchPaperOutcome {
     /// The schema version of the metadata TOML written
     /// (always [`crate::SCHEMA_VERSION`] for this build).
     pub schema_version: String,
+    /// What happened on the PDF leg (issue #118). `Fetched` /
+    /// `NoOaUrl` are clean outcomes; `Blocked` carries the structured
+    /// reason an OA PDF existed but could not be retrieved, so the
+    /// CLI / MCP surface it instead of a silent metadata-only success.
+    pub pdf_leg: PdfLegStatus,
 }
 
 /// Resolve a [`Ref`] to a PDF (or metadata-only fallback) and write it
@@ -513,6 +559,9 @@ async fn fetch_paper_arxiv(
         path,
         size_bytes,
         schema_version: SCHEMA_VERSION.to_string(),
+        // arXiv always delivers the PDF (or the whole fn already
+        // returned Err above) — there is no metadata-only fallback.
+        pdf_leg: PdfLegStatus::Fetched,
     })
 }
 
@@ -532,8 +581,24 @@ async fn fetch_paper_doi(
     let contact = contact_email_from_env();
     let unpaywall_contact = unpaywall_email_from_env(&contact);
     let crossref = crossref_source_from_env(&contact);
-    let cross = crossref.fetch(ref_, profile, ctx).await?;
-    let crossref_meta = cross.metadata_json.unwrap_or(Value::Null);
+    // Issue #120: Crossref is NON-fatal. A transient Crossref failure
+    // must not abort the whole DOI fetch when Unpaywall alone can
+    // still deliver the OA PDF. We keep the error and only surface it
+    // if nothing usable comes back (see the both-failed guard below).
+    let (cross, crossref_err) = match crossref.fetch(ref_, profile, ctx).await {
+        Ok(r) => (Some(r), None),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "crossref fetch failed; continuing with unpaywall-only metadata + OA leg"
+            );
+            (None, Some(e))
+        }
+    };
+    let crossref_meta = cross
+        .as_ref()
+        .and_then(|c| c.metadata_json.clone())
+        .unwrap_or(Value::Null);
     let extracted = extract_crossref_fields(&crossref_meta);
 
     // Unpaywall second — license enrichment + OA URL discovery. A
@@ -562,16 +627,45 @@ async fn fetch_paper_doi(
 
     // OA PDF leg. Try the URL Unpaywall returned via the `oa-publisher`
     // source allowlist. Magic-byte check is enforced inside
-    // `HttpClient::fetch_pdf`. Any failure here is logged as a distinct
-    // `Fetch err` row and falls through to metadata-only success.
-    let pdf_outcome = if let Some(url) = oa_url {
-        try_fetch_oa_pdf(doi, &url, ctx).await
-    } else {
-        None
+    // `HttpClient::fetch_pdf`. Issue #118: a failure here is NEVER
+    // silently turned into a clean metadata-only success — the
+    // structured reason is carried out on `PdfLegStatus::Blocked` so
+    // the CLI / MCP can explain WHY the PDF could not be fetched.
+    let (pdf_leg, pdf_bytes) = match oa_url {
+        None => (PdfLegStatus::NoOaUrl, None),
+        Some(url) => match try_fetch_oa_pdf(doi, &url, ctx).await {
+            Ok((bytes, _final_url)) => (PdfLegStatus::Fetched, Some(bytes)),
+            Err(e) => {
+                // Borrow for the denial side-channel + human message,
+                // then consume into the closed ErrorCode last.
+                let fe = FetchError::Http(e);
+                let denial: Option<crate::DenialContext> = (&fe).into();
+                let message = fe.to_string();
+                let code: crate::ErrorCode = fe.into();
+                (
+                    PdfLegStatus::Blocked {
+                        code,
+                        message,
+                        denial,
+                    },
+                    None,
+                )
+            }
+        },
     };
 
-    let (final_source_label, size_bytes, pdf_path_relative, pdf_staged) = match &pdf_outcome {
-        Some((bytes, _final_url)) => {
+    // Issue #120: Crossref is non-fatal, but if it failed AND the OA
+    // PDF leg produced nothing, writing a DOI-only stub entry would
+    // mask a total failure and violate the "explain why" promise.
+    // Surface the Crossref error so the caller reports a real reason.
+    if let Some(e) = crossref_err {
+        if pdf_bytes.is_none() {
+            return Err(e);
+        }
+    }
+
+    let (final_source_label, size_bytes, pdf_path_relative, pdf_staged) = match &pdf_bytes {
+        Some(bytes) => {
             let staged = stage_pdf_to_tempfile(bytes)?;
             (
                 "oa-publisher".to_string(),
@@ -597,7 +691,10 @@ async fn fetch_paper_doi(
         isbn: None,
         type_: extracted.type_,
         keywords: Vec::new(),
-        url: cross.final_url.as_ref().map(|u| u.to_string()),
+        url: cross
+            .as_ref()
+            .and_then(|c| c.final_url.as_ref())
+            .map(|u| u.to_string()),
         pdf_path: pdf_path_relative,
         doiget: Some(DoigetExtension {
             fetched_at: Utc::now(),
@@ -615,7 +712,7 @@ async fn fetch_paper_doi(
     write_metadata_and_pdf(store, safekey, &metadata, pdf_src_path.as_deref(), ctx)?;
     drop(pdf_staged);
 
-    let path = if pdf_outcome.is_some() {
+    let path = if pdf_bytes.is_some() {
         store_root.join(format!("{}.pdf", safekey.as_str()))
     } else {
         store_root
@@ -629,6 +726,7 @@ async fn fetch_paper_doi(
         path,
         size_bytes,
         schema_version: SCHEMA_VERSION.to_string(),
+        pdf_leg,
     })
 }
 
@@ -731,7 +829,7 @@ async fn try_fetch_oa_pdf(
     doi: &Doi,
     url: &url::Url,
     ctx: &FetchContext,
-) -> Option<(Vec<u8>, url::Url)> {
+) -> Result<(Vec<u8>, url::Url), HttpError> {
     const SOURCE: &str = "oa-publisher";
     let _permit = ctx.rate_limiter.acquire(SOURCE).await;
     // ADR-0021 §1: the oa-publisher PDF leg is a DISTINCT audit
@@ -758,7 +856,7 @@ async fn try_fetch_oa_pdf(
             }) {
                 tracing::warn!(error = %e, "appending oa-publisher Fetch ok row failed");
             }
-            Some((body.to_vec(), final_url))
+            Ok((body.to_vec(), final_url))
         }
         Err(e) => {
             match &e {
@@ -766,36 +864,47 @@ async fn try_fetch_oa_pdf(
                     tracing::info!(
                         oa_url = %url,
                         denied_host = %host,
-                        "OA URL host outside oa-publisher allowlist; metadata-only fallback"
+                        "OA URL host outside oa-publisher allowlist"
                     );
                 }
                 HttpError::NotAPdf { .. } => {
                     tracing::info!(
                         oa_url = %url,
-                        "OA URL did not return a PDF magic byte; metadata-only fallback"
+                        "OA URL did not return a PDF magic byte"
                     );
                 }
                 other => {
                     tracing::warn!(
                         oa_url = %url,
                         error = %other,
-                        "OA PDF fetch failed; metadata-only fallback"
+                        "OA PDF fetch failed"
                     );
                 }
             }
+            // Provenance `error_code` is the CLOSED-set code. Every
+            // `HttpError` collapses to `NETWORK_ERROR` through the
+            // canonical `From<FetchError> for ErrorCode` (the closed
+            // set has no finer transport code by design) — so this is
+            // the correct mapped value, not the misattribution the
+            // previous hardcode implied. The *fine* reason
+            // (RedirectDenied vs NotAPdf vs …) is preserved for the
+            // user via `PdfLegStatus::Blocked.denial` / `.message`
+            // built by the caller from the returned `HttpError`
+            // (issue #118). Rendered via `ErrorCode::as_wire` so the
+            // token can never drift from the enum.
             let _ = ctx.log.append(RowInput {
                 event: LogEvent::Fetch,
                 result: LogResult::Err,
                 capability: Capability::Oa,
                 ref_: Some(doi.as_str()),
                 source: Some(SOURCE),
-                error_code: Some("NETWORK_ERROR"),
+                error_code: Some(crate::ErrorCode::NetworkError.as_wire()),
                 size_bytes: None,
                 license: None,
                 store_path: None,
                 canonical_digest: Some(&canonical),
             });
-            None
+            Err(e)
         }
     }
 }
@@ -1226,6 +1335,59 @@ mod tests {
                 assert_eq!(max, MAX_BATCH_REFS);
             }
             other => panic!("expected TooManyRefs, got: {other:?}"),
+        }
+    }
+
+    // Issue #118: a non-PDF OA body must surface as `Err(HttpError)`
+    // from `try_fetch_oa_pdf` (previously silently flattened to
+    // `None`, which `fetch_paper_doi` then reported as a clean
+    // metadata-only success). The compiler-checked `Err(e) =>
+    // PdfLegStatus::Blocked` arm in `fetch_paper_doi` does the rest.
+    #[tokio::test]
+    async fn try_fetch_oa_pdf_non_pdf_body_is_err_not_silent_none() {
+        use crate::http::HttpClient;
+        use crate::provenance::ProvenanceLog;
+        use crate::rate_limiter::RateLimiter;
+        use crate::{Doi, RateLimits};
+        use std::sync::Arc;
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(b"<html>not a pdf</html>".to_vec()),
+            )
+            .mount(&server)
+            .await;
+        let host = server
+            .uri()
+            .parse::<url::Url>()
+            .expect("uri")
+            .host_str()
+            .expect("host")
+            .to_string();
+
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let log_path = Utf8Path::from_path(td.path())
+            .expect("utf-8")
+            .join("log.jsonl");
+        let ctx = FetchContext {
+            http: Arc::new(HttpClient::new_for_tests_allow_http("oa-publisher", &host)),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+            log: Arc::new(
+                ProvenanceLog::open(log_path, "01J0000000000000000000TEST".into())
+                    .expect("provenance log"),
+            ),
+            session_id: "01J0000000000000000000TEST".into(),
+        };
+
+        let doi = Doi("10.1234/example".to_string());
+        let url: url::Url = format!("{}/oa.pdf", server.uri()).parse().expect("url");
+        let res = try_fetch_oa_pdf(&doi, &url, &ctx).await;
+        match res {
+            Err(HttpError::NotAPdf { .. }) => {}
+            other => panic!("expected Err(NotAPdf), got: {other:?}"),
         }
     }
 }

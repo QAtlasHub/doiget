@@ -647,6 +647,33 @@ pub enum ErrorCode {
     NotImplemented,
 }
 
+impl ErrorCode {
+    /// The `SCREAMING_SNAKE_CASE` wire token for this code, as a
+    /// `&'static str`. Identical to the serde representation but
+    /// allocation-free and usable where a borrowed string with a
+    /// `'static` lifetime is required — notably the provenance log
+    /// `error_code` column (`docs/PROVENANCE_LOG.md` §3), so a failure
+    /// row records the *actual* mapped code instead of a hand-written
+    /// literal that can drift from this enum (issue #118).
+    #[must_use]
+    pub fn as_wire(&self) -> &'static str {
+        match self {
+            ErrorCode::InvalidRef => "INVALID_REF",
+            ErrorCode::NoOaAvailable => "NO_OA_AVAILABLE",
+            ErrorCode::RateLimited => "RATE_LIMITED",
+            ErrorCode::NetworkError => "NETWORK_ERROR",
+            ErrorCode::StoreError => "STORE_ERROR",
+            ErrorCode::LogError => "LOG_ERROR",
+            ErrorCode::CapabilityDenied => "CAPABILITY_DENIED",
+            ErrorCode::FetchTimeout => "FETCH_TIMEOUT",
+            ErrorCode::SchemaTooNew => "SCHEMA_TOO_NEW",
+            ErrorCode::LockTimeout => "LOCK_TIMEOUT",
+            ErrorCode::InternalError => "INTERNAL_ERROR",
+            ErrorCode::NotImplemented => "NOT_IMPLEMENTED",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // DenialReason / DenialContext (ADR-0023)
 // ---------------------------------------------------------------------------
