@@ -1395,7 +1395,7 @@ impl Server {
     /// Opens the store once, then resolves each ref independently:
     /// a found entry yields `{ ref, safekey, <payload> }`, a missing
     /// one `{ ref, safekey, <payload>: null }` (NOT an error — same
-    /// convention as `doiget_info`), an unparseable ref or a store
+    /// convention as `doiget_info`), an unparsable ref or a store
     /// read failure a per-ref `{ ref, error }` element. A failure to
     /// resolve / open the store at all is a single `ok:false`
     /// envelope. Read-only; emits no provenance row.
