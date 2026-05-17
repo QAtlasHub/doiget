@@ -44,7 +44,7 @@
 //! recorded-provenance sink. The request URL is built with the key,
 //! but every URL this module hands back (the `FetchResult::final_url`
 //! and any error string) is first passed through
-//! [`redact_api_key_in_url`], which replaces the `api_key` value with
+//! `redact_api_key_in_url`, which replaces the `api_key` value with
 //! `REDACTED`. The key still appears on the wire and in Springer's own
 //! server-side / proxy logs — that is inherent to query-param auth and
 //! is documented here and in `docs/CAPABILITY.md` §1 as accepted

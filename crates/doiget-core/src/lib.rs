@@ -878,7 +878,7 @@ impl RateLimits {
 ///
 /// `docs/CAPABILITY.md` §1 specifies the type as `Secret<String>`; that is
 /// the `secrecy` 0.9 spelling. The workspace pins `secrecy` 0.10, whose
-/// equivalent owned-string secret type is [`secrecy::SecretString`]
+/// equivalent owned-string secret type is `secrecy::SecretString`
 /// (`= SecretBox<str>`). CAPABILITY.md §1 has been updated to match the
 /// 0.10 API. `Debug` redacts the value.
 ///
@@ -890,8 +890,8 @@ impl RateLimits {
 pub struct TdmGrant {
     /// The publisher API key, validated present at startup by
     /// [`CapabilityProfile::from_env`]. Wrapped in
-    /// [`secrecy::SecretString`] so `Debug` never prints it; use
-    /// [`secrecy::ExposeSecret::expose_secret`] at the point of use.
+    /// `secrecy::SecretString` so `Debug` never prints it; use
+    /// `secrecy::ExposeSecret::expose_secret` at the point of use.
     ///
     /// Only present when a `tdm-*` feature is compiled in (see the
     /// type-level docs and ADR-0002).
@@ -1023,7 +1023,7 @@ impl CapabilityProfile {
     /// # Note on `api_key` storage
     ///
     /// When a `tdm-*` feature is compiled in, [`TdmGrant`] carries the
-    /// validated key as [`secrecy::SecretString`] (issue #153). The key is
+    /// validated key as `secrecy::SecretString` (issue #153). The key is
     /// read exactly once here, at startup; TDM sources consume it from the
     /// grant and never re-read the env var at fetch time. This makes the
     /// grant a true startup attestation — an env mutation between startup
@@ -1377,6 +1377,49 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn from_env_agreed_but_empty_key_errs() {
+        // Security-adjacent (PR #161 review): an *empty* key string is
+        // treated as "not set" by `resolve_tdm_grant`. With agree=1 and
+        // DOIGET_KEY_ELSEVIER="" the misconfiguration must surface as
+        // AgreedButNoKey, not silently build a grant around an empty
+        // secret that could never authenticate.
+        let _g = unset_all_capability_env_vars();
+        let _agree = EnvGuard::set("DOIGET_AGREE_TDM_ELSEVIER", "1");
+        let _key = EnvGuard::set("DOIGET_KEY_ELSEVIER", "");
+
+        let result = CapabilityProfile::from_env();
+        match result {
+            Err(CapabilityError::AgreedButNoKey { agree_var, key_var }) => {
+                assert_eq!(agree_var, "DOIGET_AGREE_TDM_ELSEVIER");
+                assert_eq!(key_var, "DOIGET_KEY_ELSEVIER");
+            }
+            other => panic!("expected AgreedButNoKey for empty key, got {:?}", other),
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn from_env_empty_key_without_agree_is_no_grant() {
+        // Security-adjacent (PR #161 review): an empty key with the
+        // agree var unset is indistinguishable from "no key at all".
+        // It must resolve to Ok(None) (no grant, no error) — an empty
+        // string must NOT trip the KeyButNotAgreed leaked-credential
+        // rule, since there is no credential.
+        let _g = unset_all_capability_env_vars();
+        let _key = EnvGuard::set("DOIGET_KEY_ELSEVIER", "");
+
+        let p = CapabilityProfile::from_env()
+            .expect("empty key + agree unset must be Ok(None), not an error");
+        assert!(
+            p.tdm_elsevier.is_none(),
+            "empty DOIGET_KEY_ELSEVIER with no agree var must yield no grant"
+        );
+        assert!(p.tdm_aps.is_none());
+        assert!(p.tdm_springer.is_none());
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn from_env_key_but_not_agreed_errs() {
         // Rule (CAPABILITY.md §2): key set + agree unset -> KeyButNotAgreed.
         // A leaked DOIGET_KEY_ELSEVIER must not silently enable a source.
@@ -1430,6 +1473,25 @@ mod tests {
                 .as_ref()
                 .expect("feature tdm-elsevier compiled in -> Some(TdmGrant)");
             assert_eq!(grant.agree_env_var, "DOIGET_AGREE_TDM_ELSEVIER");
+            // Issue #153 / PR #161 review: prove the key was actually
+            // threaded into TdmGrant::api_key at startup (not just that
+            // the agree var was recorded). The field is cfg-gated to
+            // the same `tdm-*` set as the assertion below, so gate the
+            // check identically.
+            #[cfg(any(
+                feature = "tdm-elsevier",
+                feature = "tdm-aps",
+                feature = "tdm-springer"
+            ))]
+            {
+                use secrecy::ExposeSecret as _;
+                assert_eq!(
+                    grant.api_key.expose_secret(),
+                    "sk-test",
+                    "the DOIGET_KEY_ELSEVIER value must be threaded into \
+                     TdmGrant::api_key (issue #153)"
+                );
+            }
         } else {
             assert!(
                 p.tdm_elsevier.is_none(),

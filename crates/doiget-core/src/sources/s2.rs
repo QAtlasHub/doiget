@@ -39,7 +39,17 @@ const DEFAULT_BASE: &str = "https://api.semanticscholar.org";
 const DEFAULT_FIELDS: &str = "title,year,citationCount,references";
 
 /// Semantic Scholar [`Source`] impl — DOI → Graph-API paper record.
-#[derive(Clone, Debug)]
+///
+/// `Debug` is implemented manually (not derived) so the optional
+/// `api_key` is never printed: a derived `Debug` would render the raw
+/// key, contradicting the [`api_key`](Self::api_key) doc contract and
+/// the credential-hygiene posture the TDM sources hold (their keys are
+/// `secrecy::SecretString`). S2 is not behind a `tdm-*` feature and the
+/// `secrecy` dep is `tdm-*`-gated/optional, so wrapping the field in
+/// `SecretString` would force `secrecy` onto default (no-feature)
+/// builds; a redacting manual `Debug` achieves the same hygiene with
+/// no dependency change. See issue #156 ① and #153 (category E).
+#[derive(Clone)]
 pub struct S2Source {
     /// API base URL. Production constructor pins
     /// `https://api.semanticscholar.org`; [`with_base`](Self::with_base)
@@ -55,6 +65,25 @@ pub struct S2Source {
     /// is sent on the wire only — it is never logged, recorded in
     /// provenance, or echoed back in error strings.
     api_key: Option<String>,
+}
+
+impl std::fmt::Debug for S2Source {
+    /// Redacts `api_key`: prints only whether a key is present, never
+    /// the value. Mirrors the `secrecy::SecretString` `Debug` posture of
+    /// the TDM sources (issue #153 category E / #156 ①).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S2Source")
+            .field("base", &self.base)
+            .field(
+                "api_key",
+                if self.api_key.is_some() {
+                    &"Some(REDACTED)"
+                } else {
+                    &"None"
+                },
+            )
+            .finish()
+    }
 }
 
 impl S2Source {
