@@ -140,6 +140,26 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
+    let result: anyhow::Result<()> = run_dispatch(cli).await;
+
+    // Issue #119: a `CliExit` carries a `docs/ERRORS.md` §4 process
+    // exit code and means the human-readable `error[CODE]:` line was
+    // ALREADY printed to stderr by the command. `main` owns the actual
+    // process exit (doing it inside the command would kill in-process
+    // integration tests). Every other error keeps the default anyhow
+    // behaviour (Debug chain to stderr, exit 1).
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) => match err.downcast_ref::<doiget_cli::commands::fetch::CliExit>() {
+            Some(doiget_cli::commands::fetch::CliExit(code)) => {
+                std::process::exit(*code);
+            }
+            None => Err(err),
+        },
+    }
+}
+
+async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         None => {
             anyhow::bail!("no subcommand. Run `doiget --help` for available commands.");
