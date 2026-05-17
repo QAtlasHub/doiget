@@ -1,0 +1,141 @@
+name: release-sign
+
+# Phase 6 / Slice 23 — sign release binaries with sigstore (cosign keyless).
+#
+# release-plz pushes per-crate tags (`doiget-core-v*`, `doiget-cli-v*`,
+# `doiget-mcp-v*`) and opens a GitHub Release per crate when it runs the
+# `release` job. The user-facing artefact is the `doiget` CLI binary, so
+# this workflow fires once per version on the `doiget-cli-v*` tag, builds
+# the binary for the three first-class targets, signs each with cosign
+# keyless (Fulcio cert minted from the GitHub OIDC token — NO long-lived
+# key, NO stored secret), and uploads:
+#
+#   doiget-<os>-<arch>[.exe]
+#   doiget-<os>-<arch>[.exe].sha256
+#   doiget-<os>-<arch>[.exe].cosign.bundle   (sig + cert + Rekor entry)
+#
+# to the `doiget-cli-v<version>` GitHub Release.
+#
+# Verify a downloaded binary with:
+#   cosign verify-blob \
+#     --bundle doiget-linux-x86_64.cosign.bundle \
+#     --certificate-identity-regexp \
+#       'https://github.com/sotashimozono/doiget/.github/workflows/release-sign.yml@.*' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+#     doiget-linux-x86_64
+
+on:
+  push:
+    tags:
+      - 'doiget-cli-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing doiget-cli-v* tag to (re)build & sign'
+        required: true
+        type: string
+
+# Least common denominator; jobs widen what they need.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-sign-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    name: build + cosign sign (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write   # upload artefacts to the GitHub Release
+      id-token: write   # cosign keyless: mint Fulcio cert from OIDC token
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: doiget-linux-x86_64
+            ext: ""
+          - os: macos-latest
+            artifact: doiget-macos-aarch64
+            ext: ""
+          - os: windows-latest
+            artifact: doiget-windows-x86_64
+            ext: ".exe"
+    env:
+      # For a `push: tags` run this is the tag name; for manual dispatch
+      # it is the user-supplied tag input.
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+      - name: Build doiget (release, oa-only)
+        shell: bash
+        run: |
+          # Native target per runner — no cross-compilation, so the
+          # produced binary's arch matches the runner. `oa-only` matches
+          # the feature surface CI tests/clippy already gate on.
+          cargo build --release -p doiget-cli --no-default-features --features oa-only
+
+      - name: Stage binary + checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="target/release/doiget${{ matrix.ext }}"
+          out="${{ matrix.artifact }}${{ matrix.ext }}"
+          cp "$src" "$out"
+          shasum -a 256 "$out" > "$out.sha256"
+          echo "ARTIFACT=$out" >> "$GITHUB_ENV"
+
+      - name: cosign sign-blob (keyless)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # cosign v2+ uses keyless by default when an OIDC token is
+          # present and --bundle is requested; no COSIGN_EXPERIMENTAL.
+          cosign sign-blob --yes \
+            --bundle "${ARTIFACT}.cosign.bundle" \
+            "${ARTIFACT}"
+
+      - name: Wait for the GitHub Release to exist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # release-plz creates the `doiget-cli-v<version>` Release on the
+          # same tag push that triggered this workflow — there can be a
+          # short race. Poll (bounded) until it exists.
+          for i in $(seq 1 20); do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "release $TAG present"; exit 0
+            fi
+            echo "release $TAG not yet present (attempt $i/20); waiting 15s"
+            sleep 15
+          done
+          echo "::error::GitHub Release $TAG never appeared after ~5min" >&2
+          exit 1
+
+      - name: Upload signed artefacts to the Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" \
+            "${ARTIFACT}" \
+            "${ARTIFACT}.sha256" \
+            "${ARTIFACT}.cosign.bundle" \
+            --clobber
