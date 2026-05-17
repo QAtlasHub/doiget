@@ -51,9 +51,9 @@ use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, HttpClient};
 use doiget_core::orchestrator::{fetch_paper as core_fetch_paper, FetchPaperOutcome, PdfLegStatus};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
-use doiget_core::source::FetchContext;
+use doiget_core::source::{FetchContext, FetchError};
 use doiget_core::store::FsStore;
-use doiget_core::{CapabilityProfile, RateLimits, Ref};
+use doiget_core::{CapabilityProfile, DenialContext, ErrorCode, RateLimits, Ref};
 
 /// Defer to docs/PROVENANCE_LOG.md §3: 26-char ULID per process invocation.
 fn new_session_id() -> String {
@@ -385,10 +385,20 @@ impl FetchHarness {
     /// CLI-only stderr success-line print.
     pub(crate) async fn fetch_one(&self, ref_: &Ref) -> Result<()> {
         let ctx = self.fetch_context();
-        let outcome =
-            core_fetch_paper(ref_, &self.profile, &ctx, &self.store, self.store.root()).await?;
-        emit_success_line(ref_, &outcome);
-        Ok(())
+        match core_fetch_paper(ref_, &self.profile, &ctx, &self.store, self.store.root()).await {
+            Ok(outcome) => {
+                emit_success_line(ref_, &outcome);
+                Ok(())
+            }
+            Err(e) => {
+                // Issue #119: render the cargo-style `error[CODE]:`
+                // line + denial note HERE (while the error is still
+                // typed), then carry only the exit code to `main`.
+                render_fetch_error(&e);
+                let code: ErrorCode = (&e).into();
+                Err(anyhow::Error::new(CliExit(cli_exit_code(code))))
+            }
+        }
     }
 }
 
@@ -477,9 +487,22 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
 /// shape was YAGNI, and the wrapper only existed to spare integration
 /// tests a `FetchOptions::default()` literal.
 pub async fn run_with_options(input: String, dry_run: bool) -> Result<()> {
-    // Step 1: parse + safekey. Granular `RefParseError` collapses to anyhow
-    // via `?`; the higher-level CLI binary maps the error to its exit code.
-    let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
+    // Step 1: parse + safekey. Issue #119: render the cargo-style
+    // `error[INVALID_REF]:` line + carry the exit code, rather than
+    // letting the granular `RefParseError` fall out as an opaque
+    // anyhow `{:?}` dump.
+    let ref_ = match Ref::parse(&input) {
+        Ok(r) => r,
+        Err(e) => {
+            print_err(format_args!(
+                "error[{}]: invalid ref: {e}",
+                ErrorCode::InvalidRef.as_wire()
+            ));
+            return Err(anyhow::Error::new(CliExit(cli_exit_code(
+                ErrorCode::InvalidRef,
+            ))));
+        }
+    };
 
     // Dry-run branch: build the plan and emit it. NO harness, NO network,
     // NO store write, NO provenance row. Posture-lint ADR-0022 §5 will
@@ -521,6 +544,66 @@ pub async fn run_with_options(input: String, dry_run: bool) -> Result<()> {
 #[allow(clippy::print_stderr)]
 fn print_success(args: std::fmt::Arguments<'_>) {
     eprintln!("{args}");
+}
+
+/// Stderr sink for the `docs/ERRORS.md` §3 human-error lines. Mirrors
+/// [`print_success`]; the localized `#[allow]` is the minimal
+/// intervention for the workspace `clippy::print_stderr` lint.
+#[allow(clippy::print_stderr)]
+fn print_err(args: std::fmt::Arguments<'_>) {
+    eprintln!("{args}");
+}
+
+/// Carries a `docs/ERRORS.md` §4 process exit code out of a CLI
+/// command to `main`, which owns the actual `std::process::exit`
+/// (calling it inside `run_with_options` would kill in-process
+/// integration tests). The human-readable `error[CODE]: …` line has
+/// ALREADY been written to stderr by [`render_fetch_error`] before
+/// this is constructed, so `main` must NOT print it again. Issue #119.
+#[derive(Debug)]
+pub struct CliExit(pub i32);
+
+impl std::fmt::Display for CliExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "exiting with status {}", self.0)
+    }
+}
+
+impl std::error::Error for CliExit {}
+
+/// `docs/ERRORS.md` §4 closed-code → process exit code. Anything not
+/// individually listed falls under "at least one fetch failed" (1).
+fn cli_exit_code(code: ErrorCode) -> i32 {
+    match code {
+        ErrorCode::CapabilityDenied => 3,
+        ErrorCode::StoreError | ErrorCode::LogError => 4,
+        ErrorCode::FetchTimeout => 124,
+        _ => 1,
+    }
+}
+
+/// Render a terminal [`FetchError`] in the `docs/ERRORS.md` §3
+/// "Researcher (CLI human)" form: `error[CODE]: message` on stderr,
+/// plus an actionable `= note:` line carrying the ADR-0023
+/// `denial_context` (attempted / expected hosts) when the failure was
+/// a denial class. stdout stays clean (ADR-0001).
+fn render_fetch_error(e: &FetchError) {
+    let code: ErrorCode = e.into();
+    print_err(format_args!("error[{}]: {}", code.as_wire(), e));
+    if let Some(dc) = Option::<DenialContext>::from(e) {
+        let attempted = dc.attempted.as_deref().unwrap_or("(unknown)");
+        match &dc.expected {
+            Some(exp) if !exp.is_empty() => {
+                print_err(format_args!(
+                    "  = note: attempted {attempted}; allowed: {}",
+                    exp.join(", ")
+                ));
+            }
+            _ => {
+                print_err(format_args!("  = note: attempted {attempted}"));
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
