@@ -581,8 +581,24 @@ async fn fetch_paper_doi(
     let contact = contact_email_from_env();
     let unpaywall_contact = unpaywall_email_from_env(&contact);
     let crossref = crossref_source_from_env(&contact);
-    let cross = crossref.fetch(ref_, profile, ctx).await?;
-    let crossref_meta = cross.metadata_json.unwrap_or(Value::Null);
+    // Issue #120: Crossref is NON-fatal. A transient Crossref failure
+    // must not abort the whole DOI fetch when Unpaywall alone can
+    // still deliver the OA PDF. We keep the error and only surface it
+    // if nothing usable comes back (see the both-failed guard below).
+    let (cross, crossref_err) = match crossref.fetch(ref_, profile, ctx).await {
+        Ok(r) => (Some(r), None),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "crossref fetch failed; continuing with unpaywall-only metadata + OA leg"
+            );
+            (None, Some(e))
+        }
+    };
+    let crossref_meta = cross
+        .as_ref()
+        .and_then(|c| c.metadata_json.clone())
+        .unwrap_or(Value::Null);
     let extracted = extract_crossref_fields(&crossref_meta);
 
     // Unpaywall second — license enrichment + OA URL discovery. A
@@ -638,6 +654,16 @@ async fn fetch_paper_doi(
         },
     };
 
+    // Issue #120: Crossref is non-fatal, but if it failed AND the OA
+    // PDF leg produced nothing, writing a DOI-only stub entry would
+    // mask a total failure and violate the "explain why" promise.
+    // Surface the Crossref error so the caller reports a real reason.
+    if let Some(e) = crossref_err {
+        if pdf_bytes.is_none() {
+            return Err(e);
+        }
+    }
+
     let (final_source_label, size_bytes, pdf_path_relative, pdf_staged) = match &pdf_bytes {
         Some(bytes) => {
             let staged = stage_pdf_to_tempfile(bytes)?;
@@ -665,7 +691,10 @@ async fn fetch_paper_doi(
         isbn: None,
         type_: extracted.type_,
         keywords: Vec::new(),
-        url: cross.final_url.as_ref().map(|u| u.to_string()),
+        url: cross
+            .as_ref()
+            .and_then(|c| c.final_url.as_ref())
+            .map(|u| u.to_string()),
         pdf_path: pdf_path_relative,
         doiget: Some(DoigetExtension {
             fetched_at: Utc::now(),
