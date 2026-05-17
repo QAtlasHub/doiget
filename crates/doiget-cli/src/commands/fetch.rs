@@ -558,7 +558,7 @@ fn print_err(args: std::fmt::Arguments<'_>) {
 /// command to `main`, which owns the actual `std::process::exit`
 /// (calling it inside `run_with_options` would kill in-process
 /// integration tests). The human-readable `error[CODE]: …` line has
-/// ALREADY been written to stderr by [`render_fetch_error`] before
+/// ALREADY been written to stderr by `render_fetch_error` before
 /// this is constructed, so `main` must NOT print it again. Issue #119.
 #[derive(Debug)]
 pub struct CliExit(pub i32);
