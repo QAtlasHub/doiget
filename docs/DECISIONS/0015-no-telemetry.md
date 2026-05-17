@@ -1,7 +1,7 @@
 # 0015 - No telemetry / phone-home / self-update
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — standing policy, enforced; `docs/SCOPE.md` non-goals #10/#11 + `.github/workflows/posture-lint.yml` (telemetry/self-update crate + endpoint guard); no phone-home path in any shipped slice
 - **Supersedes:** -
 - **Source:** Discussion #12
 

@@ -1,7 +1,7 @@
 # 0023 - Structured `denial_context` on error envelopes
 
 - **Date:** 2026-05-12
-- **Status:** Proposed
+- **Status:** Accepted — implemented; failure envelopes carry the structured `denial_context` channel for denial-class errors on the metadata/fetch/batch paths (Slices 1/2; docstring §-refs tightened in Slice 5 A7/A8)
 - **Supersedes:** -
 - **Source:** Discussion #12 (musaabhasan, 2026-05-09)
 
