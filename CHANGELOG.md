@@ -10,6 +10,12 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/sotashimozono/doiget/compare/doiget-core-v0.1.0...doiget-core-v0.1.1) - 2026-05-17
+
+### Added
+
+- *(mcp)* Slice 15b — doiget_bibtex_export + doiget_csl_export tools
+
 ## [0.0.0](https://github.com/sotashimozono/doiget/releases/tag/doiget-core-v0.0.0) - 2026-05-15
 
 ### Added
