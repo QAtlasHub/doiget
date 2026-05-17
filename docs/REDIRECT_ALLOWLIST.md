@@ -165,11 +165,18 @@ Notes:
   authoring; they have NOT all been validated against real fetch traces. Each
   entry below is `(unverified)` for Phase 1 and MUST be either confirmed or
   removed before Phase 1 closes.
-- **Partial-success semantics.** When the OA URL host is NOT on this list, the
-  redirect is denied at the closure boundary (`HttpError::RedirectDenied`) and
-  the orchestrator falls back to metadata-only success — the metadata is still
-  useful. The PDF outcome is logged as a distinct `Fetch` provenance row with
-  `source = "oa-publisher"` and `result = err` /
+- **Partial-success semantics.** When the OA URL host is NOT on this list,
+  the denial is raised as `HttpError::RedirectDenied` — at the **pre-fetch
+  check** on the metadata-discovered OA URL per §1 (the host is rejected
+  before the PDF fetch is issued, even when no redirect hop occurs) and,
+  for hosts that pass the pre-check but redirect off-list mid-fetch, again
+  at the redirect-closure boundary. Both raise the *same*
+  `HttpError::RedirectDenied` value, so the downstream shape (the
+  structured `DenialContext` with `reason = redirect_not_in_allowlist`)
+  is identical regardless of which guard fires. In either case the
+  orchestrator falls back to metadata-only success — the metadata is still
+  useful. The PDF outcome is logged as a distinct `Fetch` provenance row
+  with `source = "oa-publisher"` and `result = err` /
   `error_code = "NETWORK_ERROR"`.
 - **Host families** (each `(unverified)`):
   - Springer Nature OA imprints: `*.springer.com`, `*.springeropen.com`,
