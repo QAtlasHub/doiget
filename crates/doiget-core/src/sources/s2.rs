@@ -3,8 +3,11 @@
 //! Spec: `docs/SOURCES.md` §1 Tier 2 row + §4. Semantic Scholar's Graph
 //! API accepts unauthenticated polite-pool calls; an optional
 //! `x-api-key` header raises rate limits. doiget reads the key from
-//! `DOIGET_S2_API_KEY` at the orchestrator boundary; when absent the
-//! request is sent unauthenticated.
+//! `DOIGET_S2_API_KEY` at the orchestrator boundary; when present it is
+//! sent as the `x-api-key` request header (issue #156 ① — previously
+//! the field was carried but never sent, silently throttling keyed
+//! users to the anonymous tier); when absent the request is sent
+//! unauthenticated.
 //!
 //! ## Capability gate
 //!
@@ -46,10 +49,11 @@ pub struct S2Source {
     /// means the request is sent unauthenticated, which the API
     /// explicitly allows under the public rate-limit ceiling.
     ///
-    /// NOTE: not yet threaded through `HttpClient::fetch_bytes` (which
-    /// has no per-request header hook). Adding the header is a
-    /// follow-up; the field exists to reserve the API surface.
-    #[allow(dead_code)]
+    /// When present it is sent as the `x-api-key` request header via
+    /// [`HttpClient::fetch_bytes_with_headers`] (issue #156 ①),
+    /// mirroring how the APS TDM source attaches `X-API-Key`. The value
+    /// is sent on the wire only — it is never logged, recorded in
+    /// provenance, or echoed back in error strings.
     api_key: Option<String>,
 }
 
@@ -121,7 +125,22 @@ impl Source for S2Source {
         let _permit = ctx.rate_limiter.acquire(self.name()).await;
 
         let url = self.request_url(doi)?;
-        let (body, final_url) = ctx.http.fetch_bytes(self.name(), url).await?;
+        // Issue #156 ①: when an API key is configured, send it as the
+        // `x-api-key` header so S2 applies the keyed rate-limit tier
+        // instead of the anonymous ceiling. Mirrors the APS TDM
+        // source's `X-API-Key` wiring. An empty string is treated as
+        // "no key" (it cannot authenticate and would only add a
+        // useless header). The header value is sent on the wire only —
+        // never logged or echoed.
+        let api_key = self.api_key.as_deref().filter(|k| !k.is_empty());
+        let (body, final_url) = match api_key {
+            Some(key) => {
+                ctx.http
+                    .fetch_bytes_with_headers(self.name(), url, &[("x-api-key", key)])
+                    .await?
+            }
+            None => ctx.http.fetch_bytes(self.name(), url).await?,
+        };
 
         let paper: serde_json::Value =
             serde_json::from_slice(&body).map_err(|e| FetchError::SourceSchema {
@@ -184,7 +203,7 @@ mod tests {
 
     use camino::Utf8PathBuf;
     use tempfile::TempDir;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::http::HttpClient;
@@ -260,6 +279,33 @@ mod tests {
         let meta = result.metadata_json.expect("metadata_json present");
         assert_eq!(meta["title"], "Example S2 Paper");
         assert_eq!(meta["references"][0]["paperId"], "abc111");
+    }
+
+    #[tokio::test]
+    async fn fetch_sends_x_api_key_header_when_key_present() {
+        // Issue #156 ①: a configured key must reach the wire as the
+        // `x-api-key` header so S2 applies the keyed rate-limit tier.
+        const S2_KEY: &str = "s2-test-key-abc";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/graph/v1/paper/DOI:10.1234/example"))
+            .and(header("x-api-key", S2_KEY))
+            .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_PAPER))
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = build_test_context(&server.uri());
+        let src = S2Source::with_base(
+            Url::parse(&server.uri()).expect("wiremock URI parses"),
+            Some(S2_KEY.to_string()),
+        );
+        let profile = profile_with_s2_enabled();
+        let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("DOI parses"));
+
+        let result = src.fetch(&ref_, &profile, &ctx).await.expect("fetch ok");
+        assert_eq!(result.source, "semantic_scholar");
+        let meta = result.metadata_json.expect("metadata_json present");
+        assert_eq!(meta["title"], "Example S2 Paper");
     }
 
     #[tokio::test]

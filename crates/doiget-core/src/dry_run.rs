@@ -24,6 +24,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 
 use crate::http::{oa_publisher_allowlist, tier_1_allowlist, SourceAllowlist};
+use crate::source::FetchError;
 use crate::{RateLimits, Ref};
 
 /// Per-PDF-source row inside [`FetchPlan::pdf_sources`].
@@ -109,19 +110,84 @@ pub fn rate_limit_budget() -> RateLimitBudget {
 /// publisher), reflecting `doiget-cli::commands::fetch::build_http_client`'s
 /// composition.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics with a self-documenting message if the in-crate allowlist
-/// builders ([`oa_publisher_allowlist`] / [`tier_1_allowlist`]) ever stop
-/// returning the source keys this function looks up. That signals an
-/// internal-contract drift bug, not a user error — fail-fast at preview
-/// time is preferable to silently emitting an empty `candidate_hosts`
-/// list. The workspace `clippy::expect_used` lint is `warn`-level
-/// (promoted to `deny` under `-D warnings`); the localized `#[allow]` is
-/// the minimal intervention here, mirroring the pattern in
-/// `crate::http::HttpClient::new_for_tests_allow_http`.
-#[allow(clippy::expect_used)]
+/// This infallible-looking wrapper never returns `Err` — it delegates to
+/// [`try_build_fetch_plan`] and, on the (should-be-impossible) internal
+/// allowlist-contract drift, falls back to an empty `candidate_hosts`
+/// list for the affected PDF source rather than panicking (issue #156 ②:
+/// a stray `.expect()` here crashed `doiget plan` if a source key was
+/// ever renamed). Callers that want to *observe* the invariant violation
+/// as a typed error should call [`try_build_fetch_plan`] directly; this
+/// function's signature is kept infallible because it is `pub` and has
+/// non-`doiget-core` callers (`doiget-mcp`, `doiget-cli`) whose
+/// signatures must not change in this batch.
+///
+/// The empty-`candidate_hosts` fallback is the lesser evil versus a
+/// panic: a preview with an empty allowlist is visibly wrong (and is
+/// what `try_build_fetch_plan` flags as `SourceSchema`), whereas a panic
+/// takes down `doiget plan` entirely. This path is unreachable unless
+/// [`oa_publisher_allowlist`] / [`tier_1_allowlist`] are edited to drop
+/// the `"oa-publisher"` / `"arxiv"` keys, which the in-crate tests pin.
 pub fn build_fetch_plan(ref_: &Ref, store_root: &Utf8Path) -> FetchPlan {
+    try_build_fetch_plan(ref_, store_root).unwrap_or_else(|_| {
+        // Internal-contract drift (allowlist key renamed): degrade to an
+        // empty `candidate_hosts` instead of panicking `doiget plan`.
+        // `try_build_fetch_plan` is the API that surfaces this as a
+        // typed `FetchError::SourceSchema`.
+        let safekey = ref_.safekey();
+        let target_pdf_path = store_root.join(format!("{}.pdf", safekey.as_str()));
+        let target_metadata_path = store_root
+            .join(".metadata")
+            .join(format!("{}.toml", safekey.as_str()));
+        let (metadata_sources, pdf_key) = match ref_ {
+            Ref::Doi(_) => (
+                vec!["crossref".to_string(), "unpaywall".to_string()],
+                "oa-publisher",
+            ),
+            Ref::Arxiv(_) => (Vec::<String>::new(), "arxiv"),
+        };
+        FetchPlan {
+            metadata_sources,
+            pdf_sources: vec![PdfSourcePlan {
+                key: pdf_key.to_string(),
+                candidate_hosts: Vec::new(),
+            }],
+            redirect_allowlists_loaded: tier_1_allowlist()
+                .iter()
+                .chain(oa_publisher_allowlist().iter())
+                .map(|a| a.source.clone())
+                .collect(),
+            target_pdf_path,
+            target_metadata_path,
+            would_append_provenance: true,
+            candidate_hosts_are_upper_bound: true,
+        }
+    })
+}
+
+/// Fallible builder for the dry-run preview ([`FetchPlan`]).
+///
+/// Identical to [`build_fetch_plan`] on the happy path, but propagates an
+/// internal allowlist-contract drift as a typed
+/// [`FetchError::SourceSchema`] (which maps to
+/// [`crate::ErrorCode::InternalError`] at the public boundary — the
+/// correct closed-set fit for an internal-invariant violation) instead
+/// of panicking. This is the API issue #156 ② asks for; it is added
+/// alongside the existing infallible [`build_fetch_plan`] rather than
+/// replacing it, because `build_fetch_plan` is `pub` and called from
+/// `doiget-mcp` / `doiget-cli`, whose signatures are out of scope for
+/// this change batch.
+///
+/// # Errors
+///
+/// Returns [`FetchError::SourceSchema`] if the in-crate allowlist
+/// builders ([`oa_publisher_allowlist`] / [`tier_1_allowlist`]) stop
+/// returning the `"oa-publisher"` / `"arxiv"` source keys this function
+/// looks up — an internal-contract drift bug, surfaced rather than
+/// panicked (issue #156 ②). The in-crate tests pin the keys so this is
+/// unreachable in a correct build.
+pub fn try_build_fetch_plan(ref_: &Ref, store_root: &Utf8Path) -> Result<FetchPlan, FetchError> {
     let safekey = ref_.safekey();
     let target_pdf_path = store_root.join(format!("{}.pdf", safekey.as_str()));
     let target_metadata_path = store_root
@@ -131,21 +197,24 @@ pub fn build_fetch_plan(ref_: &Ref, store_root: &Utf8Path) -> FetchPlan {
     let (metadata_sources, pdf_sources) = match ref_ {
         Ref::Doi(_) => {
             // Internal contract: `oa_publisher_allowlist()` MUST always
-            // return an entry whose `.source == "oa-publisher"`. Silent
+            // return an entry whose `.source == "oa-publisher"`. A silent
             // `.unwrap_or_default()` here would mask drift between this
             // function and the allowlist source-of-truth — the resulting
             // empty `candidate_hosts` would mislead an agent into
-            // believing the OA leg has no allowed hosts.
+            // believing the OA leg has no allowed hosts. Issue #156 ②:
+            // surface the drift as a typed error rather than `.expect()`
+            // panicking `doiget plan`.
             let oa_hosts = oa_publisher_allowlist()
                 .into_iter()
                 .find(|a: &SourceAllowlist| a.source == "oa-publisher")
                 .map(|a| a.redirect_hosts)
-                .expect(
-                    "oa-publisher allowlist must exist (see \
-                     crates/doiget-core/src/http.rs::oa_publisher_allowlist); \
-                     if this fires, build_fetch_plan and oa_publisher_allowlist \
-                     have drifted",
-                );
+                .ok_or_else(|| FetchError::SourceSchema {
+                    hint: "internal-contract drift: oa-publisher allowlist \
+                           missing (see crates/doiget-core/src/http.rs::\
+                           oa_publisher_allowlist); build_fetch_plan and \
+                           oa_publisher_allowlist have drifted"
+                        .to_string(),
+                })?;
             (
                 vec!["crossref".to_string(), "unpaywall".to_string()],
                 vec![PdfSourcePlan {
@@ -160,12 +229,13 @@ pub fn build_fetch_plan(ref_: &Ref, store_root: &Utf8Path) -> FetchPlan {
                 .into_iter()
                 .find(|a: &SourceAllowlist| a.source == "arxiv")
                 .map(|a| a.redirect_hosts)
-                .expect(
-                    "tier-1 allowlist must include 'arxiv' (see \
-                     crates/doiget-core/src/http.rs::tier_1_allowlist); \
-                     if this fires, build_fetch_plan and tier_1_allowlist \
-                     have drifted",
-                );
+                .ok_or_else(|| FetchError::SourceSchema {
+                    hint: "internal-contract drift: tier-1 allowlist missing \
+                           'arxiv' (see crates/doiget-core/src/http.rs::\
+                           tier_1_allowlist); build_fetch_plan and \
+                           tier_1_allowlist have drifted"
+                        .to_string(),
+                })?;
             (
                 Vec::<String>::new(),
                 vec![PdfSourcePlan {
@@ -188,7 +258,7 @@ pub fn build_fetch_plan(ref_: &Ref, store_root: &Utf8Path) -> FetchPlan {
         .map(|a| a.source.clone())
         .collect();
 
-    FetchPlan {
+    Ok(FetchPlan {
         metadata_sources,
         pdf_sources,
         redirect_allowlists_loaded,
@@ -201,7 +271,7 @@ pub fn build_fetch_plan(ref_: &Ref, store_root: &Utf8Path) -> FetchPlan {
         // real fetch would touch. Surfaced on the wire so agents can
         // detect the upper-bound semantics without parsing the spec.
         candidate_hosts_are_upper_bound: true,
-    }
+    })
 }
 
 /// Build the dry-run envelope as a `serde_json::Value`, without writing
@@ -335,6 +405,32 @@ mod tests {
             "plan.candidate_hosts_are_upper_bound must be true on the \
              wire (ADR-0022 §4); got: {env}"
         );
+    }
+
+    #[test]
+    fn try_build_fetch_plan_ok_matches_build_fetch_plan() {
+        // Issue #156 ②: the fallible variant must produce a plan
+        // structurally identical to the infallible wrapper on the happy
+        // path (the allowlist invariant holds in a correct build).
+        for r in [
+            Ref::Doi(Doi("10.1234/example".to_string())),
+            Ref::Arxiv(ArxivId("2401.12345".to_string())),
+        ] {
+            let root = temp_root();
+            let fallible = try_build_fetch_plan(&r, &root).expect("invariant holds");
+            let infallible = build_fetch_plan(&r, &root);
+            assert_eq!(fallible.metadata_sources, infallible.metadata_sources);
+            assert_eq!(fallible.pdf_sources[0].key, infallible.pdf_sources[0].key);
+            assert_eq!(
+                fallible.pdf_sources[0].candidate_hosts,
+                infallible.pdf_sources[0].candidate_hosts
+            );
+            assert!(
+                !fallible.pdf_sources[0].candidate_hosts.is_empty(),
+                "happy-path candidate_hosts must be populated, not the \
+                 degraded empty fallback"
+            );
+        }
     }
 
     #[test]

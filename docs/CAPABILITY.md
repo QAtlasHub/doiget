@@ -10,14 +10,16 @@
 ```rust
 // Phase 1+ target module path; Phase 0 ships these types in monolithic lib.rs.
 
-use secrecy::Secret;
+use secrecy::SecretString; // = SecretBox<str>; the `secrecy` 0.10 owned-string secret
 use chrono::{DateTime, Utc};
 
 // All structs below are #[non_exhaustive] in the Rust source. External crates
 // cannot construct them via struct-literal syntax — go through
-// `CapabilityProfile::from_env()` (see §2). The shapes shown are the Phase 1+
-// target; the Phase 0 stub omits `TdmGrant::api_key` (added non-breakingly
-// later via `#[non_exhaustive]`).
+// `CapabilityProfile::from_env()` (see §2). `TdmGrant::api_key` exists only
+// when at least one `tdm-*` Cargo feature is compiled in (the `secrecy` dep is
+// `optional = true` and gated on those features per ADR-0002). The field is
+// additive under `#[non_exhaustive]`; default release binaries — which contain
+// no TDM code at all — do not carry it.
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -44,7 +46,10 @@ pub struct MetadataAccess {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct TdmGrant {
-    pub api_key:       Secret<String>,    // added in Phase 1
+    // Present only under a `tdm-*` feature (see the note above). `secrecy`
+    // 0.10 replaced `Secret<String>` with `SecretString` (= `SecretBox<str>`).
+    #[cfg(any(feature = "tdm-elsevier", feature = "tdm-aps", feature = "tdm-springer"))]
+    pub api_key:       SecretString,
     pub agreed_at:     DateTime<Utc>,
     pub agree_env_var: String,            // e.g. "DOIGET_AGREE_TDM_ELSEVIER"
 }
@@ -87,8 +92,12 @@ Struct-literal construction (`CapabilityProfile { oa: ..., ... }`) is blocked
 outside `doiget-core` by `#[non_exhaustive]`. Tests inside `doiget-core` may
 still construct profiles directly for fixture purposes.
 
-`api_key` is wrapped in `secrecy::Secret<String>` so that `Display` and `Debug` print
-`****`. Logs use a redactor for known sensitive field names.
+`api_key` is wrapped in `secrecy::SecretString` (the `secrecy` 0.10 replacement
+for the 0.9 `Secret<String>`) so that `Debug` prints a redaction placeholder
+rather than the key. Logs additionally use a redactor for known sensitive field
+names, and any URL that carries a key as a query parameter (Springer Nature —
+see §3) is passed through `redact_api_key_in_url` before it is logged or
+recorded in provenance.
 
 ## 2. Resolution algorithm
 
@@ -115,7 +124,11 @@ fn read_tdm_grant(agree_var: &str, key_var: &str) -> Result<Option<TdmGrant>, Ca
     let key    = env::var(key_var).ok();
     match (agreed, key) {
         (true, Some(k)) => Ok(Some(TdmGrant {
-            api_key:       Secret::new(k),
+            // `secrecy` 0.10: `SecretString::from(String)` replaces the
+            // 0.9 `Secret::new(k)`. Field present only under a `tdm-*`
+            // feature; the actual source splits this into a small
+            // `build_tdm_grant` helper so the cfg lives in one place.
+            api_key:       SecretString::from(k),
             agreed_at:     Utc::now(),
             agree_env_var: agree_var.to_string(),
         })),
