@@ -1,7 +1,7 @@
 # 0020 - reqwest TLS feature stack (rustls-only, webpki bundled)
 
 - **Date:** 2026-05-06
-- **Status:** Proposed
+- **Status:** Accepted — implemented; `reqwest` on the rustls + bundled-webpki-roots stack (PR #30, refined PR #49); `openssl`/`native-tls` banned by `deny.toml`
 - **Supersedes:** -
 - **Source:** PR #30, PR #49
 

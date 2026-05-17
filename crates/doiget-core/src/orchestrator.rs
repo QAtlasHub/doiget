@@ -17,7 +17,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use chrono::Utc;
 use serde_json::Value;
 
-use crate::dry_run::{build_fetch_plan, FetchPlan};
+use crate::dry_run::{build_fetch_plan, try_build_fetch_plan, FetchPlan};
 use crate::http::HttpError;
 use crate::provenance::{Capability, LogEvent, LogResult, RowInput};
 use crate::source::{FetchContext, FetchError, FetchResult, Source};
@@ -481,6 +481,21 @@ pub async fn fetch_paper(
 /// tool method does not have to reach across two modules.
 pub fn fetch_paper_plan(ref_: &Ref, store_root: &Utf8Path) -> FetchPlan {
     build_fetch_plan(ref_, store_root)
+}
+
+/// Fallible sibling of [`fetch_paper_plan`] — propagates an internal
+/// allowlist-contract drift as a typed [`FetchError::SourceSchema`]
+/// instead of degrading to an empty `candidate_hosts` list (issue
+/// #156 ②). Thin re-export of [`crate::dry_run::try_build_fetch_plan`].
+/// Added alongside the infallible [`fetch_paper_plan`] rather than
+/// changing its signature, because `fetch_paper_plan` is `pub` and
+/// called from `doiget-mcp`, which is out of scope for this batch.
+///
+/// # Errors
+///
+/// See [`crate::dry_run::try_build_fetch_plan`].
+pub fn try_fetch_paper_plan(ref_: &Ref, store_root: &Utf8Path) -> Result<FetchPlan, FetchError> {
+    try_build_fetch_plan(ref_, store_root)
 }
 
 /// arXiv branch of [`fetch_paper`]. Internal — public callers go
@@ -1135,8 +1150,14 @@ pub async fn batch_fetch(
 /// Dry-run preview for a batch — one [`FetchPlan`] per ref. Enforces
 /// the same [`MAX_BATCH_REFS`] cap [`batch_fetch`] does.
 ///
-/// Returns `Err(FetchError::TooManyRefs)` when over the cap; otherwise
-/// `Ok(Vec<(Ref, FetchPlan)>)` parallel to the input order.
+/// Returns `Err(FetchError::TooManyRefs)` when over the cap, or
+/// `Err(FetchError::SourceSchema)` if the dry-run allowlist invariant
+/// has drifted (issue #156 ②: this now propagates as a typed error via
+/// [`try_build_fetch_plan`] rather than silently emitting an empty
+/// `candidate_hosts` list — the signature already returned `Result`, so
+/// this is an in-crate behavior tightening with no caller-visible type
+/// change). Otherwise `Ok(Vec<(Ref, FetchPlan)>)` parallel to the input
+/// order.
 pub fn batch_fetch_plans(
     refs: &[Ref],
     store_root: &Utf8Path,
@@ -1147,10 +1168,9 @@ pub fn batch_fetch_plans(
             max: MAX_BATCH_REFS,
         });
     }
-    Ok(refs
-        .iter()
-        .map(|r| (r.clone(), build_fetch_plan(r, store_root)))
-        .collect())
+    refs.iter()
+        .map(|r| try_build_fetch_plan(r, store_root).map(|p| (r.clone(), p)))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

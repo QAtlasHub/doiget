@@ -1,7 +1,7 @@
 # 0011 - Phase plan v1 — MVP at 5 weeks, Phase 5 deferred-by-default
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — realized; the phase plan was executed through Phase 6 (see `docs/PHASES.md` §1 per-phase status table). Phase 5 was *not* deferred — all three TDM sub-phases shipped (Slices 17–19)
 - **Supersedes:** -
 - **Source:** Discussion #7
 

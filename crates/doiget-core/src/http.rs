@@ -788,7 +788,14 @@ impl HttpClient {
                 }
                 return Err(HttpError::HttpStatus {
                     status: code,
-                    url: final_url.to_string(),
+                    // Issue #146: Springer Nature authenticates via an
+                    // `api_key` URL query parameter (no header path
+                    // upstream). This error string is logged and may
+                    // surface to the user, so strip any `api_key`
+                    // value before it leaves the client. No other
+                    // source puts a secret in the query string, so
+                    // this is a no-op for them.
+                    url: redact_api_key_query(&final_url),
                 });
             }
 
@@ -862,6 +869,37 @@ impl HttpClient {
             return Ok((body, final_url));
         }
     }
+}
+
+/// Return `url` rendered as a string with the value of any `api_key`
+/// query parameter replaced by `REDACTED` (issue #146).
+///
+/// Springer Nature's TDM API authenticates **only** via an `api_key`
+/// query parameter — there is no header-auth path upstream — so the key
+/// is unavoidably in the request URL. This keeps it out of *our* log
+/// and error sinks (the `HttpError::HttpStatus` string in particular,
+/// which is `tracing`-logged and can surface to the user). It is a
+/// structural no-op for every other source, none of which carry a
+/// secret in the query string. Other pairs and their order are
+/// preserved; a URL with no `api_key` pair is rendered unchanged.
+fn redact_api_key_query(url: &url::Url) -> String {
+    const API_KEY_PARAM: &str = "api_key";
+    if url.query_pairs().all(|(k, _)| k != API_KEY_PARAM) {
+        return url.to_string();
+    }
+    let mut redacted = url.clone();
+    let pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|(k, v)| {
+            if k == API_KEY_PARAM {
+                (k.into_owned(), "REDACTED".to_string())
+            } else {
+                (k.into_owned(), v.into_owned())
+            }
+        })
+        .collect();
+    redacted.query_pairs_mut().clear().extend_pairs(pairs);
+    redacted.to_string()
 }
 
 /// Test-oriented [`HttpClient`] constructor. Originally `cfg(test)`; now
