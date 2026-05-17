@@ -71,13 +71,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # SBOM of the shipped binary's full transitive graph. `oa-only`
-          # matches the feature surface release-sign.yml builds + CI gates.
-          cargo cyclonedx -p doiget-cli --format json \
-            --no-default-features --features oa-only
-          # cargo-cyclonedx writes the bom next to the crate manifest;
-          # the exact filename has drifted across versions, so locate it
-          # defensively rather than hard-coding.
+          # cargo-cyclonedx has no `-p` / `--features` flags (it derives
+          # the graph from `cargo metadata` over the whole workspace);
+          # passing them fails with "unexpected argument". Run it bare
+          # at the workspace root — it emits one `<crate>.cdx.json` per
+          # member — then select doiget-cli's bom below (it transitively
+          # includes doiget-core + doiget-mcp + all deps anyway).
+          cargo cyclonedx --format json
+          # cargo-cyclonedx writes the bom next to each crate manifest;
+          # the exact filename has drifted across versions, so locate
+          # doiget-cli's defensively rather than hard-coding.
           src="$(find . -name '*.cdx.json' -path '*doiget-cli*' | head -n1)"
           if [ -z "$src" ]; then
             src="$(find . -name '*.cdx.json' | head -n1)"
@@ -88,7 +91,10 @@ jobs:
           fi
           out="doiget-sbom-${TAG}.cdx.json"
           cp "$src" "$out"
-          shasum -a 256 "$out" > "$out.sha256"
+          # `shasum` is absent on the Windows Git-bash runner and
+          # `sha256sum` is absent on macOS; `openssl dgst` is present
+          # on all three. `-r` gives a `<hash> *<file>` line.
+          openssl dgst -sha256 -r "$out" > "$out.sha256"
           echo "SBOM=$out" >> "$GITHUB_ENV"
 
       - name: cosign sign-blob (keyless)
