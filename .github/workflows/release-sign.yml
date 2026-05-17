@@ -96,7 +96,10 @@ jobs:
           src="target/release/doiget${{ matrix.ext }}"
           out="${{ matrix.artifact }}${{ matrix.ext }}"
           cp "$src" "$out"
-          shasum -a 256 "$out" > "$out.sha256"
+          # `shasum` is absent on the Windows Git-bash runner and
+          # `sha256sum` is absent on macOS; `openssl dgst` is present
+          # on all three. `-r` gives a `<hash> *<file>` line.
+          openssl dgst -sha256 -r "$out" > "$out.sha256"
           echo "ARTIFACT=$out" >> "$GITHUB_ENV"
 
       - name: cosign sign-blob (keyless)
