@@ -140,7 +140,18 @@ When doiget writes to a `<safekey>.toml` that already exists (e.g., a re-fetch):
 - Exception: `schema_version` may be bumped on a coordinated minor revision.
 
 This rule prevents a user who runs both BiblioFetch.jl and doiget against the same store
-from losing BiblioFetch-authored fields.
+from losing BiblioFetch-authored fields. Unknown keys inside `other` (e.g. an unknown
+top-level scalar or a `[bibliofetch]` sub-key) follow the same rule: on a re-write, an
+existing on-disk value WINS over whatever doiget carries (issue #123).
+
+> **Re-fetch downgrade behaviour (issue #123).** A doiget re-fetch of an entry that
+> previously had a PDF but is now metadata-only (e.g. the OA host went off-allowlist)
+> rewrites the `[doiget]` table (`source`, `size_bytes`, …) in place. The PDF blob is
+> immutable-after-write (§1) so the existing `.pdf` file is **not** deleted, but the
+> entry's recorded state changes. This is intentional, not silent: as of issue #118 the
+> blocked-PDF reason is surfaced to the caller (CLI `note:` line / MCP `pdf.status`),
+> so the operator always learns the entry was downgraded and why. A guard that refuses
+> to downgrade is deferred (post-MVP) — it is a policy choice, not a correctness bug.
 
 ## 7. TOML normalization
 
@@ -171,6 +182,18 @@ Both implementations MUST refuse:
 
 - Missing `schema_version`, `title`, `authors`, or year-equivalent.
 - Future major `schema_version` for write operations.
+
+> **Known doiget limitation (issue #123).** doiget reads any unknown table
+> into an opaque `other` map and preserves *flat* unknown tables (e.g.
+> `[bibliofetch]` with scalar/array sub-keys) losslessly across a
+> read→write→read cycle (proven by
+> `bibliofetch_typed_table_and_unknown_scalar_survive_roundtrip`). It does
+> **not** yet round-trip a *nested* unknown sub-table such as
+> `[bibliofetch.history]`: doiget's TOML normalizer rejects a nested table
+> inside `other`, so a doiget rewrite of an entry containing one returns
+> `StoreError::Serialize` rather than silently dropping data (fail-loud,
+> not data loss). BiblioFetch.jl should keep its tool table flat until
+> this is lifted; tracked for a post-MVP normalizer pass.
 
 ## 9. Round-trip CI test
 

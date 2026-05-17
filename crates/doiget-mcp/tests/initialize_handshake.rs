@@ -238,6 +238,14 @@ async fn doiget_metadata_only_invalid_ref_returns_invalid_ref_envelope() -> anyh
         serde_json::json!("INVALID_REF"),
         "envelope: {structured:?}"
     );
+    // Issue #123: docs/MCP_TOOLS.md §5 mandates `ref` on every
+    // ok:false envelope (was previously omitted by
+    // metadata_only_error_envelope).
+    assert_eq!(
+        structured["ref"],
+        serde_json::json!("not a doi"),
+        "ok:false envelope must carry the request ref (§5); got: {structured:?}"
+    );
     assert!(
         structured["error"]["message"]
             .as_str()
