@@ -223,6 +223,7 @@ impl Server {
             Ok(r) => r,
             Err(e) => {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                    Some(&input.ref_),
                     ErrorCode::InvalidRef,
                     &format!("invalid ref: {e}"),
                 )));
@@ -255,6 +256,7 @@ impl Server {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                    Some(&input.ref_),
                     ErrorCode::InternalError,
                     &format!("metadata-only context initialization failed: {e}"),
                 )));
@@ -281,6 +283,7 @@ impl Server {
             canonical_digest: None,
         }) {
             return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                Some(&input.ref_),
                 ErrorCode::LogError,
                 &format!("SessionStart append failed: {e}"),
             )));
@@ -365,6 +368,7 @@ impl Server {
             Ok(r) => r,
             Err(e) => {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                    Some(&input.ref_),
                     ErrorCode::InvalidRef,
                     &format!("invalid ref: {e}"),
                 )));
@@ -377,6 +381,7 @@ impl Server {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                    Some(&input.ref_),
                     ErrorCode::InternalError,
                     &format!("resolve-paper context initialization failed: {e}"),
                 )));
@@ -402,6 +407,7 @@ impl Server {
             canonical_digest: None,
         }) {
             return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                Some(&input.ref_),
                 ErrorCode::LogError,
                 &format!("SessionStart append failed: {e}"),
             )));
@@ -1556,9 +1562,14 @@ fn read_path_error_envelope(ref_str: Option<&str>, code: ErrorCode, message: &st
 /// I6 lesson from PR #84's multi-agent review: free-form string codes
 /// can drift from `ErrorCode`'s SCREAMING_SNAKE_CASE rendering without
 /// the compiler noticing.
-fn metadata_only_error_envelope(code: ErrorCode, message: &str) -> Value {
+fn metadata_only_error_envelope(ref_str: Option<&str>, code: ErrorCode, message: &str) -> Value {
     json!({
         "ok": false,
+        // Issue #123: docs/MCP_TOOLS.md §5 mandates `ref` on every
+        // ok:false envelope. Emitted always (null when there is no
+        // ref to surface) for shape-symmetry with the success
+        // envelopes and `read_path_error_envelope`.
+        "ref": ref_str.map(Value::from).unwrap_or(Value::Null),
         "error": {
             "code": code,
             "message": message,
