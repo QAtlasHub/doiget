@@ -1,7 +1,7 @@
 # 0005 - CapabilityProfile gates source invocation at the type level
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented; `Source` trait + `CapabilityProfile::from_env` (PR #64/#65, Phase 1); Tier 2 / TDM sources gate on `profile.*` flags (Slices 11–19)
 - **Supersedes:** -
 - **Source:** Discussion #16 / #17
 

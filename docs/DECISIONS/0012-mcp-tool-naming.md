@@ -1,7 +1,7 @@
 # 0012 - MCP tool naming + structured ok-false errors
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented; the `doiget_*` tool surface + structured `ok:false` envelopes are wired across Slices 1/2/7/8/15 (10-tool Phase-3 baseline + Phase-4 citation tool)
 - **Supersedes:** -
 - **Source:** Discussion #8
 

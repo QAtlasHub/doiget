@@ -23,7 +23,9 @@ explicitly out of scope below or requires a new ADR.
 
 ## Two classes of non-goal
 
-doiget's non-goals split into two classes:
+doiget enumerates **19 non-goals total**, continuously numbered 1–19 (a stable
+`§non-goal N` reference scheme), split into two classes — **14 permanent**
+(items 1–14) and **5 current design choices** (items 15–19):
 
 - **Permanent non-goals.** Reversing one would weaken the
   [`LEGAL.md`](LEGAL.md) posture, the [`SECURITY.md`](SECURITY.md) threat
@@ -45,7 +47,7 @@ A future ADR may freely move an item from "Current design choices" to
 scope-reopening Discussion. Moving the other way (Permanent → Current →
 Removed) requires the full meta-rule.
 
-## Permanent non-goals (14)
+## Permanent non-goals (14 — items 1–14 of 19)
 
 ### Content / processing
 
@@ -113,7 +115,7 @@ Removed) requires the full meta-rule.
     explicitly in scope and is **not** governed by item #1 above. This is the
     same boundary [`LEGAL.md`](LEGAL.md) §3 documents.
 
-## Current design choices (5)
+## Current design choices (5 — items 15–19 of 19)
 
 These are out of scope **today** because the maintainer judges them more
 trouble than they're worth at the current Phase, but they do not threaten the

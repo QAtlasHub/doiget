@@ -1,7 +1,7 @@
 # 0009 - MVP source list is Tier 1 only (Crossref / Unpaywall / arXiv)
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented; default `oa-only` build ships Tier 1 (Crossref / Unpaywall / arXiv) only (PR #67/#68/#69, Phase 1); Tier 2 is feature-gated and off by default (Slices 10–13)
 - **Supersedes:** -
 - **Source:** Discussion #3
 

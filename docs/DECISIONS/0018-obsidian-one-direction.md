@@ -1,7 +1,7 @@
 # 0018 - Obsidian export is one-direction, optional Phase 7
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Proposed — *intentionally not yet Accepted*; the decision is genuinely unrealized. `doiget-obsidian` is a Phase 7 default-OFF crate still `exclude`d in `Cargo.toml`; no store→vault sync code has shipped (no CHANGELOG slice). Flips to Accepted only once the Phase 7 crate lands
 - **Supersedes:** -
 - **Source:** Discussion #15
 

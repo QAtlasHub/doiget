@@ -1,7 +1,7 @@
 # 0003 - PDF content processing is permanently out of scope
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — standing policy, enforced; `docs/SCOPE.md` permanent non-goal #1 + posture-lint; no PDF-content code path exists in any shipped slice
 - **Supersedes:** -
 - **Source:** Discussion #9
 

@@ -1,7 +1,7 @@
 # 0016 - Common foundation crates + deny list
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented; shared `Cargo.toml` workspace deps + root `deny.toml` ban list (bans `openssl`/`native-tls`) in force since Phase 0, gated by `.github/workflows/audit.yml`
 - **Supersedes:** -
 - **Source:** Discussion #13
 
