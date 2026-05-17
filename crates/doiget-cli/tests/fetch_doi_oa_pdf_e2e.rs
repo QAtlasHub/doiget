@@ -239,17 +239,32 @@ async fn fetch_doi_oa_pdf_happy_path() {
 async fn fetch_doi_oa_pdf_falls_back_to_metadata_when_host_off_allowlist() {
     // Failure-fallback path: Unpaywall hands back an OA URL whose host is
     // NOT registered in the test client's `oa-publisher` allowlist. The
-    // orchestrator MUST log a `Fetch err / source=oa-publisher` row,
-    // SKIP writing a PDF, and still return Ok(()) with the metadata
-    // written. Per the `informed-best-effort` posture in
-    // `docs/REDIRECT_ALLOWLIST.md` §3.
+    // orchestrator MUST log a `Fetch err / source=oa-publisher` row and
+    // SKIP writing a PDF while still writing the metadata TOML (the
+    // `informed-best-effort` posture in `docs/REDIRECT_ALLOWLIST.md` §3
+    // keeps the metadata).
+    //
+    // Issue #145 / `docs/ERRORS.md` §3 + §6: the CLI persona must NOT
+    // treat this blocked PDF leg as a clean `Ok(())`. The metadata is
+    // still written (and pointed at), but `run_with_options` returns an
+    // `Err` carrying a `CliExit` so the process exits non-zero — a
+    // blocked PDF is no longer a silent success.
     let server = MockServer::start().await;
     let base_uri = server.uri();
 
     // The OA URL points at an `https://` host that is NOT one of our
-    // registered allowlist entries (`127.0.0.1`). The redirect-policy
-    // closure denies the initial-leg URL on the host-allowlist check
-    // before any body is read.
+    // registered allowlist entries. As of issue #145 / PR #163 the core
+    // runs a PRE-FETCH host allowlist check on the metadata-discovered OA
+    // URL in `doiget_core::orchestrator::try_fetch_oa_pdf` BEFORE the PDF
+    // fetch is issued (`docs/REDIRECT_ALLOWLIST.md` §1 — NORMATIVE), not
+    // only inside the redirect closure. This mock mounts NO redirect and
+    // `attacker.test` is off the `oa-publisher` allowlist, so the pre-fetch
+    // check rejects the OA URL with the SAME `HttpError::RedirectDenied`
+    // the redirect closure produces — carrying a
+    // `DenialContext(RedirectNotInAllowlist)`. The connect to
+    // `attacker.test` never happens. The doiget-cli classification then
+    // promotes this deliberate policy block to `CAPABILITY_DENIED` /
+    // exit 3 (see the assertion + `docs/ERRORS.md` §6.1 below).
     let off_allowlist_oa_url = "https://attacker.test/file.pdf".to_string();
 
     // Crossref uses `Url::join("/works/<doi>")` which does NOT URL-encode
@@ -288,11 +303,55 @@ async fn fetch_doi_oa_pdf_falls_back_to_metadata_when_host_off_allowlist() {
     // on every redirect hop).
     env.set("DOIGET_OA_PUBLISHER_BASE", &base_uri);
 
-    // The orchestrator MUST still return Ok(()) — metadata is the
-    // partial-success contract from REDIRECT_ALLOWLIST.md §3.
-    fetch::run_with_options(format!("doi:{}", TEST_DOI), false)
+    // Issue #145: the blocked PDF leg must surface as a non-zero exit,
+    // NOT a silent `Ok(())`. The metadata is still written (asserted
+    // below) but the CLI persona gets an `error[CODE]:` line + a
+    // `CliExit` carrying the `docs/ERRORS.md` §4 process code.
+    //
+    // Issue #145 (Option B, approved): an off-allowlist / redirect-denied
+    // / insecure-scheme OA-PDF block is a DELIBERATE policy denial and
+    // MUST surface as `CAPABILITY_DENIED` / exit 3, not `NETWORK_ERROR` /
+    // exit 1 (`docs/ERRORS.md` §2 + §6.1). The doiget-cli reclassification
+    // lives in `effective_blocked_code`
+    // (`crates/doiget-cli/src/commands/fetch.rs`): whenever the
+    // orchestrator surfaces a `DenialContext` whose `reason` is
+    // `redirect_not_in_allowlist` / `insecure_scheme` /
+    // `host_in_block_list`, the CLI promotes the code to
+    // `CapabilityDenied` and returns `CliExit(3)`.
+    //
+    // This case IS now COVERED end-to-end. PR #163 added the core
+    // PRE-FETCH host allowlist check in
+    // `doiget_core::orchestrator::try_fetch_oa_pdf`
+    // (`docs/REDIRECT_ALLOWLIST.md` §1 — NORMATIVE): the
+    // metadata-discovered OA URL is run through the `oa-publisher`
+    // allowlist BEFORE the PDF fetch is issued, not only on redirect
+    // hops. With `attacker.test` off the allowlist and NO redirect, the
+    // pre-fetch check rejects it with the SAME `HttpError::RedirectDenied`
+    // the redirect closure produces → `DenialContext(RedirectNotIn-
+    // Allowlist)` (not `None`). The #162 CLI classification then promotes
+    // it to `CAPABILITY_DENIED` / exit 3. This closes the former "initial
+    // OA URL host off-allowlist with no redirect" gap (#145 + #163; see
+    // `docs/ERRORS.md` §6.1). The metadata-still-written /
+    // PDF-not-written and `error_code == NETWORK_ERROR` provenance
+    // assertions below remain (the pre-fetch denial emits the same
+    // closed-set `NETWORK_ERROR` provenance row as a redirect-time
+    // denial; the process EXIT code is the reclassified value).
+    let err = fetch::run_with_options(format!("doi:{}", TEST_DOI), false)
         .await
-        .expect("fetch::run_with_options succeeds (metadata-only fallback)");
+        .expect_err("a blocked OA PDF leg must NOT be a silent success (issue #145)");
+    let cli_exit = err
+        .downcast_ref::<doiget_cli::commands::fetch::CliExit>()
+        .expect("blocked PDF leg must carry a CliExit so main maps it to a §4 exit code");
+    assert_eq!(
+        cli_exit.0, 3,
+        "off-allowlist OA URL with NO redirect is now caught by the #163 \
+         core PRE-FETCH allowlist check, which yields the SAME \
+         HttpError::RedirectDenied → DenialContext(RedirectNotInAllowlist) \
+         as a redirect-time denial. The #162 CLI classification promotes \
+         this deliberate supply-chain policy block to CAPABILITY_DENIED → \
+         exit 3 (#145 + #163; docs/ERRORS.md §6.1). It is NO LONGER a \
+         generic NETWORK_ERROR / exit 1."
+    );
 
     // PDF MUST NOT be written.
     let pdf_path = store_root.join("doi_10.1234_test.pdf");

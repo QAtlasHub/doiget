@@ -238,9 +238,16 @@ async fn batch_with_malformed_ref_continues_and_returns_err() {
     .expect("write refs file");
 
     let result = batch::run_with_options(refs_path.as_str().to_string(), false).await;
-    assert!(
-        result.is_err(),
-        "batch with a malformed ref must surface an error to the binary"
+    let err = result.expect_err("batch with a malformed ref must surface an error to the binary");
+    // Issue #143 / `docs/ERRORS.md` §4: the batch exit code is the number
+    // of failures (capped at 255), NOT a blanket 1. Exactly one entry
+    // failed to parse here, so the carried `CliExit` must be 1.
+    let cli_exit = err
+        .downcast_ref::<doiget_cli::commands::fetch::CliExit>()
+        .expect("batch failure must carry a CliExit so main maps it to the §4 exit code");
+    assert_eq!(
+        cli_exit.0, 1,
+        "one parse failure must yield exit code 1 (failure count), not a generic anyhow exit"
     );
 
     // Step 2: the good ref's PDF must still be on disk.

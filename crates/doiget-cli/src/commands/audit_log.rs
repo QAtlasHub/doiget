@@ -41,6 +41,17 @@ use camino::Utf8PathBuf;
 
 use doiget_core::provenance::{verify, VerifyIssueKind};
 
+use super::fetch::CliExit;
+
+/// Stderr sink for the `docs/ERRORS.md` §3 human-error lines. Mirrors
+/// the `print_err` helper in `commands::fetch`; the localized `#[allow]`
+/// is the minimal intervention for the workspace `clippy::print_stderr`
+/// lint.
+#[allow(clippy::print_stderr)]
+fn print_err(args: std::fmt::Arguments<'_>) {
+    eprintln!("{args}");
+}
+
 /// Run the `audit-log` subcommand.
 ///
 /// `verify_flag` corresponds to the `--verify` clap flag. Phase 1 requires
@@ -53,10 +64,15 @@ use doiget_core::provenance::{verify, VerifyIssueKind};
 /// and the non-zero exit code.
 pub fn run(verify_flag: bool) -> Result<()> {
     if !verify_flag {
-        bail!(
-            "doiget audit-log: --verify is required (Phase 1 ships only \
+        // Issue #149: a missing required flag is argument misuse →
+        // `docs/ERRORS.md` §4 exit 2, NOT the generic exit 1 a bare
+        // `bail!` produced. The human-readable line is emitted here (so
+        // `main` does not reprint it) and only the exit code is carried.
+        print_err(format_args!(
+            "error: doiget audit-log: --verify is required (Phase 1 ships only \
              --verify; --since / --source / --session land later)"
-        );
+        ));
+        return Err(anyhow::Error::new(CliExit(2)));
     }
 
     let log_path = resolve_log_path()?;
@@ -109,11 +125,14 @@ pub fn run(verify_flag: bool) -> Result<()> {
 /// 1. `DOIGET_LOG_PATH` env var, if set and non-empty.
 /// 2. `<config_dir>/doiget/access.jsonl` (cross-platform via `dirs::config_dir`).
 ///
-/// Note: the writer's default in `commands/config.rs::ResolvedConfig` is
-/// `DOIGET_LOG_DIR` + `access.jsonl`. We accept the more direct
-/// `DOIGET_LOG_PATH` here too because §1 of `docs/PROVENANCE_LOG.md`
-/// specifies `DOIGET_LOG_PATH` as the spec'd override. Tests rely on
-/// `DOIGET_LOG_PATH` to point at a per-test tempdir.
+/// This resolution agrees with the provenance-log *writer*
+/// (`commands::fetch::resolve_log_path` / `commands::config::ResolvedConfig`):
+/// since issue #142 all of them key off `DOIGET_LOG_PATH` (the only log env
+/// var `docs/CONFIG.md` §4 / `docs/PROVENANCE_LOG.md` §1 documents), falling
+/// back to `<config_dir>/doiget/access.jsonl`. The previously read,
+/// undocumented `DOIGET_LOG_DIR` was removed in #142, so reader and writer
+/// can never disagree. Tests rely on `DOIGET_LOG_PATH` to point at a
+/// per-test tempdir.
 fn resolve_log_path() -> Result<Utf8PathBuf> {
     if let Ok(s) = std::env::var("DOIGET_LOG_PATH") {
         if !s.is_empty() {
@@ -184,12 +203,20 @@ mod tests {
     fn run_without_verify_flag_errors() {
         // Even with no log file at all, the absence of --verify is a
         // user-error guard that fires before we touch the disk.
+        //
+        // Issue #149: missing-required-flag is argument misuse →
+        // `docs/ERRORS.md` §4 exit 2. The human-readable line is now
+        // written to stderr (not into the error's Display), and the
+        // returned error carries a `CliExit(2)` so `main` exits 2
+        // instead of the old generic 1.
         let _g = EnvGuard::unset("DOIGET_LOG_PATH");
         let err = run(false).expect_err("--verify must be required in Phase 1");
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("--verify is required"),
-            "unexpected error message: {msg}"
+        let cli_exit = err
+            .downcast_ref::<CliExit>()
+            .expect("missing --verify must carry a CliExit (issue #149)");
+        assert_eq!(
+            cli_exit.0, 2,
+            "missing required flag is misuse → exit 2, not the generic exit 1"
         );
     }
 

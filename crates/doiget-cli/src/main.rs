@@ -1,12 +1,11 @@
 //! doiget CLI binary.
 //!
-//! Phase 0 ships the CLI skeleton: `doiget --help` works, and each subcommand
-//! returns a Phase-1-pending error message. Real implementations land in Phase 1+.
-//!
-//! Phase 1 progressively replaces the Phase-0 bail-out per subcommand. The
-//! `config`, `info`, `list-recent`, `search`, `fetch`, `audit-log`, `batch`,
-//! `bib`, and `csl` subcommands have landed. Phase 3 wires `serve` to
-//! the rmcp-based MCP server in `doiget-mcp`.
+//! `doiget` is an OA-first paper fetcher and stdio MCP server. The full
+//! shipped subcommand surface is wired through [`run_dispatch`]: `fetch`,
+//! `batch`, `bib`, `csl`, `info`, `search`, `list-recent`, `audit-log`,
+//! `provenance`, `config`, `serve`, and (under `--features citation`)
+//! `graph`. `serve` runs the rmcp-based MCP server in `doiget-mcp` over
+//! stdio (ADR-0001).
 
 use clap::{Parser, Subcommand};
 
@@ -32,8 +31,23 @@ enum ProvenanceAction {
     version,
     about = "Fetch academic papers via official Open Access APIs.",
     long_about = "doiget is an OA-first paper fetcher and stdio MCP server.\n\
-                  See README.md and docs/ for the full specification.\n\
-                  This is the Phase 0 skeleton; subcommands are not yet implemented."
+                  \n\
+                  Subcommands:\n\
+                  \x20 fetch        Fetch a single paper PDF by DOI or arXiv id\n\
+                  \x20 batch        Fetch many refs from a newline-separated file\n\
+                  \x20 bib          Export a stored entry as BibTeX\n\
+                  \x20 csl          Export a stored entry as CSL JSON\n\
+                  \x20 info         Show metadata for a stored entry\n\
+                  \x20 search       Search the local store by title / authors / venue\n\
+                  \x20 list-recent  List the most recently fetched entries\n\
+                  \x20 audit-log    Inspect or verify the provenance log\n\
+                  \x20 provenance   Provenance-log lifecycle ops (migrate v1 -> v2)\n\
+                  \x20 config       Show or doctor the resolved configuration\n\
+                  \x20 serve        Run as an MCP server over stdio\n\
+                  \x20 graph        Expand a DOI's citation neighborhood via OpenAlex\n\
+                  \x20              (requires --features citation + DOIGET_ENABLE_OPENALEX)\n\
+                  \n\
+                  See README.md and docs/ for the full specification."
 )]
 struct Cli {
     #[command(subcommand)]
