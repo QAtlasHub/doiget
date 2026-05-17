@@ -1177,6 +1177,48 @@ impl Server {
             }
         }
     }
+
+    /// `doiget_bibtex_export` — render stored entries as BibTeX.
+    ///
+    /// Per `docs/MCP_TOOLS.md` §1. Read-only, no network, no
+    /// provenance row (local inspection, same posture as
+    /// `doiget_info`). Accepts one or many refs; each is resolved
+    /// independently so a bad ref in the batch does not fail the
+    /// others.
+    #[tool(
+        description = "WHEN TO USE: Export already-fetched entries as BibTeX (one or many).\n\
+                       INPUTS: refs (array of DOI / arXiv id strings, 1..=200).\n\
+                       OUTPUTS: { ok: true, entries: [{ ref, safekey, bibtex }] } — bibtex is null when the entry is not in the store; a per-ref { ref, error } element is emitted for an invalid ref or a store read error. OR { ok:false, error } for a store-open failure.\n\
+                       COSTS: <10 ms per entry, local read.\n\
+                       SIDE EFFECTS: none.\n\
+                       LIMITS: Entry must already have been fetched (bibtex:null otherwise — NOT an error). At most 200 refs per call."
+    )]
+    async fn doiget_bibtex_export(
+        &self,
+        Parameters(input): Parameters<BibtexExportInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        Ok(self.export_citations(&input.refs, CiteFmt::Bibtex))
+    }
+
+    /// `doiget_csl_export` — render stored entries as CSL JSON 1.0.
+    ///
+    /// Per `docs/MCP_TOOLS.md` §1. Read-only, no network, no
+    /// provenance row. Each found entry's payload is a single-element
+    /// CSL JSON 1.0 array (drop-in for citeproc-js / pandoc).
+    #[tool(
+        description = "WHEN TO USE: Export already-fetched entries as CSL JSON 1.0 (one or many).\n\
+                       INPUTS: refs (array of DOI / arXiv id strings, 1..=200).\n\
+                       OUTPUTS: { ok: true, entries: [{ ref, safekey, csl }] } — csl is a 1-element CSL JSON array, or null when the entry is not in the store; a per-ref { ref, error } element is emitted for an invalid ref or a store read error. OR { ok:false, error } for a store-open failure.\n\
+                       COSTS: <10 ms per entry, local read.\n\
+                       SIDE EFFECTS: none.\n\
+                       LIMITS: Entry must already have been fetched (csl:null otherwise — NOT an error). At most 200 refs per call."
+    )]
+    async fn doiget_csl_export(
+        &self,
+        Parameters(input): Parameters<CslExportInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        Ok(self.export_citations(&input.refs, CiteFmt::Csl))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1311,6 +1353,137 @@ pub struct ExpandCitationGraphInput {
     /// ADR-0010 maximum (20).
     #[serde(default)]
     pub per_paper: Option<u32>,
+}
+
+/// JSON-schema-derived input for the `doiget_bibtex_export` MCP tool.
+/// One or many refs (`docs/MCP_TOOLS.md` §1 row `doiget_bibtex_export`);
+/// each is resolved independently.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct BibtexExportInput {
+    /// DOIs / arXiv ids to render. 1..=200; each validated via
+    /// `Ref::parse` with per-ref error reporting.
+    pub refs: Vec<String>,
+}
+
+/// JSON-schema-derived input for the `doiget_csl_export` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct CslExportInput {
+    /// DOIs / arXiv ids to render. 1..=200; each validated via
+    /// `Ref::parse` with per-ref error reporting.
+    pub refs: Vec<String>,
+}
+
+/// Hard cap on refs accepted by a single `doiget_bibtex_export` /
+/// `doiget_csl_export` call. Mirrors the 200-entry ceiling used by the
+/// read-path list tools.
+const MAX_EXPORT_REFS: usize = 200;
+
+/// Which citation format [`Server::export_citations`] renders.
+#[derive(Debug, Clone, Copy)]
+enum CiteFmt {
+    Bibtex,
+    Csl,
+}
+
+impl Server {
+    /// Shared body for `doiget_bibtex_export` / `doiget_csl_export`.
+    ///
+    /// Opens the store once, then resolves each ref independently:
+    /// a found entry yields `{ ref, safekey, <payload> }`, a missing
+    /// one `{ ref, safekey, <payload>: null }` (NOT an error — same
+    /// convention as `doiget_info`), an unparsable ref or a store
+    /// read failure a per-ref `{ ref, error }` element. A failure to
+    /// resolve / open the store at all is a single `ok:false`
+    /// envelope. Read-only; emits no provenance row.
+    fn export_citations(&self, refs: &[String], fmt: CiteFmt) -> CallToolResult {
+        if refs.len() > MAX_EXPORT_REFS {
+            return CallToolResult::structured(read_path_error_envelope(
+                None,
+                ErrorCode::InvalidRef,
+                &format!("too many refs: got {}, max {MAX_EXPORT_REFS}", refs.len()),
+            ));
+        }
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return CallToolResult::structured(read_path_error_envelope(
+                    None,
+                    ErrorCode::InternalError,
+                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                ));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return CallToolResult::structured(read_path_error_envelope(
+                    None,
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                ));
+            }
+        };
+
+        let payload_key = match fmt {
+            CiteFmt::Bibtex => "bibtex",
+            CiteFmt::Csl => "csl",
+        };
+        let mut entries: Vec<Value> = Vec::with_capacity(refs.len());
+        for r in refs {
+            let ref_ = match Ref::parse(r) {
+                Ok(v) => v,
+                Err(e) => {
+                    entries.push(json!({
+                        "ref": r,
+                        "error": { "code": ErrorCode::InvalidRef, "message": format!("invalid ref: {e}") },
+                    }));
+                    continue;
+                }
+            };
+            let safekey = ref_.safekey();
+            match store.read(&safekey) {
+                Ok(Some(m)) => {
+                    let payload = match fmt {
+                        CiteFmt::Bibtex => {
+                            Value::from(doiget_core::store::render::to_bibtex(safekey.as_str(), &m))
+                        }
+                        CiteFmt::Csl => {
+                            doiget_core::store::render::to_csl_array(safekey.as_str(), &m)
+                        }
+                    };
+                    // `json!` requires literal keys; the payload key is
+                    // format-dependent, so build the object explicitly.
+                    let mut obj = serde_json::Map::with_capacity(3);
+                    obj.insert("ref".to_string(), Value::from(r.clone()));
+                    obj.insert("safekey".to_string(), Value::from(safekey.as_str()));
+                    obj.insert(payload_key.to_string(), payload);
+                    entries.push(Value::Object(obj));
+                }
+                Ok(None) => {
+                    // Not in store is NOT an error (closed ErrorCode set
+                    // has no NotFound). Surface null payload, same as
+                    // doiget_info's `metadata: null`.
+                    let mut obj = serde_json::Map::with_capacity(3);
+                    obj.insert("ref".to_string(), Value::from(r.clone()));
+                    obj.insert("safekey".to_string(), Value::from(safekey.as_str()));
+                    obj.insert(payload_key.to_string(), Value::Null);
+                    entries.push(Value::Object(obj));
+                }
+                Err(e) => {
+                    entries.push(json!({
+                        "ref": r,
+                        "error": { "code": ErrorCode::StoreError, "message": format!("store read failed: {e}") },
+                    }));
+                }
+            }
+        }
+
+        CallToolResult::structured(json!({ "ok": true, "entries": entries }))
+    }
 }
 
 /// Default + max clamp for the `limit` field on `doiget_search_local`

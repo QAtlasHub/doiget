@@ -127,6 +127,15 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
         names.contains(&"doiget_expand_citation_graph"),
         "tools/list must include doiget_expand_citation_graph; got: {names:?}"
     );
+    // Slice 15b: BibTeX / CSL export tools.
+    assert!(
+        names.contains(&"doiget_bibtex_export"),
+        "tools/list must include doiget_bibtex_export; got: {names:?}"
+    );
+    assert!(
+        names.contains(&"doiget_csl_export"),
+        "tools/list must include doiget_csl_export; got: {names:?}"
+    );
 
     // -- 3. tools/call doiget_health -----------------------------------
     let health = client
