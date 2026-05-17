@@ -134,6 +134,17 @@ pub enum FetchError {
 /// `From<RefParseError> for ErrorCode` collapse from PR #55.
 impl From<FetchError> for crate::ErrorCode {
     fn from(e: FetchError) -> crate::ErrorCode {
+        crate::ErrorCode::from(&e)
+    }
+}
+
+/// Borrow-form of the collapse above, so a caller that still needs the
+/// error for its `Display` message / `denial_context` side-channel
+/// (notably the CLI human-persona renderer, issue #119) can obtain the
+/// closed code without consuming it. The owned impl delegates here so
+/// the mapping table lives in exactly one place.
+impl From<&FetchError> for crate::ErrorCode {
+    fn from(e: &FetchError) -> crate::ErrorCode {
         match e {
             FetchError::NotEligible { .. } => crate::ErrorCode::CapabilityDenied,
             FetchError::NoOaAvailable => crate::ErrorCode::NoOaAvailable,
