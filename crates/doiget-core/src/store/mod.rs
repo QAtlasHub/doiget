@@ -21,9 +21,11 @@
 
 mod fs_store;
 pub mod metadata;
+pub mod render;
 
 pub use fs_store::FsStore;
 pub use metadata::{DoigetExtension, Metadata};
+pub use render::{to_bibtex, to_csl_array};
 
 use camino::Utf8Path;
 use thiserror::Error;
