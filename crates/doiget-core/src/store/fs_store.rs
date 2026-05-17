@@ -1031,6 +1031,93 @@ mod tests {
         );
     }
 
+    /// Issue #121: prove the BiblioFetch.jl coexistence contract
+    /// end-to-end through the actual `read()` / `write()` API with
+    /// TYPED values — not a raw-text substring check. Seeds a
+    /// "BiblioFetch-authored" entry with reserved fields, a
+    /// `[bibliofetch]` table carrying typed sub-keys (string / int /
+    /// array) AND an unknown top-level scalar, then asserts a
+    /// doiget read→mutate→write→read cycle preserves all of it and
+    /// does not clobber the reserved field (STORE.md §6 + §8).
+    #[test]
+    fn bibliofetch_typed_table_and_unknown_scalar_survive_roundtrip() {
+        let dir = TempDir::new().expect("tmp");
+        let store = fresh_store(&dir);
+        let key = sample_safekey();
+        let meta_path = store.metadata_path(&key).expect("path");
+
+        // Written "by BiblioFetch.jl": reserved fields + a typed
+        // [bibliofetch] table + an unknown top-level scalar.
+        let body = format!(
+            "schema_version = \"{}\"\n\
+             title = \"Existing\"\n\
+             authors = [\"Carol\"]\n\
+             zotero_key = \"ABC123\"\n\n\
+             [bibliofetch]\n\
+             harvest = \"2026-02-03\"\n\
+             count = 42\n\
+             tags = [\"x\", \"y\"]\n",
+            SCHEMA_VERSION
+        );
+        std::fs::write(meta_path.as_std_path(), body).expect("seed write");
+
+        // First read through the real API must surface the unknowns
+        // in `other`.
+        let m0 = store.read(&key).expect("read ok").expect("entry present");
+        assert!(
+            m0.other.contains_key("bibliofetch"),
+            "[bibliofetch] not captured into `other` on read: {:?}",
+            m0.other
+        );
+        assert_eq!(
+            m0.other.get("zotero_key").and_then(|v| v.as_str()),
+            Some("ABC123"),
+            "unknown top-level scalar not captured: {:?}",
+            m0.other
+        );
+
+        // doiget rewrites (e.g. a re-fetch) with its own metadata.
+        let mut m_doiget = sample_metadata();
+        m_doiget.title = "Doiget Would Overwrite".to_string();
+        store.write(&key, &m_doiget, None).expect("doiget write");
+
+        // Read again — everything BiblioFetch authored must still be
+        // there, byte/value-identical, and the reserved field intact.
+        let m1 = store
+            .read(&key)
+            .expect("re-read ok")
+            .expect("entry present");
+        assert_eq!(
+            m1.title, "Existing",
+            "STORE.md §6: doiget overwrote a reserved field"
+        );
+        let bf = m1
+            .other
+            .get("bibliofetch")
+            .and_then(|v| v.as_table())
+            .expect("[bibliofetch] table survived read->write->read");
+        assert_eq!(
+            bf.get("harvest").and_then(|v| v.as_str()),
+            Some("2026-02-03")
+        );
+        assert_eq!(bf.get("count").and_then(|v| v.as_integer()), Some(42));
+        let tags = bf
+            .get("tags")
+            .and_then(|v| v.as_array())
+            .expect("tags array survived");
+        let tags: Vec<&str> = tags.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(tags, vec!["x", "y"]);
+        assert_eq!(
+            m1.other.get("zotero_key").and_then(|v| v.as_str()),
+            Some("ABC123"),
+            "unknown top-level scalar lost across the cycle"
+        );
+
+        // STORE.md §7 normalization: trailing newline preserved.
+        let raw = std::fs::read_to_string(meta_path.as_std_path()).expect("raw re-read");
+        assert!(raw.ends_with('\n'), "missing trailing newline: {raw:?}");
+    }
+
     #[test]
     fn pdf_is_copied_atomically_on_write() {
         let dir = TempDir::new().expect("tmp");
