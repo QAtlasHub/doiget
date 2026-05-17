@@ -588,6 +588,20 @@ pub struct HttpClient {
     /// policy that captures only that source's allowlist. `Arc` so cloning
     /// is cheap.
     clients: Arc<HashMap<String, Client>>,
+    /// The exact [`SourceAllowlist`] each per-source client was built from,
+    /// keyed by source. The redirect closure inside each `reqwest::Client`
+    /// captures its allowlist *by move*, so it cannot be read back from the
+    /// client itself. This map keeps the identical `SourceAllowlist`
+    /// available to callers that must perform a *pre-fetch* host check on a
+    /// metadata-discovered URL (issue #145 / `docs/REDIRECT_ALLOWLIST.md`
+    /// §1: the allowlist is consulted "on the OA URL discovered through
+    /// metadata sources before the actual PDF fetch is issued", not only on
+    /// redirect hops). Storing the same value here — rather than re-deriving
+    /// it from [`oa_publisher_allowlist`] at the call site — guarantees the
+    /// pre-check and the redirect closure can never drift, and that the
+    /// check works under the test constructors too (which register a
+    /// wiremock host as the allowlist).
+    allowlists: Arc<HashMap<String, SourceAllowlist>>,
 }
 
 impl HttpClient {
@@ -604,14 +618,37 @@ impl HttpClient {
     /// fails (typically a TLS-backend init failure).
     pub fn new(allowlists: Vec<SourceAllowlist>) -> Result<Self, reqwest::Error> {
         let mut clients = HashMap::with_capacity(allowlists.len());
+        let mut allowlist_map = HashMap::with_capacity(allowlists.len());
         for entry in allowlists {
             let source = entry.source.clone();
+            // Keep the *same* allowlist value both inside the redirect
+            // closure (via `build_client`) and queryable on the client
+            // (issue #145 pre-fetch check). `build_client` takes the
+            // allowlist by value, so clone once for the side table first.
+            allowlist_map.insert(source.clone(), entry.clone());
             let client = build_client(entry)?;
             clients.insert(source, client);
         }
         Ok(Self {
             clients: Arc::new(clients),
+            allowlists: Arc::new(allowlist_map),
         })
+    }
+
+    /// The [`SourceAllowlist`] this client was built with for `source`, or
+    /// `None` if `source` was not registered.
+    ///
+    /// This is the *identical* value captured by the per-source redirect
+    /// closure (see [`HttpClient`]'s `allowlists` field doc). It exists so
+    /// the orchestrator can apply the `docs/REDIRECT_ALLOWLIST.md` §1
+    /// pre-fetch host check on a metadata-discovered OA URL — the URL that
+    /// is fetched *without* necessarily passing through a redirect hop —
+    /// using the same source of truth the redirect closure uses, so the two
+    /// can never disagree. Callers MUST use this for the `"oa-publisher"`
+    /// leg only; the initial template-constructed URL is exempt per
+    /// `docs/REDIRECT_ALLOWLIST.md` §6.
+    pub fn source_allowlist(&self, source: &str) -> Option<&SourceAllowlist> {
+        self.allowlists.get(source)
     }
 
     /// Fetch a URL, treating it as a JSON or text body. Caps at
@@ -887,9 +924,12 @@ impl HttpClient {
         let allowlist = SourceAllowlist::new(source, vec![allowlist_host.to_string()]);
         let client = build_client_allow_http(allowlist.clone()).expect("test client builds");
         let mut map = HashMap::new();
+        let mut allowlist_map = HashMap::new();
+        allowlist_map.insert(allowlist.source.clone(), allowlist.clone());
         map.insert(allowlist.source.clone(), client);
         Self {
             clients: Arc::new(map),
+            allowlists: Arc::new(allowlist_map),
         }
     }
 
@@ -903,13 +943,16 @@ impl HttpClient {
     /// [`tier_1_allowlist`].
     pub fn new_for_tests_allow_http_multi(entries: &[(&str, &str)]) -> Self {
         let mut map = HashMap::with_capacity(entries.len());
+        let mut allowlist_map = HashMap::with_capacity(entries.len());
         for (source, host) in entries {
             let allowlist = SourceAllowlist::new(*source, vec![host.to_string()]);
             let client = build_client_allow_http(allowlist.clone()).expect("test client builds");
+            allowlist_map.insert(allowlist.source.clone(), allowlist.clone());
             map.insert(allowlist.source.clone(), client);
         }
         Self {
             clients: Arc::new(map),
+            allowlists: Arc::new(allowlist_map),
         }
     }
 }

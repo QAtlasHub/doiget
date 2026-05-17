@@ -854,6 +854,70 @@ async fn try_fetch_oa_pdf(
     // both the ok and err row variants below.
     let canonical =
         crate::CanonicalRef::new(crate::SourceType::Doi, doi.as_str(), SOURCE, None).digest_hex();
+
+    // Pre-fetch host allowlist check on the metadata-discovered OA URL
+    // (issue #145; `docs/REDIRECT_ALLOWLIST.md` §1 — NORMATIVE). The
+    // per-source `redirect_hosts` allowlist is, by §1, consulted "on the
+    // OA URL discovered through metadata sources before the actual PDF
+    // fetch is issued", not only on redirect hops. The redirect closure in
+    // `crate::http` only fires when an *actual redirect* occurs; an OA URL
+    // whose host is off the `oa-publisher` allowlist that resolves WITHOUT
+    // a redirect would otherwise reach connect and be misclassified as a
+    // transport error, violating §1. This is scoped strictly to the
+    // `"oa-publisher"` PDF leg — §6 explicitly exempts the initial
+    // template-constructed URL, and `fetch_bytes`/metadata-only/resolve-
+    // only paths (which never follow the OA URL) are deliberately NOT
+    // touched. On a host MISS we return the *same* `HttpError::RedirectDenied`
+    // value the redirect closure produces (same `source_key`, lowercased
+    // `host`, and `expected_hosts` snapshot), reusing the identical
+    // allowlist the closure captured (queried via `source_allowlist`, not
+    // re-derived) so the single source of truth cannot drift. Returning
+    // that exact variant means the existing `Err(e)` arm below, the
+    // `From<&HttpError> for Option<DenialContext>` mapping
+    // (`DenialReason::RedirectNotInAllowlist`), the `PdfLegStatus::Blocked`
+    // construction in the caller, and PR #162's CLI classification all see
+    // a byte-identical downstream shape with no new code path.
+    if let Some(allowlist) = ctx.http.source_allowlist(SOURCE) {
+        // `Url::host_str()` is `None` for hostless URLs (e.g. `data:`);
+        // treat that exactly as the redirect closure does (an allowlist
+        // miss with an empty host string).
+        let host = url
+            .host_str()
+            .map(|h| h.to_ascii_lowercase())
+            .unwrap_or_default();
+        if !allowlist.matches(&host) {
+            let e = HttpError::RedirectDenied {
+                source_key: SOURCE.to_string(),
+                host: host.clone(),
+                expected_hosts: allowlist.redirect_hosts.clone(),
+            };
+            tracing::info!(
+                oa_url = %url,
+                denied_host = %host,
+                "OA URL host outside oa-publisher allowlist (pre-fetch check, \
+                 docs/REDIRECT_ALLOWLIST.md §1 / issue #145)"
+            );
+            // Emit the SAME provenance row the post-fetch redirect-denied
+            // path emits: a `Fetch` `Err` row under the `oa-publisher`
+            // source key with the closed-set `NETWORK_ERROR` code and the
+            // same canonical digest. Mirrors the `Err(e)` arm below so the
+            // audit trail is indistinguishable from a redirect-time denial.
+            let _ = ctx.log.append(RowInput {
+                event: LogEvent::Fetch,
+                result: LogResult::Err,
+                capability: Capability::Oa,
+                ref_: Some(doi.as_str()),
+                source: Some(SOURCE),
+                error_code: Some(crate::ErrorCode::NetworkError.as_wire()),
+                size_bytes: None,
+                license: None,
+                store_path: None,
+                canonical_digest: Some(&canonical),
+            });
+            return Err(e);
+        }
+    }
+
     match ctx.http.fetch_pdf(SOURCE, url.clone()).await {
         Ok((body, final_url)) => {
             let size_bytes = body.len() as u64;
@@ -1409,5 +1473,246 @@ mod tests {
             Err(HttpError::NotAPdf { .. }) => {}
             other => panic!("expected Err(NotAPdf), got: {other:?}"),
         }
+    }
+
+    // Issue #145 / `docs/REDIRECT_ALLOWLIST.md` §1: the `oa-publisher`
+    // host allowlist MUST be consulted on the metadata-discovered OA URL
+    // *before the actual PDF fetch is issued*, not only on redirect hops.
+    // An OA URL whose host is OFF the allowlist and that resolves WITHOUT
+    // a redirect previously slipped past the redirect closure entirely and
+    // was misclassified as a transport error. This test pins the fix: the
+    // pre-fetch check rejects it with the SAME `HttpError::RedirectDenied`
+    // the redirect closure produces, the OA fetch is NEVER issued (the
+    // wiremock origin records ZERO requests, proving no PDF bytes were
+    // requested / written), and the provenance trail is the byte-identical
+    // `Fetch`/`err`/`oa-publisher`/`NETWORK_ERROR` row the redirect-denied
+    // path emits.
+    #[tokio::test]
+    async fn try_fetch_oa_pdf_off_allowlist_host_no_redirect_is_redirect_denied_145() {
+        use crate::http::HttpClient;
+        use crate::provenance::ProvenanceLog;
+        use crate::rate_limiter::RateLimiter;
+        use crate::{DenialContext, DenialReason, Doi, RateLimits};
+        use std::sync::Arc;
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // The wiremock origin would serve a valid PDF with NO redirect —
+        // if the pre-check were absent the fetch would *succeed* against
+        // an off-allowlist host, which is exactly the §1 violation.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"%PDF-1.7 real pdf".to_vec()))
+            .mount(&server)
+            .await;
+
+        // Register a DIFFERENT host as the `oa-publisher` allowlist so the
+        // wiremock origin (127.0.0.1) is OFF it. `evil.example.com` is a
+        // valid host string the allowlist will not match.
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let log_path = Utf8Path::from_path(td.path())
+            .expect("utf-8")
+            .join("log.jsonl");
+        let ctx = FetchContext {
+            http: Arc::new(HttpClient::new_for_tests_allow_http(
+                "oa-publisher",
+                "allowed-publisher.example.com",
+            )),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+            log: Arc::new(
+                ProvenanceLog::open(log_path.clone(), "01J0000000000000000000TEST".into())
+                    .expect("provenance log"),
+            ),
+            session_id: "01J0000000000000000000TEST".into(),
+        };
+
+        let doi = Doi("10.1234/example".to_string());
+        // The OA URL Unpaywall handed back resolves to the wiremock host,
+        // which is OFF the `oa-publisher` allowlist.
+        let off_host_url: url::Url = format!("{}/oa.pdf", server.uri()).parse().expect("url");
+        let res = try_fetch_oa_pdf(&doi, &off_host_url, &ctx).await;
+
+        // 1. Same error variant the redirect closure produces.
+        let err = match res {
+            Err(e @ HttpError::RedirectDenied { .. }) => e,
+            other => {
+                panic!("expected Err(RedirectDenied) from the pre-fetch check, got: {other:?}")
+            }
+        };
+        match &err {
+            HttpError::RedirectDenied {
+                source_key,
+                host,
+                expected_hosts,
+            } => {
+                assert_eq!(source_key, "oa-publisher");
+                // The host is lowercased, exactly as the redirect closure
+                // would record it.
+                assert_eq!(
+                    host,
+                    off_host_url
+                        .host_str()
+                        .expect("wiremock host")
+                        .to_ascii_lowercase()
+                        .as_str()
+                );
+                assert_eq!(
+                    expected_hosts,
+                    &vec!["allowed-publisher.example.com".to_string()]
+                );
+            }
+            _ => unreachable!(),
+        }
+
+        // 2. The OA fetch was NEVER issued — the wiremock origin saw zero
+        //    requests, so no PDF bytes were requested or written.
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "the off-allowlist OA URL must NOT be fetched: the pre-check \
+             (REDIRECT_ALLOWLIST.md §1) rejects it before any request is \
+             issued; wiremock recorded request(s)",
+        );
+
+        // 3. The structured denial side-channel is byte-identical to the
+        //    redirect-closure path: `RedirectNotInAllowlist`, source key,
+        //    attempted host, expected allowlist snapshot.
+        let dc: Option<DenialContext> = (&err).into();
+        let dc = dc.expect("pre-fetch RedirectDenied -> Some(DenialContext)");
+        assert_eq!(dc.reason, DenialReason::RedirectNotInAllowlist);
+        assert_eq!(dc.source.as_deref(), Some("oa-publisher"));
+        assert_eq!(
+            dc.attempted,
+            Some(off_host_url.host_str().expect("host").to_ascii_lowercase()),
+            "attempted host must be the rejected OA URL host, lowercased — \
+             identical to what the redirect closure records",
+        );
+        assert_eq!(
+            dc.expected,
+            Some(vec!["allowed-publisher.example.com".to_string()]),
+        );
+
+        // 4. Provenance: exactly the `Fetch`/`err`/`oa-publisher`/
+        //    `NETWORK_ERROR` row the post-fetch redirect-denied arm emits
+        //    (same row kind + source key + closed-set code).
+        let log_txt = std::fs::read_to_string(&log_path).expect("read provenance log");
+        let fetch_err_row = log_txt
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .find(|v| {
+                v.get("event").and_then(|e| e.as_str()) == Some("fetch")
+                    && v.get("result").and_then(|r| r.as_str()) == Some("err")
+            })
+            .expect("a Fetch/err provenance row was written");
+        assert_eq!(
+            fetch_err_row.get("source").and_then(|s| s.as_str()),
+            Some("oa-publisher"),
+        );
+        assert_eq!(
+            fetch_err_row.get("error_code").and_then(|c| c.as_str()),
+            Some("NETWORK_ERROR"),
+        );
+        assert_eq!(
+            fetch_err_row.get("ref").and_then(|r| r.as_str()),
+            Some("10.1234/example"),
+        );
+    }
+
+    // Issue #145 positive / no-regression: an ON-allowlist OA URL still
+    // fetches the PDF normally. The pre-fetch check must be a pure gate —
+    // it must not perturb the happy path.
+    #[tokio::test]
+    async fn try_fetch_oa_pdf_on_allowlist_host_still_fetches_pdf_no_regression_145() {
+        use crate::http::HttpClient;
+        use crate::provenance::ProvenanceLog;
+        use crate::rate_limiter::RateLimiter;
+        use crate::{Doi, RateLimits};
+        use std::sync::Arc;
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let body = b"%PDF-1.7\nhello pdf".to_vec();
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+            .mount(&server)
+            .await;
+        // The wiremock host IS the registered `oa-publisher` allowlist, so
+        // the pre-check passes and the fetch proceeds as before.
+        let host = server
+            .uri()
+            .parse::<url::Url>()
+            .expect("uri")
+            .host_str()
+            .expect("host")
+            .to_string();
+
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let log_path = Utf8Path::from_path(td.path())
+            .expect("utf-8")
+            .join("log.jsonl");
+        let ctx = FetchContext {
+            http: Arc::new(HttpClient::new_for_tests_allow_http("oa-publisher", &host)),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+            log: Arc::new(
+                ProvenanceLog::open(log_path, "01J0000000000000000000TEST".into())
+                    .expect("provenance log"),
+            ),
+            session_id: "01J0000000000000000000TEST".into(),
+        };
+
+        let doi = Doi("10.1234/example".to_string());
+        let url: url::Url = format!("{}/oa.pdf", server.uri()).parse().expect("url");
+        let (bytes, _final_url) = try_fetch_oa_pdf(&doi, &url, &ctx)
+            .await
+            .expect("on-allowlist OA URL still fetches the PDF");
+        assert_eq!(bytes, body, "PDF bytes must be returned unchanged");
+    }
+
+    // Issue #145: the pre-fetch denial and the redirect-closure denial
+    // MUST produce a byte-identical `DenialContext` so PR #162's CLI
+    // classification (CAPABILITY_DENIED / exit 3) handles both unchanged.
+    // This pins the equivalence at the value level: the same source key +
+    // host + allowlist snapshot map through the SAME
+    // `From<&HttpError> for Option<DenialContext>` impl to equal structs.
+    #[test]
+    fn pre_fetch_denial_produces_byte_identical_denial_context_as_redirect_denied_145() {
+        use crate::{DenialContext, DenialReason};
+
+        // Shape produced by the pre-fetch check in `try_fetch_oa_pdf`.
+        let pre_fetch = HttpError::RedirectDenied {
+            source_key: "oa-publisher".to_string(),
+            host: "attacker.test".to_string(),
+            expected_hosts: vec!["*.springer.com".to_string(), "*.plos.org".to_string()],
+        };
+        // Shape produced by the redirect closure in `crate::http` for the
+        // identical inputs.
+        let redirect_closure = HttpError::RedirectDenied {
+            source_key: "oa-publisher".to_string(),
+            host: "attacker.test".to_string(),
+            expected_hosts: vec!["*.springer.com".to_string(), "*.plos.org".to_string()],
+        };
+
+        let dc_pre: Option<DenialContext> = (&pre_fetch).into();
+        let dc_red: Option<DenialContext> = (&redirect_closure).into();
+        let dc_pre = dc_pre.expect("pre-fetch -> Some");
+        let dc_red = dc_red.expect("redirect -> Some");
+
+        // Byte-identical: same reason, same source, same attempted host,
+        // same expected snapshot, all auxiliary channels None.
+        assert_eq!(dc_pre, dc_red);
+        assert_eq!(dc_pre.reason, DenialReason::RedirectNotInAllowlist);
+        assert_eq!(dc_pre.source.as_deref(), Some("oa-publisher"));
+        assert_eq!(dc_pre.attempted.as_deref(), Some("attacker.test"));
+        assert_eq!(
+            dc_pre.expected,
+            Some(vec!["*.springer.com".to_string(), "*.plos.org".to_string()]),
+        );
+        assert_eq!(dc_pre.hop_index, None);
+        assert_eq!(dc_pre.cap, None);
+        assert_eq!(dc_pre.actual, None);
     }
 }
