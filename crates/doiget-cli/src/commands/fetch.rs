@@ -412,7 +412,7 @@ impl FetchHarness {
                     // off-allowlist / redirect-denied / insecure-scheme OA
                     // PDF leg is a DELIBERATE policy block — retrying never
                     // helps — yet it would otherwise surface as
-                    // `NETWORK_ERROR` → generic exit 1, mis-signalling a
+                    // `NETWORK_ERROR` → generic exit 1, misrepresenting a
                     // flaky network. The orchestrator already preserves the
                     // real reason on `denial` (the `From<&HttpError> for
                     // Option<DenialContext>` impl walks reqwest's source
@@ -623,7 +623,7 @@ impl std::error::Error for CliExit {}
 /// fine" — true for a real network blip, but **false** for a deliberate
 /// supply-chain policy block (off-allowlist redirect, insecure-scheme
 /// redirect, host-blocklist hit): retrying such a block never helps, so
-/// surfacing it as `NETWORK_ERROR` (generic exit 1) mis-signals a flaky
+/// surfacing it as `NETWORK_ERROR` (generic exit 1) misrepresents a flaky
 /// network to humans and agents.
 ///
 /// The orchestrator already preserves the true reason on the

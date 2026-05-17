@@ -163,13 +163,22 @@ transport mechanism); the *user-facing* code/exit is `CAPABILITY_DENIED` /
 `denial_context`, or a non-policy reason such as `size_cap_exceeded` /
 `content_type_mismatch`) remain `NETWORK_ERROR` / exit 1.
 
-Known gap (tracked under #145): the per-source host allowlist is enforced
-only inside the redirect-policy closure, which `reqwest` invokes only on
-**redirect hops**. An OA URL whose *initial* host is off-allowlist with no
-redirect therefore fails at connect with no `RedirectDenied` / no
-`denial_context`, so it cannot be reclassified at the CLI layer and stays
-`NETWORK_ERROR` / exit 1. Closing this requires an initial-URL host
-pre-check in `doiget-core` (`crates/doiget-core/src/http.rs`); the
-reclassification rule above already covers every block that *does* carry a
-policy `denial_context` (real redirect denials, insecure-scheme hops,
-host-blocklist hits).
+Covered end-to-end (closed by #163; originally tracked under #145): the
+`oa-publisher` host allowlist is no longer enforced *only* inside the
+redirect-policy closure. PR #163 added a **pre-fetch host allowlist
+check** on the metadata-discovered OA URL in
+`doiget_core::orchestrator::try_fetch_oa_pdf`
+(`docs/REDIRECT_ALLOWLIST.md` §1 — NORMATIVE), applied **before** the PDF
+fetch is issued, not only on redirect hops. An OA URL whose *initial*
+host is off-allowlist with **no redirect** is therefore rejected by the
+pre-check with the **same** `HttpError::RedirectDenied` value the redirect
+closure produces (same `source_key` / lowercased `host` /
+`expected_hosts`), so it still carries a policy `denial_context`
+(`redirect_not_in_allowlist`). The CLI reclassification rule above then
+promotes it to `CAPABILITY_DENIED` / exit 3 — the off-allowlist OA URL is
+**not** fetched and never reaches connect. The reclassification rule now
+covers every supply-chain policy block uniformly: pre-fetch off-allowlist
+OA URLs, real redirect denials, insecure-scheme hops, and host-blocklist
+hits. Only a genuine transport fault with no `denial_context` (or a
+non-policy reason such as `size_cap_exceeded` / `content_type_mismatch`)
+remains `NETWORK_ERROR` / exit 1, consistent with §2.
