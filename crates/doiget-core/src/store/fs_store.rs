@@ -454,12 +454,17 @@ fn merge_metadata(existing: Metadata, incoming: Metadata) -> Metadata {
         out.doiget = existing.doiget;
     }
 
-    // `other` (unknown tables / fields): union, prefer incoming on key
-    // collision. This preserves e.g. `[bibliofetch]` across a doiget rewrite
-    // when incoming.other is empty (the common case for a re-fetch).
+    // `other` (unknown tables / fields): union, prefer EXISTING on key
+    // collision (issue #123). STORE.md §6 forbids doiget overwriting a
+    // field/table another tool authored; an unknown key already on disk
+    // (e.g. a `[bibliofetch]` sub-key) must win over whatever doiget
+    // happens to carry in `other`. Doiget normally leaves `other`
+    // empty on a re-fetch, so this only changes behaviour in the
+    // (latent) case where both sides populate the same unknown key —
+    // there, "never overwrite" is the correct §6 resolution.
     let mut merged_other = existing.other;
     for (k, v) in out.other.iter() {
-        merged_other.insert(k.clone(), v.clone());
+        merged_other.entry(k.clone()).or_insert_with(|| v.clone());
     }
     out.other = merged_other;
 
@@ -1028,6 +1033,40 @@ mod tests {
             read_raw.contains("title = \"Existing\""),
             "doiget overwrote a reserved field set by another tool: {}",
             read_raw
+        );
+    }
+
+    /// Issue #123: on an `other`-key collision the EXISTING on-disk
+    /// value must win (STORE.md §6 "never overwrite"). Seeds a
+    /// `zotero_key` "by another tool", then has doiget write an entry
+    /// whose own `other` carries a different `zotero_key`; the disk
+    /// value must survive.
+    #[test]
+    fn other_key_collision_prefers_existing() {
+        let dir = TempDir::new().expect("tmp");
+        let store = fresh_store(&dir);
+        let key = sample_safekey();
+        let meta_path = store.metadata_path(&key).expect("path");
+
+        let body = format!(
+            "schema_version = \"{}\"\ntitle = \"Existing\"\nauthors = [\"Carol\"]\n\
+             zotero_key = \"FROM_BIBLIOFETCH\"\n",
+            SCHEMA_VERSION
+        );
+        std::fs::write(meta_path.as_std_path(), body).expect("seed");
+
+        let mut m = sample_metadata();
+        m.other.insert(
+            "zotero_key".to_string(),
+            toml::Value::String("FROM_DOIGET".to_string()),
+        );
+        store.write(&key, &m, None).expect("write");
+
+        let got = store.read(&key).expect("read").expect("present");
+        assert_eq!(
+            got.other.get("zotero_key").and_then(|v| v.as_str()),
+            Some("FROM_BIBLIOFETCH"),
+            "STORE.md §6: existing `other` value must win on collision"
         );
     }
 
