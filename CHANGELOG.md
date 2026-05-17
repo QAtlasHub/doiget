@@ -10,6 +10,17 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/sotashimozono/doiget/compare/doiget-core-v0.1.2...doiget-core-v0.1.3) - 2026-05-17
+
+### Fixed
+
+- MVP polish batch (closes #123)
+- *(store)* write PDF before metadata for crash-consistency (closes #122)
+
+### Other
+
+- Merge branch 'main' into fix/122-torn-write-ordering-r2
+
 ## [0.1.2](https://github.com/sotashimozono/doiget/compare/doiget-core-v0.1.1...doiget-core-v0.1.2) - 2026-05-17
 
 ### Other
