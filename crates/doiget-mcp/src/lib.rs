@@ -1725,7 +1725,18 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             o.insert("code".into(), json!(code));
             o.insert("message".into(), json!(message));
             if let Some(dc) = denial {
-                o.insert("denial_context".into(), json!(dc));
+                // Route through the logged helper (#154): a bare
+                // `json!(dc)` here would silently coerce a future
+                // serialization failure to `null` inside the
+                // `fetch_paper` SUCCESS envelope with no trace —
+                // exactly the silent-swallow class #154 eliminates.
+                // The other three denial-context sites already use
+                // this helper; keep this consistent. `tracing` is
+                // stderr-only (stdout is the JSON-RPC channel).
+                o.insert(
+                    "denial_context".into(),
+                    denial_context_to_value(dc, "fetch_paper_pdf_leg"),
+                );
             }
             Value::Object(o)
         }

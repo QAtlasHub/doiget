@@ -128,10 +128,16 @@ There is an **intentional, normative asymmetry** in how the optional
 `denial_context` field is represented on an `ok:false` error:
 
 - **Single-paper tools** (`doiget_fetch_paper`, `doiget_metadata_only`,
-  `doiget_resolve_paper`): when there is no denial channel for the error
-  (e.g. a `NETWORK_ERROR`), the `denial_context` key is **omitted**
-  entirely. Agents MUST treat absence and `null` as equivalent ("no
-  structured recovery payload").
+  `doiget_resolve_paper`): the `denial_context` key is **omit-when-None**.
+  When the error *does* carry a structured recovery channel (e.g. a
+  `CAPABILITY_DENIED` allowlist/scheme denial), the key **is present**
+  with the `DenialContext` payload; when there is no denial channel for
+  the error (e.g. a `NETWORK_ERROR`), the key is **omitted** entirely.
+  `doiget_resolve_paper` follows this exact same contract as the other
+  two single-paper tools — it is *not* a tool that can never carry a
+  denial context; the key is simply absent rather than `null` when there
+  is nothing to report. Agents MUST treat absence and `null` as
+  equivalent ("no structured recovery payload").
 - **`doiget_batch_fetch`** per-ref error entries: the `denial_context`
   key is **always present**, set to `null` when there is no denial
   channel. Per-ref rows are uniform table rows in the agent's view, so
