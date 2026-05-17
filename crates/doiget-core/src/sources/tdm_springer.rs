@@ -24,10 +24,31 @@
 //! `profile.tdm_springer = Some(TdmGrant)`. This source mirrors that
 //! check in [`can_serve`](TdmSpringerSource::can_serve) and again in
 //! [`fetch`](TdmSpringerSource::fetch) (defensive — the orchestrator
-//! is *supposed* to gate on `can_serve` first). The key value itself
-//! is not currently stored in `TdmGrant` (see the
-//! [`crate::TdmGrant`] doc-comment); this source re-reads
+//! is *supposed* to gate on `can_serve` first). The key value is read
+//! once at startup and carried in
+//! [`TdmGrant::api_key`](crate::TdmGrant) (issue #153); this source
+//! consumes it from the grant and never re-reads
 //! `DOIGET_KEY_SPRINGER` at fetch time.
+//!
+//! ## Credential hygiene — key in the URL (issue #146)
+//!
+//! Unlike Elsevier (`X-ELS-APIKey` header) and APS (`X-API-Key`
+//! header), the Springer Nature API authenticates **only** via an
+//! `api_key` URL query parameter. The official Springer Nature API
+//! client sends it the same way (`params["api_key"] = api_key`); there
+//! is no header-auth path for either the regular or the TDM endpoint.
+//! Moving the key to a header (the preferred #146 fix) is therefore
+//! not possible against this upstream.
+//!
+//! Residual-risk mitigation instead: the key never reaches any log or
+//! recorded-provenance sink. The request URL is built with the key,
+//! but every URL this module hands back (the `FetchResult::final_url`
+//! and any error string) is first passed through
+//! `redact_api_key_in_url`, which replaces the `api_key` value with
+//! `REDACTED`. The key still appears on the wire and in Springer's own
+//! server-side / proxy logs — that is inherent to query-param auth and
+//! is documented here and in `docs/CAPABILITY.md` §1 as accepted
+//! residual risk.
 //!
 //! ## Metadata-only contract (Phase 5a)
 //!
@@ -40,6 +61,7 @@
 #![cfg(feature = "tdm-springer")]
 
 use async_trait::async_trait;
+use secrecy::ExposeSecret;
 use url::Url;
 
 use crate::provenance::{Capability, LogEvent, LogResult, RowInput};
@@ -49,10 +71,11 @@ use crate::{CapabilityProfile, Ref};
 /// Production Springer Nature TDM API base URL.
 const DEFAULT_BASE: &str = "https://api.springernature.com";
 
-/// Env var holding the per-tenant API key. The presence of this var
-/// is one of the three activation gates (`docs/CAPABILITY.md` §2);
-/// the value is read at fetch time and appended as `?api_key=...`.
-const KEY_ENV_VAR: &str = "DOIGET_KEY_SPRINGER";
+/// The `api_key` query-parameter name Springer Nature expects, and the
+/// value it is replaced with in any URL that leaves this module bound
+/// for a log or recorded-provenance sink (issue #146).
+const API_KEY_PARAM: &str = "api_key";
+const REDACTED: &str = "REDACTED";
 
 /// Springer Nature OA TDM [`Source`] impl — DOI → first matching
 /// `records[]` entry from `/openaccess/json`.
@@ -93,9 +116,39 @@ impl TdmSpringerSource {
             })?;
         url.query_pairs_mut()
             .append_pair("q", &format!("doi:{}", doi.as_str()))
-            .append_pair("api_key", api_key);
+            .append_pair(API_KEY_PARAM, api_key);
         Ok(url)
     }
+}
+
+/// Return a copy of `url` with the `api_key` query-parameter value
+/// replaced by `REDACTED`, preserving every other pair and ordering.
+///
+/// Springer Nature only supports query-param auth (issue #146), so the
+/// key unavoidably appears on the wire and in Springer's own logs. This
+/// keeps it out of *our* sinks: the `FetchResult::final_url` (which the
+/// orchestrator persists into the metadata TOML `url` field) and any
+/// error string this module produces. If no `api_key` pair is present
+/// the URL is returned structurally unchanged.
+fn redact_api_key_in_url(url: &Url) -> Url {
+    if url.query_pairs().all(|(k, _)| k != API_KEY_PARAM) {
+        return url.clone();
+    }
+    let mut redacted = url.clone();
+    // Re-serialize the pairs, swapping only the api_key value. `clear()`
+    // first so we don't append onto the existing query string.
+    let pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|(k, v)| {
+            if k == API_KEY_PARAM {
+                (k.into_owned(), REDACTED.to_string())
+            } else {
+                (k.into_owned(), v.into_owned())
+            }
+        })
+        .collect();
+    redacted.query_pairs_mut().clear().extend_pairs(pairs);
+    redacted
 }
 
 impl Default for TdmSpringerSource {
@@ -129,26 +182,21 @@ impl Source for TdmSpringerSource {
             }
         };
 
-        // Defensive gate (1/3): runtime grant must be populated. The
-        // orchestrator is supposed to call `can_serve` first, but we
-        // re-check here so a misrouted call still fail-closes per
-        // ADR-0019.
-        if profile.tdm_springer.is_none() {
-            return Err(FetchError::NotEligible {
+        // Defensive gate (1/3 + 2/3): the runtime grant must be
+        // populated, and it now carries the key validated at startup
+        // (issue #153). The orchestrator is supposed to call
+        // `can_serve` first, but we re-check here so a misrouted call
+        // still fail-closes per ADR-0019. The key is no longer
+        // re-read from the env at fetch time — `CapabilityProfile` is
+        // immutable for the process lifetime (`docs/CAPABILITY.md`
+        // §6), so the startup grant is the single source of truth.
+        let grant = profile
+            .tdm_springer
+            .as_ref()
+            .ok_or_else(|| FetchError::NotEligible {
                 source_key: "tdm-springer".into(),
-            });
-        }
-
-        // Defensive gate (2/3): the api key env var must still be
-        // present at fetch time. `TdmGrant` does not yet hold the
-        // key value (see the `TdmGrant` doc-comment), so we re-read
-        // here. A missing key at this point indicates the env
-        // changed mid-process — treat it as NotEligible so the
-        // orchestrator falls through to the next source rather than
-        // surfacing a confusing schema error.
-        let api_key = std::env::var(KEY_ENV_VAR).map_err(|_| FetchError::NotEligible {
-            source_key: "tdm-springer".into(),
-        })?;
+            })?;
+        let api_key = grant.api_key.expose_secret();
         if api_key.is_empty() {
             return Err(FetchError::NotEligible {
                 source_key: "tdm-springer".into(),
@@ -157,8 +205,11 @@ impl Source for TdmSpringerSource {
 
         let _permit = ctx.rate_limiter.acquire(self.name()).await;
 
-        let url = self.request_url(doi, &api_key)?;
+        let url = self.request_url(doi, api_key)?;
         let (body, final_url) = ctx.http.fetch_bytes(self.name(), url).await?;
+        // Issue #146: Springer auth is query-param only; strip the key
+        // from the URL before it can reach the metadata TOML / any log.
+        let final_url = redact_api_key_in_url(&final_url);
 
         let envelope: serde_json::Value =
             serde_json::from_slice(&body).map_err(|e| FetchError::SourceSchema {
@@ -279,19 +330,31 @@ mod tests {
         (td, ctx)
     }
 
+    /// Sentinel test key used in the happy-path wiremock matcher.
+    const TEST_KEY: &str = "test-key-xyz";
+
     fn profile_with_springer_grant() -> CapabilityProfile {
         let mut p = CapabilityProfile::from_env().expect("clean env never errors");
         p.tdm_springer = Some(TdmGrant {
+            // Issue #153: the key now flows through the grant, not the
+            // env var, so the fixture seeds it directly.
+            api_key: secrecy::SecretString::from(TEST_KEY.to_string()),
             agree_env_var: "DOIGET_AGREE_TDM_SPRINGER".to_string(),
             ..Default::default()
         });
         p
     }
 
-    /// Sentinel test key used in the happy-path wiremock matcher. The
-    /// real env var is set/unset around the test body so it does not
-    /// bleed into sibling tests.
-    const TEST_KEY: &str = "test-key-xyz";
+    /// Grant whose key is empty — exercises the fail-closed branch.
+    fn profile_with_empty_key_grant() -> CapabilityProfile {
+        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        p.tdm_springer = Some(TdmGrant {
+            api_key: secrecy::SecretString::from(String::new()),
+            agree_env_var: "DOIGET_AGREE_TDM_SPRINGER".to_string(),
+            ..Default::default()
+        });
+        p
+    }
 
     #[tokio::test]
     #[serial_test::serial]
@@ -311,15 +374,61 @@ mod tests {
         let profile = profile_with_springer_grant();
         let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("DOI parses"));
 
-        std::env::set_var(KEY_ENV_VAR, TEST_KEY);
-        let result = src.fetch(&ref_, &profile, &ctx).await;
-        std::env::remove_var(KEY_ENV_VAR);
-        let result = result.expect("fetch ok");
+        // Key comes from the grant now — no env var is touched.
+        let result = src.fetch(&ref_, &profile, &ctx).await.expect("fetch ok");
 
         assert_eq!(result.source, "tdm-springer");
         assert!(result.pdf_bytes.is_none(), "metadata-only contract");
+        // Issue #146: the returned final_url must NOT carry the real key.
+        let final_url = result.final_url.expect("final_url present");
+        assert!(
+            !final_url.as_str().contains(TEST_KEY),
+            "api_key must be redacted out of final_url: {final_url}"
+        );
+        assert!(
+            final_url
+                .query_pairs()
+                .any(|(k, v)| k == "api_key" && v == "REDACTED"),
+            "redacted api_key sentinel must be present: {final_url}"
+        );
         let meta = result.metadata_json.expect("metadata_json present");
         assert_eq!(meta["title"], "Example Springer OA Article");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn fetch_with_empty_grant_key_is_not_eligible() {
+        let (_td, ctx) = build_test_context("http://127.0.0.1:1");
+        let src = TdmSpringerSource::with_base(Url::parse("http://127.0.0.1:1").expect("parses"));
+        let profile = profile_with_empty_key_grant();
+        let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("DOI parses"));
+
+        let err = src
+            .fetch(&ref_, &profile, &ctx)
+            .await
+            .expect_err("empty grant key must fail-close");
+        assert!(matches!(err, FetchError::NotEligible { .. }));
+    }
+
+    #[test]
+    fn redact_api_key_in_url_replaces_only_the_key() {
+        let u = Url::parse(
+            "https://api.springernature.com/openaccess/json?q=doi:10.1/x&api_key=SUPERSECRET",
+        )
+        .expect("parses");
+        let r = redact_api_key_in_url(&u);
+        assert!(!r.as_str().contains("SUPERSECRET"), "key must be gone: {r}");
+        assert!(
+            r.query_pairs().any(|(k, v)| k == "q" && v == "doi:10.1/x"),
+            "other pairs preserved: {r}"
+        );
+        assert!(r
+            .query_pairs()
+            .any(|(k, v)| k == "api_key" && v == "REDACTED"));
+        // No-op when there is no api_key pair.
+        let clean = Url::parse("https://api.springernature.com/openaccess/json?q=doi:10.1/x")
+            .expect("parses");
+        assert_eq!(redact_api_key_in_url(&clean), clean);
     }
 
     #[tokio::test]
@@ -357,9 +466,7 @@ mod tests {
         let profile = profile_with_springer_grant();
         let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("DOI parses"));
 
-        std::env::set_var(KEY_ENV_VAR, TEST_KEY);
         let result = src.fetch(&ref_, &profile, &ctx).await;
-        std::env::remove_var(KEY_ENV_VAR);
 
         let err = result.expect_err("empty records must surface as SourceSchema");
         assert!(matches!(err, FetchError::SourceSchema { .. }));
