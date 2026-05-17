@@ -15,7 +15,7 @@ exclude = [
 ]
 
 [workspace.package]
-version       = "0.1.1"
+version       = "0.1.2"
 edition       = "2021"
 rust-version  = "1.86"
 license       = "MIT"
@@ -41,9 +41,9 @@ features-doc-link = "docs/SOURCES.md"
 
 [workspace.dependencies]
 # Core
-doiget-core = { path = "crates/doiget-core", version = "0.1.1" }
-doiget-cli  = { path = "crates/doiget-cli", version = "0.1.1" }
-doiget-mcp  = { path = "crates/doiget-mcp", version = "0.1.1" }
+doiget-core = { path = "crates/doiget-core", version = "0.1.2" }
+doiget-cli  = { path = "crates/doiget-cli", version = "0.1.2" }
+doiget-mcp  = { path = "crates/doiget-mcp", version = "0.1.2" }
 
 # Async runtime — features are deliberately limited (avoid `full`).
 tokio = { version = "1", default-features = false, features = [
