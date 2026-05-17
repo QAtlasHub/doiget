@@ -57,7 +57,7 @@ cargo install doiget --features metadata,tdm-aps
 cargo install doiget --features metadata,tdm-elsevier
 ```
 
-There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 16).
+There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
 
 ## 4. Source-specific notes
 
