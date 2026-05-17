@@ -10,6 +10,16 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/sotashimozono/doiget/compare/doiget-core-v0.1.3...doiget-core-v0.1.4) - 2026-05-17
+
+### Fixed
+
+- *(core)* enforce oa-publisher allowlist on discovered OA URL pre-fetch ([#145](https://github.com/sotashimozono/doiget/pull/145))
+
+### Other
+
+- Merge remote-tracking branch 'origin/main' into fix/145-oa-url-allowlist-prefetch
+
 ## [0.1.3](https://github.com/sotashimozono/doiget/compare/doiget-core-v0.1.2...doiget-core-v0.1.3) - 2026-05-17
 
 ### Fixed
