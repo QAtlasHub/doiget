@@ -253,9 +253,17 @@ async fn fetch_doi_oa_pdf_falls_back_to_metadata_when_host_off_allowlist() {
     let base_uri = server.uri();
 
     // The OA URL points at an `https://` host that is NOT one of our
-    // registered allowlist entries (`127.0.0.1`). The redirect-policy
-    // closure denies the initial-leg URL on the host-allowlist check
-    // before any body is read.
+    // registered allowlist entries. NOTE (issue #145 investigation): the
+    // per-source host allowlist is enforced ONLY inside
+    // `reqwest::redirect::Policy::custom`, which `reqwest` invokes ONLY on
+    // redirect hops — there is NO initial-URL host pre-check in
+    // `doiget_core::http::HttpClient::fetch_inner`. This mock mounts NO
+    // redirect and `attacker.test` is unroutable, so the OA leg fails at
+    // connect/DNS on the FIRST request: a genuine `HttpError::Network`
+    // transport fault with NO wrapped `RedirectDenied` and therefore NO
+    // `DenialContext`. It is NOT distinguishable from a flaky network at
+    // the doiget-cli layer, so it correctly remains `NETWORK_ERROR` /
+    // exit 1 (see the assertion + the §6.1 caveat below).
     let off_allowlist_oa_url = "https://attacker.test/file.pdf".to_string();
 
     // Crossref uses `Url::join("/works/<doi>")` which does NOT URL-encode
@@ -297,10 +305,35 @@ async fn fetch_doi_oa_pdf_falls_back_to_metadata_when_host_off_allowlist() {
     // Issue #145: the blocked PDF leg must surface as a non-zero exit,
     // NOT a silent `Ok(())`. The metadata is still written (asserted
     // below) but the CLI persona gets an `error[CODE]:` line + a
-    // `CliExit` carrying the `docs/ERRORS.md` §4 process code. The
-    // off-allowlist denial is wrapped by reqwest as `HttpError::Network`
-    // → `NETWORK_ERROR` → `cli_exit_code` falls to the generic
-    // "at least one fetch failed" exit (1).
+    // `CliExit` carrying the `docs/ERRORS.md` §4 process code.
+    //
+    // Issue #145 (Option B, approved) — scope caveat. The approved
+    // decision is: an off-allowlist / redirect-denied / insecure-scheme
+    // OA-PDF block is a DELIBERATE policy denial and MUST surface as
+    // `CAPABILITY_DENIED` / exit 3, not `NETWORK_ERROR` / exit 1
+    // (`docs/ERRORS.md` §2 + §6.1). That reclassification IS implemented
+    // at the doiget-cli layer in `effective_blocked_code`
+    // (`crates/doiget-cli/src/commands/fetch.rs`): whenever the
+    // orchestrator surfaces a `DenialContext` whose `reason` is
+    // `redirect_not_in_allowlist` / `insecure_scheme` /
+    // `host_in_block_list`, the CLI promotes the code to
+    // `CapabilityDenied` and returns `CliExit(3)`.
+    //
+    // THIS test case, however, does NOT exercise that path. The core's
+    // host allowlist is enforced only inside the redirect-policy closure
+    // (`reqwest::redirect::Policy::custom`), which runs ONLY on redirect
+    // hops; there is no initial-URL host pre-check in
+    // `doiget_core::http::fetch_inner`. With an unroutable first-leg host
+    // and no redirect, the OA leg fails at connect — a real
+    // `HttpError::Network` with NO wrapped `RedirectDenied`, hence
+    // `denial == None`. Per `docs/ERRORS.md` §6.1 a genuine transport
+    // fault with no `denial_context` correctly stays `NETWORK_ERROR` /
+    // exit 1. Closing the "initial OA URL host off-allowlist with no
+    // redirect" gap requires an initial-URL host pre-check in
+    // `crates/doiget-core/src/http.rs`, which is out of scope for this
+    // CLI-only branch/PR (tracked under #145; see the PR description /
+    // ERRORS.md §6.1). The metadata-still-written / PDF-not-written and
+    // `error_code == NETWORK_ERROR` provenance assertions below remain.
     let err = fetch::run_with_options(format!("doi:{}", TEST_DOI), false)
         .await
         .expect_err("a blocked OA PDF leg must NOT be a silent success (issue #145)");
@@ -309,7 +342,13 @@ async fn fetch_doi_oa_pdf_falls_back_to_metadata_when_host_off_allowlist() {
         .expect("blocked PDF leg must carry a CliExit so main maps it to a §4 exit code");
     assert_eq!(
         cli_exit.0, 1,
-        "off-allowlist OA denial maps to NETWORK_ERROR → exit 1"
+        "first-leg connect failure to an unroutable off-allowlist host \
+         has NO DenialContext (no redirect hop fired the allowlist \
+         closure) → genuine NETWORK_ERROR → exit 1, per docs/ERRORS.md \
+         §6.1. The policy-block → CAPABILITY_DENIED/exit-3 reclassification \
+         (issue #145) is unit-covered in fetch.rs::effective_blocked_code \
+         for the redirect/insecure-scheme cases that DO carry a \
+         DenialContext."
     );
 
     // PDF MUST NOT be written.

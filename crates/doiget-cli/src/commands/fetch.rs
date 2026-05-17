@@ -53,7 +53,7 @@ use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, Ro
 use doiget_core::rate_limiter::RateLimiter;
 use doiget_core::source::{FetchContext, FetchError};
 use doiget_core::store::FsStore;
-use doiget_core::{CapabilityProfile, DenialContext, ErrorCode, RateLimits, Ref};
+use doiget_core::{CapabilityProfile, DenialContext, DenialReason, ErrorCode, RateLimits, Ref};
 
 /// Defer to docs/PROVENANCE_LOG.md §3: 26-char ULID per process invocation.
 fn new_session_id() -> String {
@@ -403,8 +403,29 @@ impl FetchHarness {
                     denial,
                 } = &outcome.pdf_leg
                 {
-                    render_blocked_error(ref_, &outcome, *code, message, denial.as_ref());
-                    return Err(anyhow::Error::new(CliExit(cli_exit_code(*code))));
+                    // Issue #145 / `docs/ERRORS.md` §2 + §3: the core
+                    // collapses *every* `FetchError::Http(_)` to
+                    // `ErrorCode::NetworkError` (see
+                    // `doiget_core::source.rs`'s `From<&FetchError> for
+                    // ErrorCode`). For a genuine transport/DNS/TLS fault
+                    // that is correct ("retry usually fine"). But an
+                    // off-allowlist / redirect-denied / insecure-scheme OA
+                    // PDF leg is a DELIBERATE policy block — retrying never
+                    // helps — yet it would otherwise surface as
+                    // `NETWORK_ERROR` → generic exit 1, mis-signalling a
+                    // flaky network. The orchestrator already preserves the
+                    // real reason on `denial` (the `From<&HttpError> for
+                    // Option<DenialContext>` impl walks reqwest's source
+                    // chain, so even a redirect denial wrapped as
+                    // `HttpError::Network` still yields
+                    // `DenialReason::RedirectNotInAllowlist`). Reclassify
+                    // the *policy* denials here at the CLI layer to
+                    // `CapabilityDenied` → `error[CAPABILITY_DENIED]:` →
+                    // exit 3 (the same code `fetch`/`graph` already use for
+                    // `ErrorCode::CapabilityDenied`).
+                    let effective = effective_blocked_code(*code, denial.as_ref());
+                    render_blocked_error(ref_, &outcome, effective, message, denial.as_ref());
+                    return Err(anyhow::Error::new(CliExit(cli_exit_code(effective))));
                 }
                 emit_success_line(ref_, &outcome);
                 Ok(())
@@ -456,7 +477,10 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
             message,
             denial,
         } => {
-            render_blocked_error(ref_, outcome, *code, message, denial.as_ref());
+            // Same #145 reclassification as the primary interception in
+            // `fetch_one`, so this fail-closed fallback stays consistent.
+            let effective = effective_blocked_code(*code, denial.as_ref());
+            render_blocked_error(ref_, outcome, effective, message, denial.as_ref());
         }
         // `PdfLegStatus` is `#[non_exhaustive]`; a future variant
         // degrades to the size-based wording rather than failing the
@@ -589,6 +613,57 @@ impl std::fmt::Display for CliExit {
 
 impl std::error::Error for CliExit {}
 
+/// Reclassify a `PdfLegStatus::Blocked` code at the CLI layer (issue
+/// #145 / `docs/ERRORS.md` §2 "NETWORK_ERROR" vs §3.1 / §6).
+///
+/// The core maps *every* `FetchError::Http(_)` to
+/// [`ErrorCode::NetworkError`] (`doiget_core::source`'s
+/// `From<&FetchError> for ErrorCode`). `docs/ERRORS.md` §2 defines
+/// `NETWORK_ERROR` as a transport / DNS / TLS fault where "retry usually
+/// fine" — true for a real network blip, but **false** for a deliberate
+/// supply-chain policy block (off-allowlist redirect, insecure-scheme
+/// redirect, host-blocklist hit): retrying such a block never helps, so
+/// surfacing it as `NETWORK_ERROR` (generic exit 1) mis-signals a flaky
+/// network to humans and agents.
+///
+/// The orchestrator already preserves the true reason on the
+/// [`DenialContext`] side-channel (the `From<&HttpError> for
+/// Option<DenialContext>` impl walks reqwest's `source()` chain, so even
+/// a redirect denial wrapped as `HttpError::Network` still yields
+/// [`DenialReason::RedirectNotInAllowlist`]). When that reason is one of
+/// the closed-set *policy* denials, promote the surface code to
+/// [`ErrorCode::CapabilityDenied`] so the CLI renders
+/// `error[CAPABILITY_DENIED]:` and [`cli_exit_code`] returns exit 3 —
+/// the same code `fetch` / `graph` already use for capability denials.
+/// Non-policy blocks (no `denial`, or a non-policy reason such as
+/// `SizeCapExceeded` / `ContentTypeMismatch`) keep the core's code so a
+/// genuine transport failure still reads as `NETWORK_ERROR`.
+fn effective_blocked_code(code: ErrorCode, denial: Option<&DenialContext>) -> ErrorCode {
+    match denial.map(|d| d.reason) {
+        Some(
+            DenialReason::RedirectNotInAllowlist
+            | DenialReason::InsecureScheme
+            | DenialReason::HostInBlockList,
+        ) => ErrorCode::CapabilityDenied,
+        _ => code,
+    }
+}
+
+/// Snake-case wire token for a [`DenialReason`], matching the
+/// `#[serde(rename_all = "snake_case")]` JSON/MCP surface (ADR-0023 §2)
+/// so the CLI human line uses the SAME vocabulary as the machine
+/// envelope (`docs/ERRORS.md` §3.1). Only the policy-denial reasons the
+/// CLI inlines are enumerated; everything else degrades to a generic
+/// token rather than drifting from the serde form.
+fn denial_reason_wire(reason: DenialReason) -> &'static str {
+    match reason {
+        DenialReason::RedirectNotInAllowlist => "redirect_not_in_allowlist",
+        DenialReason::InsecureScheme => "insecure_scheme",
+        DenialReason::HostInBlockList => "host_in_block_list",
+        _ => "policy_denied",
+    }
+}
+
 /// `docs/ERRORS.md` §4 closed-code → process exit code. Anything not
 /// individually listed falls under "at least one fetch failed" (1).
 ///
@@ -648,10 +723,30 @@ fn render_blocked_error(
         Ref::Arxiv(id) => format!("arxiv:{}", id.as_str()),
         Ref::Doi(doi) => format!("doi:{}", doi.as_str()),
     };
-    print_err(format_args!(
-        "error[{}]: {label}: an OA PDF was found but could not be retrieved: {message}",
-        code.as_wire()
-    ));
+    // Issue #145: when the block is a deliberate policy denial, name the
+    // closed-set reason inline so a human/agent reading the
+    // `error[CAPABILITY_DENIED]:` line immediately sees this is a
+    // supply-chain policy block (retrying is futile), not a flaky network.
+    match denial.map(|d| d.reason) {
+        Some(
+            reason @ (DenialReason::RedirectNotInAllowlist
+            | DenialReason::InsecureScheme
+            | DenialReason::HostInBlockList),
+        ) => {
+            print_err(format_args!(
+                "error[{}]: {label}: an OA PDF was found but its host is blocked by \
+                 supply-chain policy ({}): {message}",
+                code.as_wire(),
+                denial_reason_wire(reason)
+            ));
+        }
+        _ => {
+            print_err(format_args!(
+                "error[{}]: {label}: an OA PDF was found but could not be retrieved: {message}",
+                code.as_wire()
+            ));
+        }
+    }
     if let Some(dc) = denial {
         let attempted = dc.attempted.as_deref().unwrap_or("(unknown)");
         match &dc.expected {
@@ -709,5 +804,102 @@ mod tests {
     #[test]
     fn fetch_paper_outcome_is_reachable_from_cli() {
         let _ = std::any::type_name::<doiget_core::orchestrator::FetchPaperOutcome>();
+    }
+
+    /// Minimal `DenialContext` carrying only `reason`; every other field
+    /// is optional (ADR-0023 §3) so `None`/empty is a valid producer
+    /// shape for the reclassification decision under test.
+    fn denial(reason: DenialReason) -> DenialContext {
+        DenialContext {
+            reason,
+            source: None,
+            attempted: None,
+            expected: None,
+            hop_index: None,
+            cap: None,
+            actual: None,
+        }
+    }
+
+    /// Issue #145 / `docs/ERRORS.md` §6.1: a policy-class denial reason
+    /// on a `Blocked` OA-PDF leg must be reclassified from the core's
+    /// blanket `NetworkError` to `CapabilityDenied` at the CLI layer, so
+    /// the user-facing exit becomes 3 (not the generic 1) and a flaky
+    /// network is not implied for a deliberate supply-chain block.
+    #[test]
+    fn policy_denials_reclassify_network_error_to_capability_denied() {
+        for r in [
+            DenialReason::RedirectNotInAllowlist,
+            DenialReason::InsecureScheme,
+            DenialReason::HostInBlockList,
+        ] {
+            let d = denial(r);
+            assert_eq!(
+                effective_blocked_code(ErrorCode::NetworkError, Some(&d)),
+                ErrorCode::CapabilityDenied,
+                "policy reason {r:?} must promote NetworkError -> CapabilityDenied"
+            );
+            assert_eq!(
+                cli_exit_code(effective_blocked_code(ErrorCode::NetworkError, Some(&d))),
+                3,
+                "policy reason {r:?} must map to exit 3 (docs/ERRORS.md §4/§6.1)"
+            );
+        }
+    }
+
+    /// A genuine transport fault carries NO `DenialContext`; it must stay
+    /// `NetworkError` / exit 1 — `docs/ERRORS.md` §2 "retry usually fine"
+    /// is the correct signal there. (This is exactly the e2e
+    /// `..._host_off_allowlist` path: first-leg connect failure, no
+    /// redirect hop, so no allowlist denial is produced.)
+    #[test]
+    fn absent_denial_context_keeps_network_error() {
+        assert_eq!(
+            effective_blocked_code(ErrorCode::NetworkError, None),
+            ErrorCode::NetworkError
+        );
+        assert_eq!(
+            cli_exit_code(effective_blocked_code(ErrorCode::NetworkError, None)),
+            1
+        );
+    }
+
+    /// Non-policy denial reasons (size cap, content-type mismatch) are
+    /// NOT supply-chain policy blocks; they keep the core's code so a
+    /// genuine cap/transport class is not masked as a capability denial.
+    #[test]
+    fn non_policy_denials_keep_core_code() {
+        for r in [
+            DenialReason::SizeCapExceeded,
+            DenialReason::ContentTypeMismatch,
+        ] {
+            let d = denial(r);
+            assert_eq!(
+                effective_blocked_code(ErrorCode::NetworkError, Some(&d)),
+                ErrorCode::NetworkError,
+                "non-policy reason {r:?} must NOT be reclassified"
+            );
+        }
+    }
+
+    /// The closed-set wire token used in the human `error[...]:` line
+    /// must match the serde `snake_case` form so the CLI vocabulary does
+    /// not drift from the JSON/MCP envelope (`docs/ERRORS.md` §3.1).
+    #[test]
+    fn denial_reason_wire_matches_serde_snake_case() {
+        for r in [
+            DenialReason::RedirectNotInAllowlist,
+            DenialReason::InsecureScheme,
+            DenialReason::HostInBlockList,
+        ] {
+            let serde_form = serde_json::to_string(&r).expect("serialize DenialReason");
+            // serde_json wraps the enum unit variant in quotes.
+            let serde_token = serde_form.trim_matches('"');
+            assert_eq!(
+                denial_reason_wire(r),
+                serde_token,
+                "CLI wire token for {r:?} must equal the serde snake_case form"
+            );
+        }
     }
 }

@@ -125,11 +125,14 @@ pub fn run(verify_flag: bool) -> Result<()> {
 /// 1. `DOIGET_LOG_PATH` env var, if set and non-empty.
 /// 2. `<config_dir>/doiget/access.jsonl` (cross-platform via `dirs::config_dir`).
 ///
-/// Note: the writer's default in `commands/config.rs::ResolvedConfig` is
-/// `DOIGET_LOG_DIR` + `access.jsonl`. We accept the more direct
-/// `DOIGET_LOG_PATH` here too because §1 of `docs/PROVENANCE_LOG.md`
-/// specifies `DOIGET_LOG_PATH` as the spec'd override. Tests rely on
-/// `DOIGET_LOG_PATH` to point at a per-test tempdir.
+/// This resolution agrees with the provenance-log *writer*
+/// (`commands::fetch::resolve_log_path` / `commands::config::ResolvedConfig`):
+/// since issue #142 all of them key off `DOIGET_LOG_PATH` (the only log env
+/// var `docs/CONFIG.md` §4 / `docs/PROVENANCE_LOG.md` §1 documents), falling
+/// back to `<config_dir>/doiget/access.jsonl`. The previously read,
+/// undocumented `DOIGET_LOG_DIR` was removed in #142, so reader and writer
+/// can never disagree. Tests rely on `DOIGET_LOG_PATH` to point at a
+/// per-test tempdir.
 fn resolve_log_path() -> Result<Utf8PathBuf> {
     if let Ok(s) = std::env::var("DOIGET_LOG_PATH") {
         if !s.is_empty() {

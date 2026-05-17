@@ -36,7 +36,7 @@ Wire form (JSON / MCP): `"INVALID_REF"`, `"NO_OA_AVAILABLE"`, etc.
 | `INVALID_REF` | DOI / arXiv id failed validation. | No (user must correct input). |
 | `NO_OA_AVAILABLE` | Tier 1 sources reported no OA URL. | Try later, or enable opt-in source. |
 | `RATE_LIMITED` | Internal rate cap hit, OR 429 from source. | Retry after `Retry-After` (or 1 s). |
-| `NETWORK_ERROR` | Transport / DNS / TLS failure. | Retry usually fine. |
+| `NETWORK_ERROR` | Transport / DNS / TLS failure. **Does NOT cover a deliberate supply-chain policy block** — see §6.1: an off-allowlist / redirect-denied / insecure-scheme OA-PDF leg is `CAPABILITY_DENIED`, not `NETWORK_ERROR`. | Retry usually fine. |
 | `STORE_ERROR` | Filesystem write failed (disk, permission, etc.). | Depends on cause. |
 | `LOG_ERROR` | Provenance log write failed. **Fetch is aborted.** | Free disk / fix perms. |
 | `CAPABILITY_DENIED` | Source not in `CapabilityProfile`. | User opts in, or pick different source. |
@@ -130,3 +130,46 @@ unset.
 doiget MUST NOT return a "success" result with placeholder data when a real fetch
 failed. A fetch either succeeds with a real PDF + license + metadata, or returns an
 error with one of the codes above.
+
+### 6.1 Off-allowlist / redirect-denied OA-PDF leg → `CAPABILITY_DENIED` / exit 3 (NORMATIVE; issue #145)
+
+When a DOI fetch discovers an OA PDF URL but the OA-PDF leg is **blocked
+by supply-chain redirect policy** — the host is off the `oa-publisher`
+allowlist (`redirect_not_in_allowlist`), a redirect hop is non-HTTPS
+(`insecure_scheme`), or the host is on the block list
+(`host_in_block_list`) — the metadata is still written, but the leg is a
+**deliberate policy denial, not a transport failure**.
+
+Internally `doiget-core` collapses every `FetchError::Http(_)` (including
+a redirect denial that `reqwest` re-wraps as `HttpError::Network`) to
+`NetworkError`, and the provenance-log row for the failed `oa-publisher`
+leg is therefore written with `error_code = NETWORK_ERROR` (the
+transport-layer truth — unchanged). However, surfacing this to the user
+as `NETWORK_ERROR` would be **wrong**: §2 defines `NETWORK_ERROR` as
+"retry usually fine", whereas retrying a policy block never helps.
+
+NORMATIVE rule: the CLI MUST reclassify such a blocked OA-PDF leg using
+the preserved `denial_context.reason` (§3.1) and surface it as:
+
+- error code **`CAPABILITY_DENIED`** (rendered `error[CAPABILITY_DENIED]:`,
+  with the closed-set `denial_context.reason` named inline so the block is
+  unambiguously a policy denial, not a flaky network);
+- process **exit code `3`** (§4 "Capability denied"), the same exit code
+  `fetch` / `graph` use for every other `ErrorCode::CapabilityDenied`.
+
+The provenance row keeps `error_code = NETWORK_ERROR` (it records the
+transport mechanism); the *user-facing* code/exit is `CAPABILITY_DENIED` /
+`3`. Non-policy OA-PDF blocks (genuine transport fault with no
+`denial_context`, or a non-policy reason such as `size_cap_exceeded` /
+`content_type_mismatch`) remain `NETWORK_ERROR` / exit 1.
+
+Known gap (tracked under #145): the per-source host allowlist is enforced
+only inside the redirect-policy closure, which `reqwest` invokes only on
+**redirect hops**. An OA URL whose *initial* host is off-allowlist with no
+redirect therefore fails at connect with no `RedirectDenied` / no
+`denial_context`, so it cannot be reclassified at the CLI layer and stays
+`NETWORK_ERROR` / exit 1. Closing this requires an initial-URL host
+pre-check in `doiget-core` (`crates/doiget-core/src/http.rs`); the
+reclassification rule above already covers every block that *does* carry a
+policy `denial_context` (real redirect denials, insecure-scheme hops,
+host-blocklist hits).
