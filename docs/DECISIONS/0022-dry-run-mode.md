@@ -1,7 +1,7 @@
 # 0022 - Dry-run mode for fetch operations
 
 - **Date:** 2026-05-12
-- **Status:** Proposed
+- **Status:** Accepted — implemented; `dry_run` returns a `FetchPlan` without touching network/store on `doiget_fetch_paper`/`doiget_batch_fetch` + CLI `fetch`/`batch` (Slice 2; option bundle simplified in Slice 5)
 - **Supersedes:** -
 - **Source:** Discussion #12 (musaabhasan, 2026-05-08)
 

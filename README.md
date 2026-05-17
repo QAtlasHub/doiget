@@ -3,8 +3,10 @@
 > A single-binary CLI + stdio MCP server that turns DOIs and arXiv ids into local PDFs through official, OA-first APIs.
 > Designed as the **agent-facing companion** to [BiblioFetch.jl](https://github.com/sotashimozono/BiblioFetch.jl).
 
-**Status:** Design phase complete (v1.0 spec, 2026-05-05). Phase 0 implementation pending.
-See [docs/PHASES.md](docs/PHASES.md) for the implementation plan.
+**Status:** Shipping — **v0.1.3** on a live `release-plz` pipeline. Tier 1 + Tier 2
+sources, the stdio MCP server, citation-graph expansion, gated TDM sources, and
+OIDC/sigstore release automation are all implemented. See [CHANGELOG.md](CHANGELOG.md)
+for the per-slice history and [docs/PHASES.md](docs/PHASES.md) for the phase plan.
 
 ## Posture
 

@@ -23,9 +23,11 @@
 //! `profile.tdm_aps = Some(TdmGrant)`. This source mirrors that
 //! check in [`can_serve`](TdmApsSource::can_serve) and again in
 //! [`fetch`](TdmApsSource::fetch) (defensive). APS expects the key
-//! in the `X-API-Key` header (not a URL parameter, unlike Springer);
-//! `TdmGrant` does not currently store the key, so the source
-//! re-reads `DOIGET_KEY_APS` at fetch time.
+//! in the `X-API-Key` header (not a URL parameter, unlike Springer).
+//! The key is read once at startup and carried in
+//! [`TdmGrant::api_key`](crate::TdmGrant) (issue #153); the source
+//! consumes it from the grant and never re-reads `DOIGET_KEY_APS` at
+//! fetch time.
 //!
 //! ## Metadata-only contract (Phase 5b)
 //!
@@ -38,6 +40,7 @@
 #![cfg(feature = "tdm-aps")]
 
 use async_trait::async_trait;
+use secrecy::ExposeSecret;
 use url::Url;
 
 use crate::provenance::{Capability, LogEvent, LogResult, RowInput};
@@ -46,12 +49,6 @@ use crate::{CapabilityProfile, Ref};
 
 /// Production APS Harvest API base URL.
 const DEFAULT_BASE: &str = "https://harvest.aps.org";
-
-/// Env var holding the per-tenant API key. Presence is one of the
-/// three activation gates (`docs/CAPABILITY.md` §2); the value is
-/// read at fetch time and sent as the `X-API-Key` header via
-/// [`HttpClient::fetch_bytes_with_headers`].
-const KEY_ENV_VAR: &str = "DOIGET_KEY_APS";
 
 /// APS Harvest [`Source`] impl — DOI → `/v2/article/<DOI>` JSON
 /// record.
@@ -121,19 +118,18 @@ impl Source for TdmApsSource {
             }
         };
 
-        // Defensive gate (1/3): runtime grant must be populated.
-        if profile.tdm_aps.is_none() {
-            return Err(FetchError::NotEligible {
+        // Defensive gate (1/3 + 2/3): the runtime grant must be
+        // populated and now carries the key validated at startup
+        // (issue #153). `CapabilityProfile` is immutable for the
+        // process lifetime (`docs/CAPABILITY.md` §6), so the startup
+        // grant is the single source of truth — no env re-read.
+        let grant = profile
+            .tdm_aps
+            .as_ref()
+            .ok_or_else(|| FetchError::NotEligible {
                 source_key: "tdm-aps".into(),
-            });
-        }
-
-        // Defensive gate (2/3): re-read the key env var. A missing
-        // key here means env changed mid-process — fail-close as
-        // NotEligible so the orchestrator can fall through.
-        let api_key = std::env::var(KEY_ENV_VAR).map_err(|_| FetchError::NotEligible {
-            source_key: "tdm-aps".into(),
-        })?;
+            })?;
+        let api_key = grant.api_key.expose_secret();
         if api_key.is_empty() {
             return Err(FetchError::NotEligible {
                 source_key: "tdm-aps".into(),
@@ -150,7 +146,7 @@ impl Source for TdmApsSource {
         // or echoed back in error messages.
         let (body, final_url) = ctx
             .http
-            .fetch_bytes_with_headers(self.name(), url, &[("X-API-Key", &api_key)])
+            .fetch_bytes_with_headers(self.name(), url, &[("X-API-Key", api_key)])
             .await?;
 
         let envelope: serde_json::Value =
@@ -277,16 +273,18 @@ mod tests {
         (td, ctx)
     }
 
+    const TEST_KEY: &str = "aps-test-key-xyz";
+
     fn profile_with_aps_grant() -> CapabilityProfile {
         let mut p = CapabilityProfile::from_env().expect("clean env never errors");
         p.tdm_aps = Some(TdmGrant {
+            // Issue #153: key flows through the grant, not the env var.
+            api_key: secrecy::SecretString::from(TEST_KEY.to_string()),
             agree_env_var: "DOIGET_AGREE_TDM_APS".to_string(),
             ..Default::default()
         });
         p
     }
-
-    const TEST_KEY: &str = "aps-test-key-xyz";
 
     #[tokio::test]
     #[serial_test::serial]
@@ -306,10 +304,7 @@ mod tests {
         let profile = profile_with_aps_grant();
         let ref_ = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("DOI parses"));
 
-        std::env::set_var(KEY_ENV_VAR, TEST_KEY);
-        let result = src.fetch(&ref_, &profile, &ctx).await;
-        std::env::remove_var(KEY_ENV_VAR);
-        let result = result.expect("fetch ok");
+        let result = src.fetch(&ref_, &profile, &ctx).await.expect("fetch ok");
 
         assert_eq!(result.source, "tdm-aps");
         assert!(result.pdf_bytes.is_none(), "metadata-only contract");
@@ -352,9 +347,7 @@ mod tests {
         let profile = profile_with_aps_grant();
         let ref_ = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("DOI parses"));
 
-        std::env::set_var(KEY_ENV_VAR, TEST_KEY);
         let result = src.fetch(&ref_, &profile, &ctx).await;
-        std::env::remove_var(KEY_ENV_VAR);
 
         let err = result.expect_err("non-object response must surface as SourceSchema");
         assert!(matches!(err, FetchError::SourceSchema { .. }));

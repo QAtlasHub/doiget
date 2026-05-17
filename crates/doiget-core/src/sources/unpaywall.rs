@@ -128,10 +128,15 @@ impl Source for UnpaywallSource {
             canonical_digest: Some(&canonical),
         })?;
 
-        // Note: Phase 1 returns metadata only; the actual PDF fetch from the
-        // OA URL is the orchestrator's job (a follow-up PR — `doiget fetch`
-        // CLI subcommand calls Unpaywall, then HttpClient::fetch_pdf on the
-        // discovered URL via a per-publisher allowlist). See ARCHITECTURE.md §6.
+        // Note: this source returns metadata only; the actual PDF fetch
+        // from the discovered OA URL is the orchestrator's job
+        // (`crate::orchestrator::try_fetch_oa_pdf`, called from
+        // `fetch_paper_doi`). That leg runs the OA URL through the
+        // `oa-publisher` per-publisher allowlist BOTH as a pre-fetch host
+        // check (issue #145; `docs/REDIRECT_ALLOWLIST.md` §1 — applied to
+        // the metadata-discovered URL before the fetch is issued) and on
+        // every redirect hop via the per-source redirect closure in
+        // `crate::http`. See ARCHITECTURE.md §6.
         Ok(FetchResult {
             source: self.name().to_string(),
             license,

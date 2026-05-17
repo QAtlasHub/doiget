@@ -1,7 +1,7 @@
 # 0019 - Eight-safeguard legal posture (5 social + 3 technical)
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — standing posture, enforced; the 5 social + 3 technical safeguards are realized across `docs/LEGAL.md`/`SCOPE.md` + posture-lint + the capability-gate / redirect-allowlist / provenance-log technical controls (Phase 1 onward)
 - **Supersedes:** -
 - **Source:** Discussion #16
 

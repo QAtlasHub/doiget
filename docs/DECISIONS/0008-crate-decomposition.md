@@ -1,7 +1,7 @@
 # 0008 - Workspace is split into doiget-core / -cli / -mcp (+ -obsidian opt)
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented; Cargo workspace with `doiget-core` / `doiget-cli` / `doiget-mcp` members (Phase 0); optional `doiget-obsidian` remains `exclude`d (Phase 7, not yet built)
 - **Supersedes:** -
 - **Source:** Discussion #14 / #18
 

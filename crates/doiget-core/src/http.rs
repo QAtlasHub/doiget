@@ -588,6 +588,20 @@ pub struct HttpClient {
     /// policy that captures only that source's allowlist. `Arc` so cloning
     /// is cheap.
     clients: Arc<HashMap<String, Client>>,
+    /// The exact [`SourceAllowlist`] each per-source client was built from,
+    /// keyed by source. The redirect closure inside each `reqwest::Client`
+    /// captures its allowlist *by move*, so it cannot be read back from the
+    /// client itself. This map keeps the identical `SourceAllowlist`
+    /// available to callers that must perform a *pre-fetch* host check on a
+    /// metadata-discovered URL (issue #145 / `docs/REDIRECT_ALLOWLIST.md`
+    /// §1: the allowlist is consulted "on the OA URL discovered through
+    /// metadata sources before the actual PDF fetch is issued", not only on
+    /// redirect hops). Storing the same value here — rather than re-deriving
+    /// it from [`oa_publisher_allowlist`] at the call site — guarantees the
+    /// pre-check and the redirect closure can never drift, and that the
+    /// check works under the test constructors too (which register a
+    /// wiremock host as the allowlist).
+    allowlists: Arc<HashMap<String, SourceAllowlist>>,
 }
 
 impl HttpClient {
@@ -604,14 +618,37 @@ impl HttpClient {
     /// fails (typically a TLS-backend init failure).
     pub fn new(allowlists: Vec<SourceAllowlist>) -> Result<Self, reqwest::Error> {
         let mut clients = HashMap::with_capacity(allowlists.len());
+        let mut allowlist_map = HashMap::with_capacity(allowlists.len());
         for entry in allowlists {
             let source = entry.source.clone();
+            // Keep the *same* allowlist value both inside the redirect
+            // closure (via `build_client`) and queryable on the client
+            // (issue #145 pre-fetch check). `build_client` takes the
+            // allowlist by value, so clone once for the side table first.
+            allowlist_map.insert(source.clone(), entry.clone());
             let client = build_client(entry)?;
             clients.insert(source, client);
         }
         Ok(Self {
             clients: Arc::new(clients),
+            allowlists: Arc::new(allowlist_map),
         })
+    }
+
+    /// The [`SourceAllowlist`] this client was built with for `source`, or
+    /// `None` if `source` was not registered.
+    ///
+    /// This is the *identical* value captured by the per-source redirect
+    /// closure (see [`HttpClient`]'s `allowlists` field doc). It exists so
+    /// the orchestrator can apply the `docs/REDIRECT_ALLOWLIST.md` §1
+    /// pre-fetch host check on a metadata-discovered OA URL — the URL that
+    /// is fetched *without* necessarily passing through a redirect hop —
+    /// using the same source of truth the redirect closure uses, so the two
+    /// can never disagree. Callers MUST use this for the `"oa-publisher"`
+    /// leg only; the initial template-constructed URL is exempt per
+    /// `docs/REDIRECT_ALLOWLIST.md` §6.
+    pub fn source_allowlist(&self, source: &str) -> Option<&SourceAllowlist> {
+        self.allowlists.get(source)
     }
 
     /// Fetch a URL, treating it as a JSON or text body. Caps at
@@ -751,7 +788,14 @@ impl HttpClient {
                 }
                 return Err(HttpError::HttpStatus {
                     status: code,
-                    url: final_url.to_string(),
+                    // Issue #146: Springer Nature authenticates via an
+                    // `api_key` URL query parameter (no header path
+                    // upstream). This error string is logged and may
+                    // surface to the user, so strip any `api_key`
+                    // value before it leaves the client. No other
+                    // source puts a secret in the query string, so
+                    // this is a no-op for them.
+                    url: redact_api_key_query(&final_url),
                 });
             }
 
@@ -827,6 +871,37 @@ impl HttpClient {
     }
 }
 
+/// Return `url` rendered as a string with the value of any `api_key`
+/// query parameter replaced by `REDACTED` (issue #146).
+///
+/// Springer Nature's TDM API authenticates **only** via an `api_key`
+/// query parameter — there is no header-auth path upstream — so the key
+/// is unavoidably in the request URL. This keeps it out of *our* log
+/// and error sinks (the `HttpError::HttpStatus` string in particular,
+/// which is `tracing`-logged and can surface to the user). It is a
+/// structural no-op for every other source, none of which carry a
+/// secret in the query string. Other pairs and their order are
+/// preserved; a URL with no `api_key` pair is rendered unchanged.
+fn redact_api_key_query(url: &url::Url) -> String {
+    const API_KEY_PARAM: &str = "api_key";
+    if url.query_pairs().all(|(k, _)| k != API_KEY_PARAM) {
+        return url.to_string();
+    }
+    let mut redacted = url.clone();
+    let pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|(k, v)| {
+            if k == API_KEY_PARAM {
+                (k.into_owned(), "REDACTED".to_string())
+            } else {
+                (k.into_owned(), v.into_owned())
+            }
+        })
+        .collect();
+    redacted.query_pairs_mut().clear().extend_pairs(pairs);
+    redacted.to_string()
+}
+
 /// Test-oriented [`HttpClient`] constructor. Originally `cfg(test)`; now
 /// also reachable from the `doiget-cli` orchestrator's integration tests
 /// (which live outside this crate and therefore cannot see `cfg(test)`-gated
@@ -849,9 +924,12 @@ impl HttpClient {
         let allowlist = SourceAllowlist::new(source, vec![allowlist_host.to_string()]);
         let client = build_client_allow_http(allowlist.clone()).expect("test client builds");
         let mut map = HashMap::new();
+        let mut allowlist_map = HashMap::new();
+        allowlist_map.insert(allowlist.source.clone(), allowlist.clone());
         map.insert(allowlist.source.clone(), client);
         Self {
             clients: Arc::new(map),
+            allowlists: Arc::new(allowlist_map),
         }
     }
 
@@ -865,13 +943,16 @@ impl HttpClient {
     /// [`tier_1_allowlist`].
     pub fn new_for_tests_allow_http_multi(entries: &[(&str, &str)]) -> Self {
         let mut map = HashMap::with_capacity(entries.len());
+        let mut allowlist_map = HashMap::with_capacity(entries.len());
         for (source, host) in entries {
             let allowlist = SourceAllowlist::new(*source, vec![host.to_string()]);
             let client = build_client_allow_http(allowlist.clone()).expect("test client builds");
+            allowlist_map.insert(allowlist.source.clone(), allowlist.clone());
             map.insert(allowlist.source.clone(), client);
         }
         Self {
             clients: Arc::new(map),
+            allowlists: Arc::new(allowlist_map),
         }
     }
 }
