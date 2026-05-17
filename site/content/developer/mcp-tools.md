@@ -128,6 +128,35 @@ is the optional structured-recovery payload defined in
 [ADR-0023](DECISIONS/0023-denial-context-structured.md). `FetchPlan` is the
 dry-run preview shape — see §10 below.
 
+### 5.1 `denial_context` presence: single-paper vs batch (NORMATIVE)
+
+There is an **intentional, normative asymmetry** in how the optional
+`denial_context` field is represented on an `ok:false` error:
+
+- **Single-paper tools** (`doiget_fetch_paper`, `doiget_metadata_only`,
+  `doiget_resolve_paper`): the `denial_context` key is **omit-when-None**.
+  When the error *does* carry a structured recovery channel (e.g. a
+  `CAPABILITY_DENIED` allowlist/scheme denial), the key **is present**
+  with the `DenialContext` payload; when there is no denial channel for
+  the error (e.g. a `NETWORK_ERROR`), the key is **omitted** entirely.
+  `doiget_resolve_paper` follows this exact same contract as the other
+  two single-paper tools — it is *not* a tool that can never carry a
+  denial context; the key is simply absent rather than `null` when there
+  is nothing to report. Agents MUST treat absence and `null` as
+  equivalent ("no structured recovery payload").
+- **`doiget_batch_fetch`** per-ref error entries: the `denial_context`
+  key is **always present**, set to `null` when there is no denial
+  channel. Per-ref rows are uniform table rows in the agent's view, so
+  the explicit `null` lets an agent index every row's
+  `error.denial_context` without a presence test.
+
+An agent that wants to work across both surfaces should read
+`error.denial_context` and treat both *missing* and `null` as "none".
+A serialization failure of a non-`null` `DenialContext` (today
+unreachable — the type is a typed `Serialize` struct) emits `null` **and
+a `tracing::warn!` on stderr** so the swallow is observable; it is never
+silent (see #154 / ADR-0023 §4).
+
 ## 6. Excluded tools (permanent)
 
 The following are intentionally **not** offered as MCP tools and will not be added.
