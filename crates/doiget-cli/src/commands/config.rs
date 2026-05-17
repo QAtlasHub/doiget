@@ -11,23 +11,34 @@
 //! never invoked from inside an MCP session (`doiget serve` runs a
 //! different code path), so the lint is locally relaxed below.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use camino::Utf8PathBuf;
+
+use super::fetch::CliExit;
 
 /// Snapshot of the env-var + default-fallback config that `doiget` would
 /// use on the current machine.
 ///
-/// Phase 1 surface: env vars only (`DOIGET_STORE_ROOT`, `DOIGET_LOG_DIR`,
+/// Phase 1 surface: env vars only (`DOIGET_STORE_ROOT`, `DOIGET_LOG_PATH`,
 /// `DOIGET_CONTACT_EMAIL`, `DOIGET_UNPAYWALL_EMAIL`) layered over
 /// XDG / known-folder defaults. Phase 2 will layer the user config.toml
 /// underneath the env vars per `docs/CONFIG.md` §1.
+///
+/// Issue #142: `log_path` is resolved from `DOIGET_LOG_PATH` — the ONLY
+/// log env var `docs/CONFIG.md` §4 documents — using the exact same
+/// resolution the provenance-log *writer*
+/// (`commands::fetch::resolve_log_path` / `commands::audit_log`) uses, so
+/// `config show` reports the path the writer actually uses. The previously
+/// read, undocumented `DOIGET_LOG_DIR` has been dropped.
 #[derive(Debug, serde::Serialize)]
 pub struct ResolvedConfig {
     /// Root of the on-disk paper store. Default: `$HOME/papers`.
     pub store_root: Utf8PathBuf,
-    /// Directory holding doiget's append-only logs.
+    /// Directory holding doiget's append-only logs. Derived from
+    /// `log_path`'s parent so it always agrees with the writer.
     pub log_dir: Utf8PathBuf,
-    /// JSON-Lines provenance log file path. Always `<log_dir>/access.jsonl`.
+    /// JSON-Lines provenance log file path. `DOIGET_LOG_PATH` when set,
+    /// otherwise `<config_dir>/doiget/access.jsonl` (`docs/CONFIG.md` §4).
     pub log_path: Utf8PathBuf,
     /// Directory holding `config.toml` and `credentials.toml`.
     pub config_dir: Utf8PathBuf,
@@ -63,11 +74,25 @@ impl ResolvedConfig {
         let store_root = std::env::var("DOIGET_STORE_ROOT")
             .map(Utf8PathBuf::from)
             .unwrap_or_else(|_| home.join("papers"));
-        let log_dir = std::env::var("DOIGET_LOG_DIR")
-            .map(Utf8PathBuf::from)
-            .unwrap_or_else(|_| cfg.join("doiget"));
 
-        let log_path = log_dir.join("access.jsonl");
+        // Issue #142: resolve the log path the SAME way the writer does
+        // (`commands::fetch::resolve_log_path` / `commands::audit_log`):
+        // `DOIGET_LOG_PATH` (the only log env var documented in
+        // `docs/CONFIG.md` §4) when set, otherwise
+        // `<config_dir>/doiget/access.jsonl`. The undocumented
+        // `DOIGET_LOG_DIR` is no longer read, so `config show` can no
+        // longer disagree with the path the provenance log is written to.
+        let log_path = match std::env::var("DOIGET_LOG_PATH") {
+            Ok(s) if !s.is_empty() => Utf8PathBuf::from(s),
+            _ => cfg.join("doiget").join("access.jsonl"),
+        };
+        // `log_dir` is purely derived from `log_path` so the two can never
+        // drift; fall back to the config dir for a path with no parent.
+        let log_dir = log_path
+            .parent()
+            .map(Utf8PathBuf::from)
+            .unwrap_or_else(|| cfg.join("doiget"));
+
         let config_dir = cfg.join("doiget");
         let config_path = config_dir.join("config.toml");
 
@@ -124,12 +149,33 @@ pub fn run(action: String) -> Result<()> {
             // Trying to actually create the dirs would have side-effects;
             // keep doctor read-only and just check existence of parents.
             if !all_ok {
-                bail!("config doctor: one or more checks failed");
+                // Issue #149: a failing doctor means missing/invalid
+                // config — `docs/ERRORS.md` §4 classes "missing config"
+                // as misuse → exit 2 (the per-check `[FAIL]` lines were
+                // already written to stderr by `check`).
+                eprintln_err("error: config doctor: one or more checks failed");
+                return Err(anyhow::Error::new(CliExit(2)));
             }
         }
-        other => bail!("unknown config action: {other}; expected `show` / `path` / `doctor`"),
+        other => {
+            // Issue #149: an unknown subcommand action is clear argument
+            // misuse → `docs/ERRORS.md` §4 exit 2, not the generic exit 1
+            // a bare `bail!` produced.
+            eprintln_err(&format!(
+                "error: unknown config action: {other}; expected `show` / `path` / `doctor`"
+            ));
+            return Err(anyhow::Error::new(CliExit(2)));
+        }
     }
     Ok(())
+}
+
+/// Stderr sink for the `docs/ERRORS.md` §3 human-error lines. The
+/// localized `#[allow]` is the minimal intervention for the workspace
+/// `clippy::print_stderr` lint (same pattern as `commands::fetch`).
+#[allow(clippy::print_stderr)]
+fn eprintln_err(msg: &str) {
+    eprintln!("{msg}");
 }
 
 /// Emit one `[ ok ]` / `[FAIL]` checklist line to stderr and update the
@@ -193,7 +239,7 @@ mod tests {
     fn unset_all_doiget_config_env() -> Vec<EnvGuard> {
         [
             "DOIGET_STORE_ROOT",
-            "DOIGET_LOG_DIR",
+            "DOIGET_LOG_PATH",
             "DOIGET_CONTACT_EMAIL",
             "DOIGET_UNPAYWALL_EMAIL",
         ]
@@ -228,16 +274,44 @@ mod tests {
         assert_eq!(cfg.store_root.as_str(), "/tmp/foo");
     }
 
+    /// Issue #142: `config show` MUST report the same `log_path` the
+    /// provenance-log writer uses. The writer keys off `DOIGET_LOG_PATH`
+    /// (the only log env var documented in `docs/CONFIG.md` §4); the
+    /// resolver must do the same, and `log_dir` must be that path's
+    /// parent — never an independently-resolved (and divergent) value.
+    #[test]
+    #[serial_test::serial]
+    fn log_path_follows_doiget_log_path_env() {
+        let _g = unset_all_doiget_config_env();
+        let _override = EnvGuard::set("DOIGET_LOG_PATH", "/var/lib/doiget/access.jsonl");
+        let cfg = ResolvedConfig::from_env().expect("home dir must resolve on test host");
+        assert_eq!(
+            cfg.log_path.as_str(),
+            "/var/lib/doiget/access.jsonl",
+            "config show must echo DOIGET_LOG_PATH verbatim (issue #142)"
+        );
+        assert_eq!(
+            cfg.log_dir.as_str(),
+            "/var/lib/doiget",
+            "log_dir must be derived from log_path's parent so the two cannot drift"
+        );
+    }
+
     #[test]
     #[serial_test::serial]
     fn doctor_fails_without_contact_email() {
+        // Issue #149: a failing doctor is "missing config" → exit 2.
+        // The human-readable line moved to stderr; the error now carries
+        // a `CliExit(2)` rather than a Display-formatted anyhow string.
         let _g = unset_all_doiget_config_env();
         let err = run("doctor".into())
             .expect_err("doctor should fail when DOIGET_CONTACT_EMAIL is unset");
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("config doctor"),
-            "unexpected error message: {msg}"
+        let cli_exit = err
+            .downcast_ref::<CliExit>()
+            .expect("failing doctor must carry a CliExit (issue #149)");
+        assert_eq!(
+            cli_exit.0, 2,
+            "missing/invalid config is misuse → exit 2, not the generic exit 1"
         );
     }
 
@@ -254,12 +328,17 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn unknown_action_errors() {
+        // Issue #149: an unknown action is clear argument misuse →
+        // `docs/ERRORS.md` §4 exit 2. The descriptive line moved to
+        // stderr; the error carries `CliExit(2)`.
         let _g = unset_all_doiget_config_env();
         let err = run("bogus".into()).expect_err("bogus action should error");
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("unknown config action"),
-            "unexpected error message: {msg}"
+        let cli_exit = err
+            .downcast_ref::<CliExit>()
+            .expect("unknown config action must carry a CliExit (issue #149)");
+        assert_eq!(
+            cli_exit.0, 2,
+            "unknown config action is misuse → exit 2, not the generic exit 1"
         );
     }
 }

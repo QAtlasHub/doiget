@@ -34,7 +34,7 @@ use anyhow::{anyhow, Context, Result};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, RowInput};
 use doiget_core::{RateLimits, Ref, MCP_BATCH_MAX_SIZE};
 
-use super::fetch::{build_fetch_plan, emit_dry_run_plan_to_stdout, FetchHarness};
+use super::fetch::{build_fetch_plan, emit_dry_run_plan_to_stdout, CliExit, FetchHarness};
 use super::resolve_store_root;
 
 /// Run the `doiget batch <path>` subcommand.
@@ -226,12 +226,16 @@ pub async fn run_with_options(path: String, dry_run: bool) -> Result<()> {
     if all_ok {
         Ok(())
     } else {
-        Err(anyhow!(
-            "batch failed: {} OK, {} parse errors, {} fetch errors",
-            fetch_ok,
-            parse_errors,
-            fetch_errors,
-        ))
+        // Issue #143 / `docs/ERRORS.md` §4: the batch process exit code is
+        // the number of failures, capped at 255 (the dedicated "capped
+        // failure count for `batch`" exit). Previously a bare `anyhow!`
+        // fell through to `main`'s catch-all and exited 1 regardless of
+        // volume, so CI callers could not tell 1 failure from 200. The
+        // human-readable breakdown was ALREADY written to stderr by
+        // `print_summary` above, so `CliExit` carries only the code —
+        // `main` downcasts it exactly as it does for `fetch`'s `CliExit`.
+        let code = total_errors.min(255) as i32;
+        Err(anyhow::Error::new(CliExit(code)))
     }
 }
 

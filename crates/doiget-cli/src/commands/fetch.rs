@@ -387,6 +387,25 @@ impl FetchHarness {
         let ctx = self.fetch_context();
         match core_fetch_paper(ref_, &self.profile, &ctx, &self.store, self.store.root()).await {
             Ok(outcome) => {
+                // Issue #145 / `docs/ERRORS.md` §3 + §6: a `Blocked` PDF
+                // leg means an OA PDF *was* discovered but could not be
+                // retrieved. Metadata was written, but this is NOT a
+                // clean success — emitting only `print_success` here made
+                // a denied PDF visually indistinguishable from a genuine
+                // metadata-only result and exited 0 (a silent failure).
+                // Route it through the SAME `error[CODE]:` stderr channel
+                // + `cli_exit_code(...)` mapping `fetch` already uses for
+                // `CapabilityDenied`, using the structured code the
+                // orchestrator mapped from the underlying transport error.
+                if let PdfLegStatus::Blocked {
+                    code,
+                    message,
+                    denial,
+                } = &outcome.pdf_leg
+                {
+                    render_blocked_error(ref_, &outcome, *code, message, denial.as_ref());
+                    return Err(anyhow::Error::new(CliExit(cli_exit_code(*code))));
+                }
                 emit_success_line(ref_, &outcome);
                 Ok(())
             }
@@ -425,20 +444,19 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
                 label, outcome.path
             ));
         }
-        // Issue #118: an OA PDF existed but could not be retrieved.
-        // The metadata WAS written, so this is still a (partial)
-        // success — but we MUST tell the user why the PDF is missing
-        // instead of an indistinguishable "metadata-only" line.
-        PdfLegStatus::Blocked { code, message, .. } => {
-            print_success(format_args!(
-                "fetched {} (metadata-only) -> {}",
-                label, outcome.path
-            ));
-            print_success(format_args!(
-                "  note: an OA PDF was found but could not be retrieved [{}]: {}",
-                code.as_wire(),
-                message
-            ));
+        // Issue #145: `Blocked` is NO LONGER a success outcome. It is
+        // intercepted in `fetch_one` BEFORE `emit_success_line` is
+        // called and rendered via `render_blocked_error` with a
+        // non-zero exit (`docs/ERRORS.md` §3/§6 — no silent failures).
+        // Reaching this arm would mean the interception regressed, so we
+        // fail closed: surface the `error[CODE]:` line here too rather
+        // than printing a misleading success line.
+        PdfLegStatus::Blocked {
+            code,
+            message,
+            denial,
+        } => {
+            render_blocked_error(ref_, outcome, *code, message, denial.as_ref());
         }
         // `PdfLegStatus` is `#[non_exhaustive]`; a future variant
         // degrades to the size-based wording rather than failing the
@@ -573,7 +591,12 @@ impl std::error::Error for CliExit {}
 
 /// `docs/ERRORS.md` §4 closed-code → process exit code. Anything not
 /// individually listed falls under "at least one fetch failed" (1).
-fn cli_exit_code(code: ErrorCode) -> i32 {
+///
+/// `pub(crate)` so sibling subcommands (`commands::graph`, …) route
+/// their typed denials through the SAME centralized mapping instead of
+/// open-coding magic exit numbers — keeps the `ErrorCode`→exit contract
+/// single-sourced (issue #149).
+pub(crate) fn cli_exit_code(code: ErrorCode) -> i32 {
     match code {
         ErrorCode::CapabilityDenied => 3,
         ErrorCode::StoreError | ErrorCode::LogError => 4,
@@ -604,6 +627,52 @@ fn render_fetch_error(e: &FetchError) {
             }
         }
     }
+}
+
+/// Render a `PdfLegStatus::Blocked` outcome in the `docs/ERRORS.md` §3
+/// "Researcher (CLI human)" form. Issue #145: an OA PDF was discovered
+/// but could not be retrieved — the metadata WAS written, but this is a
+/// denial, not a clean success. We emit the same `error[CODE]:` stderr
+/// shape as [`render_fetch_error`] (so pipelines and humans see an
+/// unambiguous failure), name the metadata path that DID land so the
+/// partial result is still discoverable, and surface the ADR-0023
+/// `denial_context` note when present. stdout stays clean (ADR-0001).
+fn render_blocked_error(
+    ref_: &Ref,
+    outcome: &FetchPaperOutcome,
+    code: ErrorCode,
+    message: &str,
+    denial: Option<&DenialContext>,
+) {
+    let label = match ref_ {
+        Ref::Arxiv(id) => format!("arxiv:{}", id.as_str()),
+        Ref::Doi(doi) => format!("doi:{}", doi.as_str()),
+    };
+    print_err(format_args!(
+        "error[{}]: {label}: an OA PDF was found but could not be retrieved: {message}",
+        code.as_wire()
+    ));
+    if let Some(dc) = denial {
+        let attempted = dc.attempted.as_deref().unwrap_or("(unknown)");
+        match &dc.expected {
+            Some(exp) if !exp.is_empty() => {
+                print_err(format_args!(
+                    "  = note: attempted {attempted}; allowed: {}",
+                    exp.join(", ")
+                ));
+            }
+            _ => {
+                print_err(format_args!("  = note: attempted {attempted}"));
+            }
+        }
+    }
+    // The metadata TOML still landed; point the user at it so the
+    // partial result is not lost (it is still useful), without
+    // pretending the fetch succeeded.
+    print_err(format_args!(
+        "  = note: metadata-only record written to {}",
+        outcome.path
+    ));
 }
 
 // ---------------------------------------------------------------------------

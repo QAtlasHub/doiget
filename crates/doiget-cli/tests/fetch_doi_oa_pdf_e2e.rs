@@ -239,10 +239,16 @@ async fn fetch_doi_oa_pdf_happy_path() {
 async fn fetch_doi_oa_pdf_falls_back_to_metadata_when_host_off_allowlist() {
     // Failure-fallback path: Unpaywall hands back an OA URL whose host is
     // NOT registered in the test client's `oa-publisher` allowlist. The
-    // orchestrator MUST log a `Fetch err / source=oa-publisher` row,
-    // SKIP writing a PDF, and still return Ok(()) with the metadata
-    // written. Per the `informed-best-effort` posture in
-    // `docs/REDIRECT_ALLOWLIST.md` §3.
+    // orchestrator MUST log a `Fetch err / source=oa-publisher` row and
+    // SKIP writing a PDF while still writing the metadata TOML (the
+    // `informed-best-effort` posture in `docs/REDIRECT_ALLOWLIST.md` §3
+    // keeps the metadata).
+    //
+    // Issue #145 / `docs/ERRORS.md` §3 + §6: the CLI persona must NOT
+    // treat this blocked PDF leg as a clean `Ok(())`. The metadata is
+    // still written (and pointed at), but `run_with_options` returns an
+    // `Err` carrying a `CliExit` so the process exits non-zero — a
+    // blocked PDF is no longer a silent success.
     let server = MockServer::start().await;
     let base_uri = server.uri();
 
@@ -288,11 +294,23 @@ async fn fetch_doi_oa_pdf_falls_back_to_metadata_when_host_off_allowlist() {
     // on every redirect hop).
     env.set("DOIGET_OA_PUBLISHER_BASE", &base_uri);
 
-    // The orchestrator MUST still return Ok(()) — metadata is the
-    // partial-success contract from REDIRECT_ALLOWLIST.md §3.
-    fetch::run_with_options(format!("doi:{}", TEST_DOI), false)
+    // Issue #145: the blocked PDF leg must surface as a non-zero exit,
+    // NOT a silent `Ok(())`. The metadata is still written (asserted
+    // below) but the CLI persona gets an `error[CODE]:` line + a
+    // `CliExit` carrying the `docs/ERRORS.md` §4 process code. The
+    // off-allowlist denial is wrapped by reqwest as `HttpError::Network`
+    // → `NETWORK_ERROR` → `cli_exit_code` falls to the generic
+    // "at least one fetch failed" exit (1).
+    let err = fetch::run_with_options(format!("doi:{}", TEST_DOI), false)
         .await
-        .expect("fetch::run_with_options succeeds (metadata-only fallback)");
+        .expect_err("a blocked OA PDF leg must NOT be a silent success (issue #145)");
+    let cli_exit = err
+        .downcast_ref::<doiget_cli::commands::fetch::CliExit>()
+        .expect("blocked PDF leg must carry a CliExit so main maps it to a §4 exit code");
+    assert_eq!(
+        cli_exit.0, 1,
+        "off-allowlist OA denial maps to NETWORK_ERROR → exit 1"
+    );
 
     // PDF MUST NOT be written.
     let pdf_path = store_root.join("doi_10.1234_test.pdf");

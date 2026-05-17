@@ -27,13 +27,22 @@
 
 use std::io::Write;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 
 use doiget_core::citation_graph::{expand, GraphCaps, GraphError};
 use doiget_core::sources::openalex::OpenalexSource;
-use doiget_core::Ref;
+use doiget_core::{ErrorCode, Ref};
 
-use super::fetch::FetchHarness;
+use super::fetch::{cli_exit_code, CliExit, FetchHarness};
+
+/// Stderr sink for the `docs/ERRORS.md` §3 human-error lines. Mirrors
+/// the `print_err` helper in `commands::fetch`; the localized `#[allow]`
+/// is the minimal intervention for the workspace `clippy::print_stderr`
+/// lint.
+#[allow(clippy::print_stderr)]
+fn print_err(args: std::fmt::Arguments<'_>) {
+    eprintln!("{args}");
+}
 
 /// Run the `graph` subcommand against the live source set.
 ///
@@ -50,21 +59,47 @@ pub async fn run(
     total: Option<u32>,
     per_paper: Option<u32>,
 ) -> Result<()> {
-    let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
+    let ref_ = match Ref::parse(&input) {
+        Ok(r) => r,
+        Err(e) => {
+            // Bad ref string is user misuse → `docs/ERRORS.md` §4 exit 2
+            // (issue #149), consistent with `fetch`'s INVALID_REF path.
+            print_err(format_args!(
+                "error[{}]: invalid ref: {e}",
+                ErrorCode::InvalidRef.as_wire()
+            ));
+            return Err(anyhow::Error::new(CliExit(2)));
+        }
+    };
     let doi = match &ref_ {
         Ref::Doi(d) => d.clone(),
-        Ref::Arxiv(_) => bail!(
-            "doiget graph requires a DOI seed; arXiv ids are not in OpenAlex's referenced_works \
-             keyspace"
-        ),
+        Ref::Arxiv(_) => {
+            // Passing an arXiv id to `graph` is an argument-misuse error
+            // (OpenAlex's `referenced_works` is DOI-keyed) → exit 2
+            // (`docs/ERRORS.md` §4), not the generic exit 1 (issue #149).
+            print_err(format_args!(
+                "error: doiget graph requires a DOI seed; arXiv ids are not in OpenAlex's \
+                 referenced_works keyspace"
+            ));
+            return Err(anyhow::Error::new(CliExit(2)));
+        }
     };
 
     let harness = FetchHarness::from_env().context("building fetch harness")?;
     if !harness.profile.metadata.openalex {
-        bail!(
-            "doiget graph requires DOIGET_ENABLE_OPENALEX in env AND the binary built with \
-             `--features citation`. CapabilityProfile.metadata.openalex is currently false."
-        );
+        // Capability not granted → `docs/ERRORS.md` §4 exit 3, the SAME
+        // code `fetch` uses for `CAPABILITY_DENIED` (issue #149). This
+        // pre-`expand` guard is the same denial class as the post-`expand`
+        // `GraphError::CapabilityDenied` arm below; route both through
+        // `cli_exit_code(ErrorCode::CapabilityDenied)`.
+        print_err(format_args!(
+            "error[{}]: doiget graph requires DOIGET_ENABLE_OPENALEX in env AND the binary \
+             built with `--features citation` (CapabilityProfile.metadata.openalex is false)",
+            ErrorCode::CapabilityDenied.as_wire()
+        ));
+        return Err(anyhow::Error::new(CliExit(cli_exit_code(
+            ErrorCode::CapabilityDenied,
+        ))));
     }
 
     let contact_email =
@@ -97,11 +132,24 @@ pub async fn run(
     harness.log_session_end(session_ok, Some(&input));
 
     let graph = outcome.map_err(|e| match e {
-        GraphError::CapabilityDenied => anyhow::anyhow!(
-            "OpenAlex capability denied: set DOIGET_ENABLE_OPENALEX and rebuild with \
-             --features citation"
-        ),
+        GraphError::CapabilityDenied => {
+            // Issue #149: `ERRORS.md` §4 maps a capability denial to
+            // exit 3 (the same code `fetch` uses for
+            // `CAPABILITY_DENIED`), NOT the generic exit 1 a plain
+            // `anyhow!` string would have produced. Emit the cargo-style
+            // `error[CODE]:` line here (while the error is still typed),
+            // then carry only the exit code to `main`.
+            print_err(format_args!(
+                "error[{}]: OpenAlex capability denied: set DOIGET_ENABLE_OPENALEX and \
+                 rebuild with --features citation",
+                ErrorCode::CapabilityDenied.as_wire()
+            ));
+            anyhow::Error::new(CliExit(cli_exit_code(ErrorCode::CapabilityDenied)))
+        }
         GraphError::SeedNotIndexed => {
+            // Not a capability/misuse class — an indexing gap upstream.
+            // Falls under the generic "at least one fetch failed" exit
+            // (1); a descriptive anyhow string is the right surface.
             anyhow::anyhow!("seed DOI '{input}' is not indexed by OpenAlex")
         }
         other => anyhow::Error::new(other),
