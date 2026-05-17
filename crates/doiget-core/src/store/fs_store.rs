@@ -14,7 +14,12 @@
 //! - **§5 Atomic write:** write `<safekey>.toml.tmp` → `sync_all` → `rename`
 //!   → fsync parent dir (POSIX). On Windows `std::fs::rename` invokes
 //!   `MoveFileEx` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`,
-//!   so no extra parent-fsync syscall is required.
+//!   so no extra parent-fsync syscall is required. Each file is atomic
+//!   individually; there is no cross-file transaction. The PDF is
+//!   therefore written BEFORE the metadata that references it (issue
+//!   #122), so a crash between the two renames can only leave an orphan
+//!   PDF or the prior consistent entry — never metadata pointing at a
+//!   missing PDF.
 //! - **§6 Coexistence with BiblioFetch.jl:** when re-writing an existing
 //!   entry, reserved top-level fields previously present are NOT overwritten
 //!   if the new value differs. Only the `[doiget]` table and `other` are
@@ -171,17 +176,30 @@ impl Store for FsStore {
         // key order within tables and a trailing `\n`.
         let normalized = normalize_toml(&merged)?;
 
-        // Atomic write per §5: tmp → fsync → rename → fsync parent.
-        atomic_write(&meta_path, normalized.as_bytes())?;
-
-        // PDF copy (optional). Same atomic dance, but byte-by-byte rather
-        // than text-with-newline-canonicalization.
+        // Issue #122 — crash-consistent ordering: the PDF is written
+        // BEFORE the metadata that references it. A crash between the
+        // two atomic renames then leaves either the previous
+        // consistent entry or no metadata at all — NEVER metadata
+        // whose `pdf_path` points at a `.pdf` that does not exist
+        // yet. (The reverse order could publish a dangling pointer.)
+        // Worst case under the new order is an orphan `<safekey>.pdf`
+        // with stale/absent metadata, which list/search ignore (they
+        // key off metadata) and a re-fetch overwrites — strictly
+        // safer than a torn pointer. There is still no cross-file
+        // transaction; this ordering is the bounded MVP guarantee
+        // (documented in STORE.md §5).
         if let Some(pdf_src) = pdf {
             let pdf_dst = self.pdf_path(key)?;
             let mut bytes = Vec::new();
             File::open(pdf_src.as_std_path())?.read_to_end(&mut bytes)?;
+            // Same atomic dance as the metadata, byte-by-byte.
             atomic_write(&pdf_dst, &bytes)?;
         }
+
+        // Atomic write per §5: tmp → fsync → rename → fsync parent.
+        // Done LAST so the metadata only becomes visible once its PDF
+        // (if any) is already durably on disk.
+        atomic_write(&meta_path, normalized.as_bytes())?;
 
         let _ = <File as FileExt>::unlock(&lock_file);
         Ok(())

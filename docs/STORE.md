@@ -115,6 +115,20 @@ A crash mid-write leaves either:
 It never leaves a partially-visible new file. The lone `.tmp` artifact may be reaped at
 startup.
 
+**Cross-file ordering (issue #122).** Each file is atomic *individually*; there is no
+cross-file transaction across the metadata TOML and its PDF. The writer therefore renames
+the **PDF first**, then the metadata that references it. Consequences of a crash *between*
+the two renames:
+
+- before the PDF rename → the previous consistent entry (or no entry) — unchanged;
+- after the PDF rename, before the metadata rename → an **orphan `<safekey>.pdf`** plus
+  the prior/absent metadata. `list_recent` / `search` key off metadata and ignore the
+  orphan; a subsequent re-fetch overwrites it.
+
+What is **guaranteed not to happen**: metadata becoming visible while its `pdf_path`
+points at a `.pdf` that is absent or stale. A full two-file transaction is out of scope
+for the MVP; this ordering is the bounded guarantee.
+
 ## 6. doiget-side write discipline
 
 When doiget writes to a `<safekey>.toml` that already exists (e.g., a re-fetch):
