@@ -41,6 +41,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0022 | Dry-run mode for fetch operations | Accepted | Slice 2 | #12 |
 | 0023 | Structured `denial_context` on error envelopes | Accepted | Slices 1/2 | #12 |
 | 0024 | CanonicalRef implementation + provenance log v1 → v2 migration | Accepted | Slice 4 | Slice 4 |
+| 0025 | Tag-driven release with version gate + beta/stable lanes | Proposed (design-first; supersedes 0013 release portion on impl) | — | maintainer review 2026-05-17 |
 
 ## Conventions
 
