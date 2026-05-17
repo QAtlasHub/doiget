@@ -1,7 +1,7 @@
 # 0013 - CI baseline (workflows, OIDC publish, sigstore signing)
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented; Phase-0 9-workflow CI baseline + Slice 9 real MCP smoke gate + OIDC publish (Slice 22) + release-sign/SBOM workflow (commit `5a108dd`, v0.1.3)
 - **Supersedes:** -
 - **Source:** Discussion #10
 

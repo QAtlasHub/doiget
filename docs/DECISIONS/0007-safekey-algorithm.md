@@ -1,7 +1,7 @@
 # 0007 - safekey algorithm with reference test vectors
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented; `Ref::safekey()` (PR #39) + 100-vector NORMATIVE parity set (Slice 3) gated by `.github/workflows/safekey-vectors.yml`
 - **Supersedes:** -
 - **Source:** Discussion #1 §Contract 4 / #17
 

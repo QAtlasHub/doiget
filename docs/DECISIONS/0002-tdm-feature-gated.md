@@ -1,7 +1,7 @@
 # 0002 - TDM sources are compile-time feature-gated
 
 - **Date:** 2026-05-05
-- **Status:** Proposed
+- **Status:** Accepted — implemented; Slices 17/18/19 (Springer / APS / Elsevier TDM sources, each individually `--features tdm-<publisher>` gated; no umbrella flag, enforced by `docs/SCOPE.md` #12/#13 + posture-lint)
 - **Supersedes:** -
 - **Source:** Discussion #5
 
