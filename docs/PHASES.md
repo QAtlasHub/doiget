@@ -37,9 +37,13 @@ three TDM sub-phases shipped — see status table below.)*
 
 ### Per-phase completion status
 
-Status is derived from [`CHANGELOG.md`](../CHANGELOG.md) slices and `git log` tag
-dates only (no dates are invented; `0.0.0` cut = 2026-05-15, the `0.1.x` line =
-2026-05-17).
+Status is derived from the [`CHANGELOG.md`](../CHANGELOG.md) section headings and
+the slice entries within them, with the annotated `doiget-{core,cli,mcp}-v0.1.x`
+git tags backing the `0.1.1`–`0.1.3` lines. No dates are invented: the `0.0.0`
+cut date (2026-05-15) is the `## [0.0.0]` CHANGELOG heading only — there is no
+`v0.0.0` tag — while the `0.1.1`–`0.1.3` tags are dated 2026-05-17. The TDM work
+(Slices 17–19) is recorded under the `## [0.0.0]` CHANGELOG section, i.e. the
+2026-05-15 dev cut, not the later `0.1.x` tags.
 
 | Phase | Status | Evidence (CHANGELOG slice / version) |
 |---|---|---|
