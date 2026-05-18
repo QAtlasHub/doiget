@@ -1,5 +1,22 @@
 {% extends "base.html" %}
 
+{% block structured_data %}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "doiget",
+  "description": "{{ config.description }}",
+  "url": "{{ canonical | safe }}",
+  "codeRepository": "{{ config.extra.github_url }}",
+  "programmingLanguage": "Rust",
+  "runtimePlatform": "Rust 1.86+",
+  "license": "https://opensource.org/licenses/MIT",
+  "applicationCategory": "DeveloperApplication"
+}
+</script>
+{% endblock %}
+
 {% block content %}
 <section class="hero">
   <h1>doiget</h1>
@@ -52,18 +69,18 @@ wrote ~/papers/2L/2LpQ.../paper.pdf  (412 KB, license: cc-by)
 </section>
 
 <section class="roadmap">
-  <h2>Roadmap</h2>
+  <h2>Status</h2>
   <p>
-    <span class="done">Phase 0 done</span> &middot;
-    <span class="done">Phase 1 done</span> &middot;
-    <span class="done">Phase 2 done</span> &middot;
-    <span class="active">Phase 3 in progress</span> &middot;
-    <span>Phase 4-6 upcoming</span>
+    <span class="done">Shipping &mdash; <strong>v0.2.0</strong></span> on
+    crates.io (<code>doiget-core</code>, <code>doiget-cli</code>,
+    <code>doiget-mcp</code>), with sigstore-signed binaries and an SBOM on
+    every GitHub Release.
   </p>
   <p>
-    MVP ships at the end of Phase 6 (release plumbing: OIDC trusted
-    publishing + sigstore + SBOM). Until then the workspace stays at
-    <code>0.0.0</code>; see <a href="{{ get_url(path='@/contribute/phases.md') | safe }}">the phase plan</a>.
+    Tier&nbsp;1 + Tier&nbsp;2 sources, the stdio MCP server, citation-graph
+    expansion, and feature-gated TDM are all implemented. See the
+    <a href="{{ config.extra.github_url }}/blob/main/CHANGELOG.md">changelog</a>
+    and <a href="{{ get_url(path='@/contribute/phases.md') | safe }}">project status</a>.
   </p>
 </section>
 {% endblock %}
