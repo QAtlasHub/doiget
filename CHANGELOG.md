@@ -10,6 +10,20 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Fixed
+
+- **[portability]** `doiget` now installs **everywhere** — `cargo install
+  doiget-cli` no longer requires cmake/nasm/go, and the published Linux
+  binary runs on old glibc (Ubuntu 20.04 / RHEL 8 / HPC boxes). Root
+  cause: reqwest's `rustls` feature pulled the aws-lc-rs crypto provider
+  (heavy C toolchain) and the release binary was dynamically linked
+  against the runner's glibc. Now: `reqwest` uses `rustls-no-provider`
+  with the `ring` crypto provider (cc + perl only), installed as the
+  process default in `doiget-core`'s `http` module; the release Linux
+  artefact is a static `x86_64-unknown-linux-musl` build. TLS posture is
+  unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
+  still satisfied). See ADR-0020 Amendment 1.
+
 ## [0.2.0](https://github.com/sotashimozono/doiget/compare/doiget-core-v0.1.3...v0.2.0) - 2026-05-18
 
 First release cut under the tag-driven pipeline (ADR-0025): a single signed

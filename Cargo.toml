@@ -75,13 +75,35 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"]
 # ADR-0002). `doiget-core/Cargo.toml` does this correctly.
 secrecy = { version = "0.10", features = ["serde"] }
 
-# HTTP client (rustls only — no openssl by deny.toml).
-# reqwest 0.13 split the old `rustls-tls` umbrella into composable pieces:
-#   `rustls`       = rustls backend + aws-lc-rs crypto provider + platform-verifier roots
-#   `webpki-roots` = bundled Mozilla WebPKI roots (cross-platform, no system store needed)
-# Together these reproduce the 0.12 `rustls-tls` behaviour.
+# HTTP client (rustls only — no openssl by deny.toml; see ADR-0020).
+#
+# reqwest 0.13's `rustls` feature bundles the **aws-lc-rs** crypto
+# provider, whose `aws-lc-sys` build script needs a heavy C toolchain
+# (cmake + nasm/go/clang). That makes `cargo install doiget-cli` fail on
+# stock research/HPC boxes (e.g. Ubuntu 20.04 with only gcc+make) and
+# fights musl-static cross-builds. We do NOT need FIPS or post-quantum,
+# so we drop aws-lc-rs entirely:
+#
+#   reqwest `rustls-no-provider` = rustls backend + platform-verifier
+#                                  roots, but NO bundled crypto provider
+#                                  (caller installs the process default).
+#   rustls `ring`                = the ring crypto provider (cc + perl
+#                                  only — no cmake), installed as the
+#                                  process default in `doiget-core`'s
+#                                  `http` module before any client builds.
+#
+# Result: identical TLS posture (rustls-only, platform-verifier roots),
+# but a pure cc/perl build that compiles anywhere. See ADR-0020
+# Amendment 1 for the portability rationale.
 reqwest = { version = "0.13", default-features = false, features = [
-    "rustls", "json", "gzip", "brotli", "stream",
+    "rustls-no-provider", "json", "gzip", "brotli", "stream",
+] }
+# Explicit rustls pin so the `ring` provider is compiled in and can be
+# installed as the process default. `default-features = false` drops
+# rustls's own aws_lc_rs default and `prefer-post-quantum` (aws-lc-rs
+# only). Must stay version-compatible with the rustls reqwest resolves.
+rustls = { version = "0.23", default-features = false, features = [
+    "ring", "std", "tls12", "logging",
 ] }
 
 # Filesystem
