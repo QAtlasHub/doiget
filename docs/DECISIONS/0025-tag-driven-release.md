@@ -313,3 +313,18 @@ for the existing tag (`gh workflow run release-plz.yml -f tag=v0.2.0`) — the
 gate now passes as partial-recovery, `doiget-core@0.2.0` idempotently skips,
 and `doiget-mcp@0.2.0` then `doiget-cli@0.2.0` publish. No new tag is minted;
 `doiget-core@0.2.0` (already immutable on crates.io) is reused as-is.
+
+## Amendment — 2026-05-18 (3): back-merge PR automation
+
+§D6 rule 4 (anything landing on `main` → back-merge to `next` so the beta
+lane never regresses) is automated by `.github/workflows/backmerge.yml`:
+on every push to `main`, if `next` is behind `main`, it **opens** (or leaves
+the existing) `main → next` PR. Scope is deliberately *open-only* — it does
+**not** auto-merge: `next` is branch-protected, and the predictable
+`Cargo.toml`/`Cargo.lock` version conflict (`next` carries `X.Y.Z-beta.N`,
+`main` the clean `X.Y.Z`) is resolved by the human at merge time, **keeping
+`next`'s `-beta.N`**. It authenticates with the `RELEASE_PLZ_TOKEN` PAT
+(reused) because a `GITHUB_TOKEN`-opened PR would not trigger the required
+CI and so could never merge into protected `next`. Auto-resolving the
+version conflict in CI (a merge driver / normalize step) is a possible
+future enhancement, intentionally out of scope here.
