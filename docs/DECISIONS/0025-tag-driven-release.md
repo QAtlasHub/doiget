@@ -224,7 +224,8 @@ irreversible step is preceded by an abortable gate.
 **Negative / cost.** Version bump + changelog move from "automated PR" to a
 deliberate maintainer step (mitigated by the git-cliff helper). The maintainer
 must remember the bump-commit-then-tag order (mitigated: the gate rejects
-tag/manifest drift loudly instead of mis-publishing). The `main`+`next`
+tag/manifest drift loudly instead of publishing a mismatched release). The
+`main`+`next`
 two-branch model adds a back-merge discipline (hotfix → back-merge to `next`)
 and a promotion ritual (mitigated: the gate enforces lane/branch/semver
 invariants mechanically, and the back-merge is a fixed checklist step).
