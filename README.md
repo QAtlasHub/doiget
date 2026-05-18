@@ -12,7 +12,11 @@
 [![issues](https://img.shields.io/github/issues/sotashimozono/doiget)](https://github.com/sotashimozono/doiget/issues)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Docs:** stable (`main`) — [site](https://sotashimozono.github.io/doiget/) · [API on docs.rs](https://docs.rs/doiget-core) &nbsp;|&nbsp; dev (`next`/beta) — [`next` branch](https://github.com/sotashimozono/doiget/tree/next) *(source only; no rendered beta docs are published yet)*
+[![docs (stable)](https://img.shields.io/badge/docs-stable-blue)](https://codes.sota-shimozono.com/doiget/)
+[![docs (dev/next)](https://img.shields.io/badge/docs-dev%20%28next%29-orange)](https://codes.sota-shimozono.com/doiget/dev/)
+[![API (docs.rs)](https://img.shields.io/badge/API-docs.rs-blue)](https://docs.rs/doiget-core)
+
+**Docs:** stable = the Zola site (built from `main`); dev = rustdoc built from `next`; API = `docs.rs` (latest published release).
 
 **Status:** Shipping — **v0.2.0** on crates.io (`doiget-core`, `doiget-cli`,
 `doiget-mcp`), with sigstore-signed binaries + an SBOM attached to the GitHub
