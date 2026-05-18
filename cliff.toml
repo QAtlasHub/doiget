@@ -1,0 +1,92 @@
+# cliff.toml — git-cliff config for LOCAL, pre-tag changelog drafting only
+# (ADR-0025 D4). This is NOT wired into CI: there is no automated, merge-time
+# changelog generation under ADR-0025. `scripts/release-changelog.sh` invokes
+# git-cliff with this config over `<last-tag-in-lane>..HEAD`; the maintainer
+# REVIEWS + EDITS the draft before the release commit, and the version gate
+# (release-version-gate.sh, ADR-0025 D2-G5) then enforces that a non-empty
+# `## [X.Y.Z]` section exists at tag time.
+#
+# CRITICAL — #164 root cause fix: `[git] first_parent = false`. release-plz's
+# git-cliff invocation traversed first-parent only, so conventional commits
+# behind `Merge pull request #NNN` commits were invisible and the generated
+# `## [0.1.4]` captured a single fix line plus a stray merge subject. Walking
+# ALL commits (first_parent = false) makes the bodies of merged PR branches
+# visible to the conventional-commit parser. Merge commits themselves are
+# dropped by the merge-subject `skip` rule so the `main`/`next` merge-graph
+# history (ADR-0025 D6 `--no-ff` promotions) does not reintroduce noise.
+#
+# Output style: Keep a Changelog 1.1.0 (consistent with the existing,
+# hand-curated CHANGELOG.md header) — grouped Added / Changed / Fixed / Docs /
+# Other, SemVer, with a compare/ link added by the maintainer when editing.
+
+[changelog]
+# Header is intentionally empty: the script prints ONLY the new section to
+# stdout for the maintainer to splice into the existing curated CHANGELOG.md
+# (which already owns the Keep-a-Changelog preamble). We do not regenerate the
+# whole file.
+header = ""
+
+# One `## [X.Y.Z] - DATE` section, Keep-a-Changelog style, grouped. The
+# compare link mirrors the existing CHANGELOG header convention
+# (`.../compare/<prev>...<curr>`); the maintainer adds the exact endpoints
+# when editing (tags differ across the legacy per-crate vs new `v*` scheme).
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+{{ commit.message | upper_first }}\
+{% endfor %}
+{% endfor %}\n
+"""
+trim = true
+footer = ""
+
+[git]
+# THE #164 FIX — walk every commit, not just first parents, so conventional
+# commits inside merged PR branches are seen by the parser.
+first_parent = false
+conventional_commits = true
+# Keep non-conventional commits but bucket them under "Other" (matches the
+# existing CHANGELOG.md which has an `### Other` group), rather than silently
+# dropping work like release-plz did.
+filter_unconventional = false
+split_commits = false
+filter_commits = true
+tag_pattern = "v[0-9]*|doiget-core-v[0-9]*"
+topo_order = false
+sort_commits = "newest"
+protect_breaking_commits = false
+
+# Conventional-commit → Keep-a-Changelog group mapping. Order matters: first
+# match wins. Merge commits and pure-noise subjects are dropped (skip = true)
+# so the merge-graph (ADR-0025 D6 `--no-ff`) does not pollute the draft.
+commit_parsers = [
+  { message = "^Merge (pull request|branch|remote-tracking)", skip = true },
+  { message = "^chore\\(release\\):", skip = true },
+  { message = "^chore: release", skip = true },
+  { message = "^feat", group = "Added" },
+  { message = "^add", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Changed" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^change", group = "Changed" },
+  { message = "^docs", group = "Docs" },
+  { message = "^doc", group = "Docs" },
+  { message = "^test", group = "Other" },
+  { message = "^ci", group = "Other" },
+  { message = "^build", group = "Other" },
+  { message = "^chore", group = "Other" },
+  { message = "^style", group = "Other" },
+  { message = ".*", group = "Other" },
+]
+
+[bump]
+features_always_bump_minor = true
+breaking_always_bump_major = false

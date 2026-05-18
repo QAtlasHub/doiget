@@ -10,6 +10,50 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/sotashimozono/doiget/compare/doiget-core-v0.1.3...v0.2.0) - 2026-05-18
+
+First release cut under the tag-driven pipeline (ADR-0025): a single signed
+workspace tag `v0.2.0`, gated by the mandatory version gate. The **minor** bump
+(0.1.x → 0.2.0) signals the called-out breaking CLI exit-code-contract and MCP
+tool-spec changes below — per this project's 0.x semver policy (CHANGELOG
+header), such breaks are permitted within 0.x when explicitly enumerated. This
+section is hand-curated from the real non-merge history `doiget-core-v0.1.3..main`
+(#159/#160/#161/#162/#163/#165) — it replaces the materially inaccurate
+release-plz-generated `#164` section, which (traversing first-parent only)
+captured a single `fix(core)` line plus a stray merge subject and dropped the
+MCP spec-conformance, CLI exit-code-contract, credential-hygiene and docs work.
+
+### Changed
+
+- *(mcp)* **[breaking: MCP tool spec]** `doiget_capability_profile` response now
+  conforms to `MCP_TOOLS.md` §7: corrected shape, non-goal/forbidden tools are
+  guarded, and `denial_context` is routed through a logged helper so denials are
+  observable. Added `serde(deny_unknown_fields)` on the profile type and a
+  negative test asserting forbidden tools are rejected. ([#159](https://github.com/sotashimozono/doiget/pull/159), closes #141/#152/#154)
+- *(cli)* **[breaking: CLI exit-code contract]** Exit codes and environment
+  variables aligned with `ERRORS.md`/`CONFIG.md`: batch failure-count exit
+  semantics (#143), `Blocked` → `CAPABILITY_DENIED` classification (#145),
+  graph/audit-log exit codes (#149), and `DOIGET_LOG_PATH` log-path unification
+  (#142). `--help` gains `long_about`; `ERRORS.md` §2/§6.1 updated. ([#162](https://github.com/sotashimozono/doiget/pull/162), closes #142/#143/#148/#149)
+
+### Fixed
+
+- *(core)* TDM `api_key` is now threaded through the capability grant (secrecy
+  0.10) rather than read out of band; `tdm_springer` key URL-redaction added;
+  the Semantic Scholar `x-api-key` header is wired; `dry_run` uses the fallible
+  `try_*` API; rustdoc/Debug redaction hardened so the S2 key never appears in
+  `Debug` output. ([#161](https://github.com/sotashimozono/doiget/pull/161), refs #153/#156)
+- *(core)* The OA-publisher allowlist is now enforced on the
+  Unpaywall-discovered OA URL **before** the pre-fetch, not only on redirect
+  hops — closing the off-allowlist OA-fetch gap. ([#163](https://github.com/sotashimozono/doiget/pull/163), refs #145)
+
+### Docs
+
+- Planning artifacts reconciled with shipped v0.1.3 reality; date-provenance
+  wording and the `SOURCES.md` non-goal cross-reference corrected. ([#160](https://github.com/sotashimozono/doiget/pull/160))
+- *(site)* `docs/`→`site/` projection resynced so the Zola `build (zola)` job
+  passes again (errors.md projection refreshed for the `ERRORS.md` §6.1 edits). ([#165](https://github.com/sotashimozono/doiget/pull/165))
+
 ## [0.1.3](https://github.com/sotashimozono/doiget/compare/doiget-core-v0.1.2...doiget-core-v0.1.3) - 2026-05-17
 
 ### Fixed

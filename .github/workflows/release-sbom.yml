@@ -2,14 +2,18 @@ name: release-sbom
 
 # Phase 6 / Slice 24 — generate + sign a CycloneDX SBOM per release.
 #
-# Companion to release-sign.yml (Slice 23). Fires once per version on
-# the `doiget-cli-v*` tag release-plz pushes (or manual dispatch),
-# generates a CycloneDX SBOM for the `doiget-cli` package — i.e. the
-# full transitive dependency graph of the SHIPPED binary — signs it
-# with cosign keyless (Fulcio cert from the GitHub OIDC token; no
-# long-lived key, no stored secret), and uploads to the matching
-# `doiget-cli-v<version>` GitHub Release:
+# ADR-0025 (PR #166): the SBOM logic below is now ALSO folded into
+# release.yml as its `sbom` job, which fires on the single workspace tag
+# `v*`. To avoid double-firing on a tag (and on the now-retired per-crate
+# `doiget-cli-v*` pattern), this workflow's `push: tags: doiget-cli-v*`
+# trigger has been REMOVED — it is `workflow_dispatch`-only and exists solely
+# as a MANUAL re-SBOM escape hatch for an already-released version (generate a
+# CycloneDX SBOM for the `doiget-cli` package — the full transitive dependency
+# graph of the SHIPPED binary — cosign-keyless sign it, upload to the matching
+# GitHub Release). The routine path is release.yml's `sbom` job; reach for
+# this only to regenerate out of band.
 #
+# Uploads (to the Release named by the dispatch `tag` input):
 #   doiget-sbom-<tag>.cdx.json
 #   doiget-sbom-<tag>.cdx.json.sha256
 #   doiget-sbom-<tag>.cdx.json.cosign.bundle
@@ -23,13 +27,13 @@ name: release-sbom
 #     doiget-sbom-<tag>.cdx.json
 
 on:
-  push:
-    tags:
-      - 'doiget-cli-v*'
+  # push: tags trigger intentionally REMOVED under ADR-0025 (PR #166) — the
+  # routine SBOM generation now happens in release.yml's `sbom` job on the
+  # single `v*` tag. This workflow is a manual re-SBOM escape hatch only.
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing doiget-cli-v* tag to (re)generate the SBOM for'
+        description: 'Existing release tag to (re)generate the SBOM for (e.g. v0.1.4)'
         required: true
         type: string
 
