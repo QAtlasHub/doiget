@@ -121,7 +121,7 @@ jobs:
         # No explicit version pin needed: the workspace `rust-toolchain.toml`
         # declares the channel (stable) and the MSRV (1.86). dtolnay's
         # toolchain action honors that file when no toolchain input is set.
-        uses: dtolnay/rust-toolchain@b95584d8105b9ab200e15821fa671848cf2b7017   # stable, 2025-10-23
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8   # stable, 2025-10-23
 
       - name: cargo test safekey_matches_reference_vectors
         # The Rust parity test loads tests/fixtures/safekey/vectors.json via
