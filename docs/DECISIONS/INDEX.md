@@ -36,7 +36,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0017 | Output mode resolution (flag > env > implicit > TTY > quiet) | Accepted | Slice 9 stdout-purity + Slice 1 (see ADR note) | #14 |
 | 0018 | Obsidian export is one-direction, optional Phase 7 | Proposed (Phase 7, unshipped) | — | #15 |
 | 0019 | Eight-safeguard legal posture (5 social + 3 technical) | Accepted | standing posture (Phase 1 onward) | #16 |
-| 0020 | reqwest TLS feature stack (rustls-only, webpki bundled) | Accepted | PR #30 / PR #49 | PR #30 / PR #49 |
+| 0020 | reqwest TLS feature stack (rustls-only; ring provider) | Accepted (Amendment 1 2026-05-18: aws-lc-rs → ring, portability) | PR #30 / PR #49 / Amendment 1 | PR #30 / PR #49 |
 | 0021 | Canonical-tuple identity for fetched papers (spec-only) | Superseded by 0024 (impl); §1–§4 NORMATIVE remains binding | Slice 4 (via 0024) | #12 |
 | 0022 | Dry-run mode for fetch operations | Accepted | Slice 2 | #12 |
 | 0023 | Structured `denial_context` on error envelopes | Accepted | Slices 1/2 | #12 |
