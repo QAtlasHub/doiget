@@ -80,7 +80,10 @@ flowchart LR
 - `release-plz.toml` is **removed** and the `release-plz` action is no longer
   invoked. Version bump + `CHANGELOG.md` editing become an explicit pre-tag
   step (script-assisted, see D4), not an auto-PR.
-- Tags MUST be annotated and GPG-signed (`git tag -s`); the gate verifies this.
+- Tags MUST be annotated and signed — **GPG or SSH** (`git tag -s` with
+  `gpg.format` set to `openpgp` or `ssh`). G7 verifies the signature; SSH
+  signatures are checked against the committed `.github/allowed_signers`
+  (principal = tagger email). See the Amendment.
 
 ### D2 — Mandatory version gate (runs first; abort on any failure)
 
@@ -270,3 +273,13 @@ pipeline order (D5), branch model (D6), or `#164` disposition (D7). The
 filename is a deliberate, documented misnomer (header note in the workflow).
 This is recorded as an in-place amendment rather than a superseding ADR
 because no decision changed — only an implementation detail was corrected.
+
+**Signing mechanism (same amendment):** D1 originally said "GPG-signed". The
+maintainer's environment has no GPG secret key but does have an SSH key
+already trusted by GitHub for auth. Tag signing therefore accepts **GPG *or*
+SSH** (`git tag -s` with `gpg.format=ssh`). G7 verifies SSH signatures against
+the repo-committed `.github/allowed_signers` (public keys; principal = tagger
+email). This does not weaken the property D1 protects — the tag is still
+cryptographically signed by the maintainer and verified by the gate before any
+publish; only the signature *format* is broadened. Adding/rotating a release
+signer is a one-line reviewed change to `.github/allowed_signers`.
