@@ -10,9 +10,13 @@
 # and both are published together in the single force_orphan deploy. A push
 # to either lane refreshes the whole site (so `next` changes DO update the
 # dev docs). PRs build only (no deploy) — the docs-build invariant from the
-# team's standing feedback. Hosting: `sotashimozono.github.io/doiget/`
-# (the `codes.sota-shimozono.com` CNAME is managed at the user-site level;
-# this workflow does NOT publish a CNAME row).
+# team's standing feedback. The site is SERVED at the custom domain
+# `https://codes.sota-shimozono.com/doiget/` (GitHub Pages canonical URL;
+# the `sotashimozono.github.io/doiget/` URL 301s to it over http). The
+# Zola `--base-url` MUST equal the serving domain or the baked-in absolute
+# CSS/JS URLs downgrade to http and browsers block them (mixed content =
+# unstyled site). The `codes.sota-shimozono.com` CNAME is managed at the
+# user-site level; this workflow does NOT publish a CNAME row.
 name: site
 
 on:
@@ -79,7 +83,7 @@ jobs:
             echo "::error::site/content/ is stale on main; run scripts/sync_docs_to_site.sh and commit." >&2
             exit 1
           fi
-          ( cd site && zola build --base-url "https://sotashimozono.github.io/doiget/" )
+          ( cd site && zola build --base-url "https://codes.sota-shimozono.com/doiget/" )
           # Stash the built site outside the worktree so the next checkout
           # (origin/next) does not clobber it.
           rm -rf "$RUNNER_TEMP/site"
