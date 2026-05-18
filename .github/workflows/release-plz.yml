@@ -254,7 +254,11 @@ jobs:
           # `gh release create` is idempotent-friendly: if the Release already
           # exists (re-run / dispatch), fall back to `edit`. --verify-tag: the
           # Release must point at the pushed signed tag, not create a new
-          # lightweight one.
+          # lightweight one. NOTE: do NOT pass `--target` — `target_commitish`
+          # must be a branch name or commit SHA, never a tag name. The tag is
+          # always pre-created and pushed (ADR-0025 tag-driven model), so
+          # `--verify-tag` alone is correct; passing `--target "$TAG"` made
+          # GitHub reject the create with HTTP 422 "target_commitish invalid".
           if [ "$PRERELEASE" = "true" ]; then
             echo "tag $TAG carries a SemVer pre-release identifier -> prerelease=true (not latest)"
           else
@@ -270,10 +274,10 @@ jobs:
           else
             if [ "$PRERELEASE" = "true" ]; then
               gh release create "$TAG" --title "$TAG" --notes-file release-body.md \
-                --verify-tag --target "$TAG" --prerelease
+                --verify-tag --prerelease
             else
               gh release create "$TAG" --title "$TAG" --notes-file release-body.md \
-                --verify-tag --target "$TAG" --latest
+                --verify-tag --latest
             fi
           fi
 
