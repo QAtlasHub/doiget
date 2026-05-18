@@ -8,10 +8,9 @@
 
 A single-binary CLI plus stdio MCP server that:
 
-1. Resolves DOI / arXiv id input to authoritative metadata via Crossref / Unpaywall / arXiv
-   (Phase 1).
+1. Resolves DOI / arXiv id input to authoritative metadata via Crossref / Unpaywall / arXiv.
 2. Fetches PDFs through Open Access sources by default; opens additional metadata sources
-   in Phase 4 and gated TDM sources in Phase 5 only when the user has explicitly opted in
+   and gated TDM sources only when the user has explicitly opted in
    at build time and runtime.
 3. Stores fetched papers in a `~/papers/` layout that is bit-compatible with BiblioFetch.jl
    (see [`STORE.md`](STORE.md)).
@@ -118,7 +117,7 @@ Removed) requires the full meta-rule.
 ## Current design choices (5 — items 15–19 of 19)
 
 These are out of scope **today** because the maintainer judges them more
-trouble than they're worth at the current Phase, but they do not threaten the
+trouble than they're worth, but they do not threaten the
 LEGAL posture or threat model. Reversing one is a regular ADR, not a
 scope-reopening Discussion.
 
@@ -148,7 +147,7 @@ doiget composes with content-processing tools rather than incorporating them:
 - For PDF text extraction / OCR / summarization: pair doiget with
   [paper-qa](https://github.com/whitead/paper-qa),
   [marker](https://github.com/VikParuchuri/marker), or other dedicated tools. See
-  `INTEGRATION/chain-with-paperqa.md` (Phase 3+).
+  `INTEGRATION/chain-with-paperqa.md`.
 - For Julia REPL workflows: use BiblioFetch.jl directly; doiget and BiblioFetch.jl share
   the on-disk store format ([`STORE.md`](STORE.md)).
 
