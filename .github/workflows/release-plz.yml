@@ -1,5 +1,14 @@
 name: release
 
+# FILENAME NOTE (ADR-0025 amendment, 2026-05-18): this workflow is
+# intentionally kept at `.github/workflows/release-plz.yml` even though
+# release-plz itself was removed. The crates.io OIDC Trusted Publisher for
+# doiget-core / doiget-cli / doiget-mcp is bound to (repo, workflow filename)
+# = `release-plz.yml` (it is NOT environment-scoped). Renaming the file would
+# require re-registering the Trusted Publisher for all three crates on
+# crates.io before the next publish. The filename is a deliberate, documented
+# misnomer; the contents are the ADR-0025 tag-driven pipeline below.
+
 # ADR-0025 — tag-driven release pipeline. The ONLY entry point is pushing an
 # annotated, GPG-signed workspace tag `vX.Y.Z` (stable) or `vX.Y.Z-beta.N`
 # (beta). One workspace tag IS the release; the legacy per-crate
