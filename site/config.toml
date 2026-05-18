@@ -37,7 +37,7 @@ include_content = true
 # Surfaced in templates so we can show the current development phase in
 # the footer without editing the template. Update when the phase plan
 # advances.
-phase_status = "Phase 3 in progress"
+phase_status = "v0.2.0 — shipping"
 github_url = "https://github.com/sotashimozono/doiget"
 crates_io_url = "https://crates.io/crates/doiget-core"
 docs_rs_url = "https://docs.rs/doiget-core"

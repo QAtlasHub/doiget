@@ -1,11 +1,32 @@
 <!DOCTYPE html>
 <html lang="{{ config.default_language }}">
+{%- if page is defined and page.title %}
+  {%- set seo_title = page.title ~ " · " ~ config.title %}
+  {%- set seo_desc = page.description | default(value=config.description) %}
+{%- elif section is defined and section.title %}
+  {%- set seo_title = section.title ~ " · " ~ config.title %}
+  {%- set seo_desc = section.description | default(value=config.description) %}
+{%- else %}
+  {%- set seo_title = config.title %}
+  {%- set seo_desc = config.description %}
+{%- endif %}
+{%- set canonical = current_url | default(value=config.base_url) %}
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}{{ config.title }}{% endblock %}</title>
-  <meta name="description" content="{% block description %}{{ config.description }}{% endblock %}">
+  <title>{% block title %}{{ seo_title }}{% endblock %}</title>
+  <meta name="description" content="{% block description %}{{ seo_desc }}{% endblock %}">
+  <link rel="canonical" href="{{ canonical | safe }}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.title }}">
+  <meta property="og:title" content="{{ seo_title }}">
+  <meta property="og:description" content="{{ seo_desc }}">
+  <meta property="og:url" content="{{ canonical | safe }}">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="{{ seo_title }}">
+  <meta name="twitter:description" content="{{ seo_desc }}">
   <link rel="stylesheet" href="{{ get_url(path='style.css') | safe }}">
+  {% block structured_data %}{% endblock %}
 </head>
 <body>
   <header class="site-header">
