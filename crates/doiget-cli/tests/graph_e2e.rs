@@ -32,7 +32,7 @@ async fn graph_subcommand_emits_pretty_json_envelope() -> anyhow::Result<()> {
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/works/10.1234/seed"))
+        .and(path("/works/doi:10.1234/seed"))
         .respond_with(ResponseTemplate::new(200).set_body_string(SEED_WORK))
         .mount(&server)
         .await;
