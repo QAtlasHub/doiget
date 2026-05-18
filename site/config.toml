@@ -1,15 +1,13 @@
 # Zola configuration for the doiget public site.
 #
-# Hosting target: GitHub Pages on `sotashimozono.github.io/doiget/`.
-# The repo's existing `codes.sota-shimozono.com` CNAME continues to be
-# managed at the user-site level; this project-site is served from its
-# own `/doiget/` prefix (no separate CNAME row needed today).
-#
-# `base_url` may be overridden in CI via `--base-url` when a custom
-# domain is wired up. Keep this value aligned with the GH Pages
-# project-site URL.
+# Served at the custom domain `https://codes.sota-shimozono.com/doiget/`
+# (GitHub Pages canonical; `sotashimozono.github.io/doiget/` 301s to it
+# over http). `base_url` MUST equal the serving domain — Zola bakes it
+# into absolute CSS/JS URLs, and a mismatch downgrades them to http on
+# an https page (mixed content → browsers block → unstyled site). CI
+# also passes the same value via `zola build --base-url`.
 
-base_url = "https://sotashimozono.github.io/doiget"
+base_url = "https://codes.sota-shimozono.com/doiget"
 title = "doiget"
 description = "DOIs and arXiv ids -> local PDFs, through official APIs. The agent-facing companion to BiblioFetch.jl."
 default_language = "en"
