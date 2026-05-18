@@ -231,25 +231,37 @@ else
   if ! command -v curl >/dev/null 2>&1; then
     fail "G3: curl not available and --offline-skip-crates-io not set — cannot verify crates.io publication state"
   fi
+  # ADR-0025 D2-G3/G4 with D5 partial-publish-recovery semantics.
+  # Per crate: if THIS crate already publishes the exact $TAG_VERSION, that is
+  # the idempotent-recovery case (crates.io is immutable; the publish step
+  # skips it) — record it and skip G4 for that crate. Otherwise enforce G4
+  # (strictly SemVer-greater than every published version). AFTER the loop:
+  #   - all crates already at $TAG_VERSION  -> FAIL (complete re-release / a
+  #     forgotten version bump; nothing to do, crates.io is immutable);
+  #   - some (1..n-1) already at it          -> PASS as partial-publish
+  #     recovery (the publish step completes the not-yet-published siblings);
+  #   - none                                 -> normal PASS.
+  published_at_tag=0
   for crate in "${CRATES[@]}"; do
     # crates.io v1 API: 200 + a `versions` array. We grep the raw JSON for the
     # exact "num":"X.Y.Z" pair (no jq, house style). A 404 => crate never
-    # published yet, which is fine for G3 (treated as "not present").
+    # published yet (treated as "not present").
     body="$(curl -fsSL --max-time 30 \
       -H 'User-Agent: doiget-release-version-gate (https://github.com/sotashimozono/doiget)' \
       "https://crates.io/api/v1/crates/${crate}" 2>/dev/null || true)"
     if [ -z "$body" ]; then
-      echo "note: crates.io returned no body for '$crate' (likely never published yet) — G3 OK for this crate"
+      echo "note: crates.io returned no body for '$crate' (likely never published yet) — new publish, G3/G4 OK for this crate"
       continue
     fi
-    # G3: exact version must NOT already exist.
     if printf '%s' "$body" | grep -Eq "\"num\"[[:space:]]*:[[:space:]]*\"${TAG_VERSION//./\\.}\""; then
-      fail "G3: $crate $TAG_VERSION is ALREADY published on crates.io — crates.io versions are immutable. Bump to a new patch version (ADR-0025 D5: recovery is a new tag, never a force-overwrite)."
+      published_at_tag=$((published_at_tag + 1))
+      echo "::notice::G3/G4: $crate $TAG_VERSION already on crates.io (immutable) — partial-publish recovery; the publish step idempotently skips it (ADR-0025 D5)"
+      continue
     fi
-    # G4: TAG_VERSION must be strictly greater than every published num.
-    # semver_cmp orders a pre-release below its matching normal version, so a
-    # plain strict-greater check is correct for both lanes (ADR-0025 D2-G4
-    # "monotonic within lane"; a stable X.Y.Z is > X.Y.Z-beta.N).
+    # Not yet published for this crate — G4: TAG_VERSION must be strictly
+    # greater than every published num. semver_cmp orders a pre-release below
+    # its matching normal version, so a plain strict-greater check is correct
+    # for both lanes (ADR-0025 D2-G4 "monotonic within lane").
     while IFS= read -r pub; do
       [ -z "$pub" ] && continue
       cmp="$(semver_cmp "$TAG_VERSION" "$pub")"
@@ -262,8 +274,14 @@ else
     done < <(printf '%s' "$body" | grep -Eo '"num"[[:space:]]*:[[:space:]]*"[^"]+"' | sed -E 's/.*"([^"]+)"$/\1/')
     pass "G3/G4: $crate — $TAG_VERSION unpublished and strictly greater than all published"
   done
-  pass "G3: $TAG_VERSION unpublished on crates.io for all 3 crates"
-  pass "G4: $TAG_VERSION strictly SemVer-greater than latest published in lane"
+  if [ "$published_at_tag" -eq "${#CRATES[@]}" ]; then
+    fail "G3: ALL ${#CRATES[@]} crates already publish $TAG_VERSION — this version is fully released; nothing to do. Recovery from a *partial* publish is allowed, but a *complete* re-release is not (crates.io is immutable). Did you forget to bump the version?"
+  elif [ "$published_at_tag" -gt 0 ]; then
+    pass "G3/G4: PARTIAL-PUBLISH RECOVERY — $published_at_tag/${#CRATES[@]} crate(s) already at $TAG_VERSION; the publish step idempotently skips them and completes the rest (ADR-0025 D5)"
+  else
+    pass "G3: $TAG_VERSION unpublished on crates.io for all ${#CRATES[@]} crates"
+    pass "G4: $TAG_VERSION strictly SemVer-greater than latest published in lane"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
