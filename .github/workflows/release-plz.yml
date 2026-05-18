@@ -147,14 +147,16 @@ jobs:
         # registered as a Trusted Publisher on crates.io before the first run.
         uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe  # v1.0.4
         id: auth
-      - name: Publish doiget-core then doiget-cli + doiget-mcp (idempotent)
+      - name: Publish doiget-core, then doiget-mcp, then doiget-cli (idempotent)
         shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           set -euo pipefail
-          # Per-crate sequential publish in dependency order: core first
-          # (cli + mcp depend on it). --locked: publish exactly the resolved
+          # Per-crate sequential publish in TOPOLOGICAL dependency order:
+          # doiget-core (no internal deps) -> doiget-mcp (depends on core)
+          # -> doiget-cli (depends on BOTH core AND mcp). --locked: publish
+          # exactly the resolved
           # Cargo.lock the gate validated. ADR-0025 D5 idempotency: a re-run
           # that finds a crate ALREADY on crates.io (immutable) must CONTINUE
           # to the next crate, not hard-fail — recovery from a partial publish
@@ -183,8 +185,8 @@ jobs:
             return "$rc"
           }
           publish_one doiget-core
-          publish_one doiget-cli
           publish_one doiget-mcp
+          publish_one doiget-cli
 
   # -------------------------------------------------------------------------
   # d. github-release — create the GitHub Release whose body is EXACTLY the

@@ -283,3 +283,33 @@ email). This does not weaken the property D1 protects — the tag is still
 cryptographically signed by the maintainer and verified by the gate before any
 publish; only the signature *format* is broadened. Adding/rotating a release
 signer is a one-line reviewed change to `.github/allowed_signers`.
+
+## Amendment — 2026-05-18 (2): publish order + partial-publish-recovery gate
+
+The first real `v0.2.0` cut exposed two implementation bugs (the *design*
+stands; D5 already anticipated partial-publish recovery — the code did not
+implement it correctly):
+
+1. **Publish order was wrong.** D5/the workflow published `doiget-core →
+   doiget-cli → doiget-mcp`, assuming `cli`/`mcp` only depend on `core`. In
+   fact **`doiget-cli` depends on BOTH `doiget-core` AND `doiget-mcp`**, so
+   `cargo publish -p doiget-cli` failed (`failed to select a version for
+   doiget-mcp`) after `core` had already published. The topological order is
+   **`doiget-core → doiget-mcp → doiget-cli`** (cli last). Fixed in
+   `.github/workflows/release-plz.yml`.
+
+2. **G3/G4 blocked the D5 recovery re-run.** G3 hard-failed if *any* crate
+   already published `$TAG_VERSION`. After the partial `v0.2.0`
+   (`doiget-core@0.2.0` live, `cli`/`mcp` not), every re-run aborted at the
+   gate, so D5's idempotent recovery in the publish step was unreachable —
+   directly contradicting D5. G3/G4 are now partial-publish-aware: a crate
+   already at `$TAG_VERSION` is a recovery skip (the publish step idempotently
+   skips it); the gate FAILs only when **all** crates already publish the
+   version (a complete re-release / forgotten bump); 1..n−1 published is a
+   PASS-with-notice recovery. Fixed in `scripts/release-version-gate.sh`.
+
+Recovery for the in-flight `v0.2.0`: with this PR merged, re-run the pipeline
+for the existing tag (`gh workflow run release-plz.yml -f tag=v0.2.0`) — the
+gate now passes as partial-recovery, `doiget-core@0.2.0` idempotently skips,
+and `doiget-mcp@0.2.0` then `doiget-cli@0.2.0` publish. No new tag is minted;
+`doiget-core@0.2.0` (already immutable on crates.io) is reused as-is.
