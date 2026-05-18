@@ -3,10 +3,14 @@
 > A single-binary CLI + stdio MCP server that turns DOIs and arXiv ids into local PDFs through official, OA-first APIs.
 > Designed as the **agent-facing companion** to [BiblioFetch.jl](https://github.com/sotashimozono/BiblioFetch.jl).
 
-**Status:** Shipping — **v0.1.3** on a live `release-plz` pipeline. Tier 1 + Tier 2
-sources, the stdio MCP server, citation-graph expansion, gated TDM sources, and
-OIDC/sigstore release automation are all implemented. See [CHANGELOG.md](CHANGELOG.md)
-for the per-slice history and [docs/PHASES.md](docs/PHASES.md) for the phase plan.
+**Status:** Shipping — **v0.2.0** on crates.io (`doiget-core`, `doiget-cli`,
+`doiget-mcp`), with sigstore-signed binaries + an SBOM attached to the GitHub
+Release. Tier 1 + Tier 2 sources, the stdio MCP server, citation-graph
+expansion, and gated TDM sources are all implemented. Releases are cut by a
+single signed git tag through the tag-driven pipeline (see
+[ADR-0025](docs/DECISIONS/0025-tag-driven-release.md)); `release-plz` was
+retired. See [CHANGELOG.md](CHANGELOG.md) for history and
+[docs/PHASES.md](docs/PHASES.md) for the phase plan.
 
 ## Posture
 

@@ -24,18 +24,21 @@ weight = 110
 | 5a | TDM Springer Nature OA — author opt-in to start | 1 week + 1–2 wk cooldown |
 | 5b | TDM APS Harvest — author opt-in to start | 1 week + 1–2 wk cooldown |
 | 5c | TDM Elsevier ScienceDirect — author re-decision required | 1 week |
-| 6 | Release: OIDC + sigstore + SBOM + landing page polish + auto-tag (`release-plz`) | 1 week |
+| 6 | Release: OIDC + sigstore + SBOM + landing page polish + signed-tag pipeline (ADR-0025) | 1 week |
 | 7 | Optional features (`vault`, `obsidian`) | per feature |
 
-> **Phase 6 auto-tag note (live as of 2026-05-17).** Phase 6 has landed.
-> [`release-plz`](https://release-plz.dev) is wired (Slice 21) and trusted
-> publishing is on (Slice 22): every push to `main` opens/updates a release PR
-> that bumps the shared workspace version and prepends a versioned `CHANGELOG.md`
-> section; merging it pushes annotated `doiget-{core,cli,mcp}-vX.Y.Z` tags,
-> opens a GitHub release, and publishes to crates.io via OIDC. The workspace is
-> **no longer `0.0.0`** — `Cargo.toml` is `0.1.3` and the `v0.1.0`–`v0.1.3`
-> tag triplets exist. See [`CHANGELOG.md`](../CHANGELOG.md) for the released
-> versions and [`release-plz.toml`](../release-plz.toml) for the configuration.
+> **Phase 6 release note (ADR-0025, live).** Phase 6 has landed. Releases are
+> **tag-driven** ([ADR-0025](DECISIONS/0025-tag-driven-release.md)): the
+> maintainer pushes one signed workspace tag — `vX.Y.Z` (stable, from `main`)
+> or `vX.Y.Z-beta.N` (beta, from `next`). A mandatory version gate runs first
+> and, on pass, publishes all three crates to crates.io via OIDC, sigstore-signs
+> the binaries, emits an SBOM, and opens the GitHub Release. `release-plz` (the
+> original Slice 21/22 release-PR mechanism) was **retired**: there is no
+> perpetual release PR and no per-crate `doiget-<crate>-vX.Y.Z` tags. `0.1.0`–
+> `0.1.3` were cut by the old release-plz flow; **`v0.2.0`** (the current
+> release: all three crates on crates.io, signed binaries + SBOM on the GitHub
+> Release) was cut by the ADR-0025 pipeline. See [`CHANGELOG.md`](../CHANGELOG.md)
+> for released versions and ADR-0025 for the design + release runbook.
 
 **Phase 5 may be skipped or deferred indefinitely**; the decision is data-driven from
 Phase 0–4 production usage and any publisher-side correspondence. *(Not skipped: all
@@ -43,13 +46,14 @@ three TDM sub-phases shipped — see status table below.)*
 
 ### Per-phase completion status
 
-Status is derived from the [`CHANGELOG.md`](../CHANGELOG.md) section headings and
-the slice entries within them, with the annotated `doiget-{core,cli,mcp}-v0.1.x`
-git tags backing the `0.1.1`–`0.1.3` lines. No dates are invented: the `0.0.0`
+Status is derived from the [`CHANGELOG.md`](../CHANGELOG.md) section headings
+and the slice/PR entries within them. `0.1.1`–`0.1.3` are backed by the
+release-plz-era per-crate `doiget-{core,cli,mcp}-v0.1.x` git tags (dated
+2026-05-17); `0.2.0` onward is backed by a single signed workspace `vX.Y.Z`
+tag (ADR-0025 retired the per-crate scheme). No dates are invented: the `0.0.0`
 cut date (2026-05-15) is the `## [0.0.0]` CHANGELOG heading only — there is no
-`v0.0.0` tag — while the `0.1.1`–`0.1.3` tags are dated 2026-05-17. The TDM work
-(Slices 17–19) is recorded under the `## [0.0.0]` CHANGELOG section, i.e. the
-2026-05-15 dev cut, not the later `0.1.x` tags.
+`v0.0.0` tag. The TDM work (Slices 17–19) is recorded under the `## [0.0.0]`
+CHANGELOG section, i.e. the 2026-05-15 dev cut, not the later tags.
 
 | Phase | Status | Evidence (CHANGELOG slice / version) |
 |---|---|---|
@@ -61,7 +65,7 @@ cut date (2026-05-15) is the `## [0.0.0]` CHANGELOG heading only — there is no
 | **5a** | Complete | Springer Nature OA TDM (Slice 17) |
 | **5b** | Complete | APS Harvest TDM (Slice 18) |
 | **5c** | Complete | Elsevier ScienceDirect TDM (Slice 19) + per-source header hook (Slice 20) |
-| **6** | Complete (live) | `release-plz` PR flow (Slice 21) + OIDC trusted publishing (Slice 22); `0.1.0`–`0.1.3` released |
+| **6** | Complete (live) | release-plz PR flow (Slices 21/22) cut `0.1.0`–`0.1.3`, then migrated to the ADR-0025 tag-driven pipeline; **`v0.2.0`** released that way |
 | **7** | Not started | Optional `vault`/`obsidian` crate is `exclude`d in `Cargo.toml` (ADR-0008) |
 
 The Phase-0 checklist in §2 below is retained as the historical deliverable record;
@@ -137,8 +141,9 @@ Phase 0 is complete when **all** of the following are committed.
 - [ ] Default branch protection includes Action SHA pinning policy.
       *(unverified: repo-settings/external — note: the workflow actions themselves
       are SHA-pinned in-tree, e.g. `.github/workflows/release-plz.yml`
-      `actions/checkout@de0fac2…`, `release-plz/action@064f4d1…`; the branch-level
-      enforcement *policy* is still a repo-settings claim.)*
+      `actions/checkout@de0fac2…`, `rust-lang/crates-io-auth-action@bbd816…`
+      (`release-plz/action` was removed with the ADR-0025 migration); the
+      branch-level enforcement *policy* is still a repo-settings claim.)*
 
 ### Test fixtures
 
