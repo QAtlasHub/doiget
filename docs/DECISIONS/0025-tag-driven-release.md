@@ -203,15 +203,21 @@ Binding rules of the branch model:
    post-implementation HEAD and sets `next`'s version to the next
    `X.Y.(Z+1)-beta.1`.
 
-### D7 — Disposition of the in-flight v0.1.4 (`#164`)
+### D7 — Disposition of the in-flight release (`#164`)
 
-Close `#164` (release-plz PR) and remove `release-plz.{toml,yml}` as part of
-the implementing PR. The **first release under ADR-0025 is the real v0.1.4**,
-cut by tag `v0.1.4` on `main` with a correctly hand-curated/cliff-generated
-CHANGELOG covering `#159/#160/#161/#162/#163/#165`. No defective intermediate
-release is published. (Whether v0.1.4 first ships a `v0.1.4-beta.1` from `next`
-or goes straight to stable `v0.1.4` on `main` is a rollout choice for the
-implementing PR, not an architectural one.)
+`#164` was a release-plz PR that bumped `0.1.3 → 0.1.4` with a materially
+inaccurate auto-generated CHANGELOG. Close `#164` and remove
+`release-plz.{toml,yml}` as part of the implementing PR. The **first release
+under ADR-0025 is `v0.2.0`**, not `0.1.4`: the work since `0.1.3`
+(`#159/#160/#161/#162/#163/#165`) includes explicitly called-out breaking
+changes to the CLI exit-code contract and the MCP tool spec, so the **minor**
+bump signals that breaking surface under this project's 0.x semver policy
+(strict semver for `doiget-core`; CLI/MCP breaks permitted within 0.x when
+enumerated — CHANGELOG header). It is cut by a signed tag `v0.2.0` on `main`
+with the correctly hand-curated CHANGELOG. No defective intermediate release is
+published. (Whether `v0.2.0` first ships a `v0.2.0-beta.1` from `next` or goes
+straight to stable `v0.2.0` on `main` is a rollout choice, not an architectural
+one.)
 
 ## Consequences
 
