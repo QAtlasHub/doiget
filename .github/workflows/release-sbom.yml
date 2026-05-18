@@ -3,14 +3,14 @@ name: release-sbom
 # Phase 6 / Slice 24 — generate + sign a CycloneDX SBOM per release.
 #
 # ADR-0025 (PR #166): the SBOM logic below is now ALSO folded into
-# release.yml as its `sbom` job, which fires on the single workspace tag
+# release-plz.yml as its `sbom` job, which fires on the single workspace tag
 # `v*`. To avoid double-firing on a tag (and on the now-retired per-crate
 # `doiget-cli-v*` pattern), this workflow's `push: tags: doiget-cli-v*`
 # trigger has been REMOVED — it is `workflow_dispatch`-only and exists solely
 # as a MANUAL re-SBOM escape hatch for an already-released version (generate a
 # CycloneDX SBOM for the `doiget-cli` package — the full transitive dependency
 # graph of the SHIPPED binary — cosign-keyless sign it, upload to the matching
-# GitHub Release). The routine path is release.yml's `sbom` job; reach for
+# GitHub Release). The routine path is release-plz.yml's `sbom` job; reach for
 # this only to regenerate out of band.
 #
 # Uploads (to the Release named by the dispatch `tag` input):
@@ -28,7 +28,7 @@ name: release-sbom
 
 on:
   # push: tags trigger intentionally REMOVED under ADR-0025 (PR #166) — the
-  # routine SBOM generation now happens in release.yml's `sbom` job on the
+  # routine SBOM generation now happens in release-plz.yml's `sbom` job on the
   # single `v*` tag. This workflow is a manual re-SBOM escape hatch only.
   workflow_dispatch:
     inputs:

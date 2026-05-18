@@ -1,7 +1,7 @@
 # 0025 - Tag-driven release with a mandatory version gate and beta/stable lanes
 
 - **Date:** 2026-05-17
-- **Status:** Accepted — implemented by PR #166 (`.github/workflows/release.yml` + `scripts/release-version-gate.sh` + `cliff.toml`/`scripts/release-changelog.sh`; `release-plz.{toml,yml}` removed; `release-sign.yml`/`release-sbom.yml` demoted to `workflow_dispatch`-only and folded into `release.yml`). `0013`'s release portion is `Superseded by 0025` (its CI-baseline / posture-lint / SHA-pin / Dependabot decisions stand).
+- **Status:** Accepted — implemented by PR #166; amended 2026-05-18 (see Amendment) so the workflow filename stays `.github/workflows/release-plz.yml` (tag-driven pipeline contents + `scripts/release-version-gate.sh` + `cliff.toml`/`scripts/release-changelog.sh`; only `release-plz.toml` removed; `release-sign.yml`/`release-sbom.yml` demoted to `workflow_dispatch`-only and folded in). `0013`'s release portion is `Superseded by 0025` (its CI-baseline / posture-lint / SHA-pin / Dependabot decisions stand).
 - **Supersedes:** 0013 (release portion only — the CI baseline / posture-lint / SHA-pin / Dependabot decisions of 0013 stand)
 - **Source:** Maintainer release-workflow review, 2026-05-17 (release-plz `release-PR` model rejected after the v0.1.4 `#164` changelog defect)
 
@@ -67,14 +67,19 @@ flowchart LR
   end
 ```
 
-- New workflow `.github/workflows/release.yml`, `on: push: tags: ['v*']`.
+- The release workflow lives at `.github/workflows/release-plz.yml`,
+  `on: push: tags: ['v*']`. **The filename `release-plz.yml` is retained
+  deliberately** (see the Amendment below): the crates.io OIDC Trusted
+  Publisher binding is `(repo, workflow filename)`-scoped, so keeping the name
+  avoids re-registering it. The file no longer runs release-plz; its contents
+  are this tag-driven pipeline.
 - **One** workspace tag `vX.Y.Z` (or `vX.Y.Z-beta.N`). The per-crate
   `doiget-<crate>-v*` tag scheme is retired. `release-sign.yml` /
-  `release-sbom.yml` are re-pointed from `doiget-cli-v*` to `v*` (or folded
-  into `release.yml` as jobs).
-- `release-plz.yml` and `release-plz.toml` are **removed**. Version bump +
-  `CHANGELOG.md` editing become an explicit pre-tag step (script-assisted, see
-  D4), not an auto-PR.
+  `release-sbom.yml` are folded into the pipeline as `sign` / `sbom` jobs
+  (their standalone files demoted to `workflow_dispatch`-only escape hatches).
+- `release-plz.toml` is **removed** and the `release-plz` action is no longer
+  invoked. Version bump + `CHANGELOG.md` editing become an explicit pre-tag
+  step (script-assisted, see D4), not an auto-PR.
 - Tags MUST be annotated and GPG-signed (`git tag -s`); the gate verifies this.
 
 ### D2 — Mandatory version gate (runs first; abort on any failure)
@@ -244,3 +249,24 @@ flip this to `Accepted` (note the PR), flip `0013` `Status:` to
 `DECISIONS/INDEX.md`, and update any NORMATIVE doc that references the
 release process. To revise this decision, write a new ADR with
 `Supersedes: 0025` per `CONTRIBUTING.md`.
+
+## Amendment — 2026-05-18: retain the `release-plz.yml` filename
+
+D1 originally specified a new file `.github/workflows/release.yml` with
+`release-plz.yml` removed. PR #166 implemented it that way. This amendment
+(separate follow-up PR) **renames the pipeline back to
+`.github/workflows/release-plz.yml`** (only `release-plz.toml` stays removed).
+
+**Why:** the crates.io OIDC Trusted Publisher for `doiget-core`/`-cli`/`-mcp`
+is bound to `(repo, workflow filename)` and is **not** environment-scoped
+(verified against the pre-#166 `release-plz.yml`: no `environment:` key).
+Keeping the filename means the existing Trusted Publisher continues to
+authorize the publish job with **zero crates.io reconfiguration**; renaming
+would have required re-registering all three crates before the next publish.
+
+**Scope of the amendment:** filename + internal references only. No change to
+the decision, the version gate (D2), lanes (D3), changelog strategy (D4),
+pipeline order (D5), branch model (D6), or `#164` disposition (D7). The
+filename is a deliberate, documented misnomer (header note in the workflow).
+This is recorded as an in-place amendment rather than a superseding ADR
+because no decision changed — only an implementation detail was corrected.

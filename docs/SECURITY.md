@@ -103,7 +103,7 @@ malicious PDFs because doiget does not interact with their content.
 | Malicious release artifact swap | Sigstore keyless signing of release binaries; verifiable with `cosign verify-blob`. |
 | `cargo publish` token leak | Use crates.io trusted publishing (OIDC) — no long-lived token in repo. |
 | 3rd-party Action injection | All Actions pinned by SHA, not floating tag; Dependabot updates SHAs. |
-| Reproducible builds | `Cargo.lock` committed; `rust-toolchain.toml` pins rustc; `RUSTFLAGS` fixed in release.yml. |
+| Reproducible builds | `Cargo.lock` committed; `rust-toolchain.toml` pins rustc; `RUSTFLAGS` fixed in release-plz.yml. |
 
 ### 1.10 Network side channel
 

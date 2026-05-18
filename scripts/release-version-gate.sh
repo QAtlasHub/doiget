@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # release-version-gate.sh — the mandatory, abort-safe pre-publish gate for the
-# tag-driven release pipeline (ADR-0025 D2). It runs FIRST in release.yml; if
+# tag-driven release pipeline (ADR-0025 D2). It runs FIRST in release-plz.yml; if
 # any check fails NOTHING external (cargo publish / GitHub Release) runs, so
 # every irreversible step is preceded by this entirely reversible gate.
 #
@@ -16,7 +16,7 @@
 # availability so a local dry-run still exercises the structural checks.
 #
 # `--offline-skip-crates-io` skips ONLY G3/G4 (the crates.io reachability
-# checks) for a local dry-run. It MUST NOT be passed in CI — release.yml calls
+# checks) for a local dry-run. It MUST NOT be passed in CI — release-plz.yml calls
 # this script with no skip flag so the network checks always run for a real
 # release.
 #
@@ -184,7 +184,7 @@ pass "G6: prerelease consistent (tag/manifest/lane all '$LANE')"
 # G3 — X.Y.Z not already published on crates.io for ALL of the 3 crates.
 # G4 — version is strictly SemVer-greater than the latest published in lane.
 # Both query crates.io; skipped only with --offline-skip-crates-io (local
-# dry-run). They ALWAYS run in CI (release.yml passes no skip flag).
+# dry-run). They ALWAYS run in CI (release-plz.yml passes no skip flag).
 # ---------------------------------------------------------------------------
 # SemVer compare: returns 0 if $1 > $2, 1 if $1 == $2, 2 if $1 < $2.
 # Pre-release ordering per SemVer §11: a pre-release has LOWER precedence than
