@@ -1,52 +1,63 @@
-# Build and deploy the public-docs Zola site to GitHub Pages.
+# Build and deploy the public docs to GitHub Pages — SINGLE deploy authority.
 #
-# - On push to main: build site/, then publish to the gh-pages branch.
-# - On pull_request:  build site/ only (no publish), so we catch breakage
-#                     before merge. This mirrors the docs-build invariant
-#                     captured in the team's standing feedback that PR CI
-#                     must run docs builds, not just main.
+# One workflow owns the `gh-pages` branch (force_orphan: true), so there is
+# no cross-workflow race. Each run is DETERMINISTIC regardless of which lane
+# triggered it:
 #
-# Hosting target: GH Pages on `sotashimozono.github.io/doiget/`. The
-# existing `codes.sota-shimozono.com` CNAME continues to be managed at
-# the user-site level; this workflow does NOT publish a CNAME row.
+#   - the Zola site is built from `origin/main`  (stable docs)            → /
+#   - rustdoc is built from `origin/next`        (dev/beta API docs)      → /dev/
+#
+# and both are published together in the single force_orphan deploy. A push
+# to either lane refreshes the whole site (so `next` changes DO update the
+# dev docs). PRs build only (no deploy) — the docs-build invariant from the
+# team's standing feedback. Hosting: `sotashimozono.github.io/doiget/`
+# (the `codes.sota-shimozono.com` CNAME is managed at the user-site level;
+# this workflow does NOT publish a CNAME row).
 name: site
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
     paths:
       - "site/**"
       - "docs/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "scripts/sync_docs_to_site.sh"
       - ".github/workflows/site.yml"
   pull_request:
     paths:
       - "site/**"
       - "docs/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "scripts/sync_docs_to_site.sh"
       - ".github/workflows/site.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: build (zola)
+    name: build (zola + dev rustdoc)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout (full history — the build switches between main and next)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Fetch the two lane refs
+        run: git fetch origin main next --quiet
 
       - name: Install Zola
         # Zola is a single static binary; no toolchain setup needed.
-        #
-        # `set -o pipefail` is critical: without it, a curl failure
-        # (404 / network timeout / DNS) exits non-zero on the left
-        # side of the pipe, but tar receives empty stdin and exits 0
-        # — the step would then pass with no zola binary extracted.
-        # The subsequent `zola --version` would catch the missing
-        # binary, but the failure mode would be confusing. pipefail
-        # surfaces the curl failure directly.
+        # `set -o pipefail` is critical: without it a curl failure exits
+        # non-zero on the left of the pipe but tar receives empty stdin
+        # and exits 0 — the step would pass with no zola binary.
         run: |
           set -euo pipefail
           ZOLA_VERSION="v0.19.2"
@@ -54,27 +65,51 @@ jobs:
             | tar -xz -C /usr/local/bin
           zola --version
 
-      - name: Sync docs/ -> site/content/
-        # Re-project the canonical docs/*.md into site/content/* before
-        # building. If the projection drifts from what's committed, the
-        # diff will fail the projection-check step below.
-        run: |
-          bash scripts/sync_docs_to_site.sh
+      - name: Install Rust (stable) for dev rustdoc
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
 
-      - name: Verify projection is up-to-date
-        # The committed site/content/ MUST match the freshly-projected
-        # output. If it doesn't, the contributor forgot to run
-        # `scripts/sync_docs_to_site.sh` before committing — fail loud.
+      # ---- Stable site, deterministically from origin/main -----------------
+      - name: Build the Zola site from origin/main
         run: |
+          set -euo pipefail
+          git checkout --force origin/main
+          bash scripts/sync_docs_to_site.sh
           if ! git diff --exit-code site/content/; then
-            echo "::error::site/content/ is stale; run scripts/sync_docs_to_site.sh and commit the result." >&2
+            echo "::error::site/content/ is stale on main; run scripts/sync_docs_to_site.sh and commit." >&2
             exit 1
           fi
+          ( cd site && zola build --base-url "https://sotashimozono.github.io/doiget/" )
+          # Stash the built site outside the worktree so the next checkout
+          # (origin/next) does not clobber it.
+          rm -rf "$RUNNER_TEMP/site"
+          cp -r site/public "$RUNNER_TEMP/site"
 
-      - name: Build site
+      # ---- Dev rustdoc, deterministically from origin/next -----------------
+      - name: Build dev rustdoc from origin/next
         run: |
-          cd site
-          zola build --base-url "https://sotashimozono.github.io/doiget/"
+          set -euo pipefail
+          git checkout --force origin/next
+          # Default features (oa-only) — same surface docs.rs builds for the
+          # stable release; feature-gated TDM is intentionally excluded.
+          cargo doc --no-deps --workspace --locked
+          mkdir -p "$RUNNER_TEMP/site/dev"
+          cp -r target/doc/. "$RUNNER_TEMP/site/dev/"
+          # Clean entry point: /dev/ redirects to the core crate's docs.
+          # printf (not a heredoc) to stay robust inside the YAML block.
+          printf '%s\n' \
+            '<!doctype html><meta charset="utf-8">' \
+            '<meta http-equiv="refresh" content="0; url=doiget_core/index.html">' \
+            '<title>doiget dev API docs</title>' \
+            '<a href="doiget_core/index.html">doiget dev API docs (built from the <code>next</code> branch)</a>' \
+            > "$RUNNER_TEMP/site/dev/index.html"
+
+      - name: Assemble final site/public (stable site + /dev rustdoc)
+        run: |
+          set -euo pipefail
+          rm -rf site/public
+          mkdir -p site/public
+          cp -r "$RUNNER_TEMP/site/." site/public/
 
       - name: Upload site artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
@@ -86,7 +121,10 @@ jobs:
   deploy:
     name: deploy (gh-pages)
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Deploy on a push to either lane. The build is deterministic
+    # (site=origin/main, dev=origin/next) so the published content is
+    # identical regardless of which lane triggered the run. PRs never deploy.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -105,7 +143,9 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site/public
-          # Custom domain managed at user-site level; not set here.
+          # Single deploy authority — a fresh orphan commit each time keeps
+          # gh-pages clean (no stale files). The build always assembles the
+          # full tree (stable site + /dev), so orphaning loses nothing.
           force_orphan: true
           user_name: "github-actions[bot]"
           user_email: "41898282+github-actions[bot]@users.noreply.github.com"
