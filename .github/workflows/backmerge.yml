@@ -1,0 +1,73 @@
+name: backmerge
+
+# ADR-0025 §D6 rule 4 automation: keep `next` (beta lane) from regressing
+# behind `main` (stable lane). On every push to `main`, if `next` is missing
+# commits from `main`, open the `main → next` back-merge PR (or leave the
+# existing one — its diff auto-tracks new main commits).
+#
+# Scope = OPEN the PR only. It is NOT auto-merged: `next` is branch-protected
+# (PR + required checks + enforce_admins) and the predictable Cargo.toml /
+# Cargo.lock version conflict (next carries `X.Y.Z-beta.N`, main is the clean
+# stable `X.Y.Z`) is resolved by the human at merge time, keeping next's
+# `-beta.N`.
+#
+# Auth: `RELEASE_PLZ_TOKEN` (fine-grained PAT, contents + pull-requests
+# write). The default `GITHUB_TOKEN` cannot be used — PRs it opens do not
+# trigger the required CI checks (GitHub recursion guard), so they could
+# never be merged into the protected `next`. (Same constraint the release-plz
+# era already hit; the secret is reused.)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backmerge-pr:
+    name: open main → next back-merge PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Open or refresh the back-merge PR
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch origin main next --quiet || true
+
+          if ! git rev-parse --verify -q origin/next >/dev/null; then
+            echo "::notice::no 'next' branch — beta lane not open; nothing to back-merge."
+            exit 0
+          fi
+
+          behind="$(git rev-list --count origin/next..origin/main)"
+          if [ "$behind" -eq 0 ]; then
+            echo "::notice::'next' already contains all of 'main' — no back-merge needed."
+            exit 0
+          fi
+
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --base next --head main \
+            --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            echo "::notice::back-merge PR #$existing already open — it tracks new main commits automatically ($behind ahead)."
+            exit 0
+          fi
+
+          body_file="$(mktemp)"
+          {
+            echo "Automated **back-merge** so the \`next\` beta lane does not regress behind the \`main\` stable lane (ADR-0025 §D6 rule 4). Opened by \`.github/workflows/backmerge.yml\` because \`main\` advanced ($behind commit(s)) past \`next\`."
+            echo
+            echo "**Not auto-merged.** \`next\` is branch-protected; human review + CI required."
+            echo
+            echo "**Expected merge-time conflict (every back-merge):** \`[workspace.package].version\` and \`Cargo.lock\` conflict — \`next\` carries \`X.Y.Z-beta.N\`, \`main\` carries the clean stable \`X.Y.Z\`. **Keep \`next\`'s \`-beta.N\` version**; take \`main\`'s other changes. Resolve any non-version conflict on its merits."
+          } > "$body_file"
+
+          gh pr create --repo "$GITHUB_REPOSITORY" --base next --head main \
+            --title "chore: back-merge main → next (ADR-0025 §D6)" \
+            --body-file "$body_file"
+          echo "::notice::opened main → next back-merge PR."

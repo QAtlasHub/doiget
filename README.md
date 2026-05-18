@@ -4,10 +4,15 @@
 > Designed as the **agent-facing companion** to [BiblioFetch.jl](https://github.com/sotashimozono/BiblioFetch.jl).
 
 [![crates.io](https://img.shields.io/crates/v/doiget-core.svg)](https://crates.io/crates/doiget-core)
+[![downloads](https://img.shields.io/crates/d/doiget-core.svg)](https://crates.io/crates/doiget-core)
+[![MSRV](https://img.shields.io/crates/msrv/doiget-core.svg)](https://crates.io/crates/doiget-core)
 [![docs.rs](https://img.shields.io/docsrs/doiget-core)](https://docs.rs/doiget-core)
 [![CI](https://github.com/sotashimozono/doiget/actions/workflows/ci.yml/badge.svg)](https://github.com/sotashimozono/doiget/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/sotashimozono/doiget/branch/main/graph/badge.svg)](https://codecov.io/gh/sotashimozono/doiget)
+[![issues](https://img.shields.io/github/issues/sotashimozono/doiget)](https://github.com/sotashimozono/doiget/issues)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**Docs:** stable (`main`) — [site](https://sotashimozono.github.io/doiget/) · [API on docs.rs](https://docs.rs/doiget-core) &nbsp;|&nbsp; dev (`next`/beta) — [`next` branch](https://github.com/sotashimozono/doiget/tree/next) *(source only; no rendered beta docs are published yet)*
 
 **Status:** Shipping — **v0.2.0** on crates.io (`doiget-core`, `doiget-cli`,
 `doiget-mcp`), with sigstore-signed binaries + an SBOM attached to the GitHub
