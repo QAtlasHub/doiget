@@ -115,13 +115,46 @@ The following crates are denied workspace-wide via `deny.toml`:
 
 ## Commit and PR conventions
 
-- Branch from `main`. Branch name format: `<type>/<short-slug>`, e.g.
-  `fix/safekey-collision`, `feat/citation-graph`, `docs/clarify-store-spec`.
+- **Branch from `next`, not `main`** (ADR-0025 §D6). `next` is the integration
+  + beta lane; `main` is the stable lane and advances only via a `next → main`
+  promotion or a stable hotfix. Branch name format: `<type>/<short-slug>`,
+  e.g. `fix/safekey-collision`, `feat/citation-graph`,
+  `docs/clarify-store-spec`.
 - Commit messages follow Conventional Commits: `feat:`, `fix:`, `docs:`, `chore:`,
   `refactor:`, `test:`, `ci:`, `perf:`.
-- Sign your commits (`git commit -S`) — verified signatures are required on `main`.
+- Sign your commits. Both `main` and `next` are branch-protected with the same
+  required checks. Release **tags** MUST be signed — **GPG or SSH** (`git tag
+  -s` with `gpg.format` set accordingly); the release version gate verifies the
+  signature against `.github/allowed_signers` (ADR-0025 §D2-G7 / Amendment).
 - Each PR has a single, well-scoped purpose. Multi-purpose PRs will be asked to split.
 - The PR description must reference any related ADR, Discussion, or issue.
+
+## Release process
+
+Releases are **tag-driven**; [ADR-0025](docs/DECISIONS/0025-tag-driven-release.md)
+is the binding spec and full runbook. Summary:
+
+- **Lanes.** A clean SemVer tag `vX.Y.Z` = **stable**, cut from `main`.
+  `vX.Y.Z-beta.N` = **beta**, cut from `next`. crates.io has no dist-tags, so
+  the SemVer pre-release identifier *is* the channel.
+- **Cutting a release** (maintainer only): bump `[workspace.package].version`,
+  curate the `## [X.Y.Z]` `CHANGELOG.md` section (helper:
+  `scripts/release-changelog.sh`), commit, then push **one signed tag**
+  (`git tag -s vX.Y.Z … && git push origin vX.Y.Z`). The
+  `.github/workflows/release-plz.yml` pipeline (kept at that filename only to
+  preserve the crates.io Trusted Publisher binding — release-plz itself was
+  removed) runs a mandatory **version gate**, then publishes
+  `doiget-core → doiget-mcp → doiget-cli` to crates.io via OIDC,
+  sigstore-signs the binaries, emits an SBOM, and opens the GitHub Release.
+- **The gate fails closed** (ADR-0025 §D2): tag↔manifest mismatch, a
+  missing/empty `## [X.Y.Z]` CHANGELOG section, a non-monotonic version,
+  prerelease/lane inconsistency, or an unsigned tag aborts the release
+  *before* anything is published. A partial publish is recovered by re-running
+  the **same** tag on a fixed pipeline (already-published crates idempotently
+  skip) — never by force-overwrite; crates.io is immutable.
+- A pipeline bug fix only takes effect for a re-run if the tag is re-pointed
+  to the fixed commit (the pipeline runs the workflow/scripts *as of the
+  tagged tree*). Do not reintroduce a perpetual "release PR".
 
 ## ADR workflow
 

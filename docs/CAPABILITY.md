@@ -8,7 +8,7 @@
 ## 1. Type definition
 
 ```rust
-// Phase 1+ target module path; Phase 0 ships these types in monolithic lib.rs.
+// These types are defined in the doiget-core crate.
 
 use secrecy::SecretString; // = SecretBox<str>; the `secrecy` 0.10 owned-string secret
 use chrono::{DateTime, Utc};
@@ -38,7 +38,7 @@ pub struct AlwaysOn;   // unit struct — Tier 1 OA is always permitted
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct MetadataAccess {
-    pub openalex: bool,            // Phase 4+
+    pub openalex: bool,
     pub semantic_scholar: bool,
     pub doaj: bool,
 }
@@ -157,9 +157,9 @@ fn read_tdm_grant(agree_var: &str, key_var: &str) -> Result<Option<TdmGrant>, Ca
 
 | Variable | Type | Effect |
 |---|---|---|
-| `DOIGET_ENABLE_OPENALEX` | presence | Enables OpenAlex (metadata only). Phase 4+. |
-| `DOIGET_ENABLE_S2` | presence | Enables Semantic Scholar. Phase 4+. |
-| `DOIGET_ENABLE_DOAJ` | presence | Enables DOAJ. Phase 4+. |
+| `DOIGET_ENABLE_OPENALEX` | presence | Enables OpenAlex (metadata only). |
+| `DOIGET_ENABLE_S2` | presence | Enables Semantic Scholar. |
+| `DOIGET_ENABLE_DOAJ` | presence | Enables DOAJ. |
 | `DOIGET_AGREE_TDM_ELSEVIER` | `=1` | Acknowledges Elsevier TDM ToS. Pairs with key. |
 | `DOIGET_KEY_ELSEVIER` | secret string | Elsevier API key. Read into `Secret<String>`. |
 | `DOIGET_AGREE_TDM_APS` | `=1` | Acknowledges APS Harvest TDM ToS. |

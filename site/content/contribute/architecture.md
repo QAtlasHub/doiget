@@ -35,8 +35,8 @@ flowchart TB
 
     Core --> Cap{CapabilityProfile<br/>oa / metadata / tdm-*}
     Cap -->|always on| OA[Tier 1 OA<br/>Crossref / Unpaywall / arXiv]
-    Cap -->|opt-in env| Meta[Tier 2 metadata<br/>OpenAlex / S2 / DOAJ<br/>Phase 4]
-    Cap -->|opt-in env + key + agree<br/>compile-time gated| TDM[Tier 3 TDM<br/>Springer OA / APS / Elsevier<br/>Phase 5a/5b/5c]
+    Cap -->|opt-in env| Meta[Tier 2 metadata<br/>OpenAlex / S2 / DOAJ]
+    Cap -->|opt-in env + key + agree<br/>compile-time gated| TDM[Tier 3 TDM<br/>Springer OA / APS / Elsevier]
 
     OA --> Fetcher[Fetcher<br/>rate-cap 5/sec, size cap, redirect allowlist]
     Meta -.-> Fetcher
@@ -68,7 +68,7 @@ doiget/                              # workspace root
 │   ├── doiget-core/                 # ★ library, semver-strict
 │   ├── doiget-cli/                  # binary `doiget`
 │   ├── doiget-mcp/                  # MCP server library
-│   └── doiget-obsidian/             # Phase 7 optional, default OFF
+│   └── doiget-obsidian/             # optional, default OFF
 │
 ├── examples/
 │   ├── 01-basic-fetch/
@@ -94,7 +94,7 @@ flowchart LR
     cli[doiget-cli<br/>binary] --> core[doiget-core<br/>library, semver-strict]
     cli --> mcp[doiget-mcp<br/>library]
     mcp --> core
-    obs[doiget-obsidian<br/>Phase 7 optional] --> core
+    obs[doiget-obsidian<br/>optional] --> core
 
     classDef core fill:#bfb,stroke:#060
     classDef bin fill:#bef,stroke:#069
@@ -191,21 +191,13 @@ sequenceDiagram
 | [CONTACT.md](../CONTACT.md) | Entry | Takedown / SLA / DMCA / security disclosure |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Process | PR rules, doc style, scope-reopening meta-rule |
 
-## 8. Phase plan summary
+## 8. Phase plan
 
-The full plan is in [`PHASES.md`](PHASES.md). Headline:
-
-| Phase | Scope | Effort |
-|---|---|---|
-| 0 | Repo bootstrap, normative specs, ADRs, Cargo workspace skeleton, CI | 5–7 days |
-| 1 | Core resolver + Tier 1 sources + `fetch` / `batch` CLI | 1.5 weeks |
-| 2 | Store + `info` / `search` / `bib` / `csl` | 1 week |
-| 3 | MCP server + 9 tools + strict stdio | 1.5 weeks |
-| **MVP shipping point** | | **5 weeks** |
-| 4 | Tier 2 sources + citation graph (Phase 4) | 1.5 weeks |
-| 5 | TDM (5a Springer OA / 5b APS / 5c Elsevier) | 3–5 weeks, optional |
-| 6 | Release + marketplace + polish | 1 week |
-| 7 | Optional (`vault`, `obsidian`) | per feature |
+The MVP (core resolver + Tier 1 sources + `fetch` / `batch` CLI, store +
+`info` / `search` / `bib` / `csl`, MCP server + tools + strict stdio) plus
+Tier 2 sources, the citation graph, and feature-gated Tier 3 TDM are shipped.
+The optional `doiget-obsidian` crate is the remaining per-feature work. The
+historical phase breakdown is in [`PHASES.md`](PHASES.md).
 
 ## 9. Cross-tool relationship with BiblioFetch.jl
 
@@ -224,5 +216,5 @@ The boundary contracts are documented as part of [`STORE.md`](STORE.md):
 2. Read [LEGAL.md](LEGAL.md) and [SCOPE.md](SCOPE.md). These set the boundaries on what
    contributions are accepted.
 3. Skim [DECISIONS/](DECISIONS/) — the ADRs explain why doiget is shaped the way it is.
-4. Pick a Phase 0 task from [PHASES.md](PHASES.md) §"Phase 0 deliverable checklist" or
-   open an issue to discuss a contribution outside it.
+4. Open an issue to discuss a contribution, keeping it within the boundaries
+   set by [LEGAL.md](LEGAL.md) and [SCOPE.md](SCOPE.md).

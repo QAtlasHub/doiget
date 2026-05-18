@@ -12,7 +12,7 @@ weight = 100
 `doiget` runs as a Model Context Protocol server when invoked as `doiget serve`. It
 speaks **stdio only** ([ADR-0001](DECISIONS/), [`SCOPE.md`](SCOPE.md) §non-goal 6).
 
-## 1. Tool list (Phase 3 baseline)
+## 1. Tool list
 
 | Tool | Purpose |
 |---|---|
@@ -27,7 +27,7 @@ speaks **stdio only** ([ADR-0001](DECISIONS/), [`SCOPE.md`](SCOPE.md) §non-goal
 | `doiget_capability_profile` | Report which sources this instance is allowed to use. |
 | `doiget_health` | Operational sanity (store writable, version, schema). |
 
-Phase 4 adds:
+Additional tools:
 
 | Tool | Purpose |
 |---|---|
@@ -88,10 +88,10 @@ type FetchResult =
       source: "crossref" | "unpaywall" | "arxiv"
             | "openalex" | "s2" | "doaj" | "oa-publisher"
             | "tdm-elsevier" | "tdm-aps" | "tdm-springer",
-      // ADR-0021 §4 / ADR-0024 (Slice 4): the resolver profile under
-      // which the canonical-digest for this fetch was minted. Equal to
-      // `source` verbatim in Slice 4; kept distinct so future slices
-      // can decouple the two when overlapping resolvers ship.
+      // ADR-0021 §4 / ADR-0024: the resolver profile under which the
+      // canonical-digest for this fetch was minted. Currently equal to
+      // `source` verbatim; kept a distinct field so the two can be
+      // decoupled if overlapping resolvers are ever added.
       resolver_profile: string,
       path: string,
       license: string,
@@ -196,7 +196,7 @@ type CapabilityProfileResponse = {
 
 ## 9. Smoke test
 
-A CI workflow `mcp-smoke.yml` (Phase 3) spawns the server, sends a minimal sequence
+A CI workflow `mcp-smoke.yml` spawns the server, sends a minimal sequence
 (`initialize` → `tools/list` → `tools/call doiget_health`), asserts the responses, and
 asserts that no stray bytes appeared on stdout outside JSON-RPC frames.
 
@@ -214,8 +214,8 @@ an optional `dry_run: boolean` input field, defaulting to `false`. When
   for the resolver, not a prediction of the single host the real fetch would
   hit. doiget cannot resolve the post-Unpaywall OA URL host without making
   the Unpaywall call, and `dry_run` MUST NOT make it.
-- The `plan.candidate_hosts_are_upper_bound` boolean is always `true` in
-  Phase 1 and machine-encodes the bullet above (ADR-0022 §4) directly into
+- The `plan.candidate_hosts_are_upper_bound` boolean is always `true` and
+  machine-encodes the bullet above (ADR-0022 §4) directly into
   the wire envelope, so an agent can detect the upper-bound semantics
   without consulting the spec.
 
@@ -287,7 +287,7 @@ type MetadataOnlyResult =
       source: "crossref" | "unpaywall" | "arxiv",
       // ADR-0021 §4 / ADR-0024: the resolver profile under which the
       // canonical-digest for this metadata-only call was minted.
-      // Equal to `source` verbatim in Slice 4.
+      // Currently equal to `source` verbatim.
       resolver_profile: string,
       license: string,
       oa_url: string | null,
