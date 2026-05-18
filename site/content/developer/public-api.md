@@ -15,13 +15,9 @@ binaries / servers and may evolve more freely.
 
 ## 1. Re-exports (top of `lib.rs`)
 
-> **Phase 0 note:** the module paths shown below (`crate::ref_`,
-> `crate::capability`, `crate::source`, `crate::store`, `crate::error`,
-> `crate::provenance`) describe the **Phase 1+ target layout**. At Phase 0
-> HEAD, `doiget-core` is a single `lib.rs` and the same items are visible
-> directly from the crate root. The semver-locked surface is the public
-> identifier set, not the submodule layout — Phase 1 may split files
-> without a major bump.
+> **Note:** the semver-locked surface is the public identifier set, not the
+> submodule layout. File splits within `doiget-core` that preserve the public
+> identifier set are not a major bump.
 
 ```rust
 pub use crate::ref_::{Ref, Doi, ArxivId};
@@ -144,10 +140,8 @@ propagation collapses to `INVALID_REF` automatically.
 `RefParseError` is `#[non_exhaustive]`; adding new categories is a
 non-breaking change. Pattern-match with a wildcard arm.
 
-History: prior revisions of this section documented the signature as
-`Result<Self, ErrorCode>` (a Phase 0 placeholder before the parse impls
-landed). PR #55 introduced the dedicated `RefParseError` type; see also
-the [`Unreleased`] entry in [`CHANGELOG.md`](../CHANGELOG.md).
+The dedicated `RefParseError` type was introduced by PR #55; see also
+the [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## 5. CapabilityProfile
 
@@ -173,7 +167,7 @@ See [`CAPABILITY.md`](CAPABILITY.md) for the full type definition and resolution
 - Items not listed here (private types, `pub(crate)`, types under `__internal::`) carry
   no stability guarantee.
 - During the `0.x` line, breaking changes are allowed at any minor bump but must still
-  be documented in `CHANGELOG.md` and an ADR. Phase 6 freezes this surface as `1.0`.
+  be documented in `CHANGELOG.md` and an ADR. The `1.0` release freezes this surface.
 
 ## 7. MSRV
 
@@ -184,8 +178,8 @@ explicitly to 1.86 to verify the declared floor still holds.
 
 Raising the declared MSRV is a **minor** version bump and requires a CHANGELOG
 entry. Lowering it requires an ADR (we do not retroactively re-support older
-toolchains without explicit reason). Phase 6 may re-evaluate the policy and
-adopt a stable-channel-tracks-current-stable-minus-N rule at that point.
+toolchains without explicit reason). The `1.0` release may re-evaluate the
+policy and adopt a stable-channel-tracks-current-stable-minus-N rule.
 
 ## 8. Structured denial context (NORMATIVE; ADR-0023)
 
@@ -229,7 +223,7 @@ surface and [`MCP_TOOLS.md`](MCP_TOOLS.md) §5 for the JSON envelope.
 
 ## 9. Audit-identity: `CanonicalRef` (NORMATIVE; ADR-0021, ADR-0024)
 
-Slice 4 ships the four-tuple audit identity reserved by
+`doiget-core` provides the four-tuple audit identity defined by
 [ADR-0021](DECISIONS/0021-canonical-tuple-identity.md) and implemented per
 [ADR-0024](DECISIONS/0024-canonical-ref-impl.md). The re-exports are listed
 in §1 (`CanonicalRef`, `SourceType`).

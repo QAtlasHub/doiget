@@ -1,20 +1,19 @@
 +++
 title = "BiblioFetch.jl migration"
-description = "This document will cover migration scenarios between doiget and"
+description = "This document covers migration scenarios between doiget and"
 weight = 130
 +++
 
 # Migration
 
-> **Status: INFORMATIVE (placeholder).** Full migration recipes will be filled in during
-> Phase 2 once the round-trip test suite (`cross-tool-compat.yml`) passes. The
-> binding contract underlying these scenarios is in [`STORE.md`](STORE.md).
+> **Status: INFORMATIVE.** The binding contract underlying these scenarios is in
+> [`STORE.md`](STORE.md).
 
-This document will cover migration scenarios between doiget and
+This document covers migration scenarios between doiget and
 [BiblioFetch.jl](https://github.com/sotashimozono/BiblioFetch.jl), and between
 machines.
 
-## Scenarios (to be expanded)
+## Scenarios
 
 ### 1. BiblioFetch.jl user trying doiget for the first time
 
@@ -65,13 +64,7 @@ at that time. Until then, doiget never writes anything other than `1.x`.
 The store is just files under `~/papers/`. Uninstalling doiget (`cargo uninstall
 doiget`) does not touch the store. BiblioFetch.jl can continue to read and write it.
 
-## Future content
+## Related
 
-This file will expand to:
-
-- Step-by-step recipes with expected output.
-- Failure-mode walkthroughs.
-- Cross-platform path handling (Windows ↔ POSIX) notes.
-- Troubleshooting `cross-tool-compat.yml` failures.
-
-Until then, see [`STORE.md`](STORE.md) for the binding spec.
+For the binding store contract these scenarios rely on, see
+[`STORE.md`](STORE.md).

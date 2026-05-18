@@ -163,9 +163,9 @@ fn read_tdm_grant(agree_var: &str, key_var: &str) -> Result<Option<TdmGrant>, Ca
 
 | Variable | Type | Effect |
 |---|---|---|
-| `DOIGET_ENABLE_OPENALEX` | presence | Enables OpenAlex (metadata only). Phase 4+. |
-| `DOIGET_ENABLE_S2` | presence | Enables Semantic Scholar. Phase 4+. |
-| `DOIGET_ENABLE_DOAJ` | presence | Enables DOAJ. Phase 4+. |
+| `DOIGET_ENABLE_OPENALEX` | presence | Enables OpenAlex (metadata only). |
+| `DOIGET_ENABLE_S2` | presence | Enables Semantic Scholar. |
+| `DOIGET_ENABLE_DOAJ` | presence | Enables DOAJ. |
 | `DOIGET_AGREE_TDM_ELSEVIER` | `=1` | Acknowledges Elsevier TDM ToS. Pairs with key. |
 | `DOIGET_KEY_ELSEVIER` | secret string | Elsevier API key. Read into `Secret<String>`. |
 | `DOIGET_AGREE_TDM_APS` | `=1` | Acknowledges APS Harvest TDM ToS. |

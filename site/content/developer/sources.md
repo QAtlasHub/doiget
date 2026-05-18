@@ -80,12 +80,12 @@ There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
   global 5/sec cap respects this.
 - doiget uses arXiv for: arXiv id → PDF + metadata.
 
-### OpenAlex / Semantic Scholar / DOAJ (Phase 4)
+### OpenAlex / Semantic Scholar / DOAJ
 
-- Metadata enrichment only. doiget will not fetch PDFs from these unless the response
+- Metadata enrichment only. doiget does not fetch PDFs from these unless the response
   includes an OA URL whose host is on the per-source allowlist.
 
-### TDM sources (Phase 5)
+### TDM sources
 
 Each requires:
 

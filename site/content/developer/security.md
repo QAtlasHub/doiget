@@ -136,9 +136,9 @@ doiget contains no auto-update path, no version check, no crash report transmiss
 no usage analytics. (ADR-0015) These are denied at the dependency level via `cargo-deny`
 to prevent inadvertent introduction.
 
-## 2. Defense-in-depth controls (Phase 0)
+## 2. Defense-in-depth controls
 
-Phase 0 must establish:
+The following controls are established:
 
 - [`Cargo.lock`](../Cargo.lock) committed.
 - `cargo audit` and `cargo deny check` in CI (`audit.yml`).
@@ -150,7 +150,7 @@ Phase 0 must establish:
   commits.
 - Author 2FA mandatory.
 
-## 3. Phase 3 (MCP) additional controls
+## 3. MCP server additional controls
 
 - `clippy::print_stdout` denied workspace-wide (and especially in `doiget-mcp`).
 - `tracing-subscriber` global writer redirected to stderr; `std::panic::set_hook`
@@ -160,7 +160,7 @@ Phase 0 must establish:
 - All tool inputs validated with `serde` strict mode and explicit JSON Schema declared in
   `inputSchema`.
 
-## 4. Phase 6 (release) additional controls
+## 4. Release additional controls
 
 - crates.io trusted publishing (OIDC).
 - GitHub Environment-protected release workflow (manual approval).
