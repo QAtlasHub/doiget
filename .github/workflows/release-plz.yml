@@ -10,7 +10,7 @@ name: release
 # misnomer; the contents are the ADR-0025 tag-driven pipeline below.
 
 # ADR-0025 — tag-driven release pipeline. The ONLY entry point is pushing an
-# annotated, GPG-signed workspace tag `vX.Y.Z` (stable) or `vX.Y.Z-beta.N`
+# annotated, signed (GPG or SSH) workspace tag `vX.Y.Z` (stable) or `vX.Y.Z-beta.N`
 # (beta). One workspace tag IS the release; the legacy per-crate
 # `doiget-<crate>-v*` tag scheme (release-plz) is retired.
 #

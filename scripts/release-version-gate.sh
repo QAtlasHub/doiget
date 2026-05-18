@@ -281,8 +281,15 @@ else
   if [ "$OBJ_TYPE" != "tag" ]; then
     fail "G7: tag '$TAG' is a lightweight tag (object type '$OBJ_TYPE'), not an annotated tag. ADR-0025 D1 requires 'git tag -s' (annotated + signed)."
   fi
-  if ! git -C "$REPO_ROOT" verify-tag "$TAG" >/dev/null 2>&1; then
-    fail "G7: tag '$TAG' is not GPG-verifiable ('git verify-tag' failed). ADR-0025 D1 requires a signed tag."
+  # ADR-0025 D1: GPG- OR SSH-signed. `git verify-tag` auto-detects the
+  # signature type; SSH signatures additionally need an allowed-signers file.
+  # Passing it via `-c` is harmless for GPG-signed tags (ignored) and enables
+  # SSH verification against the committed `.github/allowed_signers` (whose
+  # principal is the tagger email).
+  ALLOWED_SIGNERS="$REPO_ROOT/.github/allowed_signers"
+  if ! git -C "$REPO_ROOT" -c gpg.ssh.allowedSignersFile="$ALLOWED_SIGNERS" \
+        verify-tag "$TAG" >/dev/null 2>&1; then
+    fail "G7: tag '$TAG' is not signature-verifiable ('git verify-tag' failed). ADR-0025 D1 requires a GPG- or SSH-signed tag; an SSH signer must be listed in .github/allowed_signers with a principal matching the tagger email."
   fi
   if [ "$LANE" = "beta" ]; then
     LANE_BRANCH="next"
