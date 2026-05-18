@@ -60,8 +60,8 @@ in all timestamps.
 
 ## 3.1 Schema migration (v1 → v2)
 
-> **Status: NORMATIVE.** Implemented in Slice 4 per
-> [ADR-0024](DECISIONS/0024-canonical-ref-impl.md), supersedes the
+> **Status: NORMATIVE.** Implemented per
+> [ADR-0024](DECISIONS/0024-canonical-ref-impl.md), which supersedes the
 > spec-only posture of [ADR-0021](DECISIONS/0021-canonical-tuple-identity.md).
 
 Pre-Slice-4 logs are **v1**: rows have neither a `schema_version`

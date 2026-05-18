@@ -7,9 +7,9 @@
 ```
 ~/.cache/doiget/
 ├── resolver/
-│   └── <safekey>.toml       # Crossref / Unpaywall response cache (Phase 1+)
+│   └── <safekey>.toml       # Crossref / Unpaywall response cache
 └── citations/
-    └── <safekey>.toml       # citation graph expansion cache (Phase 4+)
+    └── <safekey>.toml       # citation graph expansion cache
 ```
 
 Override root via `DOIGET_CACHE_ROOT` env or `[cache] root` in `config.toml`.

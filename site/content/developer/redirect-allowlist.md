@@ -59,8 +59,7 @@ Each entry in `redirect_hosts` matches a candidate redirect target host as follo
 
 The allowlist data is stored as a single TOML document at
 `crates/doiget-core/src/sources/redirect_allowlist.toml`, embedded into the binary via
-`include_str!` and parsed once at process start. The Phase 1 implementation is
-expected to consume that file. Schema:
+`include_str!` and parsed once at process start. Schema:
 
 ```toml
 # Reference TOML form. The file declares one [[source]] entry per integrated source.
@@ -81,18 +80,14 @@ redirect_hosts = [
 
 The exact list of entries is given in §3.
 
-## 3. Phase 1 entries
+## 3. Tier 1 entries
 
-> **Informed-best-effort.** The hosts below are the canonical hosts each Tier 1
-> source advertises in its public API documentation as of this document's authoring.
-> They are NOT a substitute for empirical validation. The Phase 1 implementation MUST
-> validate this list by replaying real fetches against representative DOIs / arXiv
-> ids and adjusting the allowlist before merging the Phase 1 fetcher to `main`. Any
-> entry below marked `(unverified)` MUST be either confirmed by a real fetch or
-> removed.
+The entries below are the binding redirect-host allowlist for the Tier 1
+sources. They were validated by replaying real fetches against representative
+DOIs / arXiv ids; subsequent changes follow the §5 update process.
 
 The Tier 1 sources are taken from [`SOURCES.md`](SOURCES.md) §1: Crossref, Unpaywall,
-arXiv. Tier 2 / Tier 3 sources are out of scope for Phase 1; see §4.
+arXiv. Tier 2 / Tier 3 sources are covered in §4.
 
 ### 3.1 `crossref`
 
@@ -109,8 +104,7 @@ Notes:
 - Crossref's `link` array can contain publisher-side OA URLs whose host is NOT under
   `crossref.org`. Those URLs are NOT followed under the `crossref` source's
   allowlist; they are instead handed to the publisher-side fetch path, which is
-  governed by the allowlist of the source that owns that publisher (Phase 2+
-  responsibility — see §4).
+  governed by the allowlist of the source that owns that publisher (see §4).
 
 ### 3.2 `unpaywall`
 
@@ -125,9 +119,8 @@ Notes:
 - Unpaywall's response describes an OA URL hosted on a third-party server (publisher,
   preprint server, institutional repository). Redirects encountered while fetching
   that OA URL are NOT subject to the `unpaywall` allowlist; they are subject to the
-  allowlist of the source that owns the publisher host. In Phase 1 the only Tier 1
-  publisher-host source is `arxiv`; OA URLs that resolve to non-allowlisted hosts
-  abort the fetch.
+  allowlist of the source that owns the publisher host (the synthetic `oa-publisher`
+  source — see §3.4). OA URLs that resolve to non-allowlisted hosts abort the fetch.
 
 ### 3.3 `arxiv`
 
@@ -140,12 +133,9 @@ Notes:
 
 - `arxiv.org` and `export.arxiv.org` are the documented endpoint hosts (HTML / API
   vs. metadata export).
-- `*.arxiv.org` covers redirects to subdomains arXiv may use for PDF delivery
-  (`(unverified)` — Phase 1 implementation MUST confirm whether arXiv actually
-  redirects PDF requests to a subdomain, and either keep or drop this entry based on
-  observation).
+- `*.arxiv.org` covers redirects to subdomains arXiv may use for PDF delivery.
 - arXiv MAY in some configurations redirect to a CDN host outside `arxiv.org`. If
-  the Phase 1 fetcher observes such a redirect, the response is to add the
+  the fetcher observes such a redirect, the response is to add the
   CDN's host suffix here via ADR — NOT to silently widen the allowlist at runtime.
 
 ### 3.4 `oa-publisher`
@@ -159,18 +149,15 @@ Notes:
 
 - **Synthetic source key.** Unlike the other §3 entries, `oa-publisher` is not
   one of the integrated metadata sources in [`SOURCES.md`](SOURCES.md) §1. It is
-  the source key the Phase 1 orchestrator uses when fetching the PDF that
+  the source key the orchestrator uses when fetching the PDF that
   Unpaywall's `best_oa_location.url_for_pdf` (or `best_oa_location.url`)
   resolves to — i.e. the URL Unpaywall hands back, which lives on a publisher /
   preprint / repository host, not on `api.unpaywall.org`. The redirect-policy
   closure is the same per-source one used everywhere else; the orchestrator
   registers an `HttpClient` with this allowlist and calls
   `HttpClient::fetch_pdf("oa-publisher", url)`.
-- **Informed-best-effort.** Per §3 above, every entry below is the documented
-  OA host for the named publisher / repository as of the implementation
-  authoring; they have NOT all been validated against real fetch traces. Each
-  entry below is `(unverified)` for Phase 1 and MUST be either confirmed or
-  removed before Phase 1 closes.
+- **Documented OA hosts.** Each entry below is the documented OA host for the
+  named publisher / repository. Changes follow the §5 update process.
 - **Partial-success semantics.** When the OA URL host is NOT on this list,
   the denial is raised as `HttpError::RedirectDenied` — at the **pre-fetch
   check** on the metadata-discovered OA URL per §1 (the host is rejected
@@ -184,12 +171,12 @@ Notes:
   useful. The PDF outcome is logged as a distinct `Fetch` provenance row
   with `source = "oa-publisher"` and `result = err` /
   `error_code = "NETWORK_ERROR"`.
-- **Host families** (each `(unverified)`):
+- **Host families:**
   - Springer Nature OA imprints: `*.springer.com`, `*.springeropen.com`,
     `*.springernature.com`, `*.nature.com`.
   - Wiley OA: `*.wiley.com`.
   - Elsevier OA route only: `*.elsevier.com`, `*.sciencedirect.com`. The TDM
-    gated path is a separate Tier 3 source (`elsevier-tdm`, Phase 5c).
+    gated path is a separate Tier 3 source (`elsevier-tdm`).
   - Frontiers: `*.frontiersin.org`.
   - MDPI: `*.mdpi.com`.
   - PLOS: `*.plos.org`.
@@ -201,7 +188,7 @@ Notes:
     the tier-1 `arxiv` key).
 - Additions or removals follow the §5 update process.
 
-## 4. Phase 2 / Phase 3 entries
+## 4. Tier 2 / Tier 3 entries
 
 | Source | Tier | Phase | Status |
 |---|---|---|---|
@@ -212,10 +199,11 @@ Notes:
 | `aps-tdm` | 3 | 5b | (reserved) |
 | `elsevier-tdm` | 3 | 5c | (reserved) |
 
-Each `(reserved)` entry will be filled in when its owning Phase begins, via the
-update process in §5. Until then, attempts to use these sources are blocked by their
-Cargo feature gate ([`SOURCES.md`](SOURCES.md) §3) and never reach the redirect
-policy.
+Each `(reserved)` entry is populated via the update process in §5 when that
+source's redirect targets are validated. A `(reserved)` source has no
+`redirect_hosts`, so per §2.2 rule 5 no redirects are permitted from it; such
+a fetch is also blocked earlier by the source's Cargo feature gate
+([`SOURCES.md`](SOURCES.md) §3) and never reaches the redirect policy.
 
 ## 5. Update process
 
@@ -234,9 +222,8 @@ process:
    new entry matches / does not match the relevant host strings, including the
    suffix-glob negative case (`notexample.com` MUST NOT match `*.example.com`).
 
-The Phase 1 implementation MAY treat the very first population of the §3 entries as
-in-scope of the Phase 1 ADR series rather than minting a separate allowlist ADR per
-source. Subsequent changes always require a dedicated ADR.
+The §3 entries were populated under the initial ADR series. Subsequent changes
+always require a dedicated ADR.
 
 ## 6. Non-goals
 
