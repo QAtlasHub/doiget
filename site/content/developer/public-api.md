@@ -29,7 +29,7 @@ pub use crate::source::{Source, FetchContext, FetchResult, FetchError};
 pub use crate::store::{Store, Metadata, EntryInfo, StoreError};
 pub use crate::error::{ErrorCode, DenialContext, DenialReason};
 pub use crate::provenance::{ProvenanceLog, LogEvent, LogError};
-// Slice 4 / ADR-0024 — audit-identity surface:
+// ADR-0024 — audit-identity surface:
 pub use crate::canonical::{CanonicalRef, SourceType};
 ```
 
