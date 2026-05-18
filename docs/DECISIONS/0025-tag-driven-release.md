@@ -203,10 +203,12 @@ Binding rules of the branch model:
 4. **Hotfix.** An urgent stable fix lands directly on `main` (patch tag
    `vX.Y.Z`), then `main` is **back-merged into `next`** immediately so the
    beta lane never regresses relative to stable.
-5. **Branch protection.** `next` carries the *same* required checks as `main`
-   (`test (ubuntu-latest)`, `test (windows-latest)`) so betas are gated as
-   strictly as stable. "Require branches up to date before merging" applies to
-   both (already in force on `main`).
+5. **Branch protection.** `next` carries the *same required checks* as `main`
+   (`test (ubuntu-latest)`, `test (windows-latest)`) + PR-required +
+   enforce-admins, so betas are gated as strictly as stable. **Exception
+   (Amendment 4): `next` must NOT enable "require branches up to date"
+   (`strict`)** — it is incompatible with the §D6 rule-4 back-merge PR
+   direction. `main` keeps `strict`.
 6. **First cutover.** The implementing PR creates `next` from `main`'s
    post-implementation HEAD and sets `next`'s version to the next
    `X.Y.(Z+1)-beta.1`.
@@ -328,3 +330,22 @@ the existing) `main → next` PR. Scope is deliberately *open-only* — it does
 CI and so could never merge into protected `next`. Auto-resolving the
 version conflict in CI (a merge driver / normalize step) is a possible
 future enhancement, intentionally out of scope here.
+
+## Amendment — 2026-05-18 (4): `next` must not be `strict` (up-to-date)
+
+D6 rule 5 originally said "require branches up to date before merging"
+applies to **both** `main` and `next`. Operationally this is a self-
+contradiction with D6 rule 4: the back-merge bot opens a `main → next` PR
+(PR #175 was the first), but a `strict`/up-to-date requirement on `next`
+makes that PR perpetually `BEHIND` — GitHub's "Update branch" on it would
+merge the base (`next`) into the head (`main`), the *wrong* direction, so
+it can never be brought up to date and never merges through the normal
+flow.
+
+**Resolution:** `next`'s branch protection drops `strict`
+(`required_status_checks.strict = false`); it keeps the same **required
+status checks** (`test (ubuntu-latest)`, `test (windows-latest)`),
+**PR-required**, and **enforce-admins**. `main` is unchanged (keeps
+`strict`). This makes the §D6 rule-4 back-merge PRs mergeable while betas
+remain gated by the same CI as stable. Applied via the branch-protection
+API on 2026-05-18; D6 rule 5 is corrected accordingly above.
