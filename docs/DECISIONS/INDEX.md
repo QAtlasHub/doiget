@@ -29,7 +29,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0010 | Citation graph hard-cap (depth=3, total=100, per-paper=20) | Accepted | Slice 14 | #6 |
 | 0011 | Phase plan v1 — MVP at 5 weeks, Phase 5 deferred-by-default | Accepted | executed through Phase 6 | #7 |
 | 0012 | MCP tool naming + structured ok-false errors | Accepted | Slices 1/2/7/8/15 | #8 |
-| 0013 | CI baseline (9 workflows, OIDC publish, sigstore signing) | Accepted | Phase 0 + Slices 9/22 + `5a108dd` | #10 |
+| 0013 | CI baseline (9 workflows, OIDC publish, sigstore signing) | Accepted (release portion Superseded by 0025, PR #166) | Phase 0 + Slices 9/22 + `5a108dd` | #10 |
 | 0014 | Docs split into NORMATIVE / INFORMATIVE with ADR change-control | Accepted | Phase 0 (in force) | #11 |
 | 0015 | No telemetry / phone-home / self-update | Accepted | standing policy (SCOPE.md #10/#11 + posture-lint) | #12 |
 | 0016 | Common foundation crates + deny list | Accepted | Phase 0 (deny.toml) | #13 |
@@ -41,7 +41,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0022 | Dry-run mode for fetch operations | Accepted | Slice 2 | #12 |
 | 0023 | Structured `denial_context` on error envelopes | Accepted | Slices 1/2 | #12 |
 | 0024 | CanonicalRef implementation + provenance log v1 → v2 migration | Accepted | Slice 4 | Slice 4 |
-| 0025 | Tag-driven release with version gate + beta/stable lanes | Proposed (design-first; supersedes 0013 release portion on impl) | — | maintainer review 2026-05-17 |
+| 0025 | Tag-driven release with version gate + beta/stable lanes | Accepted | PR #166 | maintainer review 2026-05-17 |
 
 ## Conventions
 

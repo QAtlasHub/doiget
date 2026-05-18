@@ -2,19 +2,20 @@ name: release-sign
 
 # Phase 6 / Slice 23 — sign release binaries with sigstore (cosign keyless).
 #
-# release-plz pushes per-crate tags (`doiget-core-v*`, `doiget-cli-v*`,
-# `doiget-mcp-v*`) and opens a GitHub Release per crate when it runs the
-# `release` job. The user-facing artefact is the `doiget` CLI binary, so
-# this workflow fires once per version on the `doiget-cli-v*` tag, builds
-# the binary for the three first-class targets, signs each with cosign
-# keyless (Fulcio cert minted from the GitHub OIDC token — NO long-lived
-# key, NO stored secret), and uploads:
+# ADR-0025 (PR #166): the binary-signing logic below is now ALSO folded into
+# release.yml as its `sign` job, which fires on the single workspace tag
+# `v*`. To avoid double-firing on a tag (and on the now-retired per-crate
+# `doiget-cli-v*` pattern), this workflow's `push: tags: doiget-cli-v*`
+# trigger has been REMOVED — it is `workflow_dispatch`-only and exists solely
+# as a MANUAL re-sign escape hatch for an already-released version (build the
+# `doiget` CLI binary for the three first-class targets, cosign-keyless sign
+# each, upload to the matching GitHub Release). The routine path is
+# release.yml's `sign` job; reach for this only to re-sign out of band.
 #
+# Uploads (to the Release named by the dispatch `tag` input):
 #   doiget-<os>-<arch>[.exe]
 #   doiget-<os>-<arch>[.exe].sha256
 #   doiget-<os>-<arch>[.exe].cosign.bundle   (sig + cert + Rekor entry)
-#
-# to the `doiget-cli-v<version>` GitHub Release.
 #
 # Verify a downloaded binary with:
 #   cosign verify-blob \
@@ -25,13 +26,13 @@ name: release-sign
 #     doiget-linux-x86_64
 
 on:
-  push:
-    tags:
-      - 'doiget-cli-v*'
+  # push: tags trigger intentionally REMOVED under ADR-0025 (PR #166) — the
+  # routine binary signing now happens in release.yml's `sign` job on the
+  # single `v*` tag. This workflow is a manual re-sign escape hatch only.
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing doiget-cli-v* tag to (re)build & sign'
+        description: 'Existing release tag to (re)build & sign (e.g. v0.1.4)'
         required: true
         type: string
 

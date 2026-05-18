@@ -1,7 +1,7 @@
 # 0025 - Tag-driven release with a mandatory version gate and beta/stable lanes
 
 - **Date:** 2026-05-17
-- **Status:** Proposed — design-first; flips to `Accepted` and `0013` flips to `Superseded by 0025` when the implementing PR merges (per `DECISIONS/INDEX.md` rule)
+- **Status:** Accepted — implemented by PR #166 (`.github/workflows/release.yml` + `scripts/release-version-gate.sh` + `cliff.toml`/`scripts/release-changelog.sh`; `release-plz.{toml,yml}` removed; `release-sign.yml`/`release-sbom.yml` demoted to `workflow_dispatch`-only and folded into `release.yml`). `0013`'s release portion is `Superseded by 0025` (its CI-baseline / posture-lint / SHA-pin / Dependabot decisions stand).
 - **Supersedes:** 0013 (release portion only — the CI baseline / posture-lint / SHA-pin / Dependabot decisions of 0013 stand)
 - **Source:** Maintainer release-workflow review, 2026-05-17 (release-plz `release-PR` model rejected after the v0.1.4 `#164` changelog defect)
 
