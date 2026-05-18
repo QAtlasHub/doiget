@@ -25,6 +25,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Once;
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
@@ -958,6 +959,7 @@ impl HttpClient {
 }
 
 fn build_client_allow_http(allowlist: SourceAllowlist) -> Result<Client, reqwest::Error> {
+    ensure_crypto_provider();
     let allowlist_for_closure = allowlist.clone();
     let redirect_policy = Policy::custom(move |attempt| {
         let scheme = attempt.url().scheme().to_string();
@@ -1008,7 +1010,30 @@ fn build_client_allow_http(allowlist: SourceAllowlist) -> Result<Client, reqwest
 // ClientBuilder helpers
 // ---------------------------------------------------------------------------
 
+/// Install the `ring` `rustls` crypto provider as the process default,
+/// exactly once.
+///
+/// reqwest is built with the `rustls-no-provider` feature (ADR-0020
+/// Amendment 1: drop aws-lc-rs so `cargo install` needs no cmake/C
+/// toolchain and musl-static builds cleanly). With no bundled provider,
+/// `reqwest::ClientBuilder::build` calls
+/// `rustls::crypto::CryptoProvider::get_default()` and **panics**
+/// (`"No provider set"`) unless a process-default provider was installed
+/// first. Every client constructor below calls this; the `Once` makes it
+/// safe to invoke from many sites and from concurrent tests.
+fn ensure_crypto_provider() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        // `install_default` errors only if a provider is already set;
+        // under `Once` that is unreachable, but ignore it rather than
+        // panic (another linked crate could have installed one first).
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 fn build_client(allowlist: SourceAllowlist) -> Result<Client, reqwest::Error> {
+    ensure_crypto_provider();
+
     let user_agent = format!(
         "doiget/{} (+https://github.com/sotashimozono/doiget)",
         VERSION
@@ -1073,9 +1098,11 @@ fn build_client(allowlist: SourceAllowlist) -> Result<Client, reqwest::Error> {
         .read_timeout(READ_TIMEOUT)
         .user_agent(user_agent)
         // `tls_backend_rustls()` is the non-deprecated equivalent of the
-        // older `use_rustls_tls()`. The workspace `reqwest` features
-        // already pin `rustls`, so this is a re-assertion at builder
-        // level rather than a feature switch.
+        // older `use_rustls_tls()`. The workspace pins reqwest with
+        // `rustls-no-provider` (ADR-0020 Amendment 1), so this is a
+        // re-assertion at builder level rather than a feature switch; the
+        // `ring` provider installed by `ensure_crypto_provider()` above
+        // is what reqwest picks up via `CryptoProvider::get_default()`.
         .tls_backend_rustls()
         .build()
 }
@@ -1513,6 +1540,7 @@ mod tests {
             }
             attempt.follow()
         });
+        ensure_crypto_provider();
         let raw_client = ClientBuilder::new()
             .https_only(false)
             .redirect(policy)

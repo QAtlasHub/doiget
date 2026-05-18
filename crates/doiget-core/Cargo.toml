@@ -33,6 +33,11 @@ async-trait = { workspace = true }
 tracing     = { workspace = true }
 secrecy     = { workspace = true, optional = true }
 reqwest     = { workspace = true }
+# Pulled in solely to install the `ring` crypto provider as the process
+# default before any reqwest client is built (reqwest uses
+# `rustls-no-provider` — no bundled provider). See ADR-0020 Amendment 1
+# and `src/http.rs::ensure_crypto_provider`.
+rustls      = { workspace = true }
 camino      = { workspace = true, features = ["serde1"] }
 fs2         = { workspace = true }
 tempfile    = { workspace = true }
