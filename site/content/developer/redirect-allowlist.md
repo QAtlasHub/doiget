@@ -143,7 +143,7 @@ Notes:
 | Field | Value |
 |---|---|
 | `source` | `oa-publisher` (synthetic — see notes) |
-| `redirect_hosts` | `*.springer.com`, `*.springeropen.com`, `*.springernature.com`, `*.nature.com`, `*.wiley.com`, `*.elsevier.com`, `*.sciencedirect.com`, `*.frontiersin.org`, `*.mdpi.com`, `*.plos.org`, `*.biorxiv.org`, `*.medrxiv.org`, `europepmc.org`, `*.europepmc.org`, `*.nih.gov`, `*.ncbi.nlm.nih.gov`, `arxiv.org`, `*.arxiv.org` |
+| `redirect_hosts` | `*.springer.com`, `*.springeropen.com`, `*.springernature.com`, `*.nature.com`, `*.wiley.com`, `*.elsevier.com`, `*.sciencedirect.com`, `*.frontiersin.org`, `*.mdpi.com`, `*.plos.org`, `*.biorxiv.org`, `*.medrxiv.org`, `europepmc.org`, `*.europepmc.org`, `*.nih.gov`, `*.ncbi.nlm.nih.gov`, `*.aps.org`, `scipost.org`, `*.scipost.org`, `*.iop.org`, `arxiv.org`, `*.arxiv.org` |
 
 Notes:
 
@@ -158,6 +158,16 @@ Notes:
   `HttpClient::fetch_pdf("oa-publisher", url)`.
 - **Documented OA hosts.** Each entry below is the documented OA host for the
   named publisher / repository. Changes follow the §5 update process.
+- **Empirical verification (ADR-0027).** The physics-society / diamond-OA
+  hosts (`*.aps.org`, `scipost.org`, `*.scipost.org`, `*.iop.org`) were
+  added from a real `doiget batch` over 30 OpenAlex-OA
+  finite-temperature-MPS DOIs in which Unpaywall `best_oa_location`
+  resolved to these hosts and the PDF leg was denied. This is the
+  empirical pass the §3 informed-best-effort note calls for; these
+  entries are *verified*, not `(unverified)`. Open-ended institutional /
+  handle repositories observed in the same run (`hdl.handle.net`,
+  `ruj.uj.edu.pl`) are deliberately **excluded** as a separate
+  open-surface question.
 - **Partial-success semantics.** When the OA URL host is NOT on this list,
   the denial is raised as `HttpError::RedirectDenied` — at the **pre-fetch
   check** on the metadata-discovered OA URL per §1 (the host is rejected
@@ -183,6 +193,11 @@ Notes:
   - Preprint servers: `*.biorxiv.org`, `*.medrxiv.org`.
   - Europe PMC + NIH PMC: `europepmc.org`, `*.europepmc.org`, `*.nih.gov`,
     `*.ncbi.nlm.nih.gov`.
+  - Physics society / diamond OA (empirically verified, ADR-0027):
+    `*.aps.org` (APS — `link.aps.org` / `journals.aps.org`; also trusted
+    under the separate `tdm-aps` Tier-3 key), `scipost.org` +
+    `*.scipost.org` (SciPost — community-run diamond OA), `*.iop.org`
+    (IOP Publishing — `iopscience.iop.org`, *New J. Phys.* etc.).
   - arXiv: `arxiv.org`, `*.arxiv.org` (mirrors §3.3 because the Unpaywall
     flow re-derives an arXiv URL through the `oa-publisher` source key, not
     the tier-1 `arxiv` key).

@@ -24,6 +24,21 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
   still satisfied). See ADR-0020 Amendment 1.
 
+## [0.2.1-beta.6] - 2026-05-19
+
+### Changed
+
+- **[core]** `oa-publisher` redirect allowlist now includes
+  physics-society / diamond-OA hosts: `*.aps.org` (APS), `scipost.org`
+  + `*.scipost.org` (SciPost diamond OA), `*.iop.org` (IOP) (#193, per
+  ADR-0027 and `docs/REDIRECT_ALLOWLIST.md` §5). The list was
+  bio/medical-leaning; a real `doiget batch` over 30 OpenAlex-OA
+  finite-temperature-MPS DOIs had 7 denied purely because the
+  discovered OA PDF host was off-list (24/30 → ~30/30). Unlike the
+  surrounding `(unverified)` entries these are empirically verified.
+  `hdl.handle.net` / `ruj.uj.edu.pl` (open handle/repo surfaces) are
+  deliberately out of scope.
+
 ## [0.2.1-beta.5] - 2026-05-19
 
 ### Fixed

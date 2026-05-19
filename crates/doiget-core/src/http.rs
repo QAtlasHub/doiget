@@ -350,6 +350,20 @@ pub fn oa_publisher_allowlist() -> Vec<SourceAllowlist> {
             "*.europepmc.org".to_string(),
             "*.nih.gov".to_string(),
             "*.ncbi.nlm.nih.gov".to_string(),
+            // Physics-society / diamond-OA hosts. UNLIKE the entries
+            // above, these are EMPIRICALLY VERIFIED: a real `doiget batch`
+            // over 30 OpenAlex-OA finite-temperature-MPS DOIs observed
+            // Unpaywall `best_oa_location` resolving to these hosts and
+            // being denied (#193, REDIRECT_ALLOWLIST.md §3.4, ADR-0027).
+            // APS — journals.aps.org / link.aps.org (green & gold OA;
+            // society host; `*.aps.org` is already trusted under the
+            // separate `tdm-aps` Tier-3 source key).
+            "*.aps.org".to_string(),
+            // SciPost — diamond OA, community-run physics publisher.
+            "scipost.org".to_string(),
+            "*.scipost.org".to_string(),
+            // IOP Publishing — iopscience.iop.org (New J. Phys. etc.).
+            "*.iop.org".to_string(),
             // arXiv — already on the `arxiv` tier-1 allowlist, but the
             // Unpaywall-driven path uses the `oa-publisher` source key,
             // so we mirror the host list here too. See REDIRECT_ALLOWLIST.md
@@ -1177,8 +1191,20 @@ mod tests {
         assert!(oa.matches("europepmc.org"));
         assert!(oa.matches("www.ncbi.nlm.nih.gov"));
         assert!(oa.matches("arxiv.org"));
+        // #193: physics-society / diamond-OA hosts (empirically observed
+        // as Unpaywall best_oa_location targets in the dogfood run).
+        assert!(oa.matches("link.aps.org"));
+        assert!(oa.matches("journals.aps.org"));
+        assert!(oa.matches("scipost.org"));
+        assert!(oa.matches("www.scipost.org"));
+        assert!(oa.matches("iopscience.iop.org"));
         // Negative: an attacker host is not covered.
         assert!(!oa.matches("attacker.test"));
+        // Negative: dot-boundary safety for the new entries — a different
+        // suffix that merely ends with the registrable name must NOT match.
+        assert!(!oa.matches("notaps.org"));
+        assert!(!oa.matches("evilscipost.org"));
+        assert!(!oa.matches("notiop.org"));
         // Negative: dot-boundary safety — `*.springer.com` must not match
         // `notspringer.com`.
         assert!(!oa.matches("notspringer.com"));
