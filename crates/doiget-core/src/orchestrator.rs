@@ -117,6 +117,15 @@ pub struct MetadataOnlyOutcome {
 /// Returns [`FetchError`] from the underlying [`Source`] dispatch. The
 /// MCP boundary converts these to the closed [`crate::ErrorCode`] set
 /// via the existing `From<FetchError> for ErrorCode` impl.
+// Stays `pub` (a `pub(crate)` compile-time guard was evaluated for
+// PR #199 review I4 and rejected): `crates/doiget-core/tests/`
+// integration tests (`real_world_fixtures_e2e`) legitimately drive
+// the PURE resolver directly and assert its outcome, and `tests/`
+// compiles as a separate crate. The #139 pre-fix bug (an MCP caller
+// picking the pure variant when it needed persistence) is instead
+// prevented *structurally*: the MCP layer imports only
+// `metadata_only_to_store`, and `resolve_only` delegates to this pure
+// fn — neither can acquire or skip the store-write by mistake.
 pub async fn metadata_only(
     ref_: &Ref,
     profile: &CapabilityProfile,
@@ -211,9 +220,12 @@ pub async fn resolve_only(
 /// # Errors
 ///
 /// [`FetchError`] from the underlying resolver dispatch, or
-/// [`FetchError::SourceSchema`] if the store write fails (the
-/// `StoreWrite` failure row is recorded before the error propagates,
-/// fail-closed per `docs/PROVENANCE_LOG.md`).
+/// [`FetchError::SourceSchema`] if the store write fails. On store-write
+/// failure `write_metadata_and_pdf` makes a **best-effort** attempt to
+/// append a `StoreWrite`/`Err` provenance row before the error
+/// propagates (that append's own failure is not separately surfaced —
+/// this matches the pre-existing `fetch_paper` metadata-only fallback
+/// path and is out of scope for #139).
 pub async fn metadata_only_to_store(
     ref_: &Ref,
     profile: &CapabilityProfile,
@@ -235,9 +247,11 @@ pub async fn metadata_only_to_store(
 /// Minimal but valid: enough that a subsequent `doiget_info` returns a
 /// non-null `metadata` object (the #139 acceptance criterion). Title is
 /// best-effort from the resolver payload (`title` as a string, or the
-/// first element if it is an array — Crossref's `message.title` is an
-/// array, arXiv/Unpaywall a string); it falls back to the ref id so the
-/// required `title` field is never empty. Bibliographic enrichment
+/// first element if it is an array — Crossref's `message.title` is
+/// typically an array, arXiv/Unpaywall typically a string; the
+/// extractor tolerates either regardless of source); it falls back to
+/// the ref id so the required `title` field is never empty.
+/// Bibliographic enrichment
 /// (year, venue, …) is intentionally out of scope here — the
 /// metadata-only contract is "persist what the resolver returned", and
 /// the raw payload is preserved verbatim in `MetadataOnlyOutcome`.
@@ -246,10 +260,7 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
         Ref::Doi(d) => (Some(d.clone()), None),
         Ref::Arxiv(a) => (None, Some(a.clone())),
     };
-    let ref_id = match ref_ {
-        Ref::Doi(d) => d.as_str().to_string(),
-        Ref::Arxiv(a) => a.as_str().to_string(),
-    };
+    let ref_id = ref_.as_input_str().to_string();
     let title = extract_metadata_title(&outcome.metadata).unwrap_or(ref_id);
     Metadata {
         schema_version: SCHEMA_VERSION.to_string(),
@@ -300,11 +311,16 @@ fn extract_metadata_title(meta: &Value) -> Option<String> {
     }
 }
 
-/// Best-effort author list, tolerant of the three resolver shapes:
-/// Crossref `author: [{given,family}]`, Unpaywall `z_authors:
-/// [{given,family}]`, arXiv `authors: [String]`. Returns `Vec::new()`
-/// when none are parseable (a valid metadata TOML — #139 only requires
-/// the entry to exist and be readable).
+/// Best-effort author list, tolerant of the resolver shapes we may see:
+/// Crossref `author: [{given,family}]`, arXiv `authors: [String]`, and
+/// a `z_authors: [{given,family}]` fallback. NOTE: doiget's Unpaywall
+/// source deserializes a *partial* `UnpaywallWork` that does not capture
+/// `z_authors`, so the `z_authors` branch is currently inert for the
+/// Unpaywall path (kept as forward-compat for if/when that struct
+/// captures it) — Unpaywall-sourced metadata-only entries get an empty
+/// author list. Returns `Vec::new()` when nothing is parseable (a valid
+/// metadata TOML — #139 only requires the entry to exist and be
+/// readable).
 fn extract_metadata_authors(meta: &Value) -> Vec<String> {
     if let Some(arr) = meta.get("authors").and_then(Value::as_array) {
         let v: Vec<String> = arr
@@ -2000,5 +2016,150 @@ mod tests {
         );
 
         std::env::remove_var("DOIGET_CROSSREF_BASE");
+    }
+
+    /// #139 — the arXiv branch of `metadata_only_to_store` must also
+    /// write the metadata TOML (different code path: Atom feed,
+    /// source="arxiv", license="arxiv-default", doi=None). Review I3/C1.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn metadata_only_to_store_arxiv_writes_metadata_toml_139() {
+        use crate::http::HttpClient;
+        use crate::provenance::ProvenanceLog;
+        use crate::rate_limiter::RateLimiter;
+        use crate::store::FsStore;
+        use crate::RateLimits;
+        use std::sync::Arc;
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let atom = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.12345v1</id>
+    <published>2024-01-15T00:00:00Z</published>
+    <title>Example arXiv Paper Title</title>
+    <summary>Example abstract.</summary>
+    <author><name>Jane Doe</name></author>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>"#;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(atom))
+            .mount(&server)
+            .await;
+        std::env::set_var("DOIGET_ARXIV_BASE", server.uri());
+        let host = server
+            .uri()
+            .parse::<url::Url>()
+            .expect("uri")
+            .host_str()
+            .expect("host")
+            .to_string();
+
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let base = Utf8Path::from_path(td.path()).expect("utf-8");
+        let store_root = base.join("papers");
+        let ctx = FetchContext {
+            http: Arc::new(HttpClient::new_for_tests_allow_http("arxiv", &host)),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+            log: Arc::new(
+                ProvenanceLog::open(base.join("log.jsonl"), "01J0000000000000000000TEST".into())
+                    .expect("provenance log"),
+            ),
+            session_id: "01J0000000000000000000TEST".into(),
+        };
+        let store = FsStore::new(store_root.clone()).expect("fs store");
+        let profile = CapabilityProfile::from_env().expect("clean env");
+        let ref_ = Ref::Arxiv(crate::ArxivId::parse("2401.12345").expect("arxiv id"));
+
+        let outcome = metadata_only_to_store(&ref_, &profile, &ctx, &store)
+            .await
+            .expect("metadata_only_to_store (arxiv) ok");
+        assert_eq!(outcome.source, "arxiv");
+
+        let tomls = metadata_dir_tomls(&store_root);
+        assert_eq!(
+            tomls.len(),
+            1,
+            "arXiv metadata-only must write one TOML; got {tomls:?}"
+        );
+        let meta: crate::store::Metadata =
+            toml::from_str(&std::fs::read_to_string(&tomls[0]).expect("read")).expect("parse");
+        assert_eq!(meta.title, "Example arXiv Paper Title");
+        assert_eq!(
+            meta.arxiv_id.as_ref().map(|a| a.as_str()),
+            Some("2401.12345")
+        );
+        assert!(meta.doi.is_none(), "arXiv entry has no DOI");
+        let ext = meta.doiget.expect("[doiget] table");
+        assert_eq!(ext.source, "arxiv");
+        assert_eq!(ext.license, "arxiv-default");
+
+        std::env::remove_var("DOIGET_ARXIV_BASE");
+    }
+
+    // ----- pure-function unit tests for the #139 extraction helpers ----
+
+    #[test]
+    fn extract_metadata_title_handles_string_array_missing_blank() {
+        use serde_json::json;
+        // bare string (arXiv/Unpaywall shape)
+        assert_eq!(
+            extract_metadata_title(&json!({"title": "Hello"})),
+            Some("Hello".to_string())
+        );
+        // single-element array (Crossref `message.title` in practice)
+        assert_eq!(
+            extract_metadata_title(&json!({"title": ["Real Title"]})),
+            Some("Real Title".to_string())
+        );
+        // missing key -> None (caller falls back to ref id)
+        assert_eq!(extract_metadata_title(&json!({"x": 1})), None);
+        // blank string -> None (must not persist an empty title)
+        assert_eq!(extract_metadata_title(&json!({"title": "   "})), None);
+        // empty array -> None
+        assert_eq!(extract_metadata_title(&json!({"title": []})), None);
+        // Documented minimal behavior: the FIRST string element is taken
+        // then trimmed, so a leading blank element yields None (best-
+        // effort; caller falls back to the ref id — acceptable per #139).
+        assert_eq!(
+            extract_metadata_title(&json!({"title": ["  ", "Real Title"]})),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_metadata_authors_handles_each_resolver_shape() {
+        use serde_json::json;
+        // arXiv: authors: [String]
+        assert_eq!(
+            extract_metadata_authors(&json!({"authors": ["Jane Doe", "John Roe"]})),
+            vec!["Jane Doe".to_string(), "John Roe".to_string()]
+        );
+        // Crossref: author: [{given,family}]
+        assert_eq!(
+            extract_metadata_authors(&json!({"author": [{"given": "Ada", "family": "Lovelace"}]})),
+            vec!["Ada Lovelace".to_string()]
+        );
+        // family-only (given absent) -> trimmed, no leading space
+        assert_eq!(
+            extract_metadata_authors(&json!({"author": [{"family": "Onsager"}]})),
+            vec!["Onsager".to_string()]
+        );
+        // `name` fallback when given+family both absent
+        assert_eq!(
+            extract_metadata_authors(&json!({"author": [{"name": "K. Wilson"}]})),
+            vec!["K. Wilson".to_string()]
+        );
+        // z_authors fallback shape (forward-compat branch)
+        assert_eq!(
+            extract_metadata_authors(&json!({"z_authors": [{"given": "L", "family": "Kadanoff"}]})),
+            vec!["L Kadanoff".to_string()]
+        );
+        // nothing parseable -> empty (still a valid TOML)
+        assert!(extract_metadata_authors(&json!({"x": 1})).is_empty());
+        assert!(extract_metadata_authors(&json!({"authors": []})).is_empty());
     }
 }
