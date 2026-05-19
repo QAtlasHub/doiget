@@ -117,11 +117,11 @@ pub struct MetadataOnlyOutcome {
 /// Returns [`FetchError`] from the underlying [`Source`] dispatch. The
 /// MCP boundary converts these to the closed [`crate::ErrorCode`] set
 /// via the existing `From<FetchError> for ErrorCode` impl.
-// Stays `pub` (a `pub(crate)` compile-time guard was evaluated for
-// PR #199 review I4 and rejected): `crates/doiget-core/tests/`
-// integration tests (`real_world_fixtures_e2e`) legitimately drive
-// the PURE resolver directly and assert its outcome, and `tests/`
-// compiles as a separate crate. The #139 pre-fix bug (an MCP caller
+// Stays `pub` (a `pub(crate)` compile-time guard was considered and
+// rejected): `crates/doiget-core/tests/` integration tests
+// (`real_world_fixtures_e2e`) legitimately drive the PURE resolver
+// directly and assert its outcome, and `tests/` compiles as a separate
+// crate. The #139 pre-fix bug (an MCP caller
 // picking the pure variant when it needed persistence) is instead
 // prevented *structurally*: the MCP layer imports only
 // `metadata_only_to_store`, and `resolve_only` delegates to this pure
@@ -219,9 +219,12 @@ pub async fn resolve_only(
 ///
 /// # Errors
 ///
-/// [`FetchError`] from the underlying resolver dispatch, or
-/// [`FetchError::SourceSchema`] if the store write fails. On store-write
-/// failure `write_metadata_and_pdf` makes a **best-effort** attempt to
+/// [`FetchError`] from the underlying resolver dispatch, or — if the
+/// store write fails — [`FetchError::SourceSchema`] (the closest
+/// closed-set arm; there is no dedicated `FetchError::StoreError`, so
+/// the MCP boundary maps it to `INTERNAL_ERROR` — see the inline note
+/// in `write_metadata_and_pdf`). On store-write failure
+/// `write_metadata_and_pdf` makes a **best-effort** attempt to
 /// append a `StoreWrite`/`Err` provenance row before the error
 /// propagates (that append's own failure is not separately surfaced —
 /// this matches the pre-existing `fetch_paper` metadata-only fallback
@@ -261,7 +264,22 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
         Ref::Arxiv(a) => (None, Some(a.clone())),
     };
     let ref_id = ref_.as_input_str().to_string();
-    let title = extract_metadata_title(&outcome.metadata).unwrap_or(ref_id);
+    let title = match extract_metadata_title(&outcome.metadata) {
+        Some(t) => t,
+        None => {
+            // The resolver returned a payload with no usable title.
+            // Persisting the ref id keeps the entry valid (#139), but
+            // emit a diagnostic so a broken/partial resolver response is
+            // not silently indistinguishable from a genuine title.
+            tracing::warn!(
+                ref_id = %ref_id,
+                source = %outcome.source,
+                "metadata-only: no usable title in resolver payload; \
+                 persisting the ref id as the title placeholder"
+            );
+            ref_id
+        }
+    };
     Metadata {
         schema_version: SCHEMA_VERSION.to_string(),
         title,
@@ -292,22 +310,26 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
     }
 }
 
-/// `title` from a resolver payload: a bare string, or the first element
-/// of an array (Crossref `message.title` is `[String]`). `None` if
-/// absent/blank.
+/// `title` from a resolver payload: a bare string, or the first
+/// **non-blank** element of an array (Crossref `message.title` is
+/// `[String]`; a leading empty/whitespace element is skipped rather
+/// than masking the real title). Trimmed. `None` if absent/blank.
 fn extract_metadata_title(meta: &Value) -> Option<String> {
     let t = meta.get("title")?;
-    let s = t.as_str().map(str::to_string).or_else(|| {
-        t.as_array()?
+    let s = match t.as_str() {
+        Some(s) => s.trim().to_string(),
+        None => t
+            .as_array()?
             .iter()
-            .find_map(|v| v.as_str())
-            .map(str::to_string)
-    })?;
-    let s = s.trim();
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .find(|s| !s.is_empty())?
+            .to_string(),
+    };
     if s.is_empty() {
         None
     } else {
-        Some(s.to_string())
+        Some(s)
     }
 }
 
@@ -2121,13 +2143,15 @@ mod tests {
         assert_eq!(extract_metadata_title(&json!({"title": "   "})), None);
         // empty array -> None
         assert_eq!(extract_metadata_title(&json!({"title": []})), None);
-        // Documented minimal behavior: the FIRST string element is taken
-        // then trimmed, so a leading blank element yields None (best-
-        // effort; caller falls back to the ref id — acceptable per #139).
+        // A leading blank/whitespace array element is SKIPPED — the first
+        // non-blank element is taken (a stray leading empty element must
+        // not mask the real Crossref title).
         assert_eq!(
             extract_metadata_title(&json!({"title": ["  ", "Real Title"]})),
-            None
+            Some("Real Title".to_string())
         );
+        // all-blank array -> None (caller falls back to ref id)
+        assert_eq!(extract_metadata_title(&json!({"title": ["  ", ""]})), None);
     }
 
     #[test]

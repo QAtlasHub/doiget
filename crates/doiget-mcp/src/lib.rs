@@ -189,7 +189,7 @@ impl Server {
     ///
     /// Per `docs/MCP_TOOLS.md` §11 (NORMATIVE).
     ///
-    /// Slice 1 wired both branches:
+    /// Both branches are wired:
     ///
     /// - `dry_run: true` → builds a [`FetchPlan`] preview and returns
     ///   it without touching the network, store, or provenance log
@@ -254,8 +254,9 @@ impl Server {
         }
 
         // Step 3: non-dry-run path. Dispatch through the
-        // `metadata_only` orchestrator (Slice 1). The orchestrator owns
-        // source selection and per-leg politeness; we own the per-call
+        // `metadata_only_to_store` orchestrator (resolves metadata AND
+        // writes the §11 metadata TOML). The orchestrator owns source
+        // selection and per-leg politeness; we own the per-call
         // session boundary (SessionStart / SessionEnd bookend rows) and
         // the wire envelope shape (`docs/MCP_TOOLS.md` §11).
         let ctx = match build_fetch_context() {
@@ -274,9 +275,9 @@ impl Server {
         // `doiget_fetch_paper` does — and crucially do this BEFORE the
         // `SessionStart` bookend, so a store-init failure cannot leave an
         // orphaned `SessionStart` with no `SessionEnd` in the fail-closed
-        // provenance log (PR #199 review C1). Mirrors
-        // `doiget_fetch_paper`'s ordering. `StoreError` matches every
-        // other `FsStore::new` failure site in this file (review C2).
+        // provenance log. Mirrors `doiget_fetch_paper`'s ordering.
+        // `StoreError` matches every other `FsStore::new` failure site
+        // in this file.
         let store_root = match resolve_store_root() {
             Some(p) => p,
             None => {
@@ -383,7 +384,7 @@ impl Server {
     /// row is emitted (no store mutation).
     ///
     /// `dry_run` is **not** a supported input field per
-    /// `docs/MCP_TOOLS.md` §10/§11 (the spec lists `doiget_resolve_paper`
+    /// `docs/MCP_TOOLS.md` §10 (the spec lists `doiget_resolve_paper`
     /// in the "dry_run does not apply" set). The schema's
     /// `deny_unknown_fields` posture rejects an attempted `dry_run`
     /// field at deserialize time, which surfaces as the rmcp transport's

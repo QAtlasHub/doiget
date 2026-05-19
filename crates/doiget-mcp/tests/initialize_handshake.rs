@@ -600,6 +600,96 @@ async fn doiget_metadata_only_doi_crossref_happy_path_returns_metadata_envelope(
     Ok(())
 }
 
+/// #139 literal acceptance + the headline regression guard: after
+/// `doiget_metadata_only`, `doiget_info` on the same ref MUST return a
+/// non-null `metadata` (i.e. the §11 store-write actually happened).
+/// This is the ONE test that fails if the mcp handler is ever rewired
+/// back to the pure `metadata_only` (no store-write) instead of
+/// `metadata_only_to_store` (PR #199 2nd-pass review).
+#[tokio::test]
+#[serial_test::serial]
+async fn doiget_metadata_only_then_doiget_info_returns_non_null_metadata() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works/10.1234/example"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"status":"ok","message":{"title":["Example Paper"]}}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let base = camino::Utf8Path::from_path(td.path()).expect("tempdir is utf-8");
+    let log_path = base.join("mcp-meta.jsonl");
+    let store_root = base.join("papers");
+
+    let env = EnvGuard::new(&[
+        "DOIGET_ARXIV_BASE",
+        "DOIGET_CROSSREF_BASE",
+        "DOIGET_UNPAYWALL_BASE",
+        "DOIGET_LOG_PATH",
+        "DOIGET_STORE_ROOT",
+    ]);
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    // Pin the store to the tempdir so the §11 write does NOT land in the
+    // developer's real ~/papers/, and so doiget_info reads it back here.
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut meta_args = serde_json::Map::new();
+    meta_args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+    let meta = client
+        .peer()
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("doiget_metadata_only")
+                .with_arguments(meta_args),
+        )
+        .await?;
+    let meta_s = meta
+        .structured_content
+        .as_ref()
+        .expect("doiget_metadata_only structured");
+    assert_eq!(
+        meta_s["ok"],
+        serde_json::json!(true),
+        "metadata_only envelope: {meta_s:?}"
+    );
+
+    let mut info_args = serde_json::Map::new();
+    info_args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+    let info = client
+        .peer()
+        .call_tool(rmcp::model::CallToolRequestParams::new("doiget_info").with_arguments(info_args))
+        .await?;
+    let info_s = info
+        .structured_content
+        .as_ref()
+        .expect("doiget_info structured");
+    assert_eq!(info_s["ok"], serde_json::json!(true), "info: {info_s:?}");
+    assert!(
+        !info_s["metadata"].is_null(),
+        "doiget_info MUST return non-null metadata after doiget_metadata_only \
+         (the §11 store-write SIDE EFFECT, #139); got: {info_s:?}"
+    );
+    assert_eq!(
+        info_s["metadata"]["title"],
+        serde_json::json!("Example Paper"),
+        "persisted title round-trips through doiget_info; got: {info_s:?}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
 #[tokio::test]
 #[serial_test::serial]
 async fn doiget_metadata_only_network_failure_returns_network_error_envelope() -> anyhow::Result<()>
