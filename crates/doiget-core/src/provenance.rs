@@ -55,7 +55,7 @@
 //! # Log rotation and retention (§6)
 //!
 //! Implemented (PROVENANCE_LOG.md §6): when `access.log` exceeds
-//! [`ROTATE_BYTES`] (100 MiB) a subsequent [`ProvenanceLog::append`]
+//! `ROTATE_BYTES` (100 MiB) a subsequent [`ProvenanceLog::append`]
 //! gzip-compresses the full file to `access.log.<YYYY-MM-DD-HHMMSS>.gz`,
 //! removes the old `access.log`, and writes the incoming row as the
 //! first row of a fresh file with `prev_hash = "GENESIS"` (the hash
@@ -243,6 +243,14 @@ pub struct ProvenanceLog {
     path: Utf8PathBuf,
     state: Mutex<LogState>,
     session_id: String,
+    /// §6 rotation threshold, resolved ONCE at [`ProvenanceLog::open`]
+    /// (not per-`append`). Reading `DOIGET_LOG_ROTATE_BYTES` once at
+    /// open — rather than on every append — means a log opened without
+    /// the env set keeps the real 100 MiB threshold for its whole life
+    /// even if another (test) thread later mutates that process-global
+    /// env var; this removes a parallel-test race without serializing
+    /// every multi-append test. `0` = rotation disabled.
+    rotate_threshold: u64,
 }
 
 /// Mutable internal state, guarded by [`ProvenanceLog::state`].
@@ -271,7 +279,7 @@ const ROTATE_BYTES: u64 = 100 * 1024 * 1024;
 const DEFAULT_RETENTION_DAYS: i64 = 90;
 
 /// Resolve the rotation threshold: `DOIGET_LOG_ROTATE_BYTES` if set and
-/// parseable, else [`ROTATE_BYTES`]. `0` (or unparseable) → returns the
+/// parseable, else [`ROTATE_BYTES`]. `0` (or unparsable) → returns the
 /// value as-is (`0` means "never rotate").
 fn rotate_threshold_bytes() -> u64 {
     match std::env::var("DOIGET_LOG_ROTATE_BYTES") {
@@ -282,7 +290,7 @@ fn rotate_threshold_bytes() -> u64 {
 
 /// Resolve retention days from `DOIGET_LOG_RETENTION_DAYS`
 /// (default [`DEFAULT_RETENTION_DAYS`]). `0` disables pruning. A
-/// negative / unparseable value falls back to the default with a warn.
+/// negative / unparsable value falls back to the default with a warn.
 fn retention_days() -> i64 {
     match std::env::var("DOIGET_LOG_RETENTION_DAYS") {
         Ok(s) => match s.trim().parse::<i64>() {
@@ -612,6 +620,7 @@ impl ProvenanceLog {
                 last_hash,
             }),
             session_id,
+            rotate_threshold: rotate_threshold_bytes(),
         })
     }
 
@@ -645,7 +654,7 @@ impl ProvenanceLog {
         // (the `?`), so the caller's fetch aborts and the chain never
         // silently continues in an over-size or half-rotated file. The
         // `state` mutex is held, so rotation is serialized with appends.
-        let threshold = rotate_threshold_bytes();
+        let threshold = self.rotate_threshold;
         if threshold > 0 {
             let size = match std::fs::metadata(&self.path) {
                 Ok(m) => m.len(),
