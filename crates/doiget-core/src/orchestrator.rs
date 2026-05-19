@@ -210,7 +210,7 @@ pub async fn resolve_only(
 /// Wraps the pure [`metadata_only`]: it runs the same resolver dispatch
 /// (so the provenance hash chain is identical), then writes
 /// `<root>/.metadata/<safekey>.toml` via the same
-/// [`write_metadata_and_pdf`] path `fetch_paper` uses for its
+/// `write_metadata_and_pdf` path `fetch_paper` uses for its
 /// metadata-only fallback, emitting one `StoreWrite` provenance row.
 ///
 /// [`resolve_only`] MUST NOT call this — its contract forbids any store
