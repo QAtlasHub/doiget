@@ -23,7 +23,7 @@ Source: CLI argument or MCP tool argument. Trust level: **untrusted**.
 
 | Vector | Mitigation |
 |---|---|
-| Path traversal in DOI suffix | Strict regex (`^10\.\d{4,9}/[A-Za-z0-9._/()-]+$`); `safekey` algorithm escapes all characters outside `[A-Za-z0-9._\-_]` (see [`SAFEKEY.md`](SAFEKEY.md)). |
+| Path traversal in DOI suffix | Strict regex (`^10\.\d{4,9}/[A-Za-z0-9._/():-]+$`); `safekey` algorithm escapes all characters outside `[A-Za-z0-9._\-_]` (see [`SAFEKEY.md`](SAFEKEY.md)). `:` is in-charset (ADR-0026) for legacy Kluwer (`10.1023/A:NNNN`) and EDP Sciences / Journal de Physique (`10.1051/jphys:NNNN`) DOIs; it grants no traversal capability (traversal requires `/` + `..`, both already permitted) and `safekey` escapes it before any filesystem use, so `:` never reaches a path literally. |
 | Excessively long suffix | `DOI_SUFFIX_MAX_LEN = 256` chars; longer inputs are rejected with `INVALID_REF`. |
 | Regex DoS | Validation regex is anchored, deterministic, no nested quantifiers. |
 | Log injection (CR / LF / control chars) | Provenance log is JSON Lines; all string fields are JSON-escaped, control chars become `\uXXXX`. |
