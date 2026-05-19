@@ -24,6 +24,17 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
   still satisfied). See ADR-0020 Amendment 1.
 
+## [0.2.1-beta.2] - 2026-05-19
+
+### Fixed
+
+- **[repo]** `LICENSE` is now the verbatim 21-line SPDX MIT body. The
+  trailing `---` separator + paper-licensing `Note:` paragraph (which
+  pushed GitHub's `licensee` classifier below its match threshold, so the
+  repo showed `licenseInfo: Other`) is removed; the identical posture
+  statement already lives in `docs/LEGAL.md` and the site posture page.
+  Restores MIT classification for crates.io / SPDX / shields. (#157)
+
 ## [0.2.0](https://github.com/sotashimozono/doiget/compare/doiget-core-v0.1.3...v0.2.0) - 2026-05-18
 
 First release cut under the tag-driven pipeline (ADR-0025): a single signed
