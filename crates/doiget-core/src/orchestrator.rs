@@ -102,11 +102,15 @@ pub struct MetadataOnlyOutcome {
 /// rows — that is the MCP server's responsibility (it owns the
 /// per-tool-call session boundary).
 ///
-/// TODO Phase 2.x: write the metadata TOML to the store after the
-/// orchestrator path is proven; the spec entry in `docs/MCP_TOOLS.md`
-/// §11 lists this as a SIDE EFFECT but Phase 2 store invariants
-/// (which directory, schema_version handling) are out of scope for
-/// Slice 1.
+/// This function is the **pure resolver**: it consults the source(s)
+/// and emits provenance rows, but it does NOT write to the store.
+/// The `docs/MCP_TOOLS.md` §11 store-write SIDE EFFECT is provided by
+/// [`metadata_only_to_store`], which wraps this and persists the
+/// metadata TOML to `<root>/.metadata/<safekey>.toml`. Keeping the
+/// store-write in a *separate* entry point is exactly what lets
+/// [`resolve_only`] safely delegate here — its contract forbids any
+/// store write, and a pure `metadata_only` can never regress that
+/// invariant (#139).
 ///
 /// # Errors
 ///
@@ -123,8 +127,8 @@ pub async fn metadata_only(
         Ref::Arxiv(id) => {
             let arxiv = arxiv_source_from_env();
             let metadata = arxiv.fetch_metadata_only(id, ctx).await?;
-            // TODO Phase 2.x: write metadata TOML to store after
-            // orchestrator path is proven.
+            // Pure resolver — no store write here (see fn doc); the
+            // store-write side effect lives in `metadata_only_to_store`.
             Ok(MetadataOnlyOutcome {
                 source: arxiv.name().to_string(),
                 resolver_profile: arxiv.name().to_string(),
@@ -150,18 +154,15 @@ pub async fn metadata_only(
 ///
 /// # Why this exists as a distinct orchestrator
 ///
-/// Today [`metadata_only`] does not write to the store (the Phase 2.x
-/// TODO inside `metadata_only_doi` and the arXiv branch), so the two
-/// functions are functionally identical. When Phase 2.x lands the store
-/// write for `metadata_only`, [`resolve_only`] MUST NOT pick it up —
-/// the future divergence is the entire reason this function exists.
-///
-/// Concretely: when the Phase 2.x change happens, this function must be
-/// refactored to call the **inner** dispatchers (`metadata_only_doi` for
-/// DOI, the arXiv-Atom path for arXiv) directly with the store-write
-/// step **excluded**, rather than continuing to delegate to
-/// [`metadata_only`]. The audit-trail / provenance-row emission is
-/// retained either way.
+/// [`metadata_only`] is the **pure resolver** and never writes to the
+/// store; the store-write SIDE EFFECT lives only in the separate
+/// [`metadata_only_to_store`] wrapper. Because the write is in a
+/// *different* entry point that this function does not call,
+/// delegating to [`metadata_only`] is permanently safe — there is no
+/// code path by which `resolve_only` can acquire a store write, now or
+/// in future (#139). This structural separation is the entire reason
+/// `metadata_only` was split into a pure core + a persisting wrapper
+/// rather than gaining a `write: bool` parameter.
 ///
 /// # Dispatch
 ///
@@ -184,13 +185,158 @@ pub async fn resolve_only(
     profile: &CapabilityProfile,
     ctx: &FetchContext,
 ) -> Result<MetadataOnlyOutcome, FetchError> {
-    // Slice 7: delegate to `metadata_only` because the latter does not
-    // yet write to the store. When Phase 2.x adds the store-write to
-    // `metadata_only`, this delegation MUST be replaced with a direct
-    // call to the inner dispatchers (`metadata_only_doi` + the arXiv
-    // Atom path) with the store-write step excluded. See the function
-    // doc-comment for the binding contract.
+    // Delegating to the PURE `metadata_only` is the contract-correct
+    // implementation, not a placeholder: `metadata_only` never writes
+    // to the store (the persisting path is the separate
+    // `metadata_only_to_store`, which this function does not call), so
+    // `resolve_only`'s "no store mutation" guarantee holds structurally
+    // and cannot regress (#139).
     metadata_only(ref_, profile, ctx).await
+}
+
+/// Resolve a [`Ref`] to metadata **and persist the metadata TOML to the
+/// store** — the `docs/MCP_TOOLS.md` §11 `doiget_metadata_only` SIDE
+/// EFFECT (#139).
+///
+/// Wraps the pure [`metadata_only`]: it runs the same resolver dispatch
+/// (so the provenance hash chain is identical), then writes
+/// `<root>/.metadata/<safekey>.toml` via the same
+/// [`write_metadata_and_pdf`] path `fetch_paper` uses for its
+/// metadata-only fallback, emitting one `StoreWrite` provenance row.
+///
+/// [`resolve_only`] MUST NOT call this — its contract forbids any store
+/// write. The split (pure core vs. persisting wrapper) makes that
+/// invariant structural rather than a convention.
+///
+/// # Errors
+///
+/// [`FetchError`] from the underlying resolver dispatch, or
+/// [`FetchError::SourceSchema`] if the store write fails (the
+/// `StoreWrite` failure row is recorded before the error propagates,
+/// fail-closed per `docs/PROVENANCE_LOG.md`).
+pub async fn metadata_only_to_store(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    store: &dyn Store,
+) -> Result<MetadataOnlyOutcome, FetchError> {
+    let outcome = metadata_only(ref_, profile, ctx).await?;
+    let safekey = ref_.safekey();
+    let metadata = build_metadata_only_metadata(ref_, &outcome);
+    // `pdf_src = None` => writes `<root>/.metadata/<safekey>.toml` and
+    // appends the `StoreWrite` row (the exact path `fetch_paper` uses
+    // for its DOI metadata-only fallback).
+    write_metadata_and_pdf(store, &safekey, &metadata, None, ctx)?;
+    Ok(outcome)
+}
+
+/// Build the [`Metadata`] persisted by [`metadata_only_to_store`].
+///
+/// Minimal but valid: enough that a subsequent `doiget_info` returns a
+/// non-null `metadata` object (the #139 acceptance criterion). Title is
+/// best-effort from the resolver payload (`title` as a string, or the
+/// first element if it is an array — Crossref's `message.title` is an
+/// array, arXiv/Unpaywall a string); it falls back to the ref id so the
+/// required `title` field is never empty. Bibliographic enrichment
+/// (year, venue, …) is intentionally out of scope here — the
+/// metadata-only contract is "persist what the resolver returned", and
+/// the raw payload is preserved verbatim in `MetadataOnlyOutcome`.
+fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
+    let (doi, arxiv_id) = match ref_ {
+        Ref::Doi(d) => (Some(d.clone()), None),
+        Ref::Arxiv(a) => (None, Some(a.clone())),
+    };
+    let ref_id = match ref_ {
+        Ref::Doi(d) => d.as_str().to_string(),
+        Ref::Arxiv(a) => a.as_str().to_string(),
+    };
+    let title = extract_metadata_title(&outcome.metadata).unwrap_or(ref_id);
+    Metadata {
+        schema_version: SCHEMA_VERSION.to_string(),
+        title,
+        authors: extract_metadata_authors(&outcome.metadata),
+        year: None,
+        doi,
+        arxiv_id,
+        abstract_: None,
+        venue: None,
+        publisher: None,
+        issn: None,
+        isbn: None,
+        type_: None,
+        keywords: Vec::new(),
+        url: outcome.oa_url.clone(),
+        pdf_path: None,
+        doiget: Some(DoigetExtension {
+            fetched_at: Utc::now(),
+            source: outcome.source.clone(),
+            license: outcome
+                .license
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+            size_bytes: 0,
+            mcp_call_id: None,
+        }),
+        other: BTreeMap::new(),
+    }
+}
+
+/// `title` from a resolver payload: a bare string, or the first element
+/// of an array (Crossref `message.title` is `[String]`). `None` if
+/// absent/blank.
+fn extract_metadata_title(meta: &Value) -> Option<String> {
+    let t = meta.get("title")?;
+    let s = t.as_str().map(str::to_string).or_else(|| {
+        t.as_array()?
+            .iter()
+            .find_map(|v| v.as_str())
+            .map(str::to_string)
+    })?;
+    let s = s.trim();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
+/// Best-effort author list, tolerant of the three resolver shapes:
+/// Crossref `author: [{given,family}]`, Unpaywall `z_authors:
+/// [{given,family}]`, arXiv `authors: [String]`. Returns `Vec::new()`
+/// when none are parseable (a valid metadata TOML — #139 only requires
+/// the entry to exist and be readable).
+fn extract_metadata_authors(meta: &Value) -> Vec<String> {
+    if let Some(arr) = meta.get("authors").and_then(Value::as_array) {
+        let v: Vec<String> = arr
+            .iter()
+            .filter_map(|a| a.as_str().map(str::to_string))
+            .collect();
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    for key in ["author", "z_authors"] {
+        if let Some(arr) = meta.get(key).and_then(Value::as_array) {
+            let v: Vec<String> = arr
+                .iter()
+                .filter_map(|a| {
+                    let given = a.get("given").and_then(Value::as_str).unwrap_or("");
+                    let family = a.get("family").and_then(Value::as_str).unwrap_or("");
+                    let name = format!("{given} {family}");
+                    let name = name.trim();
+                    if name.is_empty() {
+                        a.get("name").and_then(Value::as_str).map(str::to_string)
+                    } else {
+                        Some(name.to_string())
+                    }
+                })
+                .collect();
+            if !v.is_empty() {
+                return v;
+            }
+        }
+    }
+    Vec::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -253,8 +399,8 @@ async fn metadata_only_doi(
         Ok(res) => {
             let metadata = res.metadata_json.unwrap_or(Value::Null);
             let oa_url = extract_crossref_oa_url(&metadata);
-            // TODO Phase 2.x: write metadata TOML to store after
-            // orchestrator path is proven.
+            // Pure resolver — no store write here (see `metadata_only`
+            // doc); persistence is `metadata_only_to_store`'s job.
             Ok(MetadataOnlyOutcome {
                 source: crossref.name().to_string(),
                 resolver_profile: crossref.name().to_string(),
@@ -1714,5 +1860,145 @@ mod tests {
         assert_eq!(dc_pre.hop_index, None);
         assert_eq!(dc_pre.cap, None);
         assert_eq!(dc_pre.actual, None);
+    }
+
+    // -----------------------------------------------------------------
+    // #139 — metadata_only_to_store writes the metadata TOML;
+    //        resolve_only / pure metadata_only write NOTHING.
+    // -----------------------------------------------------------------
+
+    /// Build a ctx + FsStore under a fresh tempdir and point Crossref at
+    /// a wiremock origin that returns one minimal `message`. Returns
+    /// `(server, ctx, store, store_root, _td)` — `_td` keeps the tempdir
+    /// alive for the test body.
+    async fn md139_harness() -> (
+        wiremock::MockServer,
+        FetchContext,
+        crate::store::FsStore,
+        Utf8PathBuf,
+        tempfile::TempDir,
+    ) {
+        use crate::http::HttpClient;
+        use crate::provenance::ProvenanceLog;
+        use crate::rate_limiter::RateLimiter;
+        use crate::store::FsStore;
+        use crate::RateLimits;
+        use std::sync::Arc;
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"status":"ok","message":{"title":["Example Paper"],"author":[{"given":"Ada","family":"Lovelace"}]}}"#,
+            ))
+            .mount(&server)
+            .await;
+        std::env::set_var("DOIGET_CROSSREF_BASE", server.uri());
+
+        // wiremock serves http://127.0.0.1:PORT; the production client is
+        // https_only, so the test ctx uses the allow-http test client
+        // scoped to the crossref/unpaywall source keys + the wiremock host.
+        let host = server
+            .uri()
+            .parse::<url::Url>()
+            .expect("uri")
+            .host_str()
+            .expect("host")
+            .to_string();
+
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let base = Utf8Path::from_path(td.path()).expect("utf-8");
+        let log_path = base.join("log.jsonl");
+        let store_root = base.join("papers");
+        let ctx = FetchContext {
+            http: Arc::new(HttpClient::new_for_tests_allow_http_multi(&[
+                ("crossref", &host),
+                ("unpaywall", &host),
+            ])),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+            log: Arc::new(
+                ProvenanceLog::open(log_path, "01J0000000000000000000TEST".into())
+                    .expect("provenance log"),
+            ),
+            session_id: "01J0000000000000000000TEST".into(),
+        };
+        let store = FsStore::new(store_root.clone()).expect("fs store");
+        (server, ctx, store, store_root, td)
+    }
+
+    fn metadata_dir_tomls(store_root: &Utf8Path) -> Vec<Utf8PathBuf> {
+        let md = store_root.join(".metadata");
+        match std::fs::read_dir(md.as_std_path()) {
+            Ok(rd) => rd
+                .filter_map(|e| e.ok())
+                .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
+                .filter(|p| p.extension() == Some("toml"))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn metadata_only_to_store_writes_metadata_toml_139() {
+        let (_server, ctx, store, store_root, _td) = md139_harness().await;
+        let profile = CapabilityProfile::from_env().expect("clean env");
+        let ref_ = Ref::Doi(Doi("10.1234/example".to_string()));
+
+        let outcome = metadata_only_to_store(&ref_, &profile, &ctx, &store)
+            .await
+            .expect("metadata_only_to_store ok");
+        assert_eq!(outcome.source, "crossref");
+
+        let tomls = metadata_dir_tomls(&store_root);
+        assert_eq!(
+            tomls.len(),
+            1,
+            "exactly one .metadata/*.toml must be written (MCP_TOOLS.md §11 SIDE EFFECT, #139); got {tomls:?}"
+        );
+        let body = std::fs::read_to_string(&tomls[0]).expect("read metadata toml");
+        let meta: crate::store::Metadata = toml::from_str(&body).expect("parse metadata toml");
+        assert_eq!(meta.title, "Example Paper");
+        assert_eq!(
+            meta.doi.as_ref().map(|d| d.as_str()),
+            Some("10.1234/example")
+        );
+        let ext = meta.doiget.expect("[doiget] table present");
+        assert_eq!(ext.source, "crossref");
+        assert_eq!(ext.size_bytes, 0, "metadata-only entry has no PDF");
+
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_only_and_pure_metadata_only_write_nothing_139() {
+        let (_server, ctx, _store, store_root, _td) = md139_harness().await;
+        let profile = CapabilityProfile::from_env().expect("clean env");
+        let ref_ = Ref::Doi(Doi("10.1234/example".to_string()));
+
+        // resolve_only: contractually MUST NOT touch the store.
+        let r = resolve_only(&ref_, &profile, &ctx)
+            .await
+            .expect("resolve_only ok");
+        assert_eq!(r.source, "crossref");
+        assert!(
+            metadata_dir_tomls(&store_root).is_empty(),
+            "resolve_only MUST NOT write a metadata TOML (docs/MCP_TOOLS.md §1; #139)"
+        );
+
+        // The pure metadata_only is also write-free (the store-write
+        // lives only in metadata_only_to_store).
+        let m = metadata_only(&ref_, &profile, &ctx)
+            .await
+            .expect("metadata_only ok");
+        assert_eq!(m.source, "crossref");
+        assert!(
+            metadata_dir_tomls(&store_root).is_empty(),
+            "pure metadata_only MUST NOT write to the store (#139)"
+        );
+
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
     }
 }

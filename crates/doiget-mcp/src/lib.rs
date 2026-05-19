@@ -47,8 +47,8 @@ use doiget_core::dry_run::{
 use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, tier_2_allowlist, HttpClient};
 use doiget_core::orchestrator::{
     batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
-    metadata_only, resolve_only as core_resolve_only, FetchPaperOutcome, MetadataOnlyOutcome,
-    PdfLegStatus,
+    metadata_only_to_store, resolve_only as core_resolve_only, FetchPaperOutcome,
+    MetadataOnlyOutcome, PdfLegStatus,
 };
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
@@ -291,7 +291,32 @@ impl Server {
             )));
         }
 
-        let outcome = metadata_only(&ref_, &self.profile, &ctx).await;
+        // §11 SIDE EFFECT: persist the metadata TOML to the store
+        // (#139). Resolve the store root + open the FsStore the same way
+        // `doiget_fetch_paper` does; a store-init failure is surfaced as
+        // an error envelope (the resolver work has not run yet).
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InternalError,
+                    "store root could not be resolved (set DOIGET_STORE_ROOT or $HOME)",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InternalError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+
+        let outcome = metadata_only_to_store(&ref_, &self.profile, &ctx, &store).await;
 
         // SessionEnd bookend. Best-effort: if this append fails we still
         // surface the orchestrator's outcome (a fresh log error here

@@ -500,7 +500,7 @@ dependencies = [
 
 [[package]]
 name = "doiget-cli"
-version = "0.2.1-beta.2"
+version = "0.2.1-beta.3"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "doiget-core"
-version = "0.2.1-beta.2"
+version = "0.2.1-beta.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -560,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "doiget-mcp"
-version = "0.2.1-beta.2"
+version = "0.2.1-beta.3"
 dependencies = [
  "anyhow",
  "assert_cmd",
