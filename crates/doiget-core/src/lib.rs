@@ -127,7 +127,8 @@ impl Doi {
     /// Accepts:
     /// - Bare DOIs: `10.<registrant>/<suffix>` where `<registrant>` is 4–9
     ///   digits and `<suffix>` is a non-empty sequence of characters drawn
-    ///   from `[A-Za-z0-9._/()-]`.
+    ///   from `[A-Za-z0-9._/():-]` (the `:` covers legacy Kluwer
+    ///   `10.1023/A:NNNN` and EDP Sciences `10.1051/jphys:NNNN` DOIs).
     /// - The `doi:` URI scheme prefix; it is stripped before validation, so
     ///   the stored value never carries a scheme. (Matches the convention
     ///   established in `docs/SAFEKEY.md` §3 step 0.)
@@ -275,13 +276,22 @@ mod parse {
     }
 
     /// DOI suffix charset per `docs/SECURITY.md` §1.1:
-    /// `[A-Za-z0-9._/()-]`. The forward slash is permitted inside the
+    /// `[A-Za-z0-9._/():-]`. The forward slash is permitted inside the
     /// suffix (e.g. `10.1016/...`); the registrant separator is the
     /// *first* `/` and the suffix is everything after it.
+    ///
+    /// `:` is permitted because two large real publisher DOI families use
+    /// it in the suffix — legacy Kluwer/Springer (`10.1023/A:NNNNNNNNNN`)
+    /// and EDP Sciences / Journal de Physique
+    /// (`10.1051/jphys:NNNNNNNNNNNNNNNNN`). It adds no path-traversal
+    /// capability (traversal needs `/` + `..`, both already permitted) and
+    /// `safekey` independently escapes every char outside `[A-Za-z0-9._-]`
+    /// before any filesystem use, so `:` never reaches a path literally.
+    /// See ADR-0026 and `docs/SECURITY.md` §1.1.
     fn is_doi_suffix_char(c: char) -> bool {
         matches!(c,
             'A'..='Z' | 'a'..='z' | '0'..='9'
-            | '.' | '_' | '/' | '(' | ')' | '-'
+            | '.' | '_' | '/' | '(' | ')' | '-' | ':'
         )
     }
 
@@ -1702,6 +1712,26 @@ mod tests {
         // registrant/suffix separator.
         let d = Doi::parse("10.1234/foo/bar/baz").expect("nested slashes");
         assert_eq!(d.as_str(), "10.1234/foo/bar/baz");
+    }
+
+    #[test]
+    fn doi_parse_accepts_colon_in_legacy_kluwer_suffix() {
+        // #194: legacy Kluwer/Springer DOIs (`10.1023/A:NNNNNNNNNN`)
+        // carry a `:` in the suffix. Real DOI: "Entanglement, Quantum
+        // Phase Transitions, and DMRG" (Kluwer, 2002).
+        let d = Doi::parse("10.1023/A:1019601218492").expect("legacy Kluwer colon DOI");
+        assert_eq!(d.as_str(), "10.1023/A:1019601218492");
+    }
+
+    #[test]
+    fn doi_parse_accepts_colon_in_edp_jphys_suffix() {
+        // #194: EDP Sciences / Journal de Physique legacy corpus uses
+        // `10.1051/jphys:NNNNNNNNNNNNNNNNN`. Real DOIs from the dogfood
+        // Ising-RG run; both resolve at doi.org and via Crossref.
+        let d = Doi::parse("10.1051/jphys:0198900500120136500").expect("EDP jphys colon DOI");
+        assert_eq!(d.as_str(), "10.1051/jphys:0198900500120136500");
+        let d2 = Doi::parse("doi:10.1051/jphys:0198500460100164500").expect("scheme + colon");
+        assert_eq!(d2.as_str(), "10.1051/jphys:0198500460100164500");
     }
 
     #[test]
