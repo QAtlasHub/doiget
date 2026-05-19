@@ -147,7 +147,7 @@ url = "2"
 # response). Default features (no `serde`, no `encoding`) are sufficient
 # — we hand-roll a small event walker in `sources::arxiv`. Not on
 # `deny.toml`'s banned list.
-quick-xml = { version = "0.36", default-features = false }
+quick-xml = { version = "0.40", default-features = false }
 
 # Byte buffer + async stream combinators for streaming-with-cap body reads
 # (see crates/doiget-core/src/http.rs, docs/SECURITY.md §1.2 oversized PDF).
