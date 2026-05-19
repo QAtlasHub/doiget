@@ -510,6 +510,7 @@ dependencies = [
  "dirs",
  "doiget-core",
  "doiget-mcp",
+ "flate2",
  "predicates",
  "serde",
  "serde_json",
