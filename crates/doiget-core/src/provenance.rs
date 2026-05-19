@@ -594,6 +594,25 @@ impl ProvenanceLog {
     /// Returns [`LogError::NotARegularFile`] if `path` exists but is not a
     /// regular file (e.g. a directory).
     pub fn open(path: impl Into<Utf8PathBuf>, session_id: String) -> Result<Self, LogError> {
+        // Production path: the §6 threshold comes from
+        // `DOIGET_LOG_ROTATE_BYTES` (default 100 MiB), resolved ONCE here.
+        Self::open_with_rotate_threshold(path, session_id, rotate_threshold_bytes())
+    }
+
+    /// [`open`](Self::open) with an explicit rotation threshold instead
+    /// of reading `DOIGET_LOG_ROTATE_BYTES`.
+    ///
+    /// This exists so the rotation tests inject a tiny threshold WITHOUT
+    /// mutating the process-global env var: a global env knob raced
+    /// non-`#[serial]` tests (a concurrent test's `open` would cache the
+    /// tiny threshold and spuriously rotate). `#[serial]` only
+    /// serializes `#[serial]` tests, so injection — not serialization —
+    /// is the robust fix. `0` disables rotation.
+    pub(crate) fn open_with_rotate_threshold(
+        path: impl Into<Utf8PathBuf>,
+        session_id: String,
+        rotate_threshold: u64,
+    ) -> Result<Self, LogError> {
         let path: Utf8PathBuf = path.into();
 
         // Reject obvious non-files up front so later `OpenOptions::append`
@@ -620,7 +639,7 @@ impl ProvenanceLog {
                 last_hash,
             }),
             session_id,
-            rotate_threshold: rotate_threshold_bytes(),
+            rotate_threshold,
         })
     }
 
@@ -1499,7 +1518,6 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial] // global DOIGET_LOG_ROTATE_BYTES (#140 tests) must not interleave
     fn subsequent_rows_chain_correctly() {
         let dir = TempDir::new().expect("tmp");
         let path = tmp_dir_utf8(&dir).join("log.jsonl");
@@ -1523,7 +1541,6 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial] // global DOIGET_LOG_ROTATE_BYTES (#140 tests) must not interleave
     fn recovery_after_reopen() {
         let dir = TempDir::new().expect("tmp");
         let path = tmp_dir_utf8(&dir).join("log.jsonl");
@@ -1557,7 +1574,6 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial] // global DOIGET_LOG_ROTATE_BYTES (#140 tests) must not interleave
     fn concurrent_writers_in_same_process_serialize() {
         let dir = TempDir::new().expect("tmp");
         let path = tmp_dir_utf8(&dir).join("log.jsonl");
@@ -1765,7 +1781,6 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial] // global DOIGET_LOG_ROTATE_BYTES (#140 tests) must not interleave
     fn verify_well_formed_chain_passes() {
         // Three rows written via the real writer must verify clean.
         let dir = TempDir::new().expect("tmp");
@@ -1932,16 +1947,15 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn rotation_archives_to_gz_and_restarts_genesis_chain() {
         let dir = TempDir::new().expect("tmp");
         let path = tmp_dir_utf8(&dir).join("access.log");
-        // Tiny threshold: row 1 fits, so the SECOND append (size>=50)
-        // triggers rotation before it writes.
-        std::env::set_var("DOIGET_LOG_ROTATE_BYTES", "50");
-        std::env::set_var("DOIGET_LOG_RETENTION_DAYS", "0"); // don't prune in-test
-
-        let log = open_log(&path);
+        // Inject a tiny threshold (NOT a global env var — that raced
+        // non-#[serial] tests): row 1 fits, so the SECOND append
+        // (size>=50) rotates before it writes. A freshly rotated `.gz`
+        // is not retention-aged, so the default prune at open is a no-op.
+        let log = ProvenanceLog::open_with_rotate_threshold(&path, TEST_SESSION_ID.to_string(), 50)
+            .expect("open");
         log.append(empty_input()).expect("append 1");
         let row1 = read_rows(&path);
         assert_eq!(row1.len(), 1);
@@ -1972,9 +1986,6 @@ mod tests {
         for (p, r) in &reports {
             assert!(r.errors.is_empty(), "segment {p} must verify clean: {r:?}");
         }
-
-        std::env::remove_var("DOIGET_LOG_ROTATE_BYTES");
-        std::env::remove_var("DOIGET_LOG_RETENTION_DAYS");
     }
 
     #[test]
@@ -2038,22 +2049,26 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn verify_all_flags_tampered_segment_independently() {
         let dir = TempDir::new().expect("tmp");
         let path = tmp_dir_utf8(&dir).join("access.log");
-        std::env::set_var("DOIGET_LOG_ROTATE_BYTES", "50");
-        std::env::set_var("DOIGET_LOG_RETENTION_DAYS", "0");
-
-        let log = open_log(&path);
+        // Inject the tiny threshold (no global env → no cross-test race).
+        let log = ProvenanceLog::open_with_rotate_threshold(&path, TEST_SESSION_ID.to_string(), 50)
+            .expect("open");
         log.append(empty_input()).expect("append 1");
         log.append(empty_input()).expect("append 2 (rotates)");
         drop(log);
 
-        // Tamper the CURRENT segment's row (flip a hex char in this_hash).
+        // Tamper the CURRENT segment's row: set this_hash to a
+        // syntactically-valid 64-hex string that cannot be the SHA-256
+        // of any row (all zeros). NOTE: the previous "flip the last char
+        // to '0'" was a no-op ~1/16 of runs when the real hash already
+        // ended in '0' (this_hash depends on `Utc::now()`), which is the
+        // flake this fixes — mirrors `verify_detects_tampered_row_hash`.
         let mut cur = read_rows(&path);
         let mut bad = cur.remove(0);
-        bad.this_hash = format!("{}0", &bad.this_hash[..bad.this_hash.len() - 1]);
+        bad.this_hash =
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string();
         std::fs::write(
             path.as_std_path(),
             format!("{}\n", serde_json::to_string(&bad).expect("ser")),
@@ -2073,8 +2088,5 @@ mod tests {
             cur_path.file_name() == Some("access.log") && !cur_rep.errors.is_empty(),
             "tampered current segment must report issues: {cur_path} {cur_rep:?}"
         );
-
-        std::env::remove_var("DOIGET_LOG_ROTATE_BYTES");
-        std::env::remove_var("DOIGET_LOG_RETENTION_DAYS");
     }
 }
