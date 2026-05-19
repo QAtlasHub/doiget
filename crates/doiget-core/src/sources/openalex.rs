@@ -82,13 +82,19 @@ impl OpenalexSource {
         }
     }
 
-    /// Build the `/works/{doi}?mailto=<contact>` URL.
+    /// Build the `/works/doi:{doi}?mailto=<contact>` URL.
     ///
-    /// OpenAlex accepts the bare DOI in the path. The `mailto` query
-    /// parameter opts into the polite pool per `docs/SOURCES.md` §6.
-    /// When `contact_email` is empty, the query parameter is omitted.
+    /// OpenAlex's `/works/{id}` endpoint does **not** accept a bare DOI
+    /// in the path — `GET /works/10.1103/PhysRevLett.102.190601` returns
+    /// HTTP 404. It accepts an OpenAlex Work ID (`W…`), the namespaced
+    /// `doi:<doi>` form, or a full `https://doi.org/<doi>` URL. We use
+    /// the `doi:` prefix: it is unambiguous, needs no percent-encoding,
+    /// and (unlike the `https://doi.org/` form) does not confuse
+    /// `Url::join`'s scheme detection. The `mailto` query parameter opts
+    /// into the polite pool per `docs/SOURCES.md` §6; when
+    /// `contact_email` is empty the query parameter is omitted.
     fn request_url(&self, doi: &crate::Doi) -> Result<Url, FetchError> {
-        let path = format!("/works/{}", doi.as_str());
+        let path = format!("/works/doi:{}", doi.as_str());
         let mut url = self
             .base
             .join(&path)
@@ -293,7 +299,7 @@ mod tests {
     async fn fetch_doi_returns_work_metadata() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/works/10.1234/example"))
+            .and(path("/works/doi:10.1234/example"))
             .and(query_param("mailto", "doiget@localhost"))
             .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_WORK))
             .mount(&server)
@@ -362,7 +368,7 @@ mod tests {
         let server = MockServer::start().await;
         // Response has no `id` field — defensive shape check trips.
         Mock::given(method("GET"))
-            .and(path("/works/10.1234/example"))
+            .and(path("/works/doi:10.1234/example"))
             .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"error":"not found"}"#))
             .mount(&server)
             .await;
