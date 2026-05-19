@@ -15,7 +15,7 @@ exclude = [
 ]
 
 [workspace.package]
-version       = "0.2.1-beta.3"
+version       = "0.2.1-beta.4"
 edition       = "2021"
 rust-version  = "1.86"
 license       = "MIT"
@@ -131,6 +131,12 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "cloc
 # Hashing — provenance log hash chain
 sha2 = "0.11"
 hex  = "0.4"
+
+# gzip for provenance-log rotation (PROVENANCE_LOG.md §6). Pure-Rust
+# `miniz_oxide` backend (`rust_backend`) — NO C toolchain, consistent
+# with the ADR-0020 portability posture (cargo-installable / musl-static
+# anywhere). MIT/Apache-2.0/Zlib — within deny.toml's allow list.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 # UUIDs / ULIDs (mcp_call_id, session_id)
 uuid = { version = "1", features = ["v4", "serde"] }

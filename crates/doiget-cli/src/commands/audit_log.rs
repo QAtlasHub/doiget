@@ -39,7 +39,7 @@ use std::io::Write;
 use anyhow::{bail, Context, Result};
 use camino::Utf8PathBuf;
 
-use doiget_core::provenance::{verify, VerifyIssueKind};
+use doiget_core::provenance::{verify_all, VerifyIssueKind};
 
 use super::fetch::CliExit;
 
@@ -76,43 +76,74 @@ pub fn run(verify_flag: bool) -> Result<()> {
     }
 
     let log_path = resolve_log_path()?;
-    let report = verify(&log_path)
+    // §6: verify the full history — every rotated `.gz` segment
+    // (oldest→newest) plus the current `access.log`. Each segment is its
+    // own GENESIS-rooted chain; they are verified independently.
+    let segments = verify_all(&log_path)
         .with_context(|| format!("failed to read provenance log at {log_path}"))?;
+
+    let total_rows: usize = segments.iter().map(|(_, r)| r.total_rows).sum();
+    let total_ok: usize = segments.iter().map(|(_, r)| r.ok_rows).sum();
+    let total_issues: usize = segments.iter().map(|(_, r)| r.errors.len()).sum();
+    let multi = segments.len() > 1;
 
     // `print_stdout` is workspace-deny for MCP stdio safety — see module docs.
     // The `audit-log` CLI is the explicit human-facing channel; locking
     // `stdout()` and using `writeln!` is the sanctioned way to emit lines.
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    writeln!(out, "audit-log verify: {} rows", report.total_rows)
+    // Aggregate header — byte-identical to the pre-rotation output when
+    // there is a single segment (back-compat with audit_log_e2e.rs).
+    writeln!(out, "audit-log verify: {total_rows} rows")
         .context("failed to write header to stdout")?;
-    writeln!(out, "  ok:     {}", report.ok_rows)
-        .context("failed to write ok-row count to stdout")?;
-    writeln!(out, "  issues: {}", report.errors.len())
-        .context("failed to write issue count to stdout")?;
+    writeln!(out, "  ok:     {total_ok}").context("failed to write ok-row count to stdout")?;
+    writeln!(out, "  issues: {total_issues}").context("failed to write issue count to stdout")?;
 
-    for issue in &report.errors {
-        // `VerifyIssueKind` is `#[non_exhaustive]` (forward-compat for
-        // future variants like `SessionIdChange`); the wildcard arm uses a
-        // generic label so older CLI builds keep producing well-formed
-        // output even when run against a newer core that adds variants.
-        let kind = match issue.kind {
-            VerifyIssueKind::ParseError => "parse",
-            VerifyIssueKind::PrevHashMismatch => "prev-hash",
-            VerifyIssueKind::ThisHashMismatch => "this-hash",
-            VerifyIssueKind::SequenceJump => "sequence",
-            _ => "other",
-        };
-        writeln!(out, "  line {}: {} — {}", issue.line, kind, issue.message)
+    for (path, report) in &segments {
+        let seg = path.file_name().unwrap_or(path.as_str());
+        if multi {
+            writeln!(
+                out,
+                "  segment {}: {} rows, {} ok, {} issues",
+                seg,
+                report.total_rows,
+                report.ok_rows,
+                report.errors.len()
+            )
+            .context("failed to write segment summary to stdout")?;
+        }
+        for issue in &report.errors {
+            // `VerifyIssueKind` is `#[non_exhaustive]` (forward-compat for
+            // future variants like `SessionIdChange`); the wildcard arm uses
+            // a generic label so older CLI builds keep producing well-formed
+            // output even when run against a newer core that adds variants.
+            let kind = match issue.kind {
+                VerifyIssueKind::ParseError => "parse",
+                VerifyIssueKind::PrevHashMismatch => "prev-hash",
+                VerifyIssueKind::ThisHashMismatch => "this-hash",
+                VerifyIssueKind::SequenceJump => "sequence",
+                _ => "other",
+            };
+            if multi {
+                writeln!(
+                    out,
+                    "  [{}] line {}: {} — {}",
+                    seg, issue.line, kind, issue.message
+                )
+            } else {
+                writeln!(out, "  line {}: {} — {}", issue.line, kind, issue.message)
+            }
             .context("failed to write issue line to stdout")?;
+        }
     }
 
-    if report.errors.is_empty() {
+    if total_issues == 0 {
         Ok(())
     } else {
         bail!(
-            "audit-log: {} chain issue(s) detected — see stdout for details",
-            report.errors.len()
+            "audit-log: {} chain issue(s) detected across {} segment(s) — see stdout for details",
+            total_issues,
+            segments.len()
         )
     }
 }

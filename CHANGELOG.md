@@ -24,6 +24,27 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
   still satisfied). See ADR-0020 Amendment 1.
 
+## [0.2.1-beta.4] - 2026-05-19
+
+### Added
+
+- **[provenance]** Log rotation + retention (`docs/PROVENANCE_LOG.md`
+  §6), previously unimplemented (#140). When `access.log` exceeds
+  100 MiB an `append` gzip-archives it to
+  `access.log.<YYYY-MM-DD-HHMMSS>.gz` and starts a fresh GENESIS-rooted
+  segment (the hash chain restarts per segment — segments are not
+  linked). Rotation is **fail-closed**: any gzip/rename/unlink error
+  aborts the append (and the surrounding fetch) so the chain never
+  silently skips. At `open`, rotated segments older than
+  `DOIGET_LOG_RETENTION_DAYS` (default 90; `0` disables) are pruned
+  **best-effort** (a prune failure is logged, not fatal). `doiget
+  audit-log --verify` now verifies the full history — every rotated
+  `.gz` plus the current file — reporting per-segment when more than
+  one exists; single-segment output is unchanged. Adds the pure-Rust
+  `flate2` (`miniz_oxide` backend — no C toolchain, consistent with
+  ADR-0020 portability). Internal `DOIGET_LOG_ROTATE_BYTES` ops/test
+  knob (`0` disables rotation).
+
 ## [0.2.1-beta.3] - 2026-05-19
 
 ### Fixed
