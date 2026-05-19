@@ -8,6 +8,9 @@
 # token to itself, e.g.:
 #   doiget = "doiget"
 # Keep the table sorted; prefer fixing the typo over adding an exception.
+# `flate`: substring of the gzip crate name `flate2` (provenance §6
+# rotation, #140) — a real crate identifier, not a misspelling of "flat".
+flate = "flate"
 
 [files]
 # Generated / vendored / fixture files where typo enforcement is not useful.

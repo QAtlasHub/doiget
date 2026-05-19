@@ -191,3 +191,113 @@ fn audit_log_verify_detects_tampered_this_hash() {
         "expected issue to be reported on line 2, got stdout:\n{stdout}"
     );
 }
+
+/// Seed `n` valid rows into the provenance log at exactly `path`
+/// (caller controls the directory so siblings can be placed alongside).
+fn seed_log_at(path: &Utf8PathBuf, n: usize) {
+    let log = ProvenanceLog::open(path.clone(), "01JCKZ7Q0000000000000000AB".to_string())
+        .expect("open provenance log");
+    for _ in 0..n {
+        log.append(RowInput {
+            event: LogEvent::Fetch,
+            result: LogResult::Ok,
+            capability: Capability::Oa,
+            ref_: None,
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        })
+        .expect("append seed row");
+    }
+    drop(log);
+}
+
+/// Overwrite row `line_1based`'s `this_hash` with an all-zero (valid
+/// 64-hex, impossible-SHA-256) value, in-place.
+fn tamper_this_hash(path: &Utf8PathBuf, line_1based: usize) {
+    let raw = fs::read_to_string(path).expect("read log");
+    let mut lines: Vec<String> = raw.lines().map(str::to_string).collect();
+    let needle = "\"this_hash\":\"";
+    let target = &lines[line_1based - 1];
+    let start = target.find(needle).expect("this_hash field") + needle.len();
+    let end = start + target[start..].find('"').expect("closing quote");
+    let mut new_line = String::with_capacity(target.len());
+    new_line.push_str(&target[..start]);
+    new_line.push_str("0000000000000000000000000000000000000000000000000000000000000000");
+    new_line.push_str(&target[end..]);
+    lines[line_1based - 1] = new_line;
+    let mut out = lines.join("\n");
+    out.push('\n');
+    fs::write(path, out).expect("write tampered log");
+}
+
+/// §6 / #140: `audit-log --verify` over a ROTATED history — a gzipped
+/// `.gz` segment plus the current `access.jsonl`. Exercises the
+/// multi-segment output path in `commands::audit_log::run` (per-segment
+/// summary lines + `[segment] line N:` issue prefix + the multi-segment
+/// `bail!`), which the single-segment tests above never reach.
+#[test]
+fn audit_log_verify_multi_segment_reports_each_independently() {
+    use std::io::Write;
+
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+
+    let dir = TempDir::new().expect("tempdir");
+    let dir_root = utf8_path(&dir);
+    let current = dir_root.join("access.jsonl");
+
+    // Rotated segment: build a valid 2-row chain in a scratch file,
+    // gzip its bytes to `access.jsonl.<ts>.gz` next to `current` (the
+    // name `rotated_segments` looks for).
+    let scratch = dir_root.join("scratch.jsonl");
+    seed_log_at(&scratch, 2);
+    let plain = fs::read(scratch.as_std_path()).expect("read scratch");
+    let gz_path = dir_root.join("access.jsonl.2026-01-01-000000.gz");
+    {
+        let f = fs::File::create(gz_path.as_std_path()).expect("create gz");
+        let mut enc = GzEncoder::new(f, Compression::default());
+        enc.write_all(&plain).expect("gzip write");
+        enc.finish().expect("gzip finish");
+    }
+    fs::remove_file(scratch.as_std_path()).expect("rm scratch");
+
+    // Current segment: valid 2-row chain, then tamper row 2.
+    seed_log_at(&current, 2);
+    tamper_this_hash(&current, 2);
+
+    let assert = doiget(&current, &dir_root)
+        .args(["audit-log", "--verify"])
+        .assert()
+        .failure();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone())
+        .expect("doiget audit-log stdout was not UTF-8");
+
+    // Aggregate across both segments: 2 (.gz) + 2 (current) = 4 rows,
+    // 3 ok, 1 issue (the tampered current row 2).
+    assert!(
+        stdout.contains("audit-log verify: 4 rows"),
+        "aggregate row count over all segments, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("issues: 1"),
+        "exactly the tampered row counts as an issue, got:\n{stdout}"
+    );
+    // Per-segment summary lines (multi-segment branch).
+    assert!(
+        stdout.contains("segment access.jsonl.2026-01-01-000000.gz: 2 rows, 2 ok, 0 issues"),
+        "clean rotated .gz segment summary, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("segment access.jsonl: 2 rows, 1 ok, 1 issues"),
+        "tampered current segment summary, got:\n{stdout}"
+    );
+    // Issue lines are prefixed with the owning segment in multi mode.
+    assert!(
+        stdout.contains("[access.jsonl] line 2: this-hash"),
+        "multi-segment issue line must carry the segment prefix, got:\n{stdout}"
+    );
+}
