@@ -411,7 +411,13 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
                     // <category term="cs.LG" scheme="..."/> — extract `term`.
                     for attr in e.attributes().flatten() {
                         if attr.key.as_ref() == b"term" {
-                            if let Ok(v) = attr.unescape_value() {
+                            // quick-xml 0.40: `unescape_value()` is
+                            // deprecated in favour of `normalized_value()`
+                            // (attribute-value normalization resolves the
+                            // same character/entity references). arXiv's
+                            // Atom feed is XML 1.0.
+                            if let Ok(v) = attr.normalized_value(quick_xml::XmlVersion::Explicit1_0)
+                            {
                                 categories.push(v.into_owned());
                             }
                         }
@@ -421,8 +427,15 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
             }
             Ok(Event::Text(t)) => {
                 if let Some(tg) = target {
-                    if let Ok(s) = t.unescape() {
-                        let s = s.into_owned();
+                    // quick-xml 0.40 removed `BytesText::unescape`.
+                    // Reproduce the old behaviour: decode the bytes, then
+                    // unescape XML entities via `quick_xml::escape::unescape`.
+                    // Best-effort — skip the text on decode/unescape error.
+                    if let Some(s) = t.decode().ok().and_then(|raw| {
+                        quick_xml::escape::unescape(&raw)
+                            .ok()
+                            .map(|c| c.into_owned())
+                    }) {
                         match tg {
                             Target::Title => title.get_or_insert_with(String::new).push_str(&s),
                             Target::Summary => {
