@@ -102,17 +102,30 @@ pub struct MetadataOnlyOutcome {
 /// rows — that is the MCP server's responsibility (it owns the
 /// per-tool-call session boundary).
 ///
-/// TODO Phase 2.x: write the metadata TOML to the store after the
-/// orchestrator path is proven; the spec entry in `docs/MCP_TOOLS.md`
-/// §11 lists this as a SIDE EFFECT but Phase 2 store invariants
-/// (which directory, schema_version handling) are out of scope for
-/// Slice 1.
+/// This function is the **pure resolver**: it consults the source(s)
+/// and emits provenance rows, but it does NOT write to the store.
+/// The `docs/MCP_TOOLS.md` §11 store-write SIDE EFFECT is provided by
+/// [`metadata_only_to_store`], which wraps this and persists the
+/// metadata TOML to `<root>/.metadata/<safekey>.toml`. Keeping the
+/// store-write in a *separate* entry point is exactly what lets
+/// [`resolve_only`] safely delegate here — its contract forbids any
+/// store write, and a pure `metadata_only` can never regress that
+/// invariant (#139).
 ///
 /// # Errors
 ///
 /// Returns [`FetchError`] from the underlying [`Source`] dispatch. The
 /// MCP boundary converts these to the closed [`crate::ErrorCode`] set
 /// via the existing `From<FetchError> for ErrorCode` impl.
+// Stays `pub` (a `pub(crate)` compile-time guard was considered and
+// rejected): `crates/doiget-core/tests/` integration tests
+// (`real_world_fixtures_e2e`) legitimately drive the PURE resolver
+// directly and assert its outcome, and `tests/` compiles as a separate
+// crate. The #139 pre-fix bug (an MCP caller
+// picking the pure variant when it needed persistence) is instead
+// prevented *structurally*: the MCP layer imports only
+// `metadata_only_to_store`, and `resolve_only` delegates to this pure
+// fn — neither can acquire or skip the store-write by mistake.
 pub async fn metadata_only(
     ref_: &Ref,
     profile: &CapabilityProfile,
@@ -123,8 +136,8 @@ pub async fn metadata_only(
         Ref::Arxiv(id) => {
             let arxiv = arxiv_source_from_env();
             let metadata = arxiv.fetch_metadata_only(id, ctx).await?;
-            // TODO Phase 2.x: write metadata TOML to store after
-            // orchestrator path is proven.
+            // Pure resolver — no store write here (see fn doc); the
+            // store-write side effect lives in `metadata_only_to_store`.
             Ok(MetadataOnlyOutcome {
                 source: arxiv.name().to_string(),
                 resolver_profile: arxiv.name().to_string(),
@@ -150,18 +163,15 @@ pub async fn metadata_only(
 ///
 /// # Why this exists as a distinct orchestrator
 ///
-/// Today [`metadata_only`] does not write to the store (the Phase 2.x
-/// TODO inside `metadata_only_doi` and the arXiv branch), so the two
-/// functions are functionally identical. When Phase 2.x lands the store
-/// write for `metadata_only`, [`resolve_only`] MUST NOT pick it up —
-/// the future divergence is the entire reason this function exists.
-///
-/// Concretely: when the Phase 2.x change happens, this function must be
-/// refactored to call the **inner** dispatchers (`metadata_only_doi` for
-/// DOI, the arXiv-Atom path for arXiv) directly with the store-write
-/// step **excluded**, rather than continuing to delegate to
-/// [`metadata_only`]. The audit-trail / provenance-row emission is
-/// retained either way.
+/// [`metadata_only`] is the **pure resolver** and never writes to the
+/// store; the store-write SIDE EFFECT lives only in the separate
+/// [`metadata_only_to_store`] wrapper. Because the write is in a
+/// *different* entry point that this function does not call,
+/// delegating to [`metadata_only`] is permanently safe — there is no
+/// code path by which `resolve_only` can acquire a store write, now or
+/// in future (#139). This structural separation is the entire reason
+/// `metadata_only` was split into a pure core + a persisting wrapper
+/// rather than gaining a `write: bool` parameter.
 ///
 /// # Dispatch
 ///
@@ -184,13 +194,187 @@ pub async fn resolve_only(
     profile: &CapabilityProfile,
     ctx: &FetchContext,
 ) -> Result<MetadataOnlyOutcome, FetchError> {
-    // Slice 7: delegate to `metadata_only` because the latter does not
-    // yet write to the store. When Phase 2.x adds the store-write to
-    // `metadata_only`, this delegation MUST be replaced with a direct
-    // call to the inner dispatchers (`metadata_only_doi` + the arXiv
-    // Atom path) with the store-write step excluded. See the function
-    // doc-comment for the binding contract.
+    // Delegating to the PURE `metadata_only` is the contract-correct
+    // implementation, not a placeholder: `metadata_only` never writes
+    // to the store (the persisting path is the separate
+    // `metadata_only_to_store`, which this function does not call), so
+    // `resolve_only`'s "no store mutation" guarantee holds structurally
+    // and cannot regress (#139).
     metadata_only(ref_, profile, ctx).await
+}
+
+/// Resolve a [`Ref`] to metadata **and persist the metadata TOML to the
+/// store** — the `docs/MCP_TOOLS.md` §11 `doiget_metadata_only` SIDE
+/// EFFECT (#139).
+///
+/// Wraps the pure [`metadata_only`]: it runs the same resolver dispatch
+/// (so the provenance hash chain is identical), then writes
+/// `<root>/.metadata/<safekey>.toml` via the same
+/// `write_metadata_and_pdf` path `fetch_paper` uses for its
+/// metadata-only fallback, emitting one `StoreWrite` provenance row.
+///
+/// [`resolve_only`] MUST NOT call this — its contract forbids any store
+/// write. The split (pure core vs. persisting wrapper) makes that
+/// invariant structural rather than a convention.
+///
+/// # Errors
+///
+/// [`FetchError`] from the underlying resolver dispatch, or — if the
+/// store write fails — [`FetchError::SourceSchema`] (the closest
+/// closed-set arm; there is no dedicated `FetchError::StoreError`, so
+/// the MCP boundary maps it to `INTERNAL_ERROR` — see the inline note
+/// in `write_metadata_and_pdf`). On store-write failure
+/// `write_metadata_and_pdf` makes a **best-effort** attempt to
+/// append a `StoreWrite`/`Err` provenance row before the error
+/// propagates (that append's own failure is not separately surfaced —
+/// this matches the pre-existing `fetch_paper` metadata-only fallback
+/// path and is out of scope for #139).
+pub async fn metadata_only_to_store(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    store: &dyn Store,
+) -> Result<MetadataOnlyOutcome, FetchError> {
+    let outcome = metadata_only(ref_, profile, ctx).await?;
+    let safekey = ref_.safekey();
+    let metadata = build_metadata_only_metadata(ref_, &outcome);
+    // `pdf_src = None` => writes `<root>/.metadata/<safekey>.toml` and
+    // appends the `StoreWrite` row (the exact path `fetch_paper` uses
+    // for its DOI metadata-only fallback).
+    write_metadata_and_pdf(store, &safekey, &metadata, None, ctx)?;
+    Ok(outcome)
+}
+
+/// Build the [`Metadata`] persisted by [`metadata_only_to_store`].
+///
+/// Minimal but valid: enough that a subsequent `doiget_info` returns a
+/// non-null `metadata` object (the #139 acceptance criterion). Title is
+/// best-effort from the resolver payload (`title` as a string, or the
+/// first element if it is an array — Crossref's `message.title` is
+/// typically an array, arXiv/Unpaywall typically a string; the
+/// extractor tolerates either regardless of source); it falls back to
+/// the ref id so the required `title` field is never empty.
+/// Bibliographic enrichment
+/// (year, venue, …) is intentionally out of scope here — the
+/// metadata-only contract is "persist what the resolver returned", and
+/// the raw payload is preserved verbatim in `MetadataOnlyOutcome`.
+fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
+    let (doi, arxiv_id) = match ref_ {
+        Ref::Doi(d) => (Some(d.clone()), None),
+        Ref::Arxiv(a) => (None, Some(a.clone())),
+    };
+    let ref_id = ref_.as_input_str().to_string();
+    let title = match extract_metadata_title(&outcome.metadata) {
+        Some(t) => t,
+        None => {
+            // The resolver returned a payload with no usable title.
+            // Persisting the ref id keeps the entry valid (#139), but
+            // emit a diagnostic so a broken/partial resolver response is
+            // not silently indistinguishable from a genuine title.
+            tracing::warn!(
+                ref_id = %ref_id,
+                source = %outcome.source,
+                "metadata-only: no usable title in resolver payload; \
+                 persisting the ref id as the title placeholder"
+            );
+            ref_id
+        }
+    };
+    Metadata {
+        schema_version: SCHEMA_VERSION.to_string(),
+        title,
+        authors: extract_metadata_authors(&outcome.metadata),
+        year: None,
+        doi,
+        arxiv_id,
+        abstract_: None,
+        venue: None,
+        publisher: None,
+        issn: None,
+        isbn: None,
+        type_: None,
+        keywords: Vec::new(),
+        url: outcome.oa_url.clone(),
+        pdf_path: None,
+        doiget: Some(DoigetExtension {
+            fetched_at: Utc::now(),
+            source: outcome.source.clone(),
+            license: outcome
+                .license
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+            size_bytes: 0,
+            mcp_call_id: None,
+        }),
+        other: BTreeMap::new(),
+    }
+}
+
+/// `title` from a resolver payload: a bare string, or the first
+/// **non-blank** element of an array (Crossref `message.title` is
+/// `[String]`; a leading empty/whitespace element is skipped rather
+/// than masking the real title). Trimmed. `None` if absent/blank.
+fn extract_metadata_title(meta: &Value) -> Option<String> {
+    let t = meta.get("title")?;
+    let s = match t.as_str() {
+        Some(s) => s.trim().to_string(),
+        None => t
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .find(|s| !s.is_empty())?
+            .to_string(),
+    };
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Best-effort author list, tolerant of the resolver shapes we may see:
+/// Crossref `author: [{given,family}]`, arXiv `authors: [String]`, and
+/// a `z_authors: [{given,family}]` fallback. NOTE: doiget's Unpaywall
+/// source deserializes a *partial* `UnpaywallWork` that does not capture
+/// `z_authors`, so the `z_authors` branch is currently inert for the
+/// Unpaywall path (kept as forward-compat for if/when that struct
+/// captures it) — Unpaywall-sourced metadata-only entries get an empty
+/// author list. Returns `Vec::new()` when nothing is parseable (a valid
+/// metadata TOML — #139 only requires the entry to exist and be
+/// readable).
+fn extract_metadata_authors(meta: &Value) -> Vec<String> {
+    if let Some(arr) = meta.get("authors").and_then(Value::as_array) {
+        let v: Vec<String> = arr
+            .iter()
+            .filter_map(|a| a.as_str().map(str::to_string))
+            .collect();
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    for key in ["author", "z_authors"] {
+        if let Some(arr) = meta.get(key).and_then(Value::as_array) {
+            let v: Vec<String> = arr
+                .iter()
+                .filter_map(|a| {
+                    let given = a.get("given").and_then(Value::as_str).unwrap_or("");
+                    let family = a.get("family").and_then(Value::as_str).unwrap_or("");
+                    let name = format!("{given} {family}");
+                    let name = name.trim();
+                    if name.is_empty() {
+                        a.get("name").and_then(Value::as_str).map(str::to_string)
+                    } else {
+                        Some(name.to_string())
+                    }
+                })
+                .collect();
+            if !v.is_empty() {
+                return v;
+            }
+        }
+    }
+    Vec::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -253,8 +437,8 @@ async fn metadata_only_doi(
         Ok(res) => {
             let metadata = res.metadata_json.unwrap_or(Value::Null);
             let oa_url = extract_crossref_oa_url(&metadata);
-            // TODO Phase 2.x: write metadata TOML to store after
-            // orchestrator path is proven.
+            // Pure resolver — no store write here (see `metadata_only`
+            // doc); persistence is `metadata_only_to_store`'s job.
             Ok(MetadataOnlyOutcome {
                 source: crossref.name().to_string(),
                 resolver_profile: crossref.name().to_string(),
@@ -1714,5 +1898,292 @@ mod tests {
         assert_eq!(dc_pre.hop_index, None);
         assert_eq!(dc_pre.cap, None);
         assert_eq!(dc_pre.actual, None);
+    }
+
+    // -----------------------------------------------------------------
+    // #139 — metadata_only_to_store writes the metadata TOML;
+    //        resolve_only / pure metadata_only write NOTHING.
+    // -----------------------------------------------------------------
+
+    /// Build a ctx + FsStore under a fresh tempdir and point Crossref at
+    /// a wiremock origin that returns one minimal `message`. Returns
+    /// `(server, ctx, store, store_root, _td)` — `_td` keeps the tempdir
+    /// alive for the test body.
+    async fn md139_harness() -> (
+        wiremock::MockServer,
+        FetchContext,
+        crate::store::FsStore,
+        Utf8PathBuf,
+        tempfile::TempDir,
+    ) {
+        use crate::http::HttpClient;
+        use crate::provenance::ProvenanceLog;
+        use crate::rate_limiter::RateLimiter;
+        use crate::store::FsStore;
+        use crate::RateLimits;
+        use std::sync::Arc;
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"status":"ok","message":{"title":["Example Paper"],"author":[{"given":"Ada","family":"Lovelace"}]}}"#,
+            ))
+            .mount(&server)
+            .await;
+        std::env::set_var("DOIGET_CROSSREF_BASE", server.uri());
+
+        // wiremock serves http://127.0.0.1:PORT; the production client is
+        // https_only, so the test ctx uses the allow-http test client
+        // scoped to the crossref/unpaywall source keys + the wiremock host.
+        let host = server
+            .uri()
+            .parse::<url::Url>()
+            .expect("uri")
+            .host_str()
+            .expect("host")
+            .to_string();
+
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let base = Utf8Path::from_path(td.path()).expect("utf-8");
+        let log_path = base.join("log.jsonl");
+        let store_root = base.join("papers");
+        let ctx = FetchContext {
+            http: Arc::new(HttpClient::new_for_tests_allow_http_multi(&[
+                ("crossref", &host),
+                ("unpaywall", &host),
+            ])),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+            log: Arc::new(
+                ProvenanceLog::open(log_path, "01J0000000000000000000TEST".into())
+                    .expect("provenance log"),
+            ),
+            session_id: "01J0000000000000000000TEST".into(),
+        };
+        let store = FsStore::new(store_root.clone()).expect("fs store");
+        (server, ctx, store, store_root, td)
+    }
+
+    fn metadata_dir_tomls(store_root: &Utf8Path) -> Vec<Utf8PathBuf> {
+        let md = store_root.join(".metadata");
+        match std::fs::read_dir(md.as_std_path()) {
+            Ok(rd) => rd
+                .filter_map(|e| e.ok())
+                .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
+                .filter(|p| p.extension() == Some("toml"))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn metadata_only_to_store_writes_metadata_toml_139() {
+        let (_server, ctx, store, store_root, _td) = md139_harness().await;
+        let profile = CapabilityProfile::from_env().expect("clean env");
+        let ref_ = Ref::Doi(Doi("10.1234/example".to_string()));
+
+        let outcome = metadata_only_to_store(&ref_, &profile, &ctx, &store)
+            .await
+            .expect("metadata_only_to_store ok");
+        assert_eq!(outcome.source, "crossref");
+
+        let tomls = metadata_dir_tomls(&store_root);
+        assert_eq!(
+            tomls.len(),
+            1,
+            "exactly one .metadata/*.toml must be written (MCP_TOOLS.md §11 SIDE EFFECT, #139); got {tomls:?}"
+        );
+        let body = std::fs::read_to_string(&tomls[0]).expect("read metadata toml");
+        let meta: crate::store::Metadata = toml::from_str(&body).expect("parse metadata toml");
+        assert_eq!(meta.title, "Example Paper");
+        assert_eq!(
+            meta.doi.as_ref().map(|d| d.as_str()),
+            Some("10.1234/example")
+        );
+        let ext = meta.doiget.expect("[doiget] table present");
+        assert_eq!(ext.source, "crossref");
+        assert_eq!(ext.size_bytes, 0, "metadata-only entry has no PDF");
+
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_only_and_pure_metadata_only_write_nothing_139() {
+        let (_server, ctx, _store, store_root, _td) = md139_harness().await;
+        let profile = CapabilityProfile::from_env().expect("clean env");
+        let ref_ = Ref::Doi(Doi("10.1234/example".to_string()));
+
+        // resolve_only: contractually MUST NOT touch the store.
+        let r = resolve_only(&ref_, &profile, &ctx)
+            .await
+            .expect("resolve_only ok");
+        assert_eq!(r.source, "crossref");
+        assert!(
+            metadata_dir_tomls(&store_root).is_empty(),
+            "resolve_only MUST NOT write a metadata TOML (docs/MCP_TOOLS.md §1; #139)"
+        );
+
+        // The pure metadata_only is also write-free (the store-write
+        // lives only in metadata_only_to_store).
+        let m = metadata_only(&ref_, &profile, &ctx)
+            .await
+            .expect("metadata_only ok");
+        assert_eq!(m.source, "crossref");
+        assert!(
+            metadata_dir_tomls(&store_root).is_empty(),
+            "pure metadata_only MUST NOT write to the store (#139)"
+        );
+
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+    }
+
+    /// #139 — the arXiv branch of `metadata_only_to_store` must also
+    /// write the metadata TOML (different code path: Atom feed,
+    /// source="arxiv", license="arxiv-default", doi=None). Review I3/C1.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn metadata_only_to_store_arxiv_writes_metadata_toml_139() {
+        use crate::http::HttpClient;
+        use crate::provenance::ProvenanceLog;
+        use crate::rate_limiter::RateLimiter;
+        use crate::store::FsStore;
+        use crate::RateLimits;
+        use std::sync::Arc;
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let atom = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.12345v1</id>
+    <published>2024-01-15T00:00:00Z</published>
+    <title>Example arXiv Paper Title</title>
+    <summary>Example abstract.</summary>
+    <author><name>Jane Doe</name></author>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>"#;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(atom))
+            .mount(&server)
+            .await;
+        std::env::set_var("DOIGET_ARXIV_BASE", server.uri());
+        let host = server
+            .uri()
+            .parse::<url::Url>()
+            .expect("uri")
+            .host_str()
+            .expect("host")
+            .to_string();
+
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let base = Utf8Path::from_path(td.path()).expect("utf-8");
+        let store_root = base.join("papers");
+        let ctx = FetchContext {
+            http: Arc::new(HttpClient::new_for_tests_allow_http("arxiv", &host)),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+            log: Arc::new(
+                ProvenanceLog::open(base.join("log.jsonl"), "01J0000000000000000000TEST".into())
+                    .expect("provenance log"),
+            ),
+            session_id: "01J0000000000000000000TEST".into(),
+        };
+        let store = FsStore::new(store_root.clone()).expect("fs store");
+        let profile = CapabilityProfile::from_env().expect("clean env");
+        let ref_ = Ref::Arxiv(crate::ArxivId::parse("2401.12345").expect("arxiv id"));
+
+        let outcome = metadata_only_to_store(&ref_, &profile, &ctx, &store)
+            .await
+            .expect("metadata_only_to_store (arxiv) ok");
+        assert_eq!(outcome.source, "arxiv");
+
+        let tomls = metadata_dir_tomls(&store_root);
+        assert_eq!(
+            tomls.len(),
+            1,
+            "arXiv metadata-only must write one TOML; got {tomls:?}"
+        );
+        let meta: crate::store::Metadata =
+            toml::from_str(&std::fs::read_to_string(&tomls[0]).expect("read")).expect("parse");
+        assert_eq!(meta.title, "Example arXiv Paper Title");
+        assert_eq!(
+            meta.arxiv_id.as_ref().map(|a| a.as_str()),
+            Some("2401.12345")
+        );
+        assert!(meta.doi.is_none(), "arXiv entry has no DOI");
+        let ext = meta.doiget.expect("[doiget] table");
+        assert_eq!(ext.source, "arxiv");
+        assert_eq!(ext.license, "arxiv-default");
+
+        std::env::remove_var("DOIGET_ARXIV_BASE");
+    }
+
+    // ----- pure-function unit tests for the #139 extraction helpers ----
+
+    #[test]
+    fn extract_metadata_title_handles_string_array_missing_blank() {
+        use serde_json::json;
+        // bare string (arXiv/Unpaywall shape)
+        assert_eq!(
+            extract_metadata_title(&json!({"title": "Hello"})),
+            Some("Hello".to_string())
+        );
+        // single-element array (Crossref `message.title` in practice)
+        assert_eq!(
+            extract_metadata_title(&json!({"title": ["Real Title"]})),
+            Some("Real Title".to_string())
+        );
+        // missing key -> None (caller falls back to ref id)
+        assert_eq!(extract_metadata_title(&json!({"x": 1})), None);
+        // blank string -> None (must not persist an empty title)
+        assert_eq!(extract_metadata_title(&json!({"title": "   "})), None);
+        // empty array -> None
+        assert_eq!(extract_metadata_title(&json!({"title": []})), None);
+        // A leading blank/whitespace array element is SKIPPED — the first
+        // non-blank element is taken (a stray leading empty element must
+        // not mask the real Crossref title).
+        assert_eq!(
+            extract_metadata_title(&json!({"title": ["  ", "Real Title"]})),
+            Some("Real Title".to_string())
+        );
+        // all-blank array -> None (caller falls back to ref id)
+        assert_eq!(extract_metadata_title(&json!({"title": ["  ", ""]})), None);
+    }
+
+    #[test]
+    fn extract_metadata_authors_handles_each_resolver_shape() {
+        use serde_json::json;
+        // arXiv: authors: [String]
+        assert_eq!(
+            extract_metadata_authors(&json!({"authors": ["Jane Doe", "John Roe"]})),
+            vec!["Jane Doe".to_string(), "John Roe".to_string()]
+        );
+        // Crossref: author: [{given,family}]
+        assert_eq!(
+            extract_metadata_authors(&json!({"author": [{"given": "Ada", "family": "Lovelace"}]})),
+            vec!["Ada Lovelace".to_string()]
+        );
+        // family-only (given absent) -> trimmed, no leading space
+        assert_eq!(
+            extract_metadata_authors(&json!({"author": [{"family": "Onsager"}]})),
+            vec!["Onsager".to_string()]
+        );
+        // `name` fallback when given+family both absent
+        assert_eq!(
+            extract_metadata_authors(&json!({"author": [{"name": "K. Wilson"}]})),
+            vec!["K. Wilson".to_string()]
+        );
+        // z_authors fallback shape (forward-compat branch)
+        assert_eq!(
+            extract_metadata_authors(&json!({"z_authors": [{"given": "L", "family": "Kadanoff"}]})),
+            vec!["L Kadanoff".to_string()]
+        );
+        // nothing parseable -> empty (still a valid TOML)
+        assert!(extract_metadata_authors(&json!({"x": 1})).is_empty());
+        assert!(extract_metadata_authors(&json!({"authors": []})).is_empty());
     }
 }

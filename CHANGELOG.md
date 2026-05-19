@@ -24,6 +24,24 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
   still satisfied). See ADR-0020 Amendment 1.
 
+## [0.2.1-beta.3] - 2026-05-19
+
+### Fixed
+
+- **[mcp/core]** `doiget_metadata_only` now writes the metadata TOML to
+  the store (`<root>/.metadata/<safekey>.toml`) — the documented
+  `docs/MCP_TOOLS.md` §11 SIDE EFFECT that was previously a `TODO`
+  (orchestrator returned provenance rows but zero disk artifacts, so
+  `doiget_info` after `doiget_metadata_only` returned `metadata: null`).
+  Implemented as a new `metadata_only_to_store` wrapper around the
+  unchanged **pure** `metadata_only`; `doiget_resolve_paper`
+  (`resolve_only`) keeps delegating to the pure resolver, so its
+  `docs/MCP_TOOLS.md` §1 "NEVER writes a metadata TOML" contract now
+  holds *structurally* (the store-write lives in a separate entry point
+  `resolve_only` does not call) and cannot regress. e2e tests assert
+  metadata-only persists a readable TOML and resolve-only writes
+  nothing. (#139)
+
 ## [0.2.1-beta.2] - 2026-05-19
 
 ### Fixed

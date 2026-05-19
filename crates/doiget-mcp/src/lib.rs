@@ -12,13 +12,15 @@
 //! - `doiget_capability_profile` — reports the runtime [`CapabilityProfile`].
 //! - `doiget_metadata_only` — DOI / arXiv id metadata resolution. Both
 //!   the `dry_run: true` preview path (ADR-0022) and the live
-//!   non-dry-run path (Slice 1: dispatches through
-//!   [`doiget_core::orchestrator::metadata_only`]) are wired. The
-//!   tool MUST NOT call `HttpClient::fetch_pdf` — that contract is
-//!   enforced by the orchestrator and the posture-lint workflow.
+//!   non-dry-run path (dispatches through
+//!   [`doiget_core::orchestrator::metadata_only_to_store`], which also
+//!   performs the `docs/MCP_TOOLS.md` §11 store-write SIDE EFFECT) are
+//!   wired. The tool MUST NOT call `HttpClient::fetch_pdf` — that
+//!   contract is enforced by the orchestrator and the posture-lint
+//!   workflow.
 //!
-//! The remaining tools named in `docs/MCP_TOOLS.md` (`doiget_resolve_paper`,
-//! `doiget_fetch_paper`, `doiget_batch_fetch`, `doiget_info`,
+//! The remaining tools named in `docs/MCP_TOOLS.md` (`doiget_fetch_paper`,
+//! `doiget_batch_fetch`, `doiget_info`,
 //! `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`)
 //! land in follow-up PRs. The exact count is intentionally left unstated
 //! in this docstring so it does not rot as tools land.
@@ -47,8 +49,8 @@ use doiget_core::dry_run::{
 use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, tier_2_allowlist, HttpClient};
 use doiget_core::orchestrator::{
     batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
-    metadata_only, resolve_only as core_resolve_only, FetchPaperOutcome, MetadataOnlyOutcome,
-    PdfLegStatus,
+    metadata_only_to_store, resolve_only as core_resolve_only, FetchPaperOutcome,
+    MetadataOnlyOutcome, PdfLegStatus,
 };
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
@@ -187,13 +189,15 @@ impl Server {
     ///
     /// Per `docs/MCP_TOOLS.md` §11 (NORMATIVE).
     ///
-    /// Slice 1 wired both branches:
+    /// Both branches are wired:
     ///
     /// - `dry_run: true` → builds a [`FetchPlan`] preview and returns
     ///   it without touching the network, store, or provenance log
     ///   (ADR-0022 §2).
     /// - `dry_run: false` (default) → dispatches through
-    ///   [`doiget_core::orchestrator::metadata_only`]:
+    ///   [`doiget_core::orchestrator::metadata_only_to_store`] (which
+    ///   resolves the metadata **and** writes the `docs/MCP_TOOLS.md`
+    ///   §11 metadata TOML to the store):
     ///   - DOI → Crossref (`message` metadata + OA URL via
     ///     `message.link[]`), with Unpaywall as a fallback when
     ///     Crossref fails.
@@ -250,8 +254,9 @@ impl Server {
         }
 
         // Step 3: non-dry-run path. Dispatch through the
-        // `metadata_only` orchestrator (Slice 1). The orchestrator owns
-        // source selection and per-leg politeness; we own the per-call
+        // `metadata_only_to_store` orchestrator (resolves metadata AND
+        // writes the §11 metadata TOML). The orchestrator owns source
+        // selection and per-leg politeness; we own the per-call
         // session boundary (SessionStart / SessionEnd bookend rows) and
         // the wire envelope shape (`docs/MCP_TOOLS.md` §11).
         let ctx = match build_fetch_context() {
@@ -265,10 +270,41 @@ impl Server {
             }
         };
 
+        // §11 SIDE EFFECT: persist the metadata TOML to the store
+        // (#139). Resolve the store root + open the FsStore the same way
+        // `doiget_fetch_paper` does — and crucially do this BEFORE the
+        // `SessionStart` bookend, so a store-init failure cannot leave an
+        // orphaned `SessionStart` with no `SessionEnd` in the fail-closed
+        // provenance log. Mirrors `doiget_fetch_paper`'s ordering.
+        // `StoreError` matches every other `FsStore::new` failure site
+        // in this file.
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    "store root could not be resolved (set DOIGET_STORE_ROOT or $HOME)",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(metadata_only_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+
         // SessionStart bookend (mirrors the CLI orchestrator pattern in
         // `crates/doiget-cli/src/commands/fetch.rs::FetchHarness::log_session_start`).
         // A log-append failure here is fail-closed per
-        // `docs/PROVENANCE_LOG.md` §5 — abort the call.
+        // `docs/PROVENANCE_LOG.md` §5 — abort the call. Store init above
+        // is the only fallible step before this point and it cannot have
+        // emitted a row, so there is no orphaned-session window.
         if let Err(e) = ctx.log.append(RowInput {
             event: LogEvent::SessionStart,
             result: LogResult::Ok,
@@ -291,7 +327,7 @@ impl Server {
             )));
         }
 
-        let outcome = metadata_only(&ref_, &self.profile, &ctx).await;
+        let outcome = metadata_only_to_store(&ref_, &self.profile, &ctx, &store).await;
 
         // SessionEnd bookend. Best-effort: if this append fails we still
         // surface the orchestrator's outcome (a fresh log error here
@@ -334,9 +370,12 @@ impl Server {
     /// Per `docs/MCP_TOOLS.md` §1 (Phase 3 baseline tool list — Slice 7).
     ///
     /// Delegates to [`core_resolve_only`], whose binding contract is that
-    /// no metadata TOML is ever written to the store — present or future
-    /// (when Phase 2.x adds the store-write to `metadata_only`, the
-    /// orchestrator-level divergence kicks in there, not here).
+    /// no metadata TOML is ever written to the store. This holds
+    /// **structurally**: `core_resolve_only` delegates to the *pure*
+    /// `orchestrator::metadata_only`, while the §11 store-write lives in
+    /// the separate `orchestrator::metadata_only_to_store` (which this
+    /// path never calls). The divergence is enforced by construction,
+    /// not by a future-slice convention (#139).
     ///
     /// Per-call boundary semantics mirror [`Self::doiget_metadata_only`]:
     /// the MCP server emits `SessionStart` / `SessionEnd` bookend rows,
@@ -345,7 +384,7 @@ impl Server {
     /// row is emitted (no store mutation).
     ///
     /// `dry_run` is **not** a supported input field per
-    /// `docs/MCP_TOOLS.md` §10/§211 (the spec lists `doiget_resolve_paper`
+    /// `docs/MCP_TOOLS.md` §10 (the spec lists `doiget_resolve_paper`
     /// in the "dry_run does not apply" set). The schema's
     /// `deny_unknown_fields` posture rejects an attempted `dry_run`
     /// field at deserialize time, which surfaces as the rmcp transport's
@@ -1946,9 +1985,10 @@ fn batch_fetch_error_envelope(code: ErrorCode, message: &str) -> Value {
 /// path.
 ///
 /// Mirrors `crates/doiget-cli/src/commands/fetch.rs::FetchHarness::from_env`
-/// minus the on-disk store (which the orchestrator does not touch in
-/// Slice 1 — see the `TODO Phase 2.x` in
-/// `crates/doiget-core/src/orchestrator.rs::metadata_only`):
+/// minus the on-disk store: the `FetchContext` carries no store handle
+/// because the store is opened per-call in `doiget_metadata_only` and
+/// passed explicitly to `orchestrator::metadata_only_to_store` (the §11
+/// store-write entry point), keeping the context store-agnostic:
 ///
 /// - `HttpClient` — production allowlist (Tier 1 ∪ OA publisher), or
 ///   the test-mode multi-source allowlist when any `DOIGET_*_BASE` env
