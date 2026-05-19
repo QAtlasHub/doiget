@@ -1,7 +1,7 @@
 # 0025 - Tag-driven release with a mandatory version gate and beta/stable lanes
 
 - **Date:** 2026-05-17
-- **Status:** Accepted — implemented by PR #166; amended 2026-05-18 (see Amendment) so the workflow filename stays `.github/workflows/release-plz.yml` (tag-driven pipeline contents + `scripts/release-version-gate.sh` + `cliff.toml`/`scripts/release-changelog.sh`; only `release-plz.toml` removed; `release-sign.yml`/`release-sbom.yml` demoted to `workflow_dispatch`-only and folded in). `0013`'s release portion is `Superseded by 0025` (its CI-baseline / posture-lint / SHA-pin / Dependabot decisions stand). Amendment 5 (2026-05-19) brings the implementation back into compliance with D6 (`next`-primary; the main-primary drift is retired).
+- **Status:** Accepted — implemented by PR #166; amended 2026-05-18 (see Amendment) so the workflow filename stays `.github/workflows/release-plz.yml` (tag-driven pipeline contents + `scripts/release-version-gate.sh` + `cliff.toml`/`scripts/release-changelog.sh`; only `release-plz.toml` removed; `release-sign.yml`/`release-sbom.yml` demoted to `workflow_dispatch`-only and folded in). `0013`'s release portion is `Superseded by 0025` (its CI-baseline / posture-lint / SHA-pin / Dependabot decisions stand). Amendment 5 (2026-05-19) brings the implementation back into compliance with D6 (`next`-primary; the main-primary drift is retired). Amendment 6 (2026-05-19) adds an advisory, non-blocking `version-check` job (release-readiness visible on every PR to `next`/`main`; the signed-tag release trigger of D1 is unchanged).
 - **Supersedes:** 0013 (release portion only — the CI baseline / posture-lint / SHA-pin / Dependabot decisions of 0013 stand)
 - **Source:** Maintainer release-workflow review, 2026-05-17 (release-plz `release-PR` model rejected after the v0.1.4 `#164` changelog defect)
 
@@ -437,3 +437,45 @@ change-sets, human-gated):**
 D6 rules 1/3/4 are authoritative; this Amendment records that the
 implementation is being brought back into compliance with them and that
 Amendments 3/4 are reinterpreted under the corrected (designed) flow.
+
+## Amendment — 2026-05-19 (6): advisory `version-check` job (visibility; tag-trigger unchanged)
+
+**Motivation.** The D2 version gate (`scripts/release-version-gate.sh`,
+G0–G7) already exists, but D1 makes it run **only on a pushed signed
+tag** — so on normal PRs/branches it is invisible, and "would tagging
+this actually release?" is not observable until you cut the tag. The
+maintainer asked for that answer to be **visually obvious on every PR to
+both `next` and `main`**, while explicitly *not* wanting auto-release
+(that motivation was stated only to frame the ask; it is **not** a
+feature here and D1 is unchanged).
+
+**Decision.** Add `.github/workflows/version-check.yml`: an **advisory,
+non-blocking** job that, on `pull_request` and `push` to `next` and
+`main`, derives the prospective tag `v<[workspace.package].version>` and
+runs the *existing* gate script against it. G0–G6 and the live
+crates.io G3/G4 execute; G7 auto-SKIPs pre-tag (no signed tag object —
+per the script's documented guard). It surfaces the gate result as a
+named check so release-readiness is legible at a glance.
+
+Binding properties:
+
+1. **Release trigger unchanged.** A release is still cut *only* by a
+   human-pushed signed tag (D1). This job never tags, publishes, mutates
+   state, or auto-releases. "Auto-release when the check is green" is
+   explicitly **out of scope** — it would change D1, is an irreversible
+   publish, and contradicts Amendment 5 / D6 rule 3's human-gated
+   `next → main` promotion.
+2. **Advisory, not a gate.** The job reports honest PASS/FAIL but is
+   **not** added to `next`/`main` branch-protection required checks. It
+   informs; it does not block merges. (It may be promoted to required
+   later by a separate, explicit decision.)
+3. **Reading it.** Green on `next` = the `X.Y.Z-beta.N` version is
+   release-ready. Green on `main` = `main` carries a promoted,
+   not-yet-published version (the promotion window) — tagging would
+   release. Red is the *correct, informative* steady state on `main`
+   between releases (the published `X.Y.Z` cannot be re-released;
+   crates.io is immutable) and flags real problems elsewhere (missing
+   CHANGELOG section, `Cargo.lock` drift, lane/branch mismatch).
+4. **No new gate logic.** It reuses `scripts/release-version-gate.sh`
+   verbatim; there is one source of truth for the gate (D2). No
+   branch-protection API change is made.

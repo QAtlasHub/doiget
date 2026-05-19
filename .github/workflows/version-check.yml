@@ -1,0 +1,88 @@
+name: version-check
+
+# ADR-0025 D2 / Amendment 6 — ADVISORY (non-blocking) pre-tag visibility of
+# the mandatory release version gate.
+#
+# Runs scripts/release-version-gate.sh against the *prospective* tag derived
+# from [workspace.package].version, so the PR / branch checks list shows at a
+# glance whether tagging this version now would cleanly release (G0–G6 +
+# live crates.io G3/G4; G7 auto-SKIPs in a pre-tag dry-run since no signed
+# tag object exists yet — see the gate script header).
+#
+# This changes NOTHING about how a release is triggered: a release is still
+# cut ONLY by a human-pushed signed tag (ADR-0025 D1). This job is
+# deliberately advisory — it is NOT added to branch-protection required
+# checks; it exists purely so "would this release?" is visually obvious on
+# every PR to `next` and `main`.
+#
+# Reading the result:
+#   * green on `next`  — the beta version (X.Y.Z-beta.N) is release-ready.
+#   * green on `main`  — main carries a promoted, not-yet-published version
+#                        (the promotion window); tagging would release.
+#   * red              — tagging now would NOT cleanly release, e.g. the
+#                        version is already fully published on crates.io
+#                        (the normal steady state on `main` between
+#                        releases), the CHANGELOG section is missing/empty,
+#                        or Cargo.lock drifted. Advisory only — does not
+#                        block the PR.
+
+on:
+  pull_request:
+    branches: [next, main]
+  push:
+    branches: [next, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version-check:
+    name: version-check (advisory — would a release proceed?)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
+        with:
+          # Full history so the gate's G7 lane-branch probe can resolve
+          # origin/next | origin/main (G7 still SKIPs pre-tag — no tag
+          # object — but the checkout must not starve later, real-tag runs).
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+      - name: Derive the prospective tag from [workspace.package].version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          # First `version = "X.Y.Z(-PRE.N)"` line inside [workspace.package].
+          V="$(awk '
+            /^\[workspace\.package\]/ { inwp = 1; next }
+            /^\[/ { inwp = 0 }
+            inwp && /^[[:space:]]*version[[:space:]]*=/ {
+              gsub(/.*=[[:space:]]*"|".*/, "")
+              print
+              exit
+            }' Cargo.toml)"
+          if [ -z "$V" ]; then
+            echo "::error::version-check: could not read [workspace.package].version from Cargo.toml"
+            exit 1
+          fi
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+          echo "Prospective tag: v$V"
+      - name: Run the release version gate (advisory dry-run)
+        shell: bash
+        env:
+          CARGO: cargo
+        run: |
+          set -euo pipefail
+          echo "ADVISORY ONLY — a release is triggered solely by a human-pushed"
+          echo "signed tag (ADR-0025 D1). This job never tags, publishes, or blocks."
+          echo "A red result means: tagging '${{ steps.ver.outputs.tag }}' now would"
+          echo "NOT cleanly release (version already published, CHANGELOG section"
+          echo "missing/empty, Cargo.lock drift, or lane/branch mismatch)."
+          echo
+          bash scripts/release-version-gate.sh "${{ steps.ver.outputs.tag }}"
