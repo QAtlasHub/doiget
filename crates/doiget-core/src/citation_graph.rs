@@ -466,7 +466,7 @@ mod tests {
     async fn expand_walks_depth_2_graph() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/works/10.1234/seed"))
+            .and(path("/works/doi:10.1234/seed"))
             .respond_with(ResponseTemplate::new(200).set_body_string(SEED_WORK))
             .mount(&server)
             .await;
