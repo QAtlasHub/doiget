@@ -62,6 +62,10 @@ criteria = "safe-to-deploy"
 version = "2.2.1"
 criteria = "safe-to-run"
 
+[[exemptions.assert_cmd]]
+version = "2.2.2"
+criteria = "safe-to-run"
+
 [[exemptions.async-compression]]
 version = "0.4.42"
 criteria = "safe-to-deploy"
@@ -534,8 +538,16 @@ criteria = "safe-to-deploy"
 version = "1.6.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.rmcp]]
+version = "1.7.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.rmcp-macros]]
 version = "1.6.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.rmcp-macros]]
+version = "1.7.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustc-hash]]
