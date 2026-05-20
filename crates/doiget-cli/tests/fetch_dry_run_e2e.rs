@@ -21,6 +21,7 @@
 
 use camino::{Utf8Path, Utf8PathBuf};
 use doiget_cli::commands::fetch::{build_dry_run_envelope, build_fetch_plan, run_with_options};
+use doiget_cli::commands::output::OutputMode;
 use doiget_core::Ref;
 use serial_test::serial;
 use tempfile::TempDir;
@@ -60,7 +61,7 @@ async fn dry_run_fetch_doi_returns_ok_without_side_effects() {
     // crossref/unpaywall/oa-publisher hosts is not stubbed). The fact
     // that this call returns Ok proves the dry-run path short-circuits
     // before any network call.
-    let result = run_with_options("10.1234/foo".to_string(), true).await;
+    let result = run_with_options("10.1234/foo".to_string(), true, OutputMode::Human).await;
     result.expect("dry-run fetch::run_with_options succeeds");
 
     // Step 3: assert the on-disk side-effects are empty. The store
@@ -112,7 +113,7 @@ async fn dry_run_fetch_arxiv_returns_ok_without_side_effects() {
     env.set("DOIGET_STORE_ROOT", store_root.as_str());
     env.set("DOIGET_LOG_PATH", log_path.as_str());
 
-    let result = run_with_options("arxiv:2401.12345".to_string(), true).await;
+    let result = run_with_options("arxiv:2401.12345".to_string(), true, OutputMode::Human).await;
     result.expect("dry-run arxiv fetch::run_with_options succeeds");
 
     assert!(

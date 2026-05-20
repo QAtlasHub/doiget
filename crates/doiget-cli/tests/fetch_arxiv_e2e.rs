@@ -25,6 +25,7 @@
 
 use camino::{Utf8Path, Utf8PathBuf};
 use doiget_cli::commands::fetch;
+use doiget_cli::commands::output::OutputMode;
 use doiget_core::provenance::{LogEvent, LogResult, LogRow};
 use doiget_core::store::Metadata;
 use serial_test::serial;
@@ -80,7 +81,7 @@ async fn arxiv_2401_12345_end_to_end() {
 
     // Step 3: run the orchestrator end-to-end. No child binary; no real
     // network traffic.
-    fetch::run_with_options("arxiv:2401.12345".to_string(), false)
+    fetch::run_with_options("arxiv:2401.12345".to_string(), false, OutputMode::Human)
         .await
         .expect("fetch::run_with_options succeeds");
 

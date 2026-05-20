@@ -1,7 +1,7 @@
 # 0017 - Output mode resolution (flag > env > implicit > TTY > quiet)
 
 - **Date:** 2026-05-05
-- **Status:** Accepted — implemented (load-bearing invariant); MCP mode forbids non-JSON stdout and tracing is redirected to stderr — enforced by the Slice 9 `stdout-purity` CI job + Slice 1 `metadata_only` wiring. *(Judgment call: the full `--mode`/`DOIGET_MODE`/TTY resolution ladder has no dedicated CHANGELOG slice; the security-critical half of the decision is verifiably shipped, so this is Accepted rather than Proposed.)*
+- **Status:** Accepted — fully implemented (#144, 0.2.1-beta.7). The resolution ladder (`--mode` > `--json`/`--quiet` > `DOIGET_MODE` > subcommand-implicit > TTY) is wired through `crates/doiget-cli/src/commands/output.rs::resolve` and threaded into every command's `run(..)`; the load-bearing MCP / stdout-purity invariant (Slice 9 + Slice 1) remains in force, now backed by the `serve → forced Mcp` override in `commands::main::run_dispatch`. Per-mode command behaviour (Quiet stdout suppression, Json bodies for human-table commands, ERRORS.md §3 batch JSONL) is staged as follow-up issues #203 / #204 / #205.
 - **Supersedes:** -
 - **Source:** Discussion #14
 

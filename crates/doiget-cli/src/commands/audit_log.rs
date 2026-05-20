@@ -62,7 +62,9 @@ fn print_err(args: std::fmt::Arguments<'_>) {
 /// per-issue breakdown is always written to stdout BEFORE returning, so a
 /// caller scripting this subcommand can inspect both the structured stdout
 /// and the non-zero exit code.
-pub fn run(verify_flag: bool) -> Result<()> {
+pub fn run(verify_flag: bool, _mode: super::output::OutputMode) -> Result<()> {
+    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression and
+    // Json-body honoring are tracked in #203 / #204.
     if !verify_flag {
         // Issue #149: a missing required flag is argument misuse →
         // `docs/ERRORS.md` §4 exit 2, NOT the generic exit 1 a bare
@@ -241,7 +243,8 @@ mod tests {
         // returned error carries a `CliExit(2)` so `main` exits 2
         // instead of the old generic 1.
         let _g = EnvGuard::unset("DOIGET_LOG_PATH");
-        let err = run(false).expect_err("--verify must be required in Phase 1");
+        let err = run(false, crate::commands::output::OutputMode::Human)
+            .expect_err("--verify must be required in Phase 1");
         let cli_exit = err
             .downcast_ref::<CliExit>()
             .expect("missing --verify must carry a CliExit (issue #149)");
@@ -279,7 +282,8 @@ mod tests {
         drop(log);
 
         let _g = EnvGuard::set("DOIGET_LOG_PATH", path.as_str());
-        run(true).expect("verify must pass on a clean log");
+        run(true, crate::commands::output::OutputMode::Human)
+            .expect("verify must pass on a clean log");
     }
 
     #[test]
@@ -292,6 +296,7 @@ mod tests {
         assert!(!path.exists(), "precondition: log must not exist");
 
         let _g = EnvGuard::set("DOIGET_LOG_PATH", path.as_str());
-        run(true).expect("verify must succeed on missing log");
+        run(true, crate::commands::output::OutputMode::Human)
+            .expect("verify must succeed on missing log");
     }
 }

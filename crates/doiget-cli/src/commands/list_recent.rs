@@ -28,7 +28,9 @@ const FETCHED_AT_FMT: &str = "%Y-%m-%dT%H:%M:%SZ";
 /// Emits a tab-separated table on stdout. The column order is intentionally
 /// stable for `cut(1)` consumption; future fields will be APPENDED, not
 /// inserted.
-pub fn run(limit: usize) -> Result<()> {
+pub fn run(limit: usize, _mode: super::output::OutputMode) -> Result<()> {
+    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression and
+    // a Json body for `list-recent` are tracked in #203 / #204.
     let store_root = resolve_store_root()?;
     let store = FsStore::new(store_root)?;
     let entries = store

@@ -24,7 +24,9 @@ use super::resolve_store_root;
 /// [`Ref::parse`]). On success a single-element CSL JSON 1.0 array is
 /// written to stdout; a missing entry returns an error so the CLI exits
 /// non-zero (pipelines can distinguish "not in store" from "empty").
-pub fn run(input: String) -> Result<()> {
+pub fn run(input: String, _mode: super::output::OutputMode) -> Result<()> {
+    // `_mode` is threaded per ADR-0017 / #144. Csl's JSON output is
+    // product output, not informational; Quiet does NOT suppress it.
     let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
     let safekey = ref_.safekey();
 

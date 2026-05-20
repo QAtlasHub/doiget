@@ -25,7 +25,9 @@ use super::resolve_store_root;
 /// written to stdout as TOML. On a missing entry, the function returns an
 /// error so the CLI exits non-zero — the caller (a shell pipeline) can
 /// distinguish "entry not in store" from "entry was empty".
-pub fn run(input: String) -> Result<()> {
+pub fn run(input: String, _mode: super::output::OutputMode) -> Result<()> {
+    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression and
+    // a Json body for `info` are tracked in #203 / #204.
     let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
     let safekey = ref_.safekey();
 

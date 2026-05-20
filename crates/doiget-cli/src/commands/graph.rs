@@ -58,7 +58,11 @@ pub async fn run(
     depth: Option<u32>,
     total: Option<u32>,
     per_paper: Option<u32>,
+    _mode: super::output::OutputMode,
 ) -> Result<()> {
+    // `_mode` is threaded per ADR-0017 / #144. Graph's JSON output is
+    // product output (the requested artifact), not informational; Quiet
+    // does NOT suppress it.
     let ref_ = match Ref::parse(&input) {
         Ok(r) => r,
         Err(e) => {
