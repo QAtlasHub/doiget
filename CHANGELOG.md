@@ -24,6 +24,35 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
   still satisfied). See ADR-0020 Amendment 1.
 
+## [0.2.1-beta.6] - 2026-05-19
+
+### Changed
+
+- **[core]** `oa-publisher` redirect allowlist now includes
+  physics-society / diamond-OA hosts: `*.aps.org` (APS), `scipost.org`
+  + `*.scipost.org` (SciPost diamond OA), `*.iop.org` (IOP) (#193, per
+  ADR-0027 and `docs/REDIRECT_ALLOWLIST.md` §5). The list was
+  bio/medical-leaning; a real `doiget batch` over 30 OpenAlex-OA
+  finite-temperature-MPS DOIs had 7 denied purely because the
+  discovered OA PDF host was off-list (24/30 → ~30/30). Unlike the
+  surrounding `(unverified)` entries these are empirically verified.
+  `hdl.handle.net` / `ruj.uj.edu.pl` (open handle/repo surfaces) are
+  deliberately out of scope.
+
+## [0.2.1-beta.5] - 2026-05-19
+
+### Fixed
+
+- **[core]** `Doi::parse` now accepts `:` in the DOI suffix (#194).
+  Legacy Kluwer/Springer (`10.1023/A:NNNNNNNNNN`) and EDP Sciences /
+  Journal de Physique (`10.1051/jphys:NNNN`) DOIs — both resolvable at
+  doi.org and via Crossref — were previously rejected with
+  `INVALID_REF`, silently losing real papers from physics corpora (3/38
+  niche refs lost in the Ising-RG dogfood). `:` grants no path-traversal
+  capability beyond the already-permitted `/`, and `safekey` escapes it
+  before any filesystem use. `docs/SECURITY.md` §1.1 charset widened to
+  `[A-Za-z0-9._/():-]` per ADR-0026.
+
 ## [0.2.1-beta.4] - 2026-05-19
 
 ### Added
