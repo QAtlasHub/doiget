@@ -21,7 +21,7 @@
 //! `doiget capabilities` is a **product-output** command per the
 //! ADR-0017 convention (`--mode` is informational; the JSON inventory
 //! is the artefact). `--mode quiet` is the one mode that suppresses
-//! stdout (#203 / CONFIG.md §3); every other mode emits the same JSON.
+//! stdout (#203 / CONFIG.md §5); every other mode emits the same JSON.
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -31,15 +31,18 @@ use serde::Serialize;
 /// any field is a semver minor with a CHANGELOG `\[BREAKING\]` callout
 /// (same discipline as `EntryInfo` / `MigrationReport` in #213).
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
+#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
 #[derive(Debug, Serialize)]
 pub struct Capabilities {
     /// `CARGO_PKG_VERSION` for this build.
     pub version: &'static str,
-    /// Cargo features compiled into this binary. Empty when only the
-    /// `oa-only` default is enabled.
+    /// Cargo features compiled into this binary. Contains `"oa-only"`
+    /// when the default feature set is active (which it is in stock
+    /// release builds); empty only when the crate was built with
+    /// `default-features = false`.
     pub features: Vec<&'static str>,
     /// All four [`super::output::OutputMode`] values; the parser accepts these for
-    /// `--mode`. Mirrors `CONFIG.md` §3.
+    /// `--mode`. Mirrors `CONFIG.md` §5 (CLI flags).
     pub modes: &'static [&'static str],
     /// Global flags that apply to every subcommand.
     pub global_flags: Vec<FlagSpec>,
@@ -54,22 +57,44 @@ pub struct Capabilities {
     pub docs: Docs,
 }
 
+/// What kind of value (if any) a [`FlagSpec`] carries.
+///
+/// Typed (not `&'static str`) so a typo can't slip into the wire
+/// format and the `Enum`-implies-`values`-present invariant is
+/// expressible at the type layer (#215 self-review §I10). Serialises
+/// as the lowercased variant name: `"bool"`, `"enum"`, `"string"`.
+#[non_exhaustive]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FlagKind {
+    /// Boolean switch (no value).
+    Bool,
+    /// Value-bounded flag — `values` carries the accepted set.
+    Enum,
+    /// Free-form string / path / int value.
+    String,
+}
+
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
+#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
 #[derive(Debug, Serialize)]
 pub struct FlagSpec {
     /// e.g. `--mode`, `--json`, `-q`.
     pub name: String,
-    /// `bool` for boolean switches, `enum` for value-bounded flags,
-    /// `string` / `path` otherwise.
-    pub kind: &'static str,
+    /// Boolean / enum / free-string discriminator. See [`FlagKind`].
+    pub kind: FlagKind,
     /// `clap` `help` text.
     pub help: Option<String>,
-    /// For `enum` kind only: accepted values.
+    /// For `kind == FlagKind::Enum`: the accepted values, harvested
+    /// from clap's `PossibleValuesParser`. Owned (not `&'static`) so
+    /// the helper works for any future enum flag, not just `--mode`
+    /// (#215 self-review §I7).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub values: Option<&'static [&'static str]>,
+    pub values: Option<Vec<String>>,
 }
 
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
+#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
 #[derive(Debug, Serialize)]
 pub struct SubcommandSpec {
     pub name: String,
@@ -85,37 +110,67 @@ pub struct SubcommandSpec {
     pub feature_gated: Option<&'static str>,
 }
 
+/// What kind of positional argument an [`ArgSpec`] describes.
+///
+/// Currently every entry is `Positional`; the typed enum reserves
+/// space for future variants (e.g. `Stdin` markers) without breaking
+/// existing JSON consumers. Serialises as `"positional"`.
+#[non_exhaustive]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArgKind {
+    /// A required-or-optional positional argument on the subcommand.
+    Positional,
+}
+
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
+#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
 #[derive(Debug, Serialize)]
 pub struct ArgSpec {
     pub name: String,
-    /// `positional` | `flag-value`.
-    pub kind: &'static str,
+    /// Always [`ArgKind::Positional`] today. Kept as a discriminator
+    /// so the JSON shape can grow new arg kinds later without
+    /// renaming fields (#215 self-review §I10).
+    pub kind: ArgKind,
     pub help: Option<String>,
     /// `true` when the arg has no default and no `Option<T>` wrapper.
     pub required: bool,
 }
 
-#[allow(missing_docs)] // Variants are documented inline; the enum-level allow silences clippy.
+/// How a subcommand interacts with `--mode json`.
+///
+/// Wire shape: every variant serialises to an object with a `status`
+/// discriminant, so a consumer sees uniform `{"status":"…", …}`
+/// records (`#[serde(tag = "status")]`). Pre-#215 self-review §I6:
+/// the previous mixed string/object representation forced consumers
+/// to handle two JSON shapes for sibling variants.
+#[non_exhaustive] // Adding a future variant is non-breaking for JSON consumers.
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(tag = "status", rename_all = "lowercase")]
 pub enum JsonMode {
-    /// The command's primary output IS JSON regardless of `--mode`
-    /// (e.g. `csl`, `graph`, `*-dry-run`).
-    Product,
-    /// The command emits a structured JSON body when `--mode json` is
-    /// active; otherwise human (e.g. `info`, `list-recent`, `audit-log`).
+    /// The command's primary output IS the requested artifact, not
+    /// informational chatter. `--mode` is informational here; the
+    /// exact stdout shape (JSON for `csl` / `graph` / `capabilities`
+    /// and the JSON-RPC stream from `serve`; BibTeX for `bib`;
+    /// PDF-on-disk + stderr summary for `fetch`; a `--dry-run` JSON
+    /// plan in the dry-run variants) is fixed by the subcommand and
+    /// may vary across flags. **Consult `examples` for the per-flag
+    /// stdout form** rather than assuming JSON.
+    Artifact,
+    /// Under `--mode json` the command emits a structured JSON body
+    /// on stdout; otherwise the human form (e.g. `info`,
+    /// `list-recent`, `audit-log`, `provenance migrate`, `batch`).
     Supported,
-    /// Not yet — JSON body honoring is tracked as the issue named
-    /// inside.
+    /// JSON body honoring not yet implemented; tracked at the issue
+    /// named inside.
     Deferred {
-        /// The follow-up issue tracking the JSON honoring for this
-        /// command (e.g. `"#210"`).
+        /// The follow-up issue (e.g. `"#210"`).
         tracking: &'static str,
     },
 }
 
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
+#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
 #[derive(Debug, Serialize)]
 pub struct EnvVar {
     pub name: &'static str,
@@ -125,6 +180,7 @@ pub struct EnvVar {
 }
 
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
+#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
 #[derive(Debug, Serialize)]
 pub struct McpTool {
     pub name: &'static str,
@@ -133,6 +189,7 @@ pub struct McpTool {
 }
 
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
+#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
 #[derive(Debug, Serialize)]
 pub struct Docs {
     pub config: &'static str,
@@ -155,6 +212,11 @@ const ENV_VARS: &[EnvVar] = &[
         name: "DOIGET_STORE_ROOT",
         default: "$HOME/papers",
         help: "Root of the on-disk paper store. CONFIG.md §4.",
+    },
+    EnvVar {
+        name: "DOIGET_CACHE_ROOT",
+        default: "$HOME/.cache/doiget",
+        help: "Root of the on-disk HTTP / metadata cache. CONFIG.md §4.",
     },
     EnvVar {
         name: "DOIGET_LOG_PATH",
@@ -278,6 +340,15 @@ const DOCS: Docs = Docs {
 /// `json_mode` semantics, and feature-gating that clap doesn't
 /// expose. A regression unit test asserts every clap-visible
 /// subcommand has an entry here (otherwise the test fails loudly).
+///
+/// **Maintenance:** `feature_gated` MUST be kept in sync with the
+/// corresponding `#[cfg(feature = …)]` annotation in `main.rs`. There
+/// is no compile-time check; the `every_test_cli_subcommand_has_metadata`
+/// regression test does not cover feature-gating directly — it only
+/// asserts metadata exists. Add a CI matrix entry (`--features
+/// citation`) when introducing new gated subcommands so the e2e
+/// assertion list catches drift (#215 self-review §I5 / comment-analyzer
+/// note 4).
 struct SubcommandMeta {
     examples: &'static [&'static str],
     json_mode: JsonMode,
@@ -294,7 +365,7 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
             ],
             // The success summary is on stderr (ADR-0001); the
             // dry-run plan is JSON product output (ADR-0022).
-            json_mode: JsonMode::Product,
+            json_mode: JsonMode::Artifact,
             feature_gated: None,
         },
         "batch" => SubcommandMeta {
@@ -335,12 +406,12 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
         "bib" => SubcommandMeta {
             examples: &["doiget bib 10.1234/foo", "doiget bib arxiv:2401.12345"],
             // BibTeX output is the product; `--mode` is informational.
-            json_mode: JsonMode::Product,
+            json_mode: JsonMode::Artifact,
             feature_gated: None,
         },
         "csl" => SubcommandMeta {
             examples: &["doiget csl 10.1234/foo"],
-            json_mode: JsonMode::Product,
+            json_mode: JsonMode::Artifact,
             feature_gated: None,
         },
         "audit-log" => SubcommandMeta {
@@ -375,7 +446,7 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
             examples: &["doiget serve   # stdio MCP server (ADR-0001)"],
             // serve always runs in mcp mode; the protocol output is
             // JSON-RPC, which is product.
-            json_mode: JsonMode::Product,
+            json_mode: JsonMode::Artifact,
             feature_gated: None,
         },
         "graph" => SubcommandMeta {
@@ -383,13 +454,13 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
                 "DOIGET_ENABLE_OPENALEX=1 doiget graph 10.1234/foo",
                 "DOIGET_ENABLE_OPENALEX=1 doiget graph 10.1234/foo --depth 2 --total 50",
             ],
-            json_mode: JsonMode::Product,
+            json_mode: JsonMode::Artifact,
             feature_gated: Some("citation"),
         },
         "capabilities" => SubcommandMeta {
             examples: &["doiget capabilities | jq ."],
             // The whole point of capabilities IS JSON output.
-            json_mode: JsonMode::Product,
+            json_mode: JsonMode::Artifact,
             feature_gated: None,
         },
         // clap auto-adds `help`; we silently ignore it (it's not a
@@ -489,10 +560,24 @@ fn split_args_and_flags(
         if global_names.contains(a.get_id().as_str()) {
             continue;
         }
+        // #215 self-review §I1: clap auto-adds `--help` (and `--version`
+        // on the root) to every subcommand. They're not positional and
+        // not `is_global_set()`, so they would otherwise leak into
+        // every subcommand's `flags[]` as `kind: "string"`. Filter on
+        // the action to be robust across future clap built-ins.
+        if matches!(
+            a.get_action(),
+            clap::ArgAction::Help
+                | clap::ArgAction::HelpShort
+                | clap::ArgAction::HelpLong
+                | clap::ArgAction::Version
+        ) {
+            continue;
+        }
         if a.is_positional() {
             args.push(ArgSpec {
                 name: a.get_id().to_string(),
-                kind: "positional",
+                kind: ArgKind::Positional,
                 help: a.get_help().map(|s| s.to_string()),
                 required: a.is_required_set(),
             });
@@ -509,23 +594,23 @@ fn arg_to_flag_spec(a: &clap::Arg) -> FlagSpec {
         .map(|s| format!("--{s}"))
         .or_else(|| a.get_short().map(|c| format!("-{c}")))
         .unwrap_or_else(|| a.get_id().to_string());
-    // Best-effort kind classification. Boolean switches show up as
-    // `bool`; value-enum flags show up as `enum` with the accepted
-    // values; everything else is `string`.
-    let kind = if matches!(
+    // Boolean switches → `Bool`; value-enum flags → `Enum` with the
+    // accepted values harvested from clap directly; everything else
+    // → `String`. The `possible_values()` harvest covers any future
+    // enum flag without code change (#215 self-review §I7).
+    let possible: Option<Vec<String>> = a
+        .get_value_parser()
+        .possible_values()
+        .map(|it| it.map(|pv| pv.get_name().to_owned()).collect());
+    let (kind, values) = if matches!(
         a.get_action(),
         clap::ArgAction::SetTrue | clap::ArgAction::SetFalse
     ) {
-        "bool"
-    } else if a.get_value_parser().possible_values().is_some() {
-        "enum"
+        (FlagKind::Bool, None)
+    } else if let Some(vs) = possible {
+        (FlagKind::Enum, Some(vs))
     } else {
-        "string"
-    };
-    let values: Option<&'static [&'static str]> = if kind == "enum" && name == "--mode" {
-        Some(MODES)
-    } else {
-        None
+        (FlagKind::String, None)
     };
     FlagSpec {
         name,
@@ -582,7 +667,7 @@ mod tests {
     fn test_cli() -> clap::Command {
         use clap::{Arg, ArgAction, Command};
         let mode_values = ["human", "json", "quiet", "mcp"];
-        Command::new("doiget")
+        let cmd = Command::new("doiget")
             .arg(
                 Arg::new("mode")
                     .long("mode")
@@ -608,19 +693,66 @@ mod tests {
             .subcommand(
                 Command::new("fetch")
                     .about("Fetch a single paper PDF")
+                    .arg(Arg::new("ref").required(true))
+                    .arg(
+                        Arg::new("dry-run")
+                            .long("dry-run")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
+            .subcommand(
+                Command::new("batch")
+                    .about("Fetch many refs")
+                    .arg(Arg::new("path").required(true))
+                    .arg(
+                        Arg::new("dry-run")
+                            .long("dry-run")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
+            .subcommand(
+                Command::new("info")
+                    .about("Show metadata")
                     .arg(Arg::new("ref").required(true)),
             )
-            .subcommand(Command::new("batch").about("Fetch many refs"))
-            .subcommand(Command::new("info").about("Show metadata"))
             .subcommand(Command::new("list-recent").about("List recent"))
-            .subcommand(Command::new("search").about("Search local"))
-            .subcommand(Command::new("bib").about("BibTeX export"))
-            .subcommand(Command::new("csl").about("CSL export"))
-            .subcommand(Command::new("audit-log").about("Audit log"))
+            .subcommand(
+                Command::new("search")
+                    .about("Search local")
+                    .arg(Arg::new("query").required(true)),
+            )
+            .subcommand(
+                Command::new("bib")
+                    .about("BibTeX export")
+                    .arg(Arg::new("ref").required(true)),
+            )
+            .subcommand(
+                Command::new("csl")
+                    .about("CSL export")
+                    .arg(Arg::new("ref").required(true)),
+            )
+            .subcommand(
+                Command::new("audit-log")
+                    .about("Audit log")
+                    .arg(Arg::new("verify").long("verify").action(ArgAction::SetTrue)),
+            )
             .subcommand(Command::new("provenance").about("Provenance ops"))
-            .subcommand(Command::new("config").about("Config"))
-            .subcommand(Command::new("serve").about("MCP server"))
-            .subcommand(Command::new("capabilities").about("Capabilities"))
+            .subcommand(
+                Command::new("config")
+                    .about("Config")
+                    .arg(Arg::new("action").required(true)),
+            )
+            .subcommand(Command::new("serve").about("MCP server"));
+        // `graph` is `#[cfg(feature = "citation")]` in main.rs; mirror
+        // the gate so the shadow CLI matches the production surface
+        // (#215 self-review §I5).
+        #[cfg(feature = "citation")]
+        let cmd = cmd.subcommand(
+            Command::new("graph")
+                .about("Citation graph")
+                .arg(Arg::new("ref").required(true)),
+        );
+        cmd.subcommand(Command::new("capabilities").about("Capabilities"))
     }
 
     fn caps() -> Capabilities {
@@ -680,9 +812,11 @@ mod tests {
     fn subcommand_examples_reference_the_subcommand_name() {
         for sub in &caps().subcommands {
             for ex in sub.examples {
+                // `graph` examples carry a `DOIGET_ENABLE_OPENALEX=1`
+                // env prefix before `doiget …`. Allow either form.
                 assert!(
-                    ex.starts_with("doiget "),
-                    "example `{ex}` for `{}` should start with `doiget `",
+                    ex.starts_with("doiget ") || ex.contains(" doiget "),
+                    "example `{ex}` for `{}` must invoke `doiget` somewhere",
                     sub.name
                 );
                 assert!(
@@ -692,6 +826,71 @@ mod tests {
                 );
             }
         }
+    }
+
+    // #215 self-review §I2: exact-set parity guard against drift
+    // between CONFIG.md §4's env-var table and the static `ENV_VARS`
+    // inventory. The expected set is the SOURCE OF TRUTH at test time;
+    // adding a new DOIGET_* env var requires updating both ENV_VARS
+    // and this list in lockstep. CHANGELOG records cross-PR changes.
+    #[test]
+    fn env_vars_exact_set_matches_expected() {
+        let actual: std::collections::BTreeSet<&str> = ENV_VARS.iter().map(|ev| ev.name).collect();
+        let expected: std::collections::BTreeSet<&str> = [
+            // CONFIG.md §4 documented:
+            "DOIGET_STORE_ROOT",
+            "DOIGET_CACHE_ROOT",
+            "DOIGET_LOG_PATH",
+            "DOIGET_LOG_RETENTION_DAYS",
+            "DOIGET_USER_AGENT",
+            "DOIGET_UNPAYWALL_EMAIL",
+            "DOIGET_MODE",
+            // Code-reachable but documented in code-level docs or
+            // CAPABILITY.md (not CONFIG.md §4):
+            "DOIGET_CONTACT_EMAIL",
+            "DOIGET_ENABLE_OPENALEX",
+            // Test/wiremock-override base URLs:
+            "DOIGET_ARXIV_BASE",
+            "DOIGET_CROSSREF_BASE",
+            "DOIGET_UNPAYWALL_BASE",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            actual, expected,
+            "ENV_VARS table drifted from the expected canonical set; \
+             update both `ENV_VARS` and this test together (and CONFIG.md §4 \
+             if the new var is user-documented)."
+        );
+    }
+
+    // #215 self-review §I3: exact-set parity guard against drift
+    // between docs/MCP_TOOLS.md §1 and the static `MCP_TOOLS` array.
+    #[test]
+    fn mcp_tools_exact_set_matches_expected() {
+        let actual: std::collections::BTreeSet<&str> = MCP_TOOLS.iter().map(|t| t.name).collect();
+        let expected: std::collections::BTreeSet<&str> = [
+            "doiget_resolve_paper",
+            "doiget_fetch_paper",
+            "doiget_metadata_only",
+            "doiget_batch_fetch",
+            "doiget_info",
+            "doiget_search_local",
+            "doiget_list_recent",
+            "doiget_paper_pdf_path",
+            "doiget_capability_profile",
+            "doiget_health",
+            "doiget_expand_citation_graph",
+            "doiget_bibtex_export",
+            "doiget_csl_export",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            actual, expected,
+            "MCP_TOOLS table drifted from the expected set; update both \
+             `MCP_TOOLS` and this test together (and docs/MCP_TOOLS.md §1)."
+        );
     }
 
     #[test]

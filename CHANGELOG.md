@@ -29,7 +29,8 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 ### Added
 
 - **[cli] `doiget capabilities` — single-shot inventory JSON for LLM
-  cold-boot (#214).** A new subcommand that emits one parseable JSON
+  cold-boot (#214).** *(Includes the self-review pass against this
+  same slice: see "Wire-format & correctness refinements" below.)* A new subcommand that emits one parseable JSON
   value listing the binary's full surface in one round-trip:
   - `version` + compile-time `features` (so an agent can tell whether
     `graph` / TDM is available in *this* build);
@@ -54,6 +55,44 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   regression test asserts every subcommand declared in the `Cli`
   enum has a metadata entry, so adding a new subcommand without
   registering it in the static table fails at lib-test time.
+
+### Wire-format & correctness refinements to `capabilities` (#215 self-review)
+
+Pre-release tightening of the inventory JSON shape and the clap walk,
+applied before any consumer binds to the format. None of these are
+backwards-incompatible for the zero-consumer state we're in pre-merge;
+they are documented here for audit:
+
+- **Wire-format stability via `#[non_exhaustive]`** on every public
+  schema struct + the `JsonMode` / `FlagKind` / `ArgKind` enums.
+  Adding a field is non-breaking; renaming / removing one is now a
+  compile-time break for Rust consumers (C1).
+- **`--help` no longer leaks into per-subcommand `flags[]`** —
+  clap built-ins (`Help`/`HelpShort`/`HelpLong`/`Version` actions)
+  are now filtered in `split_args_and_flags` (I1).
+- **`json_mode` JSON shape unified** via `#[serde(tag = "status")]`
+  so every variant emits `{"status":"…", …}` instead of mixed
+  string / object. `Product` renamed to `Artifact` with a clarified
+  doc: the artifact may or may not be JSON; consult `examples`
+  for the per-flag stdout form (I4 + I6).
+- **`FlagSpec.kind` and `ArgSpec.kind` are typed enums** rather than
+  `&'static str` (I10).
+- **`arg_to_flag_spec` `values` harvest is generic** via clap's
+  `PossibleValuesParser` instead of a hardcoded `--mode` special
+  case. `FlagSpec.values` type widens to `Option<Vec<String>>`;
+  serialised output unchanged (I7).
+- **`DOIGET_CACHE_ROOT` added to `ENV_VARS`** (was missing from the
+  inventory vs `CONFIG.md` §4). Two new exact-set parity unit tests
+  (`env_vars_exact_set_matches_expected` /
+  `mcp_tools_exact_set_matches_expected`) lock the canonical sets so
+  drift between code and docs becomes a CI failure (I2 + I3).
+- **`graph` in the shadow `test_cli`** under `#[cfg(feature =
+  "citation")]`, mirroring the production gate (I5).
+- **Doc cross-ref fixes**: two `CONFIG.md §3` references corrected
+  to `§5`; the `features` doc no longer claims "empty when only
+  oa-only is enabled" (the inverse of actual behaviour);
+  `SubcommandMeta` block carries a `feature_gated` maintainer note
+  (I8 + I9).
 
 ## [0.2.1-beta.11] - 2026-05-20
 
