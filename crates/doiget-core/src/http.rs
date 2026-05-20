@@ -356,8 +356,10 @@ pub fn oa_publisher_allowlist() -> Vec<SourceAllowlist> {
             // Unpaywall `best_oa_location` resolving to these hosts and
             // being denied (#193, REDIRECT_ALLOWLIST.md §3.4, ADR-0027).
             // APS — journals.aps.org / link.aps.org (green & gold OA;
-            // society host; `*.aps.org` is already trusted under the
-            // separate `tdm-aps` Tier-3 source key).
+            // society host; `*.aps.org` is also trusted under the separate
+            // `tdm-aps` Tier-3 source key WHEN that feature is compiled
+            // in — `tier_3_aps_allowlist` is `#[cfg(feature = "tdm-aps")]`
+            // and absent from default release builds).
             "*.aps.org".to_string(),
             // SciPost — diamond OA, community-run physics publisher.
             "scipost.org".to_string(),
@@ -1198,6 +1200,18 @@ mod tests {
         assert!(oa.matches("scipost.org"));
         assert!(oa.matches("www.scipost.org"));
         assert!(oa.matches("iopscience.iop.org"));
+        // Document intent of the `*.<suffix>` form: per
+        // `REDIRECT_ALLOWLIST.md` §2.2 rule 3 it matches the bare
+        // registrable domain AND any subdomain. Unpaywall has not been
+        // observed returning bare-domain PDF URLs for these publishers,
+        // but accepting them is consistent with every other `*.` entry in
+        // this list (e.g. `arxiv.org` matched by `*.arxiv.org`) and is
+        // what the matching rule already implements.
+        assert!(oa.matches("aps.org"));
+        assert!(oa.matches("iop.org"));
+        // Multi-level subdomains also match (e.g. SciPost's deep paths);
+        // documents the wildcard scope rather than testing a known URL.
+        assert!(oa.matches("submissions.scipost.org"));
         // Negative: an attacker host is not covered.
         assert!(!oa.matches("attacker.test"));
         // Negative: dot-boundary safety for the new entries — a different

@@ -37,10 +37,14 @@ Add to the `oa-publisher` allowlist (`http.rs` + §3.4 + the site
 projection), with an in-code empirical-evidence comment:
 
 - `*.aps.org` — APS (`link.aps.org` / `journals.aps.org`). The
-  registrable domain is **already trusted** elsewhere in the codebase:
-  `tier_3_aps_allowlist()` lists `*.aps.org` under the credentialed
-  `tdm-aps` source key. This ADR extends that trust to the
-  `oa-publisher` source key for the green/gold OA route.
+  registrable domain is **also trusted** elsewhere in the codebase
+  **when the `tdm-aps` Cargo feature is compiled in**:
+  `tier_3_aps_allowlist()` (which is `#[cfg(feature = "tdm-aps")]` and
+  absent from default release builds) lists `*.aps.org` under the
+  credentialed `tdm-aps` source key. This ADR introduces the trust on
+  the `oa-publisher` source key for the green/gold OA route — making
+  the trust unconditional across feature configurations rather than
+  feature-gated.
 - `scipost.org`, `*.scipost.org` — SciPost, the canonical community-run
   **diamond-OA** physics publisher. Refusing it is hard to justify on
   supply-chain grounds.
@@ -78,6 +82,17 @@ merits.
   same per-source redirect-closure (`SourceAllowlist::matches`,
   dot-boundary enforced) applies, and the addition is empirically
   driven rather than speculative.
+- **Acknowledged overlap with the credentialed TDM path.** `*.aps.org`
+  in `oa-publisher` matches `harvest.aps.org`, which is the TDM API
+  base under the `tdm-aps` Tier-3 source key (a gated, credentialed
+  path requiring `DOIGET_KEY_APS` + `DOIGET_AGREE_TDM_APS=1`). The
+  overlap is **intentional and acceptable**: the `oa-publisher`
+  `HttpClient` never carries APS TDM credentials, so a redirect to
+  `harvest.aps.org` on the OA path would simply receive `401`/`403`
+  and fall back to metadata-only success — it cannot escalate into
+  unauthorized TDM access. Unpaywall is not observed returning the
+  TDM endpoint as an OA URL in any case; this note documents the
+  matcher's actual behaviour so a future reviewer is not surprised.
 
 **Process (REDIRECT_ALLOWLIST.md §5).**
 
