@@ -23,6 +23,7 @@
 pub mod audit_log;
 pub mod batch;
 pub mod bib;
+pub mod capabilities;
 pub mod config;
 pub mod csl;
 pub mod fetch;

@@ -24,6 +24,37 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
   still satisfied). See ADR-0020 Amendment 1.
 
+## [0.2.1-beta.12] - 2026-05-20
+
+### Added
+
+- **[cli] `doiget capabilities` — single-shot inventory JSON for LLM
+  cold-boot (#214).** A new subcommand that emits one parseable JSON
+  value listing the binary's full surface in one round-trip:
+  - `version` + compile-time `features` (so an agent can tell whether
+    `graph` / TDM is available in *this* build);
+  - the four `OutputMode` values;
+  - `global_flags` (`--mode` / `--json` / `--quiet`) with help text +
+    accepted values;
+  - `subcommands[]` walked from the live `clap::Command` tree (cannot
+    drift from the parser) — each with name, summary, positional
+    `args`, named `flags`, hand-maintained `examples`, a `json_mode`
+    label (`product` / `supported` / `deferred`), and any
+    `feature_gated` Cargo feature;
+  - `env_vars[]` (DOIGET_* table mirroring `docs/CONFIG.md` §4);
+  - `mcp_tools[]` (the `doiget_*` tool inventory from
+    `docs/MCP_TOOLS.md` §1);
+  - `docs{}` map pointing at the canonical spec files.
+
+  Output is **always JSON** (product-output convention from #204);
+  `--mode quiet` is the one mode that suppresses, per ADR-0017 /
+  #203. Field names are part of the public wire format (same
+  stability discipline as `EntryInfo` / `MigrationReport` —
+  renaming → semver minor with `[BREAKING]` callout). A unit-level
+  regression test asserts every subcommand declared in the `Cli`
+  enum has a metadata entry, so adding a new subcommand without
+  registering it in the static table fails at lib-test time.
+
 ## [0.2.1-beta.11] - 2026-05-20
 
 ### Changed (potentially breaking)

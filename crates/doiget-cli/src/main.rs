@@ -47,6 +47,8 @@ enum ProvenanceAction {
                   \x20 serve        Run as an MCP server over stdio\n\
                   \x20 graph        Expand a DOI's citation neighborhood via OpenAlex\n\
                   \x20              (requires --features citation + DOIGET_ENABLE_OPENALEX)\n\
+                  \x20 capabilities Emit a JSON inventory of the binary's full surface\n\
+                  \x20              (for LLM cold-boot; #214)\n\
                   \n\
                   See README.md and docs/ for the full specification."
 )]
@@ -142,6 +144,10 @@ enum Command {
     },
     /// Run as an MCP server over stdio.
     Serve,
+    /// Emit a single JSON inventory of the binary's full surface
+    /// (subcommands, args, env vars, modes, MCP tools, features).
+    /// Designed for LLM cold-boot in one round-trip. See #214.
+    Capabilities,
     /// Show or doctor the resolved configuration.
     Config {
         /// `show` / `path` / `doctor`
@@ -277,6 +283,15 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             debug_assert_eq!(mode, OutputMode::Mcp, "serve must resolve to Mcp");
             let profile = doiget_core::CapabilityProfile::from_env()?;
             doiget_mcp::Server::new(profile).run().await
+        }
+        // #214: single-shot inventory for LLM cold-boot. We pass the
+        // live `clap::Command` AST so the subcommand list cannot
+        // drift from the parser. `capabilities::run` honors
+        // `--mode quiet` (suppresses) and emits pretty JSON in every
+        // other mode (product-output convention).
+        Some(Command::Capabilities) => {
+            let cli_cmd = <Cli as clap::CommandFactory>::command();
+            doiget_cli::commands::capabilities::run(&cli_cmd, mode)
         }
         // Phase 4 / Slice 16. Feature-gated to keep default release
         // binaries free of the OpenAlex-only citation walker.
