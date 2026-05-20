@@ -25,9 +25,10 @@ use super::resolve_store_root;
 /// written to stdout as TOML. On a missing entry, the function returns an
 /// error so the CLI exits non-zero — the caller (a shell pipeline) can
 /// distinguish "entry not in store" from "entry was empty".
-pub fn run(input: String, _mode: super::output::OutputMode) -> Result<()> {
-    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression and
-    // a Json body for `info` are tracked in #203 / #204.
+pub fn run(input: String, mode: super::output::OutputMode) -> Result<()> {
+    // `mode` honors ADR-0017: `Quiet` skips the TOML dump but still
+    // resolves the entry so the "not-found → exit non-zero" contract
+    // continues to hold (#203). Json body is tracked in #204.
     let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
     let safekey = ref_.safekey();
 
@@ -40,6 +41,10 @@ pub fn run(input: String, _mode: super::output::OutputMode) -> Result<()> {
 
     match metadata {
         Some(m) => {
+            if mode == super::output::OutputMode::Quiet {
+                // Quiet: existence-check only; exit 0 with no stdout.
+                return Ok(());
+            }
             // Re-serialize to TOML for stdout. We use `toml::to_string_pretty`
             // for human readability; this is NOT the §7-normalized form
             // written to disk, but `info` is a presentation surface, not a

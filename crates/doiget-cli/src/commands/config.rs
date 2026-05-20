@@ -119,17 +119,24 @@ impl ResolvedConfig {
 // belong on stderr by design (stdout stays clean for `| jq` style pipes
 // when we add `--json` later).
 #[allow(clippy::print_stdout, clippy::print_stderr)]
-pub fn run(action: String, _mode: super::output::OutputMode) -> Result<()> {
-    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression and
-    // a Json body for `config show` are tracked in #203 / #204.
+pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
+    // `mode` honors ADR-0017: `Quiet` suppresses the TOML dump (`show`)
+    // and the path println! (`path`); `doctor` is unaffected because its
+    // per-check output is on stderr and only the failure/success exit
+    // code is the user-visible signal (#203). Json body for `show` is
+    // tracked in #204.
     let cfg = ResolvedConfig::from_env()?;
     match action.as_str() {
         "show" => {
-            let s = toml::to_string_pretty(&cfg)?;
-            print!("{s}");
+            if mode != super::output::OutputMode::Quiet {
+                let s = toml::to_string_pretty(&cfg)?;
+                print!("{s}");
+            }
         }
         "path" => {
-            println!("{}", cfg.config_path);
+            if mode != super::output::OutputMode::Quiet {
+                println!("{}", cfg.config_path);
+            }
         }
         "doctor" => {
             let mut all_ok = true;

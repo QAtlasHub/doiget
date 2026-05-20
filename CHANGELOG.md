@@ -24,6 +24,25 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
   still satisfied). See ADR-0020 Amendment 1.
 
+## [0.2.1-beta.8] - 2026-05-20
+
+### Changed
+
+- **[cli]** `--mode quiet` (and `-q`/`--quiet`/`DOIGET_MODE=quiet`/the
+  non-TTY default) now suppresses *informational* stdout in the six
+  commands that previously emitted it unconditionally: `audit-log
+  --verify` (header / per-segment summary / per-issue lines), `info`
+  (TOML dump), `list-recent` (TSV table), `search` (TSV table),
+  `config show` (TOML dump), `config path` (path), and
+  `provenance migrate` (summary). Errors (stderr), exit codes, and
+  on-disk side effects are unaffected — `audit-log` with chain issues
+  still exits non-zero even with `stdout == ""`. `fetch` /
+  `batch` were already quiet by design (success/summary on stderr per
+  ADR-0001), and product-output commands (`bib` / `csl` / `graph` /
+  `*-dry-run` plan) are deliberately not suppressed. Existing e2e
+  tests that assert specific human stdout opt in via
+  `DOIGET_MODE=human`. (#203)
+
 ## [0.2.1-beta.7] - 2026-05-20
 
 ### Added

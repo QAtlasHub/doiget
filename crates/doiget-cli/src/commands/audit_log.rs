@@ -62,9 +62,12 @@ fn print_err(args: std::fmt::Arguments<'_>) {
 /// per-issue breakdown is always written to stdout BEFORE returning, so a
 /// caller scripting this subcommand can inspect both the structured stdout
 /// and the non-zero exit code.
-pub fn run(verify_flag: bool, _mode: super::output::OutputMode) -> Result<()> {
-    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression and
-    // Json-body honoring are tracked in #203 / #204.
+pub fn run(verify_flag: bool, mode: super::output::OutputMode) -> Result<()> {
+    // `mode` honors ADR-0017: `Quiet` suppresses the informational stdout
+    // (header + per-segment summary + per-issue lines). The verification
+    // itself still runs and the non-zero exit on issues is still raised,
+    // so quiet pipelines see the failure via exit code (#203). Rich Json
+    // body is tracked in #204.
     if !verify_flag {
         // Issue #149: a missing required flag is argument misuse →
         // `docs/ERRORS.md` §4 exit 2, NOT the generic exit 1 a bare
@@ -92,50 +95,55 @@ pub fn run(verify_flag: bool, _mode: super::output::OutputMode) -> Result<()> {
     // `print_stdout` is workspace-deny for MCP stdio safety — see module docs.
     // The `audit-log` CLI is the explicit human-facing channel; locking
     // `stdout()` and using `writeln!` is the sanctioned way to emit lines.
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    // Aggregate header — byte-identical to the pre-rotation output when
-    // there is a single segment (back-compat with audit_log_e2e.rs).
-    writeln!(out, "audit-log verify: {total_rows} rows")
-        .context("failed to write header to stdout")?;
-    writeln!(out, "  ok:     {total_ok}").context("failed to write ok-row count to stdout")?;
-    writeln!(out, "  issues: {total_issues}").context("failed to write issue count to stdout")?;
+    // `Quiet` mode short-circuits the emit block but keeps the bail!() at
+    // the bottom so failure-on-issues exit codes still fire (#203).
+    if mode != super::output::OutputMode::Quiet {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        // Aggregate header — byte-identical to the pre-rotation output when
+        // there is a single segment (back-compat with audit_log_e2e.rs).
+        writeln!(out, "audit-log verify: {total_rows} rows")
+            .context("failed to write header to stdout")?;
+        writeln!(out, "  ok:     {total_ok}").context("failed to write ok-row count to stdout")?;
+        writeln!(out, "  issues: {total_issues}")
+            .context("failed to write issue count to stdout")?;
 
-    for (path, report) in &segments {
-        let seg = path.file_name().unwrap_or(path.as_str());
-        if multi {
-            writeln!(
-                out,
-                "  segment {}: {} rows, {} ok, {} issues",
-                seg,
-                report.total_rows,
-                report.ok_rows,
-                report.errors.len()
-            )
-            .context("failed to write segment summary to stdout")?;
-        }
-        for issue in &report.errors {
-            // `VerifyIssueKind` is `#[non_exhaustive]` (forward-compat for
-            // future variants like `SessionIdChange`); the wildcard arm uses
-            // a generic label so older CLI builds keep producing well-formed
-            // output even when run against a newer core that adds variants.
-            let kind = match issue.kind {
-                VerifyIssueKind::ParseError => "parse",
-                VerifyIssueKind::PrevHashMismatch => "prev-hash",
-                VerifyIssueKind::ThisHashMismatch => "this-hash",
-                VerifyIssueKind::SequenceJump => "sequence",
-                _ => "other",
-            };
+        for (path, report) in &segments {
+            let seg = path.file_name().unwrap_or(path.as_str());
             if multi {
                 writeln!(
                     out,
-                    "  [{}] line {}: {} — {}",
-                    seg, issue.line, kind, issue.message
+                    "  segment {}: {} rows, {} ok, {} issues",
+                    seg,
+                    report.total_rows,
+                    report.ok_rows,
+                    report.errors.len()
                 )
-            } else {
-                writeln!(out, "  line {}: {} — {}", issue.line, kind, issue.message)
+                .context("failed to write segment summary to stdout")?;
             }
-            .context("failed to write issue line to stdout")?;
+            for issue in &report.errors {
+                // `VerifyIssueKind` is `#[non_exhaustive]` (forward-compat for
+                // future variants like `SessionIdChange`); the wildcard arm uses
+                // a generic label so older CLI builds keep producing well-formed
+                // output even when run against a newer core that adds variants.
+                let kind = match issue.kind {
+                    VerifyIssueKind::ParseError => "parse",
+                    VerifyIssueKind::PrevHashMismatch => "prev-hash",
+                    VerifyIssueKind::ThisHashMismatch => "this-hash",
+                    VerifyIssueKind::SequenceJump => "sequence",
+                    _ => "other",
+                };
+                if multi {
+                    writeln!(
+                        out,
+                        "  [{}] line {}: {} — {}",
+                        seg, issue.line, kind, issue.message
+                    )
+                } else {
+                    writeln!(out, "  line {}: {} — {}", issue.line, kind, issue.message)
+                }
+                .context("failed to write issue line to stdout")?;
+            }
         }
     }
 

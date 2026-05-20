@@ -72,7 +72,11 @@ fn doiget(log_path: &Utf8PathBuf, dir_root: &Utf8PathBuf) -> Command {
         // resolver bug can't accidentally point at the developer's real
         // `~/.config/doiget/access.jsonl`.
         .env("HOME", dir_root.as_str())
-        .env("USERPROFILE", dir_root.as_str());
+        .env("USERPROFILE", dir_root.as_str())
+        // #203: these tests assert specific human-mode stdout; the
+        // subprocess runs non-TTY (assert_cmd captures stdout) which
+        // defaults to Quiet after #203's honoring. Opt in explicitly.
+        .env("DOIGET_MODE", "human");
     cmd
 }
 
