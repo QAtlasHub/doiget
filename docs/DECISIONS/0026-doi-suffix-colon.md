@@ -72,6 +72,22 @@ tool targets.
 - The accepted-input surface widens by one character. Mitigated above:
   no traversal delta, `safekey` escaping is the real filesystem guard,
   length bound unchanged.
+- **Acknowledged `safekey` collision dimension.** `safekey` maps every
+  character outside `[A-Za-z0-9._-]` to `_`, and the SHA-256 hash
+  disambiguator is appended **only** when the trimmed key exceeds 192
+  chars (`crates/doiget-core/src/lib.rs` `Ref::safekey` Step 4). For
+  short DOIs (the common case, including the Kluwer / EDP examples
+  above), no hash is appended — so any two suffixes whose escaped
+  forms collapse identically map to the same safekey. This is a
+  **pre-existing** lossy property: `10.X/A/NNN` and `10.X/A_NNN`
+  already collided before this ADR (both `/`→`_` and `/` is a legal
+  suffix char). Adding `:` to the charset adds `:` to the same
+  equivalence class (`A:NNN`, `A/NNN`, `A_NNN` all share one safekey).
+  The practical collision rate is near-zero in the real Kluwer / EDP
+  corpora — those families specifically use `A:` and `jphys:`, not
+  `_`-equivalents — but the property is acknowledged here so the
+  next maintainer is not surprised. Closing it (e.g. unconditional
+  hash suffix) is a separate ADR with broader scope than #194.
 
 **Out of scope.**
 

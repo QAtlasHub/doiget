@@ -284,7 +284,8 @@ mod parse {
     /// it in the suffix — legacy Kluwer/Springer (`10.1023/A:NNNNNNNNNN`)
     /// and EDP Sciences / Journal de Physique
     /// (`10.1051/jphys:NNNNNNNNNNNNNNNNN`). It adds no path-traversal
-    /// capability (traversal needs `/` + `..`, both already permitted) and
+    /// capability: traversal requires composing `/` and `.` into `../`,
+    /// and both characters are already in the suffix charset. In addition,
     /// `safekey` independently escapes every char outside `[A-Za-z0-9._-]`
     /// before any filesystem use, so `:` never reaches a path literally.
     /// See ADR-0026 and `docs/SECURITY.md` §1.1.
@@ -484,7 +485,7 @@ pub enum RefParseError {
         /// Hard upper bound (always [`DOI_SUFFIX_MAX_LEN`]).
         max: usize,
     },
-    /// DOI suffix contained a character outside `[A-Za-z0-9._/()-]`.
+    /// DOI suffix contained a character outside `[A-Za-z0-9._/():-]`.
     #[error("DOI suffix contains invalid character {ch:?}")]
     InvalidDoiSuffixChar {
         /// The first offending character.
@@ -1732,6 +1733,21 @@ mod tests {
         assert_eq!(d.as_str(), "10.1051/jphys:0198900500120136500");
         let d2 = Doi::parse("doi:10.1051/jphys:0198500460100164500").expect("scheme + colon");
         assert_eq!(d2.as_str(), "10.1051/jphys:0198500460100164500");
+    }
+
+    #[test]
+    fn doi_parse_rejects_semicolon_in_suffix() {
+        // #194 / ADR-0026: `;` is the natural ASCII neighbor of `:` and
+        // is explicitly EXCLUDED from the suffix charset extension
+        // (ADR-0026 §"Out of scope"). This test guards against an
+        // over-broad `matches!` arm (e.g. an accidental `':'..=';'` range
+        // typo) re-admitting `;` along with `:`.
+        let result = Doi::parse("10.1234/foo;bar");
+        assert!(
+            matches!(result, Err(RefParseError::InvalidDoiSuffixChar { ch: ';' })),
+            "expected InvalidDoiSuffixChar with ch=';', got {:?}",
+            result
+        );
     }
 
     #[test]
