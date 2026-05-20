@@ -43,6 +43,15 @@ use crate::Safekey;
 /// (#204) — the wire form is the obvious field-name JSON: `{"safekey":
 /// "...", "title": "...", "year": 2024, "fetched_at": "2026-05-20T…Z"}`,
 /// with `null` for absent optionals.
+///
+/// # Wire-format stability (post-#208 self-review §1)
+///
+/// Once a release ships with the \[`Serialize`\] derive, the field
+/// **names** below become part of the public API: a downstream consumer
+/// (CLI agent, MCP tool, BiblioFetch.jl, third-party script) MAY bind
+/// to them. Renaming a field is then a semver minor bump and warrants
+/// a CHANGELOG \[BREAKING\] note. Adding new fields is still safe
+/// (per `#[non_exhaustive]`).
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct EntryInfo {

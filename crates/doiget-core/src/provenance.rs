@@ -1102,6 +1102,13 @@ pub fn verify(path: &Utf8Path) -> Result<VerifyReport, LogError> {
 /// `Serialize` enables `provenance migrate --mode json` (#204) — the
 /// wire form is `{"rows_rewritten": N, "dry_run": bool,
 /// "first_row_v1_chain_hash": "...", "first_row_v2_chain_hash": "..."}`.
+///
+/// # Wire-format stability (post-#208 self-review §1)
+///
+/// Once a release ships with the [`Serialize`] derive, the field
+/// **names** below become part of the public API. Renaming a field is
+/// then a semver minor bump and warrants a CHANGELOG [BREAKING] note;
+/// new fields are still safe (per `#[non_exhaustive]`).
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct MigrationReport {

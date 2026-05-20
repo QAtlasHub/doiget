@@ -24,6 +24,50 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
   still satisfied). See ADR-0020 Amendment 1.
 
+## [0.2.1-beta.11] - 2026-05-20
+
+### Changed (potentially breaking)
+
+- **[cli] Retroactive callout to 0.2.1-beta.8 / #203:** the
+  `--mode quiet` honoring slice changed the **default behaviour** for
+  non-TTY invocations. Pipelines and shell scripts like
+  `doiget audit-log --verify | tee audit.log` or
+  `doiget list-recent | awk -F'\t' …` now emit empty stdout because
+  the resolver lands on `Quiet` when stdout is not a terminal. To
+  restore the previous output, either pass `--mode human` or set
+  `DOIGET_MODE=human` in the calling environment. The semantic was
+  always documented by ADR-0017 / CONFIG.md §3, but the practical
+  break is new with #203. (#207 self-review §1)
+
+### Changed
+
+- **[core]** `store::EntryInfo` and `provenance::MigrationReport`
+  carry an explicit doc-comment "wire-format stability" note:
+  field names became part of the public API the moment `Serialize`
+  shipped (in #204 / 0.2.1-beta.9). Renaming a field is now a semver
+  minor bump warranting a CHANGELOG `[BREAKING]` callout; new fields
+  are safe (`#[non_exhaustive]`). (#208 self-review §1)
+
+- **[cli/batch]** `batch --mode json` JoinSet-panic record now emits
+  `"ref": null` instead of the sentinel string `"<task-panic>"`. A
+  consumer doing `retry(rec["ref"])` would have mis-handled the
+  sentinel as a literal "DOI" — `null` is honest and parseable.
+  (#209 self-review §1)
+
+### Added (tests / docs only)
+
+- `audit-log` Quiet + tampered-log e2e (non-zero exit, empty stdout).
+- `config show` / `config path` Quiet e2e (Linux/macOS — Windows
+  gated due to `dirs::config_dir()` Known Folder API).
+- Unit test enumerating every known `VerifyIssueKind` variant against
+  the shared `kind_label` helper extracted from the two prior
+  inline matches (audit_log human + JSON branches now share one
+  mapping). (#208 self-review §2)
+- `commands/output.rs` module doc rewritten with the post-merge
+  per-mode honoring summary and an explicit "pretty single value vs
+  compact JSON-Lines" convention note for future maintainers.
+  (#206 self-review §3 / #208 self-review §6)
+
 ## [0.2.1-beta.10] - 2026-05-20
 
 ### Added

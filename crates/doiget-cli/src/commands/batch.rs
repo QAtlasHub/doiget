@@ -164,7 +164,7 @@ pub async fn run_with_options(
                     // with the human message in `error.message`. Per
                     // ERRORS.md §3.1 there is no `denial_context` on
                     // INVALID_REF (the input never reached a guard).
-                    emit_jsonl_failure(&input, "INVALID_REF", &e.to_string());
+                    emit_jsonl_failure(Some(&input), "INVALID_REF", &e.to_string());
                 }
                 // Best-effort `Resolve` row capturing the parse failure; we
                 // do NOT abort the batch on a single bad line.
@@ -238,10 +238,10 @@ pub async fn run_with_options(
                         // Best-effort code extraction. The orchestrator
                         // returns `Result<(), anyhow::Error>`; we emit a
                         // generic FETCH_ERROR code with the chain's
-                        // root-cause message. A follow-up will downcast
-                        // to `doiget_core::FetchError` for the
+                        // root-cause message. A follow-up (#210) will
+                        // downcast to `doiget_core::FetchError` for the
                         // structured `code` + `denial_context`.
-                        emit_jsonl_failure(&input, "FETCH_ERROR", &format!("{e:#}"));
+                        emit_jsonl_failure(Some(&input), "FETCH_ERROR", &format!("{e:#}"));
                     }
                     tracing::warn!(%input, error = ?e, "batch entry fetch failed");
                 }
@@ -249,8 +249,13 @@ pub async fn run_with_options(
             Err(join_err) => {
                 fetch_errors += 1;
                 if json_mode {
+                    // The JoinSet has lost the originating input by the
+                    // time the panic surfaces. Honest serialisation:
+                    // `"ref": null` instead of a `"<task-panic>"`
+                    // sentinel that a consumer doing `retry(rec["ref"])`
+                    // would mis-handle. Self-review for #209 §1.
                     emit_jsonl_failure(
-                        "<task-panic>",
+                        None,
                         "FETCH_ERROR",
                         &format!("batch task panicked: {join_err}"),
                     );
@@ -318,12 +323,19 @@ fn build_jsonl_success(ref_input: &str) -> serde_json::Value {
 
 /// #205: build the JSON-Lines failure record value with `code` and
 /// `message`. The wire shape is
-/// `{"ok": false, "ref": "...", "error": {"code": "...", "message": "..."}}`.
+/// `{"ok": false, "ref": "<ref>"|null, "error": {"code": "...", "message": "..."}}`.
+///
+/// `ref_input` is `Option<&str>` because the JoinSet panic arm has lost
+/// the originating input by the time the panic surfaces: serialising
+/// `null` is more honest than a sentinel string like `"<task-panic>"`
+/// (which a consumer doing `retry(rec["ref"])` would mis-handle by
+/// trying to refetch the literal sentinel — self-review for #209 §1).
+///
 /// `denial_context` (ADR-0023 closed enum) is intentionally omitted in
 /// this PR — surfacing it requires `fetch_one` to return the structured
-/// outcome instead of `Result<()>`; tracked as a follow-up to keep this
-/// PR's diff focused on the contract surface.
-fn build_jsonl_failure(ref_input: &str, code: &str, message: &str) -> serde_json::Value {
+/// outcome instead of `Result<()>`; tracked in #210 to keep this PR's
+/// diff focused on the contract surface.
+fn build_jsonl_failure(ref_input: Option<&str>, code: &str, message: &str) -> serde_json::Value {
     serde_json::json!({
         "ok":    false,
         "ref":   ref_input,
@@ -337,7 +349,7 @@ fn emit_jsonl_success(ref_input: &str) {
 }
 
 #[allow(clippy::print_stdout)]
-fn emit_jsonl_failure(ref_input: &str, code: &str, message: &str) {
+fn emit_jsonl_failure(ref_input: Option<&str>, code: &str, message: &str) {
     println!("{}", build_jsonl_failure(ref_input, code, message));
 }
 
@@ -362,7 +374,7 @@ mod tests {
 
     #[test]
     fn jsonl_failure_shape_invalid_ref() {
-        let v = build_jsonl_failure("not-a-doi", "INVALID_REF", "bad ref");
+        let v = build_jsonl_failure(Some("not-a-doi"), "INVALID_REF", "bad ref");
         assert_eq!(v["ok"], false);
         assert_eq!(v["ref"], "not-a-doi");
         assert_eq!(v["error"]["code"], "INVALID_REF");
@@ -371,11 +383,22 @@ mod tests {
 
     #[test]
     fn jsonl_failure_shape_fetch_error() {
-        let v = build_jsonl_failure("arxiv:2401.12345", "FETCH_ERROR", "boom");
+        let v = build_jsonl_failure(Some("arxiv:2401.12345"), "FETCH_ERROR", "boom");
         assert_eq!(v["ok"], false);
         assert_eq!(v["ref"], "arxiv:2401.12345");
         assert_eq!(v["error"]["code"], "FETCH_ERROR");
         assert_eq!(v["error"]["message"], "boom");
+    }
+
+    #[test]
+    fn jsonl_failure_shape_panic_ref_is_null() {
+        // Self-review for #209 §1: a JoinSet panic loses the input, so
+        // the record carries `ref: null` rather than a sentinel string
+        // that a consumer doing `retry(rec["ref"])` would mis-handle.
+        let v = build_jsonl_failure(None, "FETCH_ERROR", "batch task panicked: ...");
+        assert_eq!(v["ok"], false);
+        assert!(v["ref"].is_null(), "panic record's ref MUST be null: {v}");
+        assert_eq!(v["error"]["code"], "FETCH_ERROR");
     }
 
     #[test]
@@ -389,10 +412,15 @@ mod tests {
             !s.contains('\n'),
             "JSONL success must be single-line: {s:?}"
         );
-        let s2 = build_jsonl_failure("10.1/x", "FETCH_ERROR", "msg").to_string();
+        let s2 = build_jsonl_failure(Some("10.1/x"), "FETCH_ERROR", "msg").to_string();
         assert!(
             !s2.contains('\n'),
             "JSONL failure must be single-line: {s2:?}"
+        );
+        let s3 = build_jsonl_failure(None, "FETCH_ERROR", "msg").to_string();
+        assert!(
+            !s3.contains('\n'),
+            "null-ref JSONL must be single-line: {s3:?}"
         );
     }
 
