@@ -127,17 +127,35 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
     // tracked in #204.
     let cfg = ResolvedConfig::from_env()?;
     match action.as_str() {
-        "show" => {
-            if mode != super::output::OutputMode::Quiet {
+        "show" => match mode {
+            super::output::OutputMode::Quiet => {}
+            super::output::OutputMode::Json => {
+                // #204: `ResolvedConfig` is `Serialize` (already used for
+                // the TOML branch).
+                let s = serde_json::to_string_pretty(&cfg)
+                    .map_err(|e| anyhow::anyhow!("serialise config to JSON: {e}"))?;
+                println!("{s}");
+            }
+            _ => {
                 let s = toml::to_string_pretty(&cfg)?;
                 print!("{s}");
             }
-        }
-        "path" => {
-            if mode != super::output::OutputMode::Quiet {
+        },
+        "path" => match mode {
+            super::output::OutputMode::Quiet => {}
+            super::output::OutputMode::Json => {
+                // Minimal JSON object so callers can parse the path
+                // uniformly; no trailing-newline ambiguity vs the raw
+                // `path` form.
+                println!(
+                    "{}",
+                    serde_json::json!({ "config_path": cfg.config_path.as_str() })
+                );
+            }
+            _ => {
                 println!("{}", cfg.config_path);
             }
-        }
+        },
         "doctor" => {
             let mut all_ok = true;
             check(

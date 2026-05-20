@@ -24,6 +24,25 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
   still satisfied). See ADR-0020 Amendment 1.
 
+## [0.2.1-beta.9] - 2026-05-20
+
+### Added
+
+- **[cli]** `--mode json` (and `--json`/`DOIGET_MODE=json`) now emits
+  structured JSON for six commands that previously emitted human-only
+  output: `info` (the `Metadata` struct), `list-recent` / `search`
+  (a JSON array of `EntryInfo` objects with
+  `{safekey, title, year, fetched_at}`), `config show` (the
+  `ResolvedConfig` struct), `config path`
+  (`{"config_path": "..."}`), `audit-log --verify` (a report object
+  with `total_rows` / `total_ok` / `total_issues` / per-segment
+  summaries / per-issue records), and `provenance migrate` (the
+  `MigrationReport` wrapped with `log_path`). Single-value bodies
+  (NOT JSON-Lines — the batch JSONL contract is the separate ERRORS.md
+  §3 surface tracked in #205). Stderr (human errors) is unaffected.
+  `Serialize` was added to two additive public types in `doiget-core`:
+  `store::EntryInfo` and `provenance::MigrationReport`. (#204)
+
 ## [0.2.1-beta.8] - 2026-05-20
 
 ### Changed

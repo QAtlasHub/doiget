@@ -44,6 +44,24 @@ pub fn migrate(dry_run: bool, output_mode: super::output::OutputMode) -> Result<
     }
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
+    if output_mode == super::output::OutputMode::Json {
+        // #204: `MigrationReport` is `Serialize`. We wrap it with the
+        // `log_path` so the JSON consumer doesn't have to re-derive it
+        // from `DOIGET_LOG_PATH` / the platform's config dir.
+        #[derive(serde::Serialize)]
+        struct JsonReport<'a> {
+            log_path: &'a str,
+            report: &'a doiget_core::provenance::MigrationReport,
+        }
+        let payload = JsonReport {
+            log_path: log_path.as_str(),
+            report: &report,
+        };
+        let s =
+            serde_json::to_string_pretty(&payload).context("serialize migration report to JSON")?;
+        writeln!(out, "{s}").context("failed to write migration JSON to stdout")?;
+        return Ok(());
+    }
     emit_summary(&mut out, &log_path, &report)?;
     Ok(())
 }

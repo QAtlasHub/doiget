@@ -169,3 +169,29 @@ fn search_rejects_empty_query() {
         .failure()
         .stderr(predicate::str::contains("search query is empty"));
 }
+
+// ---- #204 JSON-mode coverage --------------------------------------------
+
+#[test]
+fn search_json_emits_array_of_entries() {
+    let (_dir_guard, root) = seeded_store();
+
+    let out = doiget(&root)
+        // The #203 helper pins DOIGET_MODE=human; override per-test.
+        .env("DOIGET_MODE", "json")
+        .args(["search", "quantum"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let s = String::from_utf8(out).expect("search JSON stdout utf-8");
+    let v: serde_json::Value = serde_json::from_str(&s).expect("search JSON parses");
+    let arr = v.as_array().expect("search JSON is an array");
+    assert!(!arr.is_empty(), "seeded query should match >=1 entry");
+    for entry in arr {
+        // EntryInfo schema (#204): {safekey, title, year, fetched_at}.
+        assert!(entry["safekey"].is_string(), "safekey is a string");
+        assert!(entry["title"].is_string(), "title is a string");
+    }
+}
