@@ -307,33 +307,38 @@ fn print_summary(args: std::fmt::Arguments<'_>) {
     eprintln!("{args}");
 }
 
-/// #205: emit one JSON-Lines success record for `ref_input` on stdout.
+/// #205: build the JSON-Lines success record value for `ref_input`.
 /// Per ERRORS.md §3, the wire shape is `{"ok": true, "ref": "..."}`.
-/// `print_stdout` is workspace-deny for MCP stdio safety; the localized
-/// `#[allow]` is the minimal intervention — the JSON-Lines stream is the
-/// product output of `batch --mode json`, the same way the dry-run plan
-/// is the product output of `batch --dry-run`.
-#[allow(clippy::print_stdout)]
-fn emit_jsonl_success(ref_input: &str) {
-    let record = serde_json::json!({ "ok": true, "ref": ref_input });
-    println!("{record}");
+/// Returned as `serde_json::Value` so unit tests can assert the shape
+/// without a stdout-capture dance; the integration site wraps it with
+/// `println!`.
+fn build_jsonl_success(ref_input: &str) -> serde_json::Value {
+    serde_json::json!({ "ok": true, "ref": ref_input })
 }
 
-/// #205: emit one JSON-Lines failure record for `ref_input` with
-/// `code` and `message`. The wire shape is
+/// #205: build the JSON-Lines failure record value with `code` and
+/// `message`. The wire shape is
 /// `{"ok": false, "ref": "...", "error": {"code": "...", "message": "..."}}`.
 /// `denial_context` (ADR-0023 closed enum) is intentionally omitted in
 /// this PR — surfacing it requires `fetch_one` to return the structured
 /// outcome instead of `Result<()>`; tracked as a follow-up to keep this
 /// PR's diff focused on the contract surface.
-#[allow(clippy::print_stdout)]
-fn emit_jsonl_failure(ref_input: &str, code: &str, message: &str) {
-    let record = serde_json::json!({
+fn build_jsonl_failure(ref_input: &str, code: &str, message: &str) -> serde_json::Value {
+    serde_json::json!({
         "ok":    false,
         "ref":   ref_input,
         "error": { "code": code, "message": message },
-    });
-    println!("{record}");
+    })
+}
+
+#[allow(clippy::print_stdout)]
+fn emit_jsonl_success(ref_input: &str) {
+    println!("{}", build_jsonl_success(ref_input));
+}
+
+#[allow(clippy::print_stdout)]
+fn emit_jsonl_failure(ref_input: &str, code: &str, message: &str) {
+    println!("{}", build_jsonl_failure(ref_input, code, message));
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +349,52 @@ fn emit_jsonl_failure(ref_input: &str, code: &str, message: &str) {
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    // ---- #205 JSON-Lines record shape (unit-level) ---------------------
+
+    #[test]
+    fn jsonl_success_shape() {
+        let v = build_jsonl_success("10.1234/foo");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["ref"], "10.1234/foo");
+        assert!(v.get("error").is_none(), "no error field on success");
+    }
+
+    #[test]
+    fn jsonl_failure_shape_invalid_ref() {
+        let v = build_jsonl_failure("not-a-doi", "INVALID_REF", "bad ref");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["ref"], "not-a-doi");
+        assert_eq!(v["error"]["code"], "INVALID_REF");
+        assert_eq!(v["error"]["message"], "bad ref");
+    }
+
+    #[test]
+    fn jsonl_failure_shape_fetch_error() {
+        let v = build_jsonl_failure("arxiv:2401.12345", "FETCH_ERROR", "boom");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["ref"], "arxiv:2401.12345");
+        assert_eq!(v["error"]["code"], "FETCH_ERROR");
+        assert_eq!(v["error"]["message"], "boom");
+    }
+
+    #[test]
+    fn jsonl_records_are_single_line_serialised() {
+        // `serde_json::Value::to_string` is compact (no trailing newline,
+        // no embedded newlines) — required for the JSONL contract since
+        // the production emitter wraps it with a single `println!` and
+        // CI consumers split stdout by `\n`.
+        let s = build_jsonl_success("10.1/x").to_string();
+        assert!(
+            !s.contains('\n'),
+            "JSONL success must be single-line: {s:?}"
+        );
+        let s2 = build_jsonl_failure("10.1/x", "FETCH_ERROR", "msg").to_string();
+        assert!(
+            !s2.contains('\n'),
+            "JSONL failure must be single-line: {s2:?}"
+        );
+    }
 
     #[test]
     fn parses_and_filters_input_lines() {
