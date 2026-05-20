@@ -50,7 +50,7 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 - **[cli/batch]** `batch --mode json` JoinSet-panic record now emits
   `"ref": null` instead of the sentinel string `"<task-panic>"`. A
-  consumer doing `retry(rec["ref"])` would have mis-handled the
+  consumer doing `retry(rec["ref"])` would have mishandled the
   sentinel as a literal "DOI" — `null` is honest and parseable.
   (#209 self-review §1)
 

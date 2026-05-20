@@ -253,7 +253,7 @@ pub async fn run_with_options(
                     // time the panic surfaces. Honest serialisation:
                     // `"ref": null` instead of a `"<task-panic>"`
                     // sentinel that a consumer doing `retry(rec["ref"])`
-                    // would mis-handle. Self-review for #209 §1.
+                    // would mishandle. Self-review for #209 §1.
                     emit_jsonl_failure(
                         None,
                         "FETCH_ERROR",
@@ -328,7 +328,7 @@ fn build_jsonl_success(ref_input: &str) -> serde_json::Value {
 /// `ref_input` is `Option<&str>` because the JoinSet panic arm has lost
 /// the originating input by the time the panic surfaces: serialising
 /// `null` is more honest than a sentinel string like `"<task-panic>"`
-/// (which a consumer doing `retry(rec["ref"])` would mis-handle by
+/// (which a consumer doing `retry(rec["ref"])` would mishandle by
 /// trying to refetch the literal sentinel — self-review for #209 §1).
 ///
 /// `denial_context` (ADR-0023 closed enum) is intentionally omitted in
@@ -394,7 +394,7 @@ mod tests {
     fn jsonl_failure_shape_panic_ref_is_null() {
         // Self-review for #209 §1: a JoinSet panic loses the input, so
         // the record carries `ref: null` rather than a sentinel string
-        // that a consumer doing `retry(rec["ref"])` would mis-handle.
+        // that a consumer doing `retry(rec["ref"])` would mishandle.
         let v = build_jsonl_failure(None, "FETCH_ERROR", "batch task panicked: ...");
         assert_eq!(v["ok"], false);
         assert!(v["ref"].is_null(), "panic record's ref MUST be null: {v}");

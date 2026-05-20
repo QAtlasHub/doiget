@@ -1107,7 +1107,7 @@ pub fn verify(path: &Utf8Path) -> Result<VerifyReport, LogError> {
 ///
 /// Once a release ships with the [`Serialize`] derive, the field
 /// **names** below become part of the public API. Renaming a field is
-/// then a semver minor bump and warrants a CHANGELOG [BREAKING] note;
+/// then a semver minor bump and warrants a CHANGELOG \[BREAKING\] note;
 /// new fields are still safe (per `#[non_exhaustive]`).
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
