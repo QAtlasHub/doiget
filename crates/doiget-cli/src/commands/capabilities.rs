@@ -22,6 +22,15 @@
 //! ADR-0017 convention (`--mode` is informational; the JSON inventory
 //! is the artefact). `--mode quiet` is the one mode that suppresses
 //! stdout (#203 / CONFIG.md §5); every other mode emits the same JSON.
+//!
+//! # Wire-format stability (whole module)
+//!
+//! Every `pub` struct / enum below carries `#[non_exhaustive]`. Adding
+//! a field is non-breaking; renaming or removing one is a
+//! compile-time break for downstream Rust consumers and a
+//! `[BREAKING]`-class change for JSON consumers (CHANGELOG must call
+//! it out). The per-item `#[non_exhaustive]` attributes intentionally
+//! carry no inline comment; this module-doc says it once.
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -31,15 +40,17 @@ use serde::Serialize;
 /// any field is a semver minor with a CHANGELOG `\[BREAKING\]` callout
 /// (same discipline as `EntryInfo` / `MigrationReport` in #213).
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
-#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
+#[non_exhaustive]
 #[derive(Debug, Serialize)]
 pub struct Capabilities {
     /// `CARGO_PKG_VERSION` for this build.
     pub version: &'static str,
     /// Cargo features compiled into this binary. Contains `"oa-only"`
-    /// when the default feature set is active (which it is in stock
-    /// release builds); empty only when the crate was built with
-    /// `default-features = false`.
+    /// in stock release builds (the default feature). Empty only when
+    /// the crate was built with `--no-default-features` and **no
+    /// other features enabled**; a build like
+    /// `cargo build --no-default-features --features citation`
+    /// yields `["citation"]`, not `[]`.
     pub features: Vec<&'static str>,
     /// All four [`super::output::OutputMode`] values; the parser accepts these for
     /// `--mode`. Mirrors `CONFIG.md` §5 (CLI flags).
@@ -61,7 +72,7 @@ pub struct Capabilities {
 ///
 /// Typed (not `&'static str`) so a typo can't slip into the wire
 /// format and the `Enum`-implies-`values`-present invariant is
-/// expressible at the type layer (#215 self-review §I10). Serialises
+/// expressible at the type layer (see #215 for the design pass). Serialises
 /// as the lowercased variant name: `"bool"`, `"enum"`, `"string"`.
 #[non_exhaustive]
 #[derive(Debug, Serialize)]
@@ -71,12 +82,15 @@ pub enum FlagKind {
     Bool,
     /// Value-bounded flag — `values` carries the accepted set.
     Enum,
-    /// Free-form string / path / int value.
+    /// Any non-`Bool`, non-`Enum` flag. Today every such flag emits
+    /// `"string"`; richer typing (`Path` / `Int` etc.) is intentionally
+    /// out of scope until a real consumer needs it — `#[non_exhaustive]`
+    /// reserves space without commitment.
     String,
 }
 
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
-#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
+#[non_exhaustive]
 #[derive(Debug, Serialize)]
 pub struct FlagSpec {
     /// e.g. `--mode`, `--json`, `-q`.
@@ -88,13 +102,13 @@ pub struct FlagSpec {
     /// For `kind == FlagKind::Enum`: the accepted values, harvested
     /// from clap's `PossibleValuesParser`. Owned (not `&'static`) so
     /// the helper works for any future enum flag, not just `--mode`
-    /// (#215 self-review §I7).
+    /// (see #215).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<String>>,
 }
 
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
-#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
+#[non_exhaustive]
 #[derive(Debug, Serialize)]
 pub struct SubcommandSpec {
     pub name: String,
@@ -124,13 +138,13 @@ pub enum ArgKind {
 }
 
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
-#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
+#[non_exhaustive]
 #[derive(Debug, Serialize)]
 pub struct ArgSpec {
     pub name: String,
     /// Always [`ArgKind::Positional`] today. Kept as a discriminator
     /// so the JSON shape can grow new arg kinds later without
-    /// renaming fields (#215 self-review §I10).
+    /// renaming fields (see #215 for the design pass).
     pub kind: ArgKind,
     pub help: Option<String>,
     /// `true` when the arg has no default and no `Option<T>` wrapper.
@@ -141,36 +155,42 @@ pub struct ArgSpec {
 ///
 /// Wire shape: every variant serialises to an object with a `status`
 /// discriminant, so a consumer sees uniform `{"status":"…", …}`
-/// records (`#[serde(tag = "status")]`). Pre-#215 self-review §I6:
-/// the previous mixed string/object representation forced consumers
-/// to handle two JSON shapes for sibling variants.
+/// records (`#[serde(tag = "status")]`). Before #215 the previous
+/// mixed string/object representation forced consumers to handle two
+/// JSON shapes for sibling variants.
+///
+/// **Tuple variants not permitted.** `#[serde(tag = "status")]`
+/// requires the tag to live in the same flat object as variant
+/// fields; tuple variants are incompatible with internally-tagged
+/// representation. Future variants MUST use named fields.
 #[non_exhaustive] // Adding a future variant is non-breaking for JSON consumers.
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum JsonMode {
     /// The command's primary output IS the requested artifact, not
     /// informational chatter. `--mode` is informational here; the
-    /// exact stdout shape (JSON for `csl` / `graph` / `capabilities`
-    /// and the JSON-RPC stream from `serve`; BibTeX for `bib`;
-    /// PDF-on-disk + stderr summary for `fetch`; a `--dry-run` JSON
-    /// plan in the dry-run variants) is fixed by the subcommand and
-    /// may vary across flags. **Consult `examples` for the per-flag
-    /// stdout form** rather than assuming JSON.
+    /// exact stdout shape (e.g. JSON for `csl` / `graph` /
+    /// `capabilities` and the JSON-RPC stream from `serve`; BibTeX
+    /// for `bib`; PDF-on-disk + stderr summary for `fetch`; a
+    /// `--dry-run` JSON plan in the dry-run variants) is fixed by
+    /// the subcommand and may vary across flags. **Consult
+    /// `examples` for the per-flag stdout form** rather than
+    /// assuming JSON.
     Artifact,
     /// Under `--mode json` the command emits a structured JSON body
     /// on stdout; otherwise the human form (e.g. `info`,
     /// `list-recent`, `audit-log`, `provenance migrate`, `batch`).
     Supported,
-    /// JSON body honoring not yet implemented; tracked at the issue
-    /// named inside.
-    Deferred {
-        /// The follow-up issue (e.g. `"#210"`).
-        tracking: &'static str,
-    },
+    // NOTE: a `Deferred { tracking: &'static str }` variant was
+    // sketched during #214's design phase but never instantiated by
+    // any subcommand. Removed in the #215 self-review pass to avoid
+    // shipping an unused wire shape; `#[non_exhaustive]` keeps the
+    // door open to add it back non-breakingly when a real consumer
+    // emerges.
 }
 
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
-#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
+#[non_exhaustive]
 #[derive(Debug, Serialize)]
 pub struct EnvVar {
     pub name: &'static str,
@@ -180,7 +200,7 @@ pub struct EnvVar {
 }
 
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
-#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
+#[non_exhaustive]
 #[derive(Debug, Serialize)]
 pub struct McpTool {
     pub name: &'static str,
@@ -189,7 +209,7 @@ pub struct McpTool {
 }
 
 #[allow(missing_docs)] // Field names ARE the schema; documented externally in #214.
-#[non_exhaustive] // Wire-format stability: adding fields is non-breaking; renames/removals are.
+#[non_exhaustive]
 #[derive(Debug, Serialize)]
 pub struct Docs {
     pub config: &'static str,
@@ -347,8 +367,9 @@ const DOCS: Docs = Docs {
 /// regression test does not cover feature-gating directly — it only
 /// asserts metadata exists. Add a CI matrix entry (`--features
 /// citation`) when introducing new gated subcommands so the e2e
-/// assertion list catches drift (#215 self-review §I5 / comment-analyzer
-/// note 4).
+/// assertion list catches drift (see #215). Alternatively, add a
+/// unit test that asserts `metadata_for("graph").unwrap().feature_gated
+/// == Some("citation")` to lock the gate at the lib-test layer.
 struct SubcommandMeta {
     examples: &'static [&'static str],
     json_mode: JsonMode,
@@ -560,11 +581,18 @@ fn split_args_and_flags(
         if global_names.contains(a.get_id().as_str()) {
             continue;
         }
-        // #215 self-review §I1: clap auto-adds `--help` (and `--version`
-        // on the root) to every subcommand. They're not positional and
-        // not `is_global_set()`, so they would otherwise leak into
-        // every subcommand's `flags[]` as `kind: "string"`. Filter on
-        // the action to be robust across future clap built-ins.
+        // Clap auto-adds `--help` (and `--version` on the root) to
+        // every subcommand. They're not positional and not
+        // `is_global_set()`, so they would otherwise leak into every
+        // subcommand's `flags[]` as `kind: "string"`. Filter on the
+        // action against the known built-in variants.
+        //
+        // **Maintenance:** `clap::ArgAction` is itself
+        // `#[non_exhaustive]` upstream. A future clap release that
+        // adds a new built-in action (e.g. a hypothetical
+        // `HelpMarkdown`) would fall through this `matches!` and
+        // reappear in `flags[]`. Re-audit this filter on every clap
+        // minor-version bump.
         if matches!(
             a.get_action(),
             clap::ArgAction::Help
@@ -597,7 +625,7 @@ fn arg_to_flag_spec(a: &clap::Arg) -> FlagSpec {
     // Boolean switches → `Bool`; value-enum flags → `Enum` with the
     // accepted values harvested from clap directly; everything else
     // → `String`. The `possible_values()` harvest covers any future
-    // enum flag without code change (#215 self-review §I7).
+    // enum flag without code change (see #215).
     let possible: Option<Vec<String>> = a
         .get_value_parser()
         .possible_values()
@@ -745,7 +773,7 @@ mod tests {
             .subcommand(Command::new("serve").about("MCP server"));
         // `graph` is `#[cfg(feature = "citation")]` in main.rs; mirror
         // the gate so the shadow CLI matches the production surface
-        // (#215 self-review §I5).
+        // (see #215).
         #[cfg(feature = "citation")]
         let cmd = cmd.subcommand(
             Command::new("graph")
@@ -828,9 +856,8 @@ mod tests {
         }
     }
 
-    // #215 self-review §I2: exact-set parity guard against drift
-    // between CONFIG.md §4's env-var table and the static `ENV_VARS`
-    // inventory. The expected set is the SOURCE OF TRUTH at test time;
+    // Exact-set parity guard against drift between the static
+    // `ENV_VARS` table and the documented surface (#215). The expected set is the SOURCE OF TRUTH at test time;
     // adding a new DOIGET_* env var requires updating both ENV_VARS
     // and this list in lockstep. CHANGELOG records cross-PR changes.
     #[test]
@@ -864,8 +891,8 @@ mod tests {
         );
     }
 
-    // #215 self-review §I3: exact-set parity guard against drift
-    // between docs/MCP_TOOLS.md §1 and the static `MCP_TOOLS` array.
+    // Exact-set parity guard against drift between the static
+    // `MCP_TOOLS` table and `docs/MCP_TOOLS.md` §1 (#215).
     #[test]
     fn mcp_tools_exact_set_matches_expected() {
         let actual: std::collections::BTreeSet<&str> = MCP_TOOLS.iter().map(|t| t.name).collect();
@@ -891,6 +918,69 @@ mod tests {
             "MCP_TOOLS table drifted from the expected set; update both \
              `MCP_TOOLS` and this test together (and docs/MCP_TOOLS.md §1)."
         );
+    }
+
+    // Pin the `#[serde(tag = "status")]` wire shape: every variant
+    // serialises to a `{"status":"…", …}` object. Accidentally
+    // removing the `tag` attribute (or renaming the discriminant)
+    // would silently degrade the wire format; this test catches it
+    // (#215 N1).
+    #[test]
+    fn json_mode_serialises_with_status_discriminant() {
+        let s = serde_json::to_string(&JsonMode::Artifact).expect("serialise");
+        assert_eq!(
+            s, r#"{"status":"artifact"}"#,
+            "Artifact must emit a status-tagged object"
+        );
+        let s = serde_json::to_string(&JsonMode::Supported).expect("serialise");
+        assert_eq!(s, r#"{"status":"supported"}"#);
+    }
+
+    // `arg_to_flag_spec` was generalised in #215 to harvest the
+    // accepted values from clap's `PossibleValuesParser` instead of
+    // hard-coding `--mode`. Pin the contract: the `--mode` entry in
+    // `global_flags` MUST report `kind: Enum` with all four mode
+    // strings. A future regression that silently degrades `--mode`
+    // to `kind: String, values: None` would otherwise pass every
+    // existing test (#215 N3).
+    #[test]
+    fn mode_flag_carries_enum_kind_and_all_four_values() {
+        let global = &caps().global_flags;
+        let mode = global
+            .iter()
+            .find(|f| f.name == "--mode")
+            .expect("--mode flag is in global_flags");
+        assert!(
+            matches!(mode.kind, FlagKind::Enum),
+            "--mode kind MUST be Enum, got {:?}",
+            mode.kind
+        );
+        let vs = mode.values.as_ref().expect("--mode carries values");
+        let mut sorted = vs.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec!["human", "json", "mcp", "quiet"]);
+    }
+
+    // `compile_time_features()` pushes string literals that must
+    // exactly match the Cargo feature names in `Cargo.toml`. A
+    // typo in the literal (`"oa_only"` vs `"oa-only"`) would
+    // silently invert the inventory's `features` field for every
+    // consumer. The default build has `oa-only` active; assert
+    // the literal round-trips (#215 A9).
+    #[test]
+    fn compile_time_features_contains_oa_only_under_default() {
+        // `cfg!(feature = "oa-only")` is true in the default test
+        // build; if a future maintainer disables the default feature
+        // for the test target, this test becomes meaningless but
+        // does not cause a false failure.
+        if cfg!(feature = "oa-only") {
+            let f = compile_time_features();
+            assert!(
+                f.contains(&"oa-only"),
+                "oa-only feature was enabled at compile time but \
+                 `compile_time_features()` did not list it: {f:?}"
+            );
+        }
     }
 
     #[test]

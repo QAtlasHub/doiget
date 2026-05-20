@@ -105,6 +105,52 @@ fn capabilities_inventory_includes_every_subcommand() {
             "subcommand `{expected}` missing from capabilities inventory; got {names:?}"
         );
     }
+
+    // `graph` is `#[cfg(feature = "citation")]` in main.rs. Under
+    // that feature it MUST appear; without it, it MUST NOT. A silent
+    // drop of `graph` in a citation build would otherwise pass this
+    // test (#215 N2).
+    let has_graph = names.contains(&"graph");
+    if cfg!(feature = "citation") {
+        assert!(
+            has_graph,
+            "`citation` feature was compiled in but `graph` is missing \
+             from capabilities inventory; got {names:?}"
+        );
+    } else {
+        assert!(
+            !has_graph,
+            "`graph` appeared in capabilities inventory without the \
+             `citation` feature; got {names:?}"
+        );
+    }
+}
+
+#[test]
+fn capabilities_fetch_subcommand_carries_artifact_status() {
+    // #215 N1: the `#[serde(tag = "status")]` wire shape is part of
+    // the public contract. Pin a representative subcommand's
+    // `json_mode` so an accidental revert (removing the tag, renaming
+    // the discriminant) fails at the e2e layer.
+    let dir = TempDir::new().expect("tempdir");
+    let out = doiget(&dir)
+        .arg("capabilities")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v = parse_capabilities(out);
+    let fetch = v["subcommands"]
+        .as_array()
+        .expect("subcommands array")
+        .iter()
+        .find(|s| s["name"] == "fetch")
+        .expect("fetch subcommand present");
+    assert_eq!(
+        fetch["json_mode"]["status"], "artifact",
+        "fetch.json_mode MUST carry a status discriminant, got {fetch:?}"
+    );
 }
 
 #[test]

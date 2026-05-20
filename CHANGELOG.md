@@ -66,33 +66,33 @@ they are documented here for audit:
 - **Wire-format stability via `#[non_exhaustive]`** on every public
   schema struct + the `JsonMode` / `FlagKind` / `ArgKind` enums.
   Adding a field is non-breaking; renaming / removing one is now a
-  compile-time break for Rust consumers (C1).
+  compile-time break for Rust consumers.
 - **`--help` no longer leaks into per-subcommand `flags[]`** —
   clap built-ins (`Help`/`HelpShort`/`HelpLong`/`Version` actions)
-  are now filtered in `split_args_and_flags` (I1).
+  are now filtered in `split_args_and_flags` (filter on the ArgAction).
 - **`json_mode` JSON shape unified** via `#[serde(tag = "status")]`
   so every variant emits `{"status":"…", …}` instead of mixed
   string / object. `Product` renamed to `Artifact` with a clarified
   doc: the artifact may or may not be JSON; consult `examples`
-  for the per-flag stdout form (I4 + I6).
+  for the per-flag stdout form — addressing the prior misleading "Product" label.
 - **`FlagSpec.kind` and `ArgSpec.kind` are typed enums** rather than
-  `&'static str` (I10).
+  `&'static str`.
 - **`arg_to_flag_spec` `values` harvest is generic** via clap's
   `PossibleValuesParser` instead of a hardcoded `--mode` special
   case. `FlagSpec.values` type widens to `Option<Vec<String>>`;
-  serialised output unchanged (I7).
+  serialised output unchanged.
 - **`DOIGET_CACHE_ROOT` added to `ENV_VARS`** (was missing from the
   inventory vs `CONFIG.md` §4). Two new exact-set parity unit tests
   (`env_vars_exact_set_matches_expected` /
   `mcp_tools_exact_set_matches_expected`) lock the canonical sets so
-  drift between code and docs becomes a CI failure (I2 + I3).
+  drift between code and docs becomes a CI failure.
 - **`graph` in the shadow `test_cli`** under `#[cfg(feature =
-  "citation")]`, mirroring the production gate (I5).
+  "citation")]`, mirroring the production gate.
 - **Doc cross-ref fixes**: two `CONFIG.md §3` references corrected
   to `§5`; the `features` doc no longer claims "empty when only
   oa-only is enabled" (the inverse of actual behaviour);
   `SubcommandMeta` block carries a `feature_gated` maintainer note
-  (I8 + I9).
+ .
 
 ## [0.2.1-beta.11] - 2026-05-20
 
