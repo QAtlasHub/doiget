@@ -97,7 +97,76 @@ pub fn run(verify_flag: bool, mode: super::output::OutputMode) -> Result<()> {
     // `stdout()` and using `writeln!` is the sanctioned way to emit lines.
     // `Quiet` mode short-circuits the emit block but keeps the bail!() at
     // the bottom so failure-on-issues exit codes still fire (#203).
-    if mode != super::output::OutputMode::Quiet {
+    if mode == super::output::OutputMode::Json {
+        // #204: structured report. Schema:
+        //   {"total_rows", "total_ok", "total_issues",
+        //    "segments": [{"name", "rows", "ok", "issues"}],
+        //    "issues":   [{"segment", "line", "kind", "message"}]}
+        // Single value (NOT JSON-Lines) so the whole report parses with
+        // one `JSON.parse` call. Sibling commands' shapes are sibling
+        // schemas — see commands/{list_recent,search,config,info,provenance}.
+        #[derive(serde::Serialize)]
+        struct SegmentSummary<'a> {
+            name: &'a str,
+            rows: usize,
+            ok: usize,
+            issues: usize,
+        }
+        #[derive(serde::Serialize)]
+        struct IssueRecord<'a> {
+            segment: &'a str,
+            line: usize,
+            kind: &'static str,
+            message: &'a str,
+        }
+        #[derive(serde::Serialize)]
+        struct Report<'a> {
+            total_rows: usize,
+            total_ok: usize,
+            total_issues: usize,
+            segments: Vec<SegmentSummary<'a>>,
+            issues: Vec<IssueRecord<'a>>,
+        }
+
+        let mut segs: Vec<SegmentSummary> = Vec::with_capacity(segments.len());
+        let mut issues: Vec<IssueRecord> = Vec::new();
+        for (path, report) in &segments {
+            let seg = path.file_name().unwrap_or(path.as_str());
+            segs.push(SegmentSummary {
+                name: seg,
+                rows: report.total_rows,
+                ok: report.ok_rows,
+                issues: report.errors.len(),
+            });
+            for issue in &report.errors {
+                let kind = match issue.kind {
+                    VerifyIssueKind::ParseError => "parse",
+                    VerifyIssueKind::PrevHashMismatch => "prev-hash",
+                    VerifyIssueKind::ThisHashMismatch => "this-hash",
+                    VerifyIssueKind::SequenceJump => "sequence",
+                    _ => "other",
+                };
+                issues.push(IssueRecord {
+                    segment: seg,
+                    line: issue.line,
+                    kind,
+                    message: &issue.message,
+                });
+            }
+        }
+        let report = Report {
+            total_rows,
+            total_ok,
+            total_issues,
+            segments: segs,
+            issues,
+        };
+        let s =
+            serde_json::to_string_pretty(&report).context("serialize audit-log report to JSON")?;
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        writeln!(out, "{s}").context("failed to write audit-log JSON to stdout")?;
+    } else if mode != super::output::OutputMode::Quiet {
         let stdout = std::io::stdout();
         let mut out = stdout.lock();
         // Aggregate header — byte-identical to the pre-rotation output when

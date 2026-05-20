@@ -28,6 +28,7 @@ pub use metadata::{DoigetExtension, Metadata};
 pub use render::{to_bibtex, to_csl_array};
 
 use camino::Utf8Path;
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::Safekey;
@@ -37,7 +38,12 @@ use crate::Safekey;
 ///
 /// `non_exhaustive` so adding new summary fields (e.g. `doi`, `authors`) in a
 /// later revision is non-breaking. Pattern-match with a wildcard arm.
-#[derive(Debug, Clone)]
+///
+/// `Serialize` enables `list-recent --mode json` / `search --mode json`
+/// (#204) — the wire form is the obvious field-name JSON: `{"safekey":
+/// "...", "title": "...", "year": 2024, "fetched_at": "2026-05-20T…Z"}`,
+/// with `null` for absent optionals.
+#[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct EntryInfo {
     /// The safekey of the entry. See `docs/SAFEKEY.md`.

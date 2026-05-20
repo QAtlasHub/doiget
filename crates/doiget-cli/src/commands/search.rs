@@ -57,6 +57,13 @@ pub fn run(query: String, mode: super::output::OutputMode) -> Result<()> {
 
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
+    if mode == super::output::OutputMode::Json {
+        // #204: `EntryInfo` carries `Serialize`; emit a JSON array.
+        let s = serde_json::to_string_pretty(&entries)
+            .context("failed to serialize search entries to JSON")?;
+        writeln!(out, "{s}").context("failed to write search JSON to stdout")?;
+        return Ok(());
+    }
     writeln!(out, "safekey\tyear\ttitle\tfetched_at")
         .context("failed to write search header to stdout")?;
     for e in entries {

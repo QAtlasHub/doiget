@@ -1098,7 +1098,11 @@ pub fn verify(path: &Utf8Path) -> Result<VerifyReport, LogError> {
 /// Marked `#[non_exhaustive]` so future fields (e.g. a per-row error
 /// list, an aborted-row count) can be added without breaking callers
 /// that pattern-match.
-#[derive(Debug, Clone)]
+///
+/// `Serialize` enables `provenance migrate --mode json` (#204) — the
+/// wire form is `{"rows_rewritten": N, "dry_run": bool,
+/// "first_row_v1_chain_hash": "...", "first_row_v2_chain_hash": "..."}`.
+#[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct MigrationReport {
     /// Number of rows rewritten (or that WOULD be rewritten under
