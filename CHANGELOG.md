@@ -24,6 +24,23 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
   still satisfied). See ADR-0020 Amendment 1.
 
+## [0.2.1-beta.10] - 2026-05-20
+
+### Added
+
+- **[cli]** `batch --mode json` (and `--json` / `DOIGET_MODE=json`) now
+  emits the ERRORS.md §3 CI-persona JSON-Lines per-ref shape on stdout:
+  one record per input line of the form `{"ok": true, "ref": "..."}`
+  on success or
+  `{"ok": false, "ref": "...", "error": {"code": "...", "message": "..."}}`
+  on failure. Exit code is the failure count (unchanged, capped at
+  255 per ERRORS.md §4). Human mode is unchanged (per-ref summary
+  remains on stderr per ADR-0001). The structured outcome bodies
+  (`safekey` / `store_path` / `canonical_digest` on success;
+  `denial_context` on `CAPABILITY_DENIED`) require `fetch_one` to
+  return `FetchPaperOutcome` instead of `Result<()>` and land in a
+  follow-up; the contract surface ships now. (#205)
+
 ## [0.2.1-beta.9] - 2026-05-20
 
 ### Added
