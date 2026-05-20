@@ -58,7 +58,13 @@ use super::resolve_store_root;
 /// single `dry_run: bool` parameter — the option bundle's single-bool
 /// shape was YAGNI, and the wrapper only existed to spare integration
 /// tests a `BatchOptions::default()` literal.
-pub async fn run_with_options(path: String, dry_run: bool) -> Result<()> {
+pub async fn run_with_options(
+    path: String,
+    dry_run: bool,
+    _mode: super::output::OutputMode,
+) -> Result<()> {
+    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression and
+    // the CI-persona JSON-Lines per-ref shape are tracked in #203 / #205.
     // Step 1: read the input file. Failures surface before any fetch starts.
     let raw =
         std::fs::read_to_string(&path).with_context(|| format!("reading batch file: {path}"))?;

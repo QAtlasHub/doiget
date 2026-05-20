@@ -33,7 +33,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0014 | Docs split into NORMATIVE / INFORMATIVE with ADR change-control | Accepted | Phase 0 (in force) | #11 |
 | 0015 | No telemetry / phone-home / self-update | Accepted | standing policy (SCOPE.md #10/#11 + posture-lint) | #12 |
 | 0016 | Common foundation crates + deny list | Accepted | Phase 0 (deny.toml) | #13 |
-| 0017 | Output mode resolution (flag > env > implicit > TTY > quiet) | Accepted | Slice 9 stdout-purity + Slice 1 (see ADR note) | #14 |
+| 0017 | Output mode resolution (flag > env > implicit > TTY > quiet) | Accepted | Slice 9 stdout-purity + Slice 1 + #144 (full ladder, 0.2.1-beta.7) | #14 |
 | 0018 | Obsidian export is one-direction, optional Phase 7 | Proposed (Phase 7, unshipped) | — | #15 |
 | 0019 | Eight-safeguard legal posture (5 social + 3 technical) | Accepted | standing posture (Phase 1 onward) | #16 |
 | 0020 | reqwest TLS feature stack (rustls-only; ring provider) | Accepted (Amendment 1 2026-05-18: aws-lc-rs → ring, portability) | PR #30 / PR #49 / Amendment 1 | PR #30 / PR #49 |

@@ -28,6 +28,7 @@ pub mod csl;
 pub mod fetch;
 pub mod info;
 pub mod list_recent;
+pub mod output;
 pub mod provenance;
 pub mod search;
 

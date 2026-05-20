@@ -24,6 +24,23 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
   still satisfied). See ADR-0020 Amendment 1.
 
+## [0.2.1-beta.7] - 2026-05-20
+
+### Added
+
+- **[cli]** Global output-mode flags `--mode <human|json|quiet|mcp>`,
+  `--json`, `-q`/`--quiet`, and the `DOIGET_MODE` environment variable
+  are now parsed and resolved per the ADR-0017 precedence ladder
+  (`--mode` > `--json`/`--quiet` > `DOIGET_MODE` > subcommand-implicit
+  > TTY > quiet default). The three flag forms are mutually exclusive
+  (clap-enforced). `doiget serve` is pinned to `mcp` regardless of
+  flags / env, preserving the load-bearing stdout-purity invariant
+  (CONFIG.md §5 / Slice 9). The resolved `OutputMode` is threaded into
+  every command's `run(..)`; per-mode honouring (Quiet stdout
+  suppression, Json bodies for human-table commands, ERRORS.md §3
+  batch JSONL) is tracked in follow-up issues #203 / #204 / #205. This
+  PR ships the **machinery** that those follow-ups build on. (#144)
+
 ## [0.2.1-beta.6] - 2026-05-19
 
 ### Changed

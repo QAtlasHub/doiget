@@ -30,7 +30,9 @@ use doiget_core::provenance::{migrate_v1_to_v2, MigrationReport};
 /// rewrite path runs: the original log is preserved as
 /// `<log_path>.v1-backup` and the migrated v2 log is atomically
 /// swapped in.
-pub fn migrate(dry_run: bool) -> Result<()> {
+pub fn migrate(dry_run: bool, _mode: super::output::OutputMode) -> Result<()> {
+    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression and
+    // a Json body for the migration report are tracked in #203 / #204.
     let log_path = resolve_log_path()?;
     let report = migrate_v1_to_v2(&log_path, dry_run)
         .with_context(|| format!("migrating provenance log at {log_path}"))?;
@@ -140,6 +142,7 @@ mod tests {
         assert!(!path.exists(), "precondition");
 
         let _g = EnvGuard::set("DOIGET_LOG_PATH", path.as_str());
-        migrate(true).expect("dry-run on missing log must succeed");
+        migrate(true, crate::commands::output::OutputMode::Human)
+            .expect("dry-run on missing log must succeed");
     }
 }

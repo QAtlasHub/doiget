@@ -8,6 +8,7 @@
 //! stdio (ADR-0001).
 
 use clap::{Parser, Subcommand};
+use doiget_cli::commands::output::{self, FlagInput, OutputMode};
 
 /// `doiget provenance ...` action selector. Ships only the v1→v2
 /// migration in Slice 4 (ADR-0024); further actions (e.g. `compact`,
@@ -50,6 +51,28 @@ enum ProvenanceAction {
                   See README.md and docs/ for the full specification."
 )]
 struct Cli {
+    /// Output mode (`human` | `json` | `quiet` | `mcp`). Highest-precedence
+    /// signal in the ADR-0017 resolution ladder. Conflicts with `--json`
+    /// and `--quiet`. `doiget serve` ignores this and always runs in `mcp`
+    /// (CONFIG.md §5 — load-bearing security invariant for stdout purity).
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        conflicts_with_all = ["json", "quiet"],
+    )]
+    mode: Option<OutputMode>,
+
+    /// Short form of `--mode json` (CONFIG.md §5). Conflicts with `--mode`
+    /// and `--quiet`.
+    #[arg(long, global = true, conflicts_with_all = ["mode", "quiet"])]
+    json: bool,
+
+    /// Short form of `--mode quiet` (CONFIG.md §5). Conflicts with
+    /// `--mode` and `--json`.
+    #[arg(short = 'q', long, global = true, conflicts_with_all = ["mode", "json"])]
+    quiet: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -173,7 +196,44 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+/// Build the `FlagInput` from the three mutually-exclusive global
+/// flags. Clap's `conflicts_with_all` guarantees at most one is set, so
+/// the ordering of the if-arms below is irrelevant to correctness.
+fn flag_input_from(cli: &Cli) -> FlagInput {
+    if let Some(m) = cli.mode {
+        FlagInput::Explicit(m)
+    } else if cli.json {
+        FlagInput::JsonShort
+    } else if cli.quiet {
+        FlagInput::QuietShort
+    } else {
+        FlagInput::None
+    }
+}
+
+/// Compute the `forced_implicit` mode from the subcommand. Only `serve`
+/// pins a mode (`Mcp`) — CONFIG.md §5 / ADR-0017 / SECURITY.md §3: the
+/// MCP server emits JSON-RPC frames on stdout and a `--mode quiet` /
+/// `--mode human` override there would break the protocol, so the
+/// override is unconditional.
+fn forced_implicit_for(command: &Option<Command>) -> Option<OutputMode> {
+    match command {
+        Some(Command::Serve) => Some(OutputMode::Mcp),
+        _ => None,
+    }
+}
+
 async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
+    // Resolve the effective output mode ONCE per invocation per ADR-0017.
+    // The pure resolver lives in `commands::output`; this site is the
+    // single I/O-touching layer that reads env + probes the TTY.
+    let mode = output::resolve(
+        forced_implicit_for(&cli.command),
+        flag_input_from(&cli),
+        std::env::var("DOIGET_MODE").ok().as_deref(),
+        output::stdout_is_tty(),
+    );
+
     match cli.command {
         None => {
             anyhow::bail!("no subcommand. Run `doiget --help` for available commands.");
@@ -181,30 +241,40 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         // Phase 1 subcommands. All command modules live in the library half
         // of this crate (see `src/lib.rs`) so integration tests can drive them
         // in-process.
-        Some(Command::AuditLog { verify }) => doiget_cli::commands::audit_log::run(verify),
+        //
+        // Each command receives the resolved `mode`. Per-mode behaviour
+        // (Quiet stdout suppression, Json bodies for human-table
+        // commands) is tracked in follow-up issues #203 / #204 / #205;
+        // this PR only wires the threading and the `serve→Mcp` invariant.
+        Some(Command::AuditLog { verify }) => doiget_cli::commands::audit_log::run(verify, mode),
         Some(Command::Provenance { action }) => match action {
             ProvenanceAction::Migrate { dry_run } => {
-                doiget_cli::commands::provenance::migrate(dry_run)
+                doiget_cli::commands::provenance::migrate(dry_run, mode)
             }
         },
-        Some(Command::Config { action }) => doiget_cli::commands::config::run(action),
-        Some(Command::Info { ref_ }) => doiget_cli::commands::info::run(ref_),
-        Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit),
-        Some(Command::Search { query }) => doiget_cli::commands::search::run(query),
+        Some(Command::Config { action }) => doiget_cli::commands::config::run(action, mode),
+        Some(Command::Info { ref_ }) => doiget_cli::commands::info::run(ref_, mode),
+        Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit, mode),
+        Some(Command::Search { query }) => doiget_cli::commands::search::run(query, mode),
         Some(Command::Fetch { ref_, dry_run }) => {
-            doiget_cli::commands::fetch::run_with_options(ref_, dry_run).await
+            doiget_cli::commands::fetch::run_with_options(ref_, dry_run, mode).await
         }
         Some(Command::Batch { path, dry_run }) => {
-            doiget_cli::commands::batch::run_with_options(path, dry_run).await
+            doiget_cli::commands::batch::run_with_options(path, dry_run, mode).await
         }
-        Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_),
-        Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_),
+        Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_, mode),
+        Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_, mode),
         // Phase 3 (MCP foundation). The MCP server runs on stdio per
         // ADR-0001. The `tracing_subscriber` installed at the top of
         // `main` is already redirected to stderr, so any rmcp / tool
         // tracing output will not collide with JSON-RPC frames on stdout.
         // See docs/SECURITY.md §3 / docs/MCP_TOOLS.md §8.
+        //
+        // The resolver above forces `mode == Mcp` here (CONFIG.md §5);
+        // the mcp server itself hard-codes JSON-RPC framing on stdout
+        // regardless, so the `mode` value is informational at this site.
         Some(Command::Serve) => {
+            debug_assert_eq!(mode, OutputMode::Mcp, "serve must resolve to Mcp");
             let profile = doiget_core::CapabilityProfile::from_env()?;
             doiget_mcp::Server::new(profile).run().await
         }
@@ -216,6 +286,6 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             depth,
             total,
             per_paper,
-        }) => doiget_cli::commands::graph::run(ref_, depth, total, per_paper).await,
+        }) => doiget_cli::commands::graph::run(ref_, depth, total, per_paper, mode).await,
     }
 }

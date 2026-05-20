@@ -119,7 +119,9 @@ impl ResolvedConfig {
 // belong on stderr by design (stdout stays clean for `| jq` style pipes
 // when we add `--json` later).
 #[allow(clippy::print_stdout, clippy::print_stderr)]
-pub fn run(action: String) -> Result<()> {
+pub fn run(action: String, _mode: super::output::OutputMode) -> Result<()> {
+    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression and
+    // a Json body for `config show` are tracked in #203 / #204.
     let cfg = ResolvedConfig::from_env()?;
     match action.as_str() {
         "show" => {
@@ -304,7 +306,7 @@ mod tests {
         // The human-readable line moved to stderr; the error now carries
         // a `CliExit(2)` rather than a Display-formatted anyhow string.
         let _g = unset_all_doiget_config_env();
-        let err = run("doctor".into())
+        let err = run("doctor".into(), crate::commands::output::OutputMode::Human)
             .expect_err("doctor should fail when DOIGET_CONTACT_EMAIL is unset");
         let cli_exit = err
             .downcast_ref::<CliExit>()
@@ -322,7 +324,8 @@ mod tests {
         let _email = EnvGuard::set("DOIGET_CONTACT_EMAIL", "alice@example.org");
         // home_dir() / config_dir() resolve to real, existing parents on
         // every supported test host (CI runners always have $HOME).
-        run("doctor".into()).expect("doctor should pass with contact email + real home dir");
+        run("doctor".into(), crate::commands::output::OutputMode::Human)
+            .expect("doctor should pass with contact email + real home dir");
     }
 
     #[test]
@@ -332,7 +335,8 @@ mod tests {
         // `docs/ERRORS.md` §4 exit 2. The descriptive line moved to
         // stderr; the error carries `CliExit(2)`.
         let _g = unset_all_doiget_config_env();
-        let err = run("bogus".into()).expect_err("bogus action should error");
+        let err = run("bogus".into(), crate::commands::output::OutputMode::Human)
+            .expect_err("bogus action should error");
         let cli_exit = err
             .downcast_ref::<CliExit>()
             .expect("unknown config action must carry a CliExit (issue #149)");

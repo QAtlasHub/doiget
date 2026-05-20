@@ -37,7 +37,9 @@ const FETCHED_AT_FMT: &str = "%Y-%m-%dT%H:%M:%SZ";
 /// error on stderr — the on-disk `Store::search` would otherwise return
 /// every entry up to `DEFAULT_LIMIT`, which is almost never what the caller
 /// intended.
-pub fn run(query: String) -> Result<()> {
+pub fn run(query: String, _mode: super::output::OutputMode) -> Result<()> {
+    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression and
+    // a Json body for `search` are tracked in #203 / #204.
     if query.trim().is_empty() {
         anyhow::bail!("search query is empty");
     }
