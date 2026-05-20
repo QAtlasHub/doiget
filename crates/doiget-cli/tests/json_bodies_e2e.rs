@@ -99,6 +99,35 @@ fn list_recent_json_empty_store_emits_empty_array() {
     assert_eq!(v.as_array().unwrap().len(), 0, "empty store → []");
 }
 
+// ---- provenance migrate --json -----------------------------------------
+
+#[test]
+fn provenance_migrate_dry_run_json_emits_report_object() {
+    // A missing log is the cleanest no-setup path: `migrate_v1_to_v2`
+    // returns an empty `MigrationReport` in dry-run mode, which the
+    // JSON branch wraps with `log_path` and emits.
+    let dir = TempDir::new().expect("tempdir");
+    let out = doiget(&dir)
+        .args(["--json", "provenance", "migrate", "--dry-run"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let s = String::from_utf8(out).expect("stdout utf-8");
+    let v: Value = serde_json::from_str(&s).expect("provenance migrate JSON parses");
+    assert!(v["log_path"].is_string(), "log_path field present");
+    assert_eq!(
+        v["report"]["dry_run"],
+        Value::Bool(true),
+        "dry_run flag round-trips"
+    );
+    assert!(
+        v["report"]["rows_rewritten"].is_number(),
+        "rows_rewritten present"
+    );
+}
+
 // ---- regression: human / quiet modes still behave as before ------------
 
 #[test]
