@@ -10,138 +10,66 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
-### Fixed
+## [0.3.0] - 2026-05-20
 
-- **[portability]** `doiget` now installs **everywhere** — `cargo install
-  doiget-cli` no longer requires cmake/nasm/go, and the published Linux
-  binary runs on old glibc (Ubuntu 20.04 / RHEL 8 / HPC boxes). Root
-  cause: reqwest's `rustls` feature pulled the aws-lc-rs crypto provider
-  (heavy C toolchain) and the release binary was dynamically linked
-  against the runner's glibc. Now: `reqwest` uses `rustls-no-provider`
-  with the `ring` crypto provider (cc + perl only), installed as the
-  process default in `doiget-core`'s `http` module; the release Linux
-  artefact is a static `x86_64-unknown-linux-musl` build. TLS posture is
-  unchanged (rustls-only, platform-verifier roots; `deny.toml` allowlist
-  still satisfied). See ADR-0020 Amendment 1.
-
-## [0.2.1-beta.12] - 2026-05-20
+Promotion of the `0.2.1-beta.1..beta.12` integration line on `next` to a
+stable release. Bumped to a SemVer **minor** (not patch) because this
+window introduces multiple new public surfaces — the global output-mode
+flags, the `--mode json` body contract for previously human-only
+commands, the batch JSONL per-ref shape, and a new `doiget
+capabilities` subcommand — alongside one practical default-behaviour
+change for non-TTY callers. CLI flag surface and `doiget-mcp` tool
+spec changes are called out below per the policy in the changelog
+preamble.
 
 ### Added
 
 - **[cli] `doiget capabilities` — single-shot inventory JSON for LLM
-  cold-boot (#214).** *(Includes the self-review pass against this
-  same slice: see "Wire-format & correctness refinements" below.)* A new subcommand that emits one parseable JSON
-  value listing the binary's full surface in one round-trip:
-  - `version` + compile-time `features` (so an agent can tell whether
-    `graph` / TDM is available in *this* build);
-  - the four `OutputMode` values;
-  - `global_flags` (`--mode` / `--json` / `--quiet`) with help text +
-    accepted values;
-  - `subcommands[]` walked from the live `clap::Command` tree (cannot
-    drift from the parser) — each with name, summary, positional
-    `args`, named `flags`, hand-maintained `examples`, a `json_mode`
-    label (`product` / `supported` / `deferred`), and any
-    `feature_gated` Cargo feature;
-  - `env_vars[]` (DOIGET_* table mirroring `docs/CONFIG.md` §4);
-  - `mcp_tools[]` (the `doiget_*` tool inventory from
-    `docs/MCP_TOOLS.md` §1);
-  - `docs{}` map pointing at the canonical spec files.
-
-  Output is **always JSON** (product-output convention from #204);
-  `--mode quiet` is the one mode that suppresses, per ADR-0017 /
-  #203. Field names are part of the public wire format (same
-  stability discipline as `EntryInfo` / `MigrationReport` —
-  renaming → semver minor with `[BREAKING]` callout). A unit-level
-  regression test asserts every subcommand declared in the `Cli`
-  enum has a metadata entry, so adding a new subcommand without
-  registering it in the static table fails at lib-test time.
-
-### Wire-format & correctness refinements to `capabilities` (#215 self-review)
-
-Pre-release tightening of the inventory JSON shape and the clap walk,
-applied before any consumer binds to the format. None of these are
-backwards-incompatible for the zero-consumer state we're in pre-merge;
-they are documented here for audit:
-
-- **Wire-format stability via `#[non_exhaustive]`** on every public
-  schema struct + the `JsonMode` / `FlagKind` / `ArgKind` enums.
-  Adding a field is non-breaking; renaming / removing one is now a
-  compile-time break for Rust consumers.
-- **`--help` no longer leaks into per-subcommand `flags[]`** —
-  clap built-ins (`Help`/`HelpShort`/`HelpLong`/`Version` actions)
-  are now filtered in `split_args_and_flags` (filter on the ArgAction).
-- **`json_mode` JSON shape unified** via `#[serde(tag = "status")]`
-  so every variant emits `{"status":"…", …}` instead of mixed
-  string / object. `Product` renamed to `Artifact` with a clarified
-  doc: the artifact may or may not be JSON; consult `examples`
-  for the per-flag stdout form — addressing the prior misleading "Product" label.
-- **`FlagSpec.kind` and `ArgSpec.kind` are typed enums** rather than
-  `&'static str`.
-- **`arg_to_flag_spec` `values` harvest is generic** via clap's
-  `PossibleValuesParser` instead of a hardcoded `--mode` special
-  case. `FlagSpec.values` type widens to `Option<Vec<String>>`;
-  serialised output unchanged.
-- **`DOIGET_CACHE_ROOT` added to `ENV_VARS`** (was missing from the
-  inventory vs `CONFIG.md` §4). Two new exact-set parity unit tests
-  (`env_vars_exact_set_matches_expected` /
-  `mcp_tools_exact_set_matches_expected`) lock the canonical sets so
-  drift between code and docs becomes a CI failure.
-- **`graph` in the shadow `test_cli`** under `#[cfg(feature =
-  "citation")]`, mirroring the production gate.
-- **Doc cross-ref fixes**: two `CONFIG.md §3` references corrected
-  to `§5`; the `features` doc no longer claims "empty when only
-  oa-only is enabled" (the inverse of actual behaviour);
-  `SubcommandMeta` block carries a `feature_gated` maintainer note
- .
-
-## [0.2.1-beta.11] - 2026-05-20
-
-### Changed (potentially breaking)
-
-- **[cli] Retroactive callout to 0.2.1-beta.8 / #203:** the
-  `--mode quiet` honoring slice changed the **default behaviour** for
-  non-TTY invocations. Pipelines and shell scripts like
-  `doiget audit-log --verify | tee audit.log` or
-  `doiget list-recent | awk -F'\t' …` now emit empty stdout because
-  the resolver lands on `Quiet` when stdout is not a terminal. To
-  restore the previous output, either pass `--mode human` or set
-  `DOIGET_MODE=human` in the calling environment. The semantic was
-  always documented by ADR-0017 / CONFIG.md §3, but the practical
-  break is new with #203. (#207 self-review §1)
-
-### Changed
-
-- **[core]** `store::EntryInfo` and `provenance::MigrationReport`
-  carry an explicit doc-comment "wire-format stability" note:
-  field names became part of the public API the moment `Serialize`
-  shipped (in #204 / 0.2.1-beta.9). Renaming a field is now a semver
-  minor bump warranting a CHANGELOG `[BREAKING]` callout; new fields
-  are safe (`#[non_exhaustive]`). (#208 self-review §1)
-
-- **[cli/batch]** `batch --mode json` JoinSet-panic record now emits
-  `"ref": null` instead of the sentinel string `"<task-panic>"`. A
-  consumer doing `retry(rec["ref"])` would have mishandled the
-  sentinel as a literal "DOI" — `null` is honest and parseable.
-  (#209 self-review §1)
-
-### Added (tests / docs only)
-
-- `audit-log` Quiet + tampered-log e2e (non-zero exit, empty stdout).
-- `config show` / `config path` Quiet e2e (Linux/macOS — Windows
-  gated due to `dirs::config_dir()` Known Folder API).
-- Unit test enumerating every known `VerifyIssueKind` variant against
-  the shared `kind_label` helper extracted from the two prior
-  inline matches (audit_log human + JSON branches now share one
-  mapping). (#208 self-review §2)
-- `commands/output.rs` module doc rewritten with the post-merge
-  per-mode honoring summary and an explicit "pretty single value vs
-  compact JSON-Lines" convention note for future maintainers.
-  (#206 self-review §3 / #208 self-review §6)
-
-## [0.2.1-beta.10] - 2026-05-20
-
-### Added
-
+  cold-boot (#214 / #215).** A new subcommand that emits one parseable
+  JSON value listing the binary's full surface in one round-trip:
+  `version` + compile-time `features` (so an agent can tell whether
+  `graph` / TDM is available in *this* build); the four `OutputMode`
+  values; `global_flags` (`--mode` / `--json` / `--quiet`) with help
+  text + accepted values; `subcommands[]` walked from the live
+  `clap::Command` tree (cannot drift from the parser) with name,
+  summary, positional `args`, named `flags`, hand-maintained
+  `examples`, a `json_mode` discriminant (`artifact` / `supported` /
+  `unsupported`) carrying its own status tag, and any `feature_gated`
+  Cargo feature; `env_vars[]` (DOIGET_* table mirroring
+  `docs/CONFIG.md` §5); `mcp_tools[]` (the `doiget_*` tool inventory
+  from `docs/MCP_TOOLS.md` §1); `docs{}` map pointing at the canonical
+  spec files. Output is always JSON (product-output convention);
+  `--mode quiet` is the one mode that suppresses, per ADR-0017 / #203.
+  Field names are part of the public wire format with the same
+  stability discipline as `EntryInfo` / `MigrationReport`. Every public
+  schema struct + `JsonMode` / `FlagKind` / `ArgKind` enum carries
+  `#[non_exhaustive]` so additions are non-breaking and renames /
+  removals are compile-time breaks for Rust consumers. Parity unit
+  tests lock the canonical `env_vars` / `mcp_tools` sets and the per-
+  subcommand metadata coverage so drift between code, docs, and the
+  `Cli` enum becomes a CI failure.
+- **[cli]** Global output-mode flags `--mode <human|json|quiet|mcp>`,
+  `--json`, `-q`/`--quiet`, and the `DOIGET_MODE` environment variable
+  are now parsed and resolved per the ADR-0017 precedence ladder
+  (`--mode` > `--json`/`--quiet` > `DOIGET_MODE` > subcommand-implicit
+  > TTY > quiet default). The three flag forms are mutually exclusive
+  (clap-enforced). `doiget serve` is pinned to `mcp` regardless of
+  flags / env, preserving the load-bearing stdout-purity invariant
+  (CONFIG.md §5 / Slice 9). (#144)
+- **[cli]** `--mode json` (and `--json` / `DOIGET_MODE=json`) now emits
+  structured JSON for six commands that previously emitted human-only
+  output: `info` (the `Metadata` struct), `list-recent` / `search`
+  (a JSON array of `EntryInfo` objects with
+  `{safekey, title, year, fetched_at}`), `config show` (the
+  `ResolvedConfig` struct), `config path` (`{"config_path": "..."}`),
+  `audit-log --verify` (a report object with `total_rows` /
+  `total_ok` / `total_issues` / per-segment summaries / per-issue
+  records), and `provenance migrate` (the `MigrationReport` wrapped
+  with `log_path`). Single-value bodies (NOT JSON-Lines — the batch
+  JSONL contract is the separate ERRORS.md §3 surface). Stderr (human
+  errors) is unaffected. `Serialize` was added to two additive public
+  types in `doiget-core`: `store::EntryInfo` and
+  `provenance::MigrationReport`. (#204)
 - **[cli]** `batch --mode json` (and `--json` / `DOIGET_MODE=json`) now
   emits the ERRORS.md §3 CI-persona JSON-Lines per-ref shape on stdout:
   one record per input line of the form `{"ok": true, "ref": "..."}`
@@ -154,95 +82,6 @@ they are documented here for audit:
   `denial_context` on `CAPABILITY_DENIED`) require `fetch_one` to
   return `FetchPaperOutcome` instead of `Result<()>` and land in a
   follow-up; the contract surface ships now. (#205)
-
-## [0.2.1-beta.9] - 2026-05-20
-
-### Added
-
-- **[cli]** `--mode json` (and `--json`/`DOIGET_MODE=json`) now emits
-  structured JSON for six commands that previously emitted human-only
-  output: `info` (the `Metadata` struct), `list-recent` / `search`
-  (a JSON array of `EntryInfo` objects with
-  `{safekey, title, year, fetched_at}`), `config show` (the
-  `ResolvedConfig` struct), `config path`
-  (`{"config_path": "..."}`), `audit-log --verify` (a report object
-  with `total_rows` / `total_ok` / `total_issues` / per-segment
-  summaries / per-issue records), and `provenance migrate` (the
-  `MigrationReport` wrapped with `log_path`). Single-value bodies
-  (NOT JSON-Lines — the batch JSONL contract is the separate ERRORS.md
-  §3 surface tracked in #205). Stderr (human errors) is unaffected.
-  `Serialize` was added to two additive public types in `doiget-core`:
-  `store::EntryInfo` and `provenance::MigrationReport`. (#204)
-
-## [0.2.1-beta.8] - 2026-05-20
-
-### Changed
-
-- **[cli]** `--mode quiet` (and `-q`/`--quiet`/`DOIGET_MODE=quiet`/the
-  non-TTY default) now suppresses *informational* stdout in the six
-  commands that previously emitted it unconditionally: `audit-log
-  --verify` (header / per-segment summary / per-issue lines), `info`
-  (TOML dump), `list-recent` (TSV table), `search` (TSV table),
-  `config show` (TOML dump), `config path` (path), and
-  `provenance migrate` (summary). Errors (stderr), exit codes, and
-  on-disk side effects are unaffected — `audit-log` with chain issues
-  still exits non-zero even with `stdout == ""`. `fetch` /
-  `batch` were already quiet by design (success/summary on stderr per
-  ADR-0001), and product-output commands (`bib` / `csl` / `graph` /
-  `*-dry-run` plan) are deliberately not suppressed. Existing e2e
-  tests that assert specific human stdout opt in via
-  `DOIGET_MODE=human`. (#203)
-
-## [0.2.1-beta.7] - 2026-05-20
-
-### Added
-
-- **[cli]** Global output-mode flags `--mode <human|json|quiet|mcp>`,
-  `--json`, `-q`/`--quiet`, and the `DOIGET_MODE` environment variable
-  are now parsed and resolved per the ADR-0017 precedence ladder
-  (`--mode` > `--json`/`--quiet` > `DOIGET_MODE` > subcommand-implicit
-  > TTY > quiet default). The three flag forms are mutually exclusive
-  (clap-enforced). `doiget serve` is pinned to `mcp` regardless of
-  flags / env, preserving the load-bearing stdout-purity invariant
-  (CONFIG.md §5 / Slice 9). The resolved `OutputMode` is threaded into
-  every command's `run(..)`; per-mode honouring (Quiet stdout
-  suppression, Json bodies for human-table commands, ERRORS.md §3
-  batch JSONL) is tracked in follow-up issues #203 / #204 / #205. This
-  PR ships the **machinery** that those follow-ups build on. (#144)
-
-## [0.2.1-beta.6] - 2026-05-19
-
-### Changed
-
-- **[core]** `oa-publisher` redirect allowlist now includes
-  physics-society / diamond-OA hosts: `*.aps.org` (APS), `scipost.org`
-  + `*.scipost.org` (SciPost diamond OA), `*.iop.org` (IOP) (#193, per
-  ADR-0027 and `docs/REDIRECT_ALLOWLIST.md` §5). The list was
-  bio/medical-leaning; a real `doiget batch` over 30 OpenAlex-OA
-  finite-temperature-MPS DOIs had 7 denied purely because the
-  discovered OA PDF host was off-list (24/30 → ~30/30). Unlike the
-  surrounding `(unverified)` entries these are empirically verified.
-  `hdl.handle.net` / `ruj.uj.edu.pl` (open handle/repo surfaces) are
-  deliberately out of scope.
-
-## [0.2.1-beta.5] - 2026-05-19
-
-### Fixed
-
-- **[core]** `Doi::parse` now accepts `:` in the DOI suffix (#194).
-  Legacy Kluwer/Springer (`10.1023/A:NNNNNNNNNN`) and EDP Sciences /
-  Journal de Physique (`10.1051/jphys:NNNN`) DOIs — both resolvable at
-  doi.org and via Crossref — were previously rejected with
-  `INVALID_REF`, silently losing real papers from physics corpora (3/38
-  niche refs lost in the Ising-RG dogfood). `:` grants no path-traversal
-  capability beyond the already-permitted `/`, and `safekey` escapes it
-  before any filesystem use. `docs/SECURITY.md` §1.1 charset widened to
-  `[A-Za-z0-9._/():-]` per ADR-0026.
-
-## [0.2.1-beta.4] - 2026-05-19
-
-### Added
-
 - **[provenance]** Log rotation + retention (`docs/PROVENANCE_LOG.md`
   §6), previously unimplemented (#140). When `access.log` exceeds
   100 MiB an `append` gzip-archives it to
@@ -260,34 +99,93 @@ they are documented here for audit:
   ADR-0020 portability). Internal `DOIGET_LOG_ROTATE_BYTES` ops/test
   knob (`0` disables rotation).
 
-## [0.2.1-beta.3] - 2026-05-19
+### Changed (potentially breaking)
+
+- **[cli] Non-TTY default is now `Quiet`.** The `--mode quiet` honoring
+  slice (#203) changed the default behaviour for non-TTY invocations:
+  pipelines and shell scripts like `doiget audit-log --verify | tee
+  audit.log` or `doiget list-recent | awk -F'\t' …` now emit empty
+  stdout because the resolver lands on `Quiet` when stdout is not a
+  terminal. To restore the previous output, either pass `--mode human`
+  or set `DOIGET_MODE=human` in the calling environment. The semantic
+  was always documented by ADR-0017 / CONFIG.md §5, but the practical
+  break is new here.
+
+### Changed
+
+- **[cli]** `--mode quiet` (and `-q`/`--quiet`/`DOIGET_MODE=quiet`/the
+  non-TTY default) now suppresses *informational* stdout in the six
+  commands that previously emitted it unconditionally: `audit-log
+  --verify` (header / per-segment summary / per-issue lines), `info`
+  (TOML dump), `list-recent` (TSV table), `search` (TSV table),
+  `config show` (TOML dump), `config path` (path), and
+  `provenance migrate` (summary). Errors (stderr), exit codes, and
+  on-disk side effects are unaffected — `audit-log` with chain issues
+  still exits non-zero even with `stdout == ""`. `fetch` / `batch`
+  were already quiet by design (success/summary on stderr per
+  ADR-0001), and product-output commands (`bib` / `csl` / `graph` /
+  `*-dry-run` plan) are deliberately not suppressed. (#203)
+- **[core]** `oa-publisher` redirect allowlist now includes
+  physics-society / diamond-OA hosts: `*.aps.org` (APS), `scipost.org`
+  + `*.scipost.org` (SciPost diamond OA), `*.iop.org` (IOP) (#193, per
+  ADR-0027 and `docs/REDIRECT_ALLOWLIST.md` §5). The list was
+  bio/medical-leaning; a real `doiget batch` over 30 OpenAlex-OA
+  finite-temperature-MPS DOIs had 7 denied purely because the
+  discovered OA PDF host was off-list (24/30 → ~30/30). Unlike the
+  surrounding `(unverified)` entries these are empirically verified.
+  `hdl.handle.net` / `ruj.uj.edu.pl` (open handle/repo surfaces) are
+  deliberately out of scope.
+- **[core]** `store::EntryInfo` and `provenance::MigrationReport`
+  carry an explicit doc-comment "wire-format stability" note: field
+  names became part of the public API the moment `Serialize` shipped.
+  Renaming a field is now a semver minor bump warranting a CHANGELOG
+  `[BREAKING]` callout; new fields are safe (`#[non_exhaustive]`).
+- **[cli/batch]** `batch --mode json` JoinSet-panic record now emits
+  `"ref": null` instead of the sentinel string `"<task-panic>"`. A
+  consumer doing `retry(rec["ref"])` would have mishandled the
+  sentinel as a literal "DOI"; `null` is honest and parseable.
 
 ### Fixed
 
-- **[mcp/core]** `doiget_metadata_only` now writes the metadata TOML to
-  the store (`<root>/.metadata/<safekey>.toml`) — the documented
+- **[portability]** `doiget` now installs **everywhere** — `cargo
+  install doiget-cli` no longer requires cmake/nasm/go, and the
+  published Linux binary runs on old glibc (Ubuntu 20.04 / RHEL 8 /
+  HPC boxes). Root cause: reqwest's `rustls` feature pulled the
+  aws-lc-rs crypto provider (heavy C toolchain) and the release
+  binary was dynamically linked against the runner's glibc. Now:
+  `reqwest` uses `rustls-no-provider` with the `ring` crypto provider
+  (cc + perl only), installed as the process default in
+  `doiget-core`'s `http` module; the release Linux artefact is a
+  static `x86_64-unknown-linux-musl` build. TLS posture is unchanged
+  (rustls-only, platform-verifier roots; `deny.toml` allowlist still
+  satisfied). See ADR-0020 Amendment 1.
+- **[core]** `Doi::parse` now accepts `:` in the DOI suffix (#194).
+  Legacy Kluwer/Springer (`10.1023/A:NNNNNNNNNN`) and EDP Sciences /
+  Journal de Physique (`10.1051/jphys:NNNN`) DOIs — both resolvable
+  at doi.org and via Crossref — were previously rejected with
+  `INVALID_REF`, silently losing real papers from physics corpora
+  (3/38 niche refs lost in the Ising-RG dogfood). `:` grants no
+  path-traversal capability beyond the already-permitted `/`, and
+  `safekey` escapes it before any filesystem use. `docs/SECURITY.md`
+  §1.1 charset widened to `[A-Za-z0-9._/():-]` per ADR-0026.
+- **[mcp/core]** `doiget_metadata_only` now writes the metadata TOML
+  to the store (`<root>/.metadata/<safekey>.toml`) — the documented
   `docs/MCP_TOOLS.md` §11 SIDE EFFECT that was previously a `TODO`
   (orchestrator returned provenance rows but zero disk artifacts, so
-  `doiget_info` after `doiget_metadata_only` returned `metadata: null`).
-  Implemented as a new `metadata_only_to_store` wrapper around the
-  unchanged **pure** `metadata_only`; `doiget_resolve_paper`
+  `doiget_info` after `doiget_metadata_only` returned `metadata:
+  null`). Implemented as a new `metadata_only_to_store` wrapper
+  around the unchanged **pure** `metadata_only`; `doiget_resolve_paper`
   (`resolve_only`) keeps delegating to the pure resolver, so its
   `docs/MCP_TOOLS.md` §1 "NEVER writes a metadata TOML" contract now
-  holds *structurally* (the store-write lives in a separate entry point
-  `resolve_only` does not call) and cannot regress. e2e tests assert
-  metadata-only persists a readable TOML and resolve-only writes
-  nothing. (#139)
-
-## [0.2.1-beta.2] - 2026-05-19
-
-### Fixed
-
+  holds *structurally* (the store-write lives in a separate entry
+  point `resolve_only` does not call) and cannot regress. (#139)
 - **[repo]** `LICENSE` is now the verbatim 21-line SPDX MIT body. The
   trailing `---` separator + paper-licensing `Note:` paragraph (which
-  pushed GitHub's `licensee` classifier below its match threshold, so the
-  repo showed `licenseInfo: Other`) is removed; the identical posture
-  statement already lives in `docs/LEGAL.md` and the site posture page.
-  Restores MIT classification for crates.io / SPDX / shields. (#157)
+  pushed GitHub's `licensee` classifier below its match threshold, so
+  the repo showed `licenseInfo: Other`) is removed; the identical
+  posture statement already lives in `docs/LEGAL.md` and the site
+  posture page. Restores MIT classification for crates.io / SPDX /
+  shields. (#157)
 
 ## [0.2.0](https://github.com/sotashimozono/doiget/compare/doiget-core-v0.1.3...v0.2.0) - 2026-05-18
 
