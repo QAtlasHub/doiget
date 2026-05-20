@@ -61,10 +61,22 @@ use super::resolve_store_root;
 pub async fn run_with_options(
     path: String,
     dry_run: bool,
-    _mode: super::output::OutputMode,
+    mode: super::output::OutputMode,
 ) -> Result<()> {
-    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression and
-    // the CI-persona JSON-Lines per-ref shape are tracked in #203 / #205.
+    // `mode` honors ADR-0017. `Quiet` is a no-op here because batch's
+    // human summary already goes to stderr per ADR-0001. `Json` emits
+    // the ERRORS.md §3 CI-persona JSON-Lines per-ref shape on stdout
+    // (#205): one record per ref of the form
+    //   {"ok": true,  "ref": "..."}
+    //   {"ok": false, "ref": "...",
+    //    "error": {"code": "<ERROR_CODE>", "message": "..."}}
+    // The dry-run branch is unaffected — its product output is the
+    // FetchPlan envelope per ref, not a per-ref result record. A
+    // future follow-up will surface the full structured outcome
+    // (safekey / store_path / canonical_digest on success,
+    // `denial_context` on `CAPABILITY_DENIED`) once `fetch_one` returns
+    // the structured `FetchPaperOutcome` instead of `Result<()>`.
+    let json_mode = mode == super::output::OutputMode::Json;
     // Step 1: read the input file. Failures surface before any fetch starts.
     let raw =
         std::fs::read_to_string(&path).with_context(|| format!("reading batch file: {path}"))?;
@@ -147,6 +159,13 @@ pub async fn run_with_options(
             Ok(r) => r,
             Err(e) => {
                 parse_errors += 1;
+                if json_mode {
+                    // #205: parse failures get an INVALID_REF JSONL line
+                    // with the human message in `error.message`. Per
+                    // ERRORS.md §3.1 there is no `denial_context` on
+                    // INVALID_REF (the input never reached a guard).
+                    emit_jsonl_failure(&input, "INVALID_REF", &e.to_string());
+                }
                 // Best-effort `Resolve` row capturing the parse failure; we
                 // do NOT abort the batch on a single bad line.
                 let _ = harness.log.append(RowInput {
@@ -201,14 +220,41 @@ pub async fn run_with_options(
     while let Some(joined) = joins.join_next().await {
         match joined {
             Ok(TaskOutcome { input, result }) => match result {
-                Ok(()) => fetch_ok += 1,
+                Ok(()) => {
+                    fetch_ok += 1;
+                    if json_mode {
+                        // #205: minimal success record. The full
+                        // structured outcome (safekey / store_path /
+                        // canonical_digest) requires `fetch_one` to
+                        // return `FetchPaperOutcome`; that refactor is
+                        // tracked separately so this PR can ship the
+                        // contract surface today.
+                        emit_jsonl_success(&input);
+                    }
+                }
                 Err(e) => {
                     fetch_errors += 1;
+                    if json_mode {
+                        // Best-effort code extraction. The orchestrator
+                        // returns `Result<(), anyhow::Error>`; we emit a
+                        // generic FETCH_ERROR code with the chain's
+                        // root-cause message. A follow-up will downcast
+                        // to `doiget_core::FetchError` for the
+                        // structured `code` + `denial_context`.
+                        emit_jsonl_failure(&input, "FETCH_ERROR", &format!("{e:#}"));
+                    }
                     tracing::warn!(%input, error = ?e, "batch entry fetch failed");
                 }
             },
             Err(join_err) => {
                 fetch_errors += 1;
+                if json_mode {
+                    emit_jsonl_failure(
+                        "<task-panic>",
+                        "FETCH_ERROR",
+                        &format!("batch task panicked: {join_err}"),
+                    );
+                }
                 tracing::error!(error = ?join_err, "batch task panicked or was cancelled");
             }
         }
@@ -261,6 +307,40 @@ fn print_summary(args: std::fmt::Arguments<'_>) {
     eprintln!("{args}");
 }
 
+/// #205: build the JSON-Lines success record value for `ref_input`.
+/// Per ERRORS.md §3, the wire shape is `{"ok": true, "ref": "..."}`.
+/// Returned as `serde_json::Value` so unit tests can assert the shape
+/// without a stdout-capture dance; the integration site wraps it with
+/// `println!`.
+fn build_jsonl_success(ref_input: &str) -> serde_json::Value {
+    serde_json::json!({ "ok": true, "ref": ref_input })
+}
+
+/// #205: build the JSON-Lines failure record value with `code` and
+/// `message`. The wire shape is
+/// `{"ok": false, "ref": "...", "error": {"code": "...", "message": "..."}}`.
+/// `denial_context` (ADR-0023 closed enum) is intentionally omitted in
+/// this PR — surfacing it requires `fetch_one` to return the structured
+/// outcome instead of `Result<()>`; tracked as a follow-up to keep this
+/// PR's diff focused on the contract surface.
+fn build_jsonl_failure(ref_input: &str, code: &str, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "ok":    false,
+        "ref":   ref_input,
+        "error": { "code": code, "message": message },
+    })
+}
+
+#[allow(clippy::print_stdout)]
+fn emit_jsonl_success(ref_input: &str) {
+    println!("{}", build_jsonl_success(ref_input));
+}
+
+#[allow(clippy::print_stdout)]
+fn emit_jsonl_failure(ref_input: &str, code: &str, message: &str) {
+    println!("{}", build_jsonl_failure(ref_input, code, message));
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -269,6 +349,52 @@ fn print_summary(args: std::fmt::Arguments<'_>) {
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    // ---- #205 JSON-Lines record shape (unit-level) ---------------------
+
+    #[test]
+    fn jsonl_success_shape() {
+        let v = build_jsonl_success("10.1234/foo");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["ref"], "10.1234/foo");
+        assert!(v.get("error").is_none(), "no error field on success");
+    }
+
+    #[test]
+    fn jsonl_failure_shape_invalid_ref() {
+        let v = build_jsonl_failure("not-a-doi", "INVALID_REF", "bad ref");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["ref"], "not-a-doi");
+        assert_eq!(v["error"]["code"], "INVALID_REF");
+        assert_eq!(v["error"]["message"], "bad ref");
+    }
+
+    #[test]
+    fn jsonl_failure_shape_fetch_error() {
+        let v = build_jsonl_failure("arxiv:2401.12345", "FETCH_ERROR", "boom");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["ref"], "arxiv:2401.12345");
+        assert_eq!(v["error"]["code"], "FETCH_ERROR");
+        assert_eq!(v["error"]["message"], "boom");
+    }
+
+    #[test]
+    fn jsonl_records_are_single_line_serialised() {
+        // `serde_json::Value::to_string` is compact (no trailing newline,
+        // no embedded newlines) — required for the JSONL contract since
+        // the production emitter wraps it with a single `println!` and
+        // CI consumers split stdout by `\n`.
+        let s = build_jsonl_success("10.1/x").to_string();
+        assert!(
+            !s.contains('\n'),
+            "JSONL success must be single-line: {s:?}"
+        );
+        let s2 = build_jsonl_failure("10.1/x", "FETCH_ERROR", "msg").to_string();
+        assert!(
+            !s2.contains('\n'),
+            "JSONL failure must be single-line: {s2:?}"
+        );
+    }
 
     #[test]
     fn parses_and_filters_input_lines() {
