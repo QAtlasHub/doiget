@@ -72,6 +72,45 @@ fn batch_json_parse_failure_emits_invalid_ref_jsonl() {
 }
 
 #[test]
+fn batch_json_fetch_failure_emits_fetch_error_jsonl() {
+    // Point the arxiv resolver at a closed loopback port so a parseable
+    // ref deterministically fails at the transport layer. This exercises
+    // the JoinSet drain's `Err(e)` branch and `emit_jsonl_failure` with
+    // FETCH_ERROR — the previously-uncovered emit path.
+    let dir = TempDir::new().expect("tempdir");
+    let refs = dir.path().join("refs.txt");
+    std::fs::File::create(&refs)
+        .expect("create refs file")
+        .write_all(b"arxiv:2401.99999\n")
+        .expect("write refs");
+
+    let output = doiget(&dir)
+        // Closed port → connect-refused → fetch_one returns Err →
+        // FETCH_ERROR JSONL.
+        .env("DOIGET_ARXIV_BASE", "http://127.0.0.1:1/")
+        .args(["--json", "batch", refs.to_str().unwrap()])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).expect("stdout utf-8");
+    let lines: Vec<&str> = stdout.lines().filter(|s| !s.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 1, "exactly one JSONL record, got: {stdout}");
+    let v: Value = serde_json::from_str(lines[0]).expect("line parses as JSON");
+    assert_eq!(v["ok"], Value::Bool(false));
+    assert_eq!(v["ref"], "arxiv:2401.99999");
+    // Code is FETCH_ERROR (generic) per the #205 contract — the
+    // structured `denial_context` / source-specific code lands with the
+    // FetchPaperOutcome plumbing follow-up.
+    assert_eq!(v["error"]["code"], "FETCH_ERROR");
+    assert!(
+        v["error"]["message"].is_string() && !v["error"]["message"].as_str().unwrap().is_empty(),
+        "error.message MUST be a non-empty string"
+    );
+}
+
+#[test]
 fn batch_human_mode_remains_silent_on_stdout() {
     // ADR-0001 / pre-existing: batch in human mode emits its summary on
     // STDERR, not stdout. Regression-test that this is true even after
