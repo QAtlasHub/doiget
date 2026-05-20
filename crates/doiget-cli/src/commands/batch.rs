@@ -164,7 +164,7 @@ pub async fn run_with_options(
                     // with the human message in `error.message`. Per
                     // ERRORS.md §3.1 there is no `denial_context` on
                     // INVALID_REF (the input never reached a guard).
-                    emit_jsonl_failure(&input, "INVALID_REF", &e.to_string());
+                    emit_jsonl_failure(Some(&input), "INVALID_REF", &e.to_string());
                 }
                 // Best-effort `Resolve` row capturing the parse failure; we
                 // do NOT abort the batch on a single bad line.
@@ -218,46 +218,23 @@ pub async fn run_with_options(
     let mut fetch_ok: usize = 0;
     let mut fetch_errors: usize = 0;
     while let Some(joined) = joins.join_next().await {
-        match joined {
-            Ok(TaskOutcome { input, result }) => match result {
-                Ok(()) => {
-                    fetch_ok += 1;
-                    if json_mode {
-                        // #205: minimal success record. The full
-                        // structured outcome (safekey / store_path /
-                        // canonical_digest) requires `fetch_one` to
-                        // return `FetchPaperOutcome`; that refactor is
-                        // tracked separately so this PR can ship the
-                        // contract surface today.
-                        emit_jsonl_success(&input);
-                    }
-                }
-                Err(e) => {
-                    fetch_errors += 1;
-                    if json_mode {
-                        // Best-effort code extraction. The orchestrator
-                        // returns `Result<(), anyhow::Error>`; we emit a
-                        // generic FETCH_ERROR code with the chain's
-                        // root-cause message. A follow-up will downcast
-                        // to `doiget_core::FetchError` for the
-                        // structured `code` + `denial_context`.
-                        emit_jsonl_failure(&input, "FETCH_ERROR", &format!("{e:#}"));
-                    }
-                    tracing::warn!(%input, error = ?e, "batch entry fetch failed");
-                }
-            },
-            Err(join_err) => {
-                fetch_errors += 1;
-                if json_mode {
-                    emit_jsonl_failure(
-                        "<task-panic>",
-                        "FETCH_ERROR",
-                        &format!("batch task panicked: {join_err}"),
-                    );
-                }
-                tracing::error!(error = ?join_err, "batch task panicked or was cancelled");
+        let JoinedOutcome {
+            is_error,
+            json_record,
+            log_breadcrumb,
+        } = classify_joined(joined, json_mode);
+        if is_error {
+            fetch_errors += 1;
+        } else {
+            fetch_ok += 1;
+        }
+        if let Some(record) = json_record {
+            #[allow(clippy::print_stdout)]
+            {
+                println!("{record}");
             }
         }
+        log_breadcrumb.emit();
     }
 
     let total_errors = parse_errors + fetch_errors;
@@ -293,6 +270,11 @@ pub async fn run_with_options(
 
 /// Per-task outcome carried out of the `JoinSet`. Holding the original input
 /// string lets the warn log breadcrumb the offending ref without re-parsing.
+///
+/// `Debug` is needed for the `classify_joined_panic_emits_null_ref_fetch_error`
+/// unit test (which spawns a panicking task and consumes the panic
+/// `Result<TaskOutcome, JoinError>` via `expect_err` — the latter requires `T: Debug`).
+#[derive(Debug)]
 struct TaskOutcome {
     input: String,
     result: Result<()>,
@@ -307,6 +289,99 @@ fn print_summary(args: std::fmt::Arguments<'_>) {
     eprintln!("{args}");
 }
 
+/// Outcome of a single `JoinSet::join_next()` result, classified per
+/// #205 (success / fetch error / task panic) plus the JSON-Lines
+/// record (if `json_mode`) and the breadcrumb level for the tracing
+/// log. Extracted from the drain loop so it can be unit-tested without
+/// running the full orchestrator (self-review for #209 §7 +
+/// codecov/patch coverage closure).
+struct JoinedOutcome {
+    /// True when this entry contributes to `fetch_errors`.
+    is_error: bool,
+    /// The JSONL record to emit, when `json_mode` is on. `None` means
+    /// "no record" (either `json_mode` was false, or the variant has
+    /// no record by design — currently every variant produces a
+    /// record under json_mode, but the option leaves room for one).
+    json_record: Option<serde_json::Value>,
+    /// Source-side breadcrumb for the per-ref tracing line, captured
+    /// here so `classify_joined` stays pure and the loop just calls
+    /// `.log()` on the outcome.
+    log_breadcrumb: LogBreadcrumb,
+}
+
+enum LogBreadcrumb {
+    /// Success — no per-ref tracing line.
+    None,
+    /// `tracing::warn!(input, error)` for a normal fetch failure.
+    FetchFailed { input: String, error_dbg: String },
+    /// `tracing::error!(error)` for a task panic / cancellation.
+    TaskPanicked { error_dbg: String },
+}
+
+impl LogBreadcrumb {
+    /// Emit the per-ref breadcrumb to the tracing subscriber. Pulled
+    /// out of `classify_joined` so the helper stays pure and out of
+    /// the drain-loop body so an owned `JoinedOutcome` can be
+    /// destructured without borrow-check trouble.
+    fn emit(self) {
+        match self {
+            LogBreadcrumb::None => {}
+            LogBreadcrumb::FetchFailed { input, error_dbg } => {
+                tracing::warn!(%input, %error_dbg, "batch entry fetch failed");
+            }
+            LogBreadcrumb::TaskPanicked { error_dbg } => {
+                tracing::error!(%error_dbg, "batch task panicked or was cancelled");
+            }
+        }
+    }
+}
+
+/// Classify a single `JoinSet::join_next()` result. Pure function
+/// (no I/O, no tracing) — `JoinedOutcome::log` handles the breadcrumb
+/// side-effect at the drain site. Unit-tested below for every variant
+/// including a real `JoinError` synthesised by spawning a panicking
+/// task on a tiny `JoinSet<()>`.
+fn classify_joined(
+    joined: Result<TaskOutcome, tokio::task::JoinError>,
+    json_mode: bool,
+) -> JoinedOutcome {
+    match joined {
+        Ok(TaskOutcome { input, result }) => match result {
+            Ok(()) => JoinedOutcome {
+                is_error: false,
+                json_record: json_mode.then(|| build_jsonl_success(&input)),
+                log_breadcrumb: LogBreadcrumb::None,
+            },
+            Err(e) => {
+                let error_dbg = format!("{e:?}");
+                let json_msg = format!("{e:#}");
+                let record =
+                    json_mode.then(|| build_jsonl_failure(Some(&input), "FETCH_ERROR", &json_msg));
+                JoinedOutcome {
+                    is_error: true,
+                    json_record: record,
+                    log_breadcrumb: LogBreadcrumb::FetchFailed { input, error_dbg },
+                }
+            }
+        },
+        Err(join_err) => {
+            let error_dbg = format!("{join_err:?}");
+            // The JoinSet has lost the originating input by the
+            // time the panic surfaces. Honest serialisation:
+            // `"ref": null` instead of a `"<task-panic>"`
+            // sentinel that a consumer doing `retry(rec["ref"])`
+            // would mishandle. Self-review for #209 §1.
+            let json_msg = format!("batch task panicked: {join_err}");
+            let record = json_mode.then(|| build_jsonl_failure(None, "FETCH_ERROR", &json_msg));
+            JoinedOutcome {
+                is_error: true,
+                json_record: record,
+                log_breadcrumb: LogBreadcrumb::TaskPanicked { error_dbg },
+            }
+        }
+    }
+}
+
 /// #205: build the JSON-Lines success record value for `ref_input`.
 /// Per ERRORS.md §3, the wire shape is `{"ok": true, "ref": "..."}`.
 /// Returned as `serde_json::Value` so unit tests can assert the shape
@@ -318,12 +393,19 @@ fn build_jsonl_success(ref_input: &str) -> serde_json::Value {
 
 /// #205: build the JSON-Lines failure record value with `code` and
 /// `message`. The wire shape is
-/// `{"ok": false, "ref": "...", "error": {"code": "...", "message": "..."}}`.
+/// `{"ok": false, "ref": "<ref>"|null, "error": {"code": "...", "message": "..."}}`.
+///
+/// `ref_input` is `Option<&str>` because the JoinSet panic arm has lost
+/// the originating input by the time the panic surfaces: serialising
+/// `null` is more honest than a sentinel string like `"<task-panic>"`
+/// (which a consumer doing `retry(rec["ref"])` would mishandle by
+/// trying to refetch the literal sentinel — self-review for #209 §1).
+///
 /// `denial_context` (ADR-0023 closed enum) is intentionally omitted in
 /// this PR — surfacing it requires `fetch_one` to return the structured
-/// outcome instead of `Result<()>`; tracked as a follow-up to keep this
-/// PR's diff focused on the contract surface.
-fn build_jsonl_failure(ref_input: &str, code: &str, message: &str) -> serde_json::Value {
+/// outcome instead of `Result<()>`; tracked in #210 to keep this PR's
+/// diff focused on the contract surface.
+fn build_jsonl_failure(ref_input: Option<&str>, code: &str, message: &str) -> serde_json::Value {
     serde_json::json!({
         "ok":    false,
         "ref":   ref_input,
@@ -331,13 +413,13 @@ fn build_jsonl_failure(ref_input: &str, code: &str, message: &str) -> serde_json
     })
 }
 
+/// `emit_jsonl_failure` is still called from the parse-failure site
+/// (Step 7's `Ref::parse` branch); the JoinSet-drain site now uses
+/// [`classify_joined`] + an inline `println!`, so the matching
+/// `emit_jsonl_success` thin wrapper is no longer needed and was
+/// removed alongside the drain refactor.
 #[allow(clippy::print_stdout)]
-fn emit_jsonl_success(ref_input: &str) {
-    println!("{}", build_jsonl_success(ref_input));
-}
-
-#[allow(clippy::print_stdout)]
-fn emit_jsonl_failure(ref_input: &str, code: &str, message: &str) {
+fn emit_jsonl_failure(ref_input: Option<&str>, code: &str, message: &str) {
     println!("{}", build_jsonl_failure(ref_input, code, message));
 }
 
@@ -362,7 +444,7 @@ mod tests {
 
     #[test]
     fn jsonl_failure_shape_invalid_ref() {
-        let v = build_jsonl_failure("not-a-doi", "INVALID_REF", "bad ref");
+        let v = build_jsonl_failure(Some("not-a-doi"), "INVALID_REF", "bad ref");
         assert_eq!(v["ok"], false);
         assert_eq!(v["ref"], "not-a-doi");
         assert_eq!(v["error"]["code"], "INVALID_REF");
@@ -371,11 +453,131 @@ mod tests {
 
     #[test]
     fn jsonl_failure_shape_fetch_error() {
-        let v = build_jsonl_failure("arxiv:2401.12345", "FETCH_ERROR", "boom");
+        let v = build_jsonl_failure(Some("arxiv:2401.12345"), "FETCH_ERROR", "boom");
         assert_eq!(v["ok"], false);
         assert_eq!(v["ref"], "arxiv:2401.12345");
         assert_eq!(v["error"]["code"], "FETCH_ERROR");
         assert_eq!(v["error"]["message"], "boom");
+    }
+
+    #[test]
+    fn jsonl_failure_shape_panic_ref_is_null() {
+        // Self-review for #209 §1: a JoinSet panic loses the input, so
+        // the record carries `ref: null` rather than a sentinel string
+        // that a consumer doing `retry(rec["ref"])` would mishandle.
+        let v = build_jsonl_failure(None, "FETCH_ERROR", "batch task panicked: ...");
+        assert_eq!(v["ok"], false);
+        assert!(v["ref"].is_null(), "panic record's ref MUST be null: {v}");
+        assert_eq!(v["error"]["code"], "FETCH_ERROR");
+    }
+
+    // ---- classify_joined: every drain-arm under both json_mode toggles
+
+    #[test]
+    fn classify_joined_success_json_emits_record() {
+        let outcome = classify_joined(
+            Ok(TaskOutcome {
+                input: "10.1234/foo".to_string(),
+                result: Ok(()),
+            }),
+            true,
+        );
+        assert!(!outcome.is_error);
+        let rec = outcome.json_record.expect("json_mode → record");
+        assert_eq!(rec["ok"], true);
+        assert_eq!(rec["ref"], "10.1234/foo");
+        assert!(matches!(outcome.log_breadcrumb, LogBreadcrumb::None));
+    }
+
+    #[test]
+    fn classify_joined_success_human_no_record() {
+        let outcome = classify_joined(
+            Ok(TaskOutcome {
+                input: "10.1234/foo".to_string(),
+                result: Ok(()),
+            }),
+            false,
+        );
+        assert!(!outcome.is_error);
+        assert!(outcome.json_record.is_none(), "human mode → no record");
+    }
+
+    #[test]
+    fn classify_joined_fetch_failure_emits_fetch_error() {
+        let outcome = classify_joined(
+            Ok(TaskOutcome {
+                input: "arxiv:2401.99999".to_string(),
+                result: Err(anyhow!("connection refused")),
+            }),
+            true,
+        );
+        assert!(outcome.is_error);
+        let rec = outcome.json_record.expect("json_mode → record");
+        assert_eq!(rec["ok"], false);
+        assert_eq!(rec["ref"], "arxiv:2401.99999");
+        assert_eq!(rec["error"]["code"], "FETCH_ERROR");
+        assert!(matches!(
+            outcome.log_breadcrumb,
+            LogBreadcrumb::FetchFailed { .. }
+        ));
+    }
+
+    #[test]
+    fn classify_joined_panic_emits_null_ref_fetch_error() {
+        // Synthesise a real `tokio::task::JoinError` by spawning a
+        // panicking task on a 1-task JoinSet — exercises the
+        // structurally-rare panic arm of the drain that no e2e can
+        // reach (self-review for #209 §7 + codecov closure).
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let join_err = rt.block_on(async {
+            let mut js: tokio::task::JoinSet<TaskOutcome> = tokio::task::JoinSet::new();
+            js.spawn(async { panic!("synthetic panic for classify_joined") });
+            let joined = js.join_next().await.expect("one task");
+            joined.expect_err("expected panic → Err(JoinError)")
+        });
+
+        let outcome = classify_joined(Err(join_err), true);
+        assert!(outcome.is_error);
+        let rec = outcome.json_record.expect("json_mode → record");
+        assert_eq!(rec["ok"], false);
+        assert!(
+            rec["ref"].is_null(),
+            "panic record's ref MUST be null: {rec}"
+        );
+        assert_eq!(rec["error"]["code"], "FETCH_ERROR");
+        assert!(
+            rec["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("batch task panicked"),
+            "panic message preserved: {rec}"
+        );
+        assert!(matches!(
+            outcome.log_breadcrumb,
+            LogBreadcrumb::TaskPanicked { .. }
+        ));
+    }
+
+    #[test]
+    fn log_breadcrumb_emit_does_not_panic_on_any_variant() {
+        // `.emit()` should not panic on any variant. Tracing output
+        // isn't asserted (the subscriber may not be installed in the
+        // test harness); the test pins the no-panic happy path.
+        for variant in [
+            LogBreadcrumb::None,
+            LogBreadcrumb::FetchFailed {
+                input: "x".into(),
+                error_dbg: "y".into(),
+            },
+            LogBreadcrumb::TaskPanicked {
+                error_dbg: "z".into(),
+            },
+        ] {
+            variant.emit();
+        }
     }
 
     #[test]
@@ -389,10 +591,15 @@ mod tests {
             !s.contains('\n'),
             "JSONL success must be single-line: {s:?}"
         );
-        let s2 = build_jsonl_failure("10.1/x", "FETCH_ERROR", "msg").to_string();
+        let s2 = build_jsonl_failure(Some("10.1/x"), "FETCH_ERROR", "msg").to_string();
         assert!(
             !s2.contains('\n'),
             "JSONL failure must be single-line: {s2:?}"
+        );
+        let s3 = build_jsonl_failure(None, "FETCH_ERROR", "msg").to_string();
+        assert!(
+            !s3.contains('\n'),
+            "null-ref JSONL must be single-line: {s3:?}"
         );
     }
 

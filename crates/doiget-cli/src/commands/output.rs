@@ -12,15 +12,38 @@
 //! TTY-detection wrapper ([`stdout_is_tty`]) so the ladder is fully
 //! unit-testable without environment manipulation.
 //!
-//! # Phase-1 scope (#144 / PR5)
+//! # Per-mode honoring across the CLI surface
 //!
-//! This PR delivers the **machinery** — global flags, ladder, threading,
-//! `serve`→`mcp` invariant. Per-command rich JSON bodies for the
-//! human-table commands (`info`, `list-recent`, `search`, `config show`,
-//! `audit-log`) and the ERRORS.md §3 JSON-Lines batch error shape are
-//! tracked as follow-ups; in this PR `Json` mode is honored where a
-//! command already emits JSON (`csl`, `graph`, `fetch`/`batch` dry-run
-//! plan) and `Quiet` mode is a stdout-suppression hint everywhere.
+//! - `Human` — default for TTY stdout. Human-readable text, the
+//!   pre-#144 behaviour.
+//! - `Quiet` — informational stdout suppressed across the six
+//!   info-emitting commands (audit-log / info / list-recent / search /
+//!   config show / config path / provenance migrate) per #203.
+//!   Errors (stderr) and exit codes are unaffected. Product-output
+//!   commands (bib / csl / graph / *-dry-run / batch JSONL) are NOT
+//!   suppressed.
+//! - `Json` — structured JSON bodies for the human-table commands
+//!   (#204) plus the ERRORS.md §3 JSON-Lines per-ref shape for batch
+//!   (#205). Single-value-per-stdout for the table commands;
+//!   line-oriented for batch.
+//! - `Mcp` — JSON-RPC framing on stdout (only reachable via
+//!   `doiget serve`; forced by `forced_implicit_for` in `main.rs`).
+//!
+//! # JSON wire conventions (a single-line note)
+//!
+//! Two intentional conventions live side-by-side in the codebase, and
+//! they are different on purpose:
+//!
+//! 1. **Pretty-printed single value** for the table commands' `--mode
+//!    json` bodies (info / list-recent / search / config show /
+//!    audit-log / provenance migrate). Optimised for `| jq .` and
+//!    human-on-a-screen reading.
+//! 2. **Compact JSON-Lines** for `batch --mode json` per the
+//!    ERRORS.md §3 CI persona — one record per stdout line, no embedded
+//!    newlines, so a consumer can `split('\n').map(json.loads)`.
+//!
+//! Future-maintainer reminder: do NOT unify these by accident — they
+//! serve different consumers.
 
 use clap::ValueEnum;
 

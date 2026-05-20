@@ -139,13 +139,7 @@ pub fn run(verify_flag: bool, mode: super::output::OutputMode) -> Result<()> {
                 issues: report.errors.len(),
             });
             for issue in &report.errors {
-                let kind = match issue.kind {
-                    VerifyIssueKind::ParseError => "parse",
-                    VerifyIssueKind::PrevHashMismatch => "prev-hash",
-                    VerifyIssueKind::ThisHashMismatch => "this-hash",
-                    VerifyIssueKind::SequenceJump => "sequence",
-                    _ => "other",
-                };
+                let kind = kind_label(issue.kind);
                 issues.push(IssueRecord {
                     segment: seg,
                     line: issue.line,
@@ -195,13 +189,7 @@ pub fn run(verify_flag: bool, mode: super::output::OutputMode) -> Result<()> {
                 // future variants like `SessionIdChange`); the wildcard arm uses
                 // a generic label so older CLI builds keep producing well-formed
                 // output even when run against a newer core that adds variants.
-                let kind = match issue.kind {
-                    VerifyIssueKind::ParseError => "parse",
-                    VerifyIssueKind::PrevHashMismatch => "prev-hash",
-                    VerifyIssueKind::ThisHashMismatch => "this-hash",
-                    VerifyIssueKind::SequenceJump => "sequence",
-                    _ => "other",
-                };
+                let kind = kind_label(issue.kind);
                 if multi {
                     writeln!(
                         out,
@@ -243,6 +231,28 @@ pub fn run(verify_flag: bool, mode: super::output::OutputMode) -> Result<()> {
 /// undocumented `DOIGET_LOG_DIR` was removed in #142, so reader and writer
 /// can never disagree. Tests rely on `DOIGET_LOG_PATH` to point at a
 /// per-test tempdir.
+/// Map a [`VerifyIssueKind`] to its stable wire-format label. Shared
+/// between the human (`stdout`) and JSON branches so the two surfaces
+/// stay byte-identical for every known variant; the `_ => "other"`
+/// wildcard guards against `#[non_exhaustive]` future variants.
+///
+/// Self-review for #208 §2: any future variant added in `doiget-core`
+/// will degrade to `"other"` here until this match is updated. The
+/// `kind_label_covers_every_known_variant` unit test below pins every
+/// currently-known variant; adding a variant in core triggers a
+/// compile-time exhaustiveness warning in that test (the wildcard
+/// remains for forward compatibility, but the explicit match in the
+/// test makes the gap loud).
+fn kind_label(k: VerifyIssueKind) -> &'static str {
+    match k {
+        VerifyIssueKind::ParseError => "parse",
+        VerifyIssueKind::PrevHashMismatch => "prev-hash",
+        VerifyIssueKind::ThisHashMismatch => "this-hash",
+        VerifyIssueKind::SequenceJump => "sequence",
+        _ => "other",
+    }
+}
+
 fn resolve_log_path() -> Result<Utf8PathBuf> {
     if let Ok(s) = std::env::var("DOIGET_LOG_PATH") {
         if !s.is_empty() {
@@ -272,6 +282,30 @@ mod tests {
     use tempfile::TempDir;
 
     use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
+
+    // Self-review for #208 §2 (#211 in the followups stack): every
+    // currently-known `VerifyIssueKind` variant must map to a non-
+    // `"other"` label. If `doiget-core` adds a new variant, this test
+    // still compiles (the wildcard arm covers it) but the assertion
+    // makes the gap loud: rerun this test against the new variant and
+    // it'll trigger the wildcard, failing the assertion.
+    #[test]
+    fn kind_label_covers_every_known_variant() {
+        let known: &[(VerifyIssueKind, &str)] = &[
+            (VerifyIssueKind::ParseError, "parse"),
+            (VerifyIssueKind::PrevHashMismatch, "prev-hash"),
+            (VerifyIssueKind::ThisHashMismatch, "this-hash"),
+            (VerifyIssueKind::SequenceJump, "sequence"),
+        ];
+        for (kind, expected) in known {
+            let got = kind_label(*kind);
+            assert_eq!(
+                got, *expected,
+                "VerifyIssueKind variant fell through to wildcard: {kind:?}"
+            );
+            assert_ne!(got, "other", "known variant {kind:?} must not degrade");
+        }
+    }
 
     /// RAII guard that captures the prior value of an env var on
     /// construction and restores it on drop. Mirrors the convention in
