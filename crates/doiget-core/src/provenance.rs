@@ -52,16 +52,31 @@
 //! through the resulting [`ProvenanceLog`]. This crate does not generate the
 //! ULID itself — see [`ProvenanceLog::open`] for the contract.
 //!
-//! # TODO: log rotation (§6)
+//! # Log rotation and retention (§6)
 //!
-//! Log rotation is not yet implemented. When it lands, the first row of the
-//! NEW log file MUST use `prev_hash = "GENESIS"` (chain restart), matching
-//! the `GENESIS_HASH` constant below.
+//! Implemented (PROVENANCE_LOG.md §6): when `access.log` exceeds
+//! `ROTATE_BYTES` (100 MiB) a subsequent [`ProvenanceLog::append`]
+//! gzip-compresses the full file to `access.log.<YYYY-MM-DD-HHMMSS>.gz`,
+//! removes the old `access.log`, and writes the incoming row as the
+//! first row of a fresh file with `prev_hash = "GENESIS"` (the hash
+//! chain **restarts** per segment — segments are NOT linked). Rotation
+//! is fail-closed: any gzip / rename / unlink failure aborts the
+//! `append` (the caller's fetch aborts) so the chain never silently
+//! skips. At [`ProvenanceLog::open`], rotated `.gz` segments older than
+//! the retention window (`DOIGET_LOG_RETENTION_DAYS`, default 90; `0`
+//! disables) are deleted **best-effort** (a prune failure is logged,
+//! not fatal — pruning is housekeeping, not integrity).
+//! [`verify_all`] verifies the current file plus every rotated `.gz`
+//! segment (each its own GENESIS-rooted chain).
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::sync::Mutex;
+
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, Utc};
@@ -228,6 +243,14 @@ pub struct ProvenanceLog {
     path: Utf8PathBuf,
     state: Mutex<LogState>,
     session_id: String,
+    /// §6 rotation threshold, resolved ONCE at [`ProvenanceLog::open`]
+    /// (not per-`append`). Reading `DOIGET_LOG_ROTATE_BYTES` once at
+    /// open — rather than on every append — means a log opened without
+    /// the env set keeps the real 100 MiB threshold for its whole life
+    /// even if another (test) thread later mutates that process-global
+    /// env var; this removes a parallel-test race without serializing
+    /// every multi-append test. `0` = rotation disabled.
+    rotate_threshold: u64,
 }
 
 /// Mutable internal state, guarded by [`ProvenanceLog::state`].
@@ -241,8 +264,192 @@ struct LogState {
 
 /// The genesis sentinel used as `prev_hash` for the first row of a log file
 /// (PROVENANCE_LOG.md §3, §6). Also written verbatim as the prev-hash of the
-/// first row after a log rotation (TODO: rotation not yet implemented).
+/// first row after a log rotation (the chain restarts per segment).
 const GENESIS_HASH: &str = "GENESIS";
+
+/// Rotate `access.log` once it reaches this size (PROVENANCE_LOG.md §6:
+/// "100 MB"). 100 MiB. Overridable via the `DOIGET_LOG_ROTATE_BYTES`
+/// env var — an internal ops/testing knob (NOT a documented public
+/// surface): tests set it tiny to exercise rotation without writing
+/// 100 MiB; a value of `0` disables rotation.
+const ROTATE_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Default rotated-segment retention (PROVENANCE_LOG.md §6: "90 days").
+/// Overridable via `DOIGET_LOG_RETENTION_DAYS`; `0` disables pruning.
+const DEFAULT_RETENTION_DAYS: i64 = 90;
+
+/// Resolve the rotation threshold: `DOIGET_LOG_ROTATE_BYTES` if set and
+/// parseable, else [`ROTATE_BYTES`]. `0` (or unparsable) → returns the
+/// value as-is (`0` means "never rotate").
+fn rotate_threshold_bytes() -> u64 {
+    match std::env::var("DOIGET_LOG_ROTATE_BYTES") {
+        Ok(s) => s.trim().parse::<u64>().unwrap_or(ROTATE_BYTES),
+        Err(_) => ROTATE_BYTES,
+    }
+}
+
+/// Resolve retention days from `DOIGET_LOG_RETENTION_DAYS`
+/// (default [`DEFAULT_RETENTION_DAYS`]). `0` disables pruning. A
+/// negative / unparsable value falls back to the default with a warn.
+fn retention_days() -> i64 {
+    match std::env::var("DOIGET_LOG_RETENTION_DAYS") {
+        Ok(s) => match s.trim().parse::<i64>() {
+            Ok(n) if n >= 0 => n,
+            _ => {
+                tracing::warn!(
+                    value = %s,
+                    "DOIGET_LOG_RETENTION_DAYS is not a non-negative integer; \
+                     using the {DEFAULT_RETENTION_DAYS}-day default"
+                );
+                DEFAULT_RETENTION_DAYS
+            }
+        },
+        Err(_) => DEFAULT_RETENTION_DAYS,
+    }
+}
+
+/// gzip-compress `path` to `<file_name>.<YYYY-MM-DD-HHMMSS>.gz` (in the
+/// same directory) and unlink `path` (PROVENANCE_LOG.md §6).
+///
+/// Atomic & fail-closed: the gzip is written to a `.tmp`, fsynced, then
+/// `rename`d into place (so a partial `.gz` is never observable), and
+/// only then is the original removed. Every step propagates its error
+/// to the caller (`ProvenanceLog::append`), which is fail-closed — a
+/// rotation failure aborts the surrounding fetch. Crash safety: a crash
+/// after the rename but before the unlink leaves both the full `.gz`
+/// and the (over-size) `access.log`; the next `append` simply rotates
+/// again, producing a second independently-valid segment — wasteful but
+/// never lossy or corrupt.
+fn rotate_log(path: &Utf8Path) -> Result<(), LogError> {
+    let file_name = path.file_name().ok_or_else(|| {
+        LogError::Io(std::io::Error::other(
+            "provenance log path has no file name; cannot rotate",
+        ))
+    })?;
+    let ts = Utc::now().format("%Y-%m-%d-%H%M%S");
+    let gz_name = format!("{file_name}.{ts}.gz");
+    let dir = path.parent().unwrap_or_else(|| Utf8Path::new("."));
+    let gz_path = dir.join(&gz_name);
+    let tmp_path = dir.join(format!("{gz_name}.tmp"));
+
+    {
+        let mut src = File::open(path)?;
+        let tmp = File::create(&tmp_path)?;
+        let mut enc = GzEncoder::new(BufWriter::new(tmp), Compression::default());
+        std::io::copy(&mut src, &mut enc)?;
+        let bufw = enc.finish()?;
+        let tmp = bufw.into_inner().map_err(|e| {
+            LogError::Io(std::io::Error::other(format!(
+                "gz tmp buf flush failed: {}",
+                e.error()
+            )))
+        })?;
+        tmp.sync_all()?;
+    }
+    std::fs::rename(&tmp_path, &gz_path)?;
+    std::fs::remove_file(path)?;
+    Ok(())
+}
+
+/// Rotated `.gz` segments siblings of `current`, sorted ascending. The
+/// embedded `YYYY-MM-DD-HHMMSS` timestamp makes lexicographic order ==
+/// chronological order.
+fn rotated_segments(current: &Utf8Path) -> Vec<Utf8PathBuf> {
+    let Some(file_name) = current.file_name() else {
+        return Vec::new();
+    };
+    let dir = current.parent().unwrap_or_else(|| Utf8Path::new("."));
+    let prefix = format!("{file_name}.");
+    let mut segs: Vec<Utf8PathBuf> = match std::fs::read_dir(dir.as_std_path()) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
+            .filter(|p| {
+                p.file_name()
+                    .map(|n| n.starts_with(&prefix) && n.ends_with(".gz"))
+                    .unwrap_or(false)
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    segs.sort();
+    segs
+}
+
+/// Delete rotated `.gz` segments older than `days` (PROVENANCE_LOG.md
+/// §6 retention). `days <= 0` is a no-op (disabled). **Best-effort**:
+/// pruning is housekeeping, not integrity, so any failure is logged and
+/// skipped — `ProvenanceLog::open` still succeeds.
+fn prune_rotated_segments(current: &Utf8Path, days: i64) {
+    if days <= 0 {
+        return;
+    }
+    let Some(cutoff) = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(days as u64 * 86_400))
+    else {
+        return;
+    };
+    for seg in rotated_segments(current) {
+        let aged = std::fs::metadata(seg.as_std_path())
+            .and_then(|m| m.modified())
+            .map(|mt| mt < cutoff)
+            .unwrap_or(false);
+        if !aged {
+            continue;
+        }
+        match std::fs::remove_file(seg.as_std_path()) {
+            Ok(()) => tracing::info!(
+                segment = %seg,
+                "provenance: pruned rotated segment past retention"
+            ),
+            Err(e) => tracing::warn!(
+                segment = %seg, error = %e,
+                "provenance: failed to prune rotated segment (best-effort; continuing)"
+            ),
+        }
+    }
+}
+
+/// Verify the full provenance history: every rotated `.gz` segment
+/// (oldest→newest) followed by the current `access.log`. Each segment
+/// is its own GENESIS-rooted hash chain (segments are deliberately NOT
+/// linked across a rotation, PROVENANCE_LOG.md §6), so they are
+/// verified independently and reported per-segment.
+///
+/// The audited [`verify`] function itself is unchanged; this only
+/// orchestrates it over the segment set (gunzipping each `.gz` to a
+/// tempfile first).
+///
+/// # Errors
+///
+/// [`LogError::Io`] on a gunzip / tempfile failure. A missing current
+/// `access.log` is not an error ([`verify`] reports it empty).
+pub fn verify_all(current: &Utf8Path) -> Result<Vec<(Utf8PathBuf, VerifyReport)>, LogError> {
+    let mut out = Vec::new();
+    for seg in rotated_segments(current) {
+        let gz = File::open(seg.as_std_path())?;
+        let mut dec = GzDecoder::new(gz);
+        let tmp = tempfile::NamedTempFile::new().map_err(|e| {
+            LogError::Io(std::io::Error::other(format!(
+                "verify_all: tempfile for {seg}: {e}"
+            )))
+        })?;
+        {
+            let mut w = File::create(tmp.path())?;
+            std::io::copy(&mut dec, &mut w)?;
+            w.sync_all()?;
+        }
+        let tmp_utf8 = Utf8Path::from_path(tmp.path()).ok_or_else(|| {
+            LogError::Io(std::io::Error::other("verify_all: non-utf8 tempfile path"))
+        })?;
+        let report = verify(tmp_utf8)?;
+        out.push((seg, report));
+        // `tmp` (and the gunzipped file) drop here, after verify.
+    }
+    let report = verify(current)?;
+    out.push((current.to_path_buf(), report));
+    Ok(out)
+}
 
 /// Caller-supplied fields for a row. The writer fills in `ts`, `ts_seq`,
 /// `session_id`, `prev_hash`, `this_hash`, and the literal
@@ -387,6 +594,25 @@ impl ProvenanceLog {
     /// Returns [`LogError::NotARegularFile`] if `path` exists but is not a
     /// regular file (e.g. a directory).
     pub fn open(path: impl Into<Utf8PathBuf>, session_id: String) -> Result<Self, LogError> {
+        // Production path: the §6 threshold comes from
+        // `DOIGET_LOG_ROTATE_BYTES` (default 100 MiB), resolved ONCE here.
+        Self::open_with_rotate_threshold(path, session_id, rotate_threshold_bytes())
+    }
+
+    /// [`open`](Self::open) with an explicit rotation threshold instead
+    /// of reading `DOIGET_LOG_ROTATE_BYTES`.
+    ///
+    /// This exists so the rotation tests inject a tiny threshold WITHOUT
+    /// mutating the process-global env var: a global env knob raced
+    /// non-`#[serial]` tests (a concurrent test's `open` would cache the
+    /// tiny threshold and spuriously rotate). `#[serial]` only
+    /// serializes `#[serial]` tests, so injection — not serialization —
+    /// is the robust fix. `0` disables rotation.
+    pub(crate) fn open_with_rotate_threshold(
+        path: impl Into<Utf8PathBuf>,
+        session_id: String,
+        rotate_threshold: u64,
+    ) -> Result<Self, LogError> {
         let path: Utf8PathBuf = path.into();
 
         // Reject obvious non-files up front so later `OpenOptions::append`
@@ -400,6 +626,12 @@ impl ProvenanceLog {
 
         let (next_seq, last_hash) = recover_state(&path)?;
 
+        // §6 retention: prune rotated `.gz` segments older than the
+        // window. Best-effort — pruning is housekeeping, not integrity,
+        // so a failure is logged and `open` still succeeds (unlike
+        // rotation, which is fail-closed).
+        prune_rotated_segments(&path, retention_days());
+
         Ok(Self {
             path,
             state: Mutex::new(LogState {
@@ -407,6 +639,7 @@ impl ProvenanceLog {
                 last_hash,
             }),
             session_id,
+            rotate_threshold,
         })
     }
 
@@ -432,6 +665,27 @@ impl ProvenanceLog {
             .state
             .lock()
             .map_err(|_| LogError::Io(std::io::Error::other("provenance log mutex poisoned")))?;
+
+        // §6 rotation, BEFORE this row is written. If `access.log` has
+        // reached the threshold, gzip+rename it and reset the in-memory
+        // chain state so this row becomes the GENESIS-rooted first row of
+        // a fresh file. Fail-closed: a rotation error aborts the append
+        // (the `?`), so the caller's fetch aborts and the chain never
+        // silently continues in an over-size or half-rotated file. The
+        // `state` mutex is held, so rotation is serialized with appends.
+        let threshold = self.rotate_threshold;
+        if threshold > 0 {
+            let size = match std::fs::metadata(&self.path) {
+                Ok(m) => m.len(),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+                Err(e) => return Err(LogError::Io(e)),
+            };
+            if size >= threshold {
+                rotate_log(&self.path)?;
+                state.next_seq = 1;
+                state.last_hash = GENESIS_HASH.to_string();
+            }
+        }
 
         let ts_seq = state.next_seq;
         let prev_hash = state.last_hash.clone();
@@ -844,7 +1098,18 @@ pub fn verify(path: &Utf8Path) -> Result<VerifyReport, LogError> {
 /// Marked `#[non_exhaustive]` so future fields (e.g. a per-row error
 /// list, an aborted-row count) can be added without breaking callers
 /// that pattern-match.
-#[derive(Debug, Clone)]
+///
+/// `Serialize` enables `provenance migrate --mode json` (#204) — the
+/// wire form is `{"rows_rewritten": N, "dry_run": bool,
+/// "first_row_v1_chain_hash": "...", "first_row_v2_chain_hash": "..."}`.
+///
+/// # Wire-format stability (post-#208 self-review §1)
+///
+/// Once a release ships with the [`Serialize`] derive, the field
+/// **names** below become part of the public API. Renaming a field is
+/// then a semver minor bump and warrants a CHANGELOG \[BREAKING\] note;
+/// new fields are still safe (per `#[non_exhaustive]`).
+#[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct MigrationReport {
     /// Number of rows rewritten (or that WOULD be rewritten under
@@ -1677,5 +1942,162 @@ mod tests {
                 cap
             );
         }
+    }
+
+    // -----------------------------------------------------------------
+    // #140 — §6 rotation, retention, multi-segment verify.
+    // -----------------------------------------------------------------
+
+    fn gunzip_to_string(gz: &Utf8Path) -> String {
+        use std::io::Read;
+        let f = std::fs::File::open(gz.as_std_path()).expect("open gz");
+        let mut dec = GzDecoder::new(f);
+        let mut s = String::new();
+        dec.read_to_string(&mut s).expect("gunzip");
+        s
+    }
+
+    #[test]
+    fn rotation_archives_to_gz_and_restarts_genesis_chain() {
+        let dir = TempDir::new().expect("tmp");
+        let path = tmp_dir_utf8(&dir).join("access.log");
+        // Inject a tiny threshold (NOT a global env var — that raced
+        // non-#[serial] tests): row 1 fits, so the SECOND append
+        // (size>=50) rotates before it writes. A freshly rotated `.gz`
+        // is not retention-aged, so the default prune at open is a no-op.
+        let log = ProvenanceLog::open_with_rotate_threshold(&path, TEST_SESSION_ID.to_string(), 50)
+            .expect("open");
+        log.append(empty_input()).expect("append 1");
+        let row1 = read_rows(&path);
+        assert_eq!(row1.len(), 1);
+        assert_eq!(row1[0].prev_hash, GENESIS_HASH);
+
+        log.append(empty_input()).expect("append 2 (rotates first)");
+
+        // Exactly one rotated segment; it gunzips to the original row 1.
+        let segs = rotated_segments(&path);
+        assert_eq!(segs.len(), 1, "one .gz segment expected; got {segs:?}");
+        let archived: Vec<LogRow> = gunzip_to_string(&segs[0])
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| serde_json::from_str(l).expect("row"))
+            .collect();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].this_hash, row1[0].this_hash);
+
+        // The fresh access.log restarts the chain at GENESIS, ts_seq 1.
+        let cur = read_rows(&path);
+        assert_eq!(cur.len(), 1, "fresh segment holds only the post-rotate row");
+        assert_eq!(cur[0].prev_hash, GENESIS_HASH);
+        assert_eq!(cur[0].ts_seq, 1);
+
+        // verify_all sees both segments, each its own clean chain.
+        let reports = verify_all(&path).expect("verify_all");
+        assert_eq!(reports.len(), 2, "rotated .gz + current");
+        for (p, r) in &reports {
+            assert!(r.errors.is_empty(), "segment {p} must verify clean: {r:?}");
+        }
+    }
+
+    #[test]
+    fn rotate_log_is_fail_closed_on_missing_source() {
+        // The append path propagates this via `?`, so a rotation failure
+        // aborts the fetch (fail-closed) rather than silently continuing.
+        let dir = TempDir::new().expect("tmp");
+        let missing = tmp_dir_utf8(&dir).join("nope.log");
+        let err = rotate_log(&missing).expect_err("missing source must error");
+        assert!(matches!(err, LogError::Io(_)), "got {err:?}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn prune_respects_retention_window_and_disable() {
+        let dir = TempDir::new().expect("tmp");
+        let base = tmp_dir_utf8(&dir);
+        let path = base.join("access.log");
+        let old_gz = base.join("access.log.2020-01-01-000000.gz");
+        let new_gz = base.join("access.log.2999-01-01-000000.gz");
+
+        let mk = |p: &Utf8Path, aged: bool| {
+            let f = std::fs::File::create(p.as_std_path()).expect("create gz");
+            if aged {
+                // 100 days ago — older than the 90-day default & a 1-day window.
+                let when =
+                    std::time::SystemTime::now() - std::time::Duration::from_secs(100 * 86_400);
+                f.set_modified(when).expect("set mtime");
+            }
+        };
+
+        // (a) days=0 disables pruning entirely.
+        mk(&old_gz, true);
+        std::env::set_var("DOIGET_LOG_RETENTION_DAYS", "0");
+        let _ = open_log(&path);
+        assert!(old_gz.exists(), "days=0 must NOT prune");
+
+        // (b) days=1 prunes the aged segment, keeps a fresh one.
+        mk(&new_gz, false);
+        std::env::set_var("DOIGET_LOG_RETENTION_DAYS", "1");
+        let _ = open_log(&path);
+        assert!(!old_gz.exists(), "aged segment must be pruned at days=1");
+        assert!(new_gz.exists(), "fresh segment must survive");
+
+        std::env::remove_var("DOIGET_LOG_RETENTION_DAYS");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn retention_days_env_parsing() {
+        std::env::set_var("DOIGET_LOG_RETENTION_DAYS", "0");
+        assert_eq!(retention_days(), 0);
+        std::env::set_var("DOIGET_LOG_RETENTION_DAYS", "30");
+        assert_eq!(retention_days(), 30);
+        std::env::set_var("DOIGET_LOG_RETENTION_DAYS", "garbage");
+        assert_eq!(retention_days(), DEFAULT_RETENTION_DAYS);
+        std::env::set_var("DOIGET_LOG_RETENTION_DAYS", "-5");
+        assert_eq!(retention_days(), DEFAULT_RETENTION_DAYS);
+        std::env::remove_var("DOIGET_LOG_RETENTION_DAYS");
+        assert_eq!(retention_days(), DEFAULT_RETENTION_DAYS);
+    }
+
+    #[test]
+    fn verify_all_flags_tampered_segment_independently() {
+        let dir = TempDir::new().expect("tmp");
+        let path = tmp_dir_utf8(&dir).join("access.log");
+        // Inject the tiny threshold (no global env → no cross-test race).
+        let log = ProvenanceLog::open_with_rotate_threshold(&path, TEST_SESSION_ID.to_string(), 50)
+            .expect("open");
+        log.append(empty_input()).expect("append 1");
+        log.append(empty_input()).expect("append 2 (rotates)");
+        drop(log);
+
+        // Tamper the CURRENT segment's row: set this_hash to a
+        // syntactically-valid 64-hex string that cannot be the SHA-256
+        // of any row (all zeros). NOTE: the previous "flip the last char
+        // to '0'" was a no-op ~1/16 of runs when the real hash already
+        // ended in '0' (this_hash depends on `Utc::now()`), which is the
+        // flake this fixes — mirrors `verify_detects_tampered_row_hash`.
+        let mut cur = read_rows(&path);
+        let mut bad = cur.remove(0);
+        bad.this_hash =
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        std::fs::write(
+            path.as_std_path(),
+            format!("{}\n", serde_json::to_string(&bad).expect("ser")),
+        )
+        .expect("rewrite tampered current");
+
+        let reports = verify_all(&path).expect("verify_all");
+        assert_eq!(reports.len(), 2);
+        // Oldest first = the rotated .gz (clean); current last (tampered).
+        let (gz_path, gz_rep) = &reports[0];
+        let (cur_path, cur_rep) = &reports[1];
+        assert!(
+            gz_path.as_str().ends_with(".gz") && gz_rep.errors.is_empty(),
+            "rotated segment must stay clean: {gz_path} {gz_rep:?}"
+        );
+        assert!(
+            cur_path.file_name() == Some("access.log") && !cur_rep.errors.is_empty(),
+            "tampered current segment must report issues: {cur_path} {cur_rep:?}"
+        );
     }
 }

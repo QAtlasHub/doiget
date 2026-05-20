@@ -1,7 +1,7 @@
 # 0025 - Tag-driven release with a mandatory version gate and beta/stable lanes
 
 - **Date:** 2026-05-17
-- **Status:** Accepted — implemented by PR #166; amended 2026-05-18 (see Amendment) so the workflow filename stays `.github/workflows/release-plz.yml` (tag-driven pipeline contents + `scripts/release-version-gate.sh` + `cliff.toml`/`scripts/release-changelog.sh`; only `release-plz.toml` removed; `release-sign.yml`/`release-sbom.yml` demoted to `workflow_dispatch`-only and folded in). `0013`'s release portion is `Superseded by 0025` (its CI-baseline / posture-lint / SHA-pin / Dependabot decisions stand).
+- **Status:** Accepted — implemented by PR #166; amended 2026-05-18 (see Amendment) so the workflow filename stays `.github/workflows/release-plz.yml` (tag-driven pipeline contents + `scripts/release-version-gate.sh` + `cliff.toml`/`scripts/release-changelog.sh`; only `release-plz.toml` removed; `release-sign.yml`/`release-sbom.yml` demoted to `workflow_dispatch`-only and folded in). `0013`'s release portion is `Superseded by 0025` (its CI-baseline / posture-lint / SHA-pin / Dependabot decisions stand). Amendment 5 (2026-05-19) brings the implementation back into compliance with D6 (`next`-primary; the main-primary drift is retired). Amendment 6 (2026-05-19) adds an advisory, non-blocking `version-check` job (release-readiness visible on every PR to `next`/`main`; the signed-tag release trigger of D1 is unchanged).
 - **Supersedes:** 0013 (release portion only — the CI baseline / posture-lint / SHA-pin / Dependabot decisions of 0013 stand)
 - **Source:** Maintainer release-workflow review, 2026-05-17 (release-plz `release-PR` model rejected after the v0.1.4 `#164` changelog defect)
 
@@ -349,3 +349,133 @@ status checks** (`test (ubuntu-latest)`, `test (windows-latest)`),
 `strict`). This makes the §D6 rule-4 back-merge PRs mergeable while betas
 remain gated by the same CI as stable. Applied via the branch-protection
 API on 2026-05-18; D6 rule 5 is corrected accordingly above.
+
+## Amendment — 2026-05-19 (5): operate D6 as designed (`next`-primary); retire the main-primary drift
+
+**Diagnosis (drift, not a new model).** D6 already specifies a
+`next`-primary model: rule 1 ("all feature/fix PRs target `next`"), rule 3
+(routine path into `main` is the `next → main` promotion merge), rule 4
+(`main → next` is the *hotfix-only* back-merge). The *implementation*
+diverged from this:
+
+- `.github/dependabot.yml` sets `target-branch: main` for both the
+  `cargo` and `github-actions` ecosystems, so dependency PRs landed on
+  `main`;
+- feature/fix PRs (`#184`, `#187`, `#188`, `#189`) were opened against
+  `main`;
+- Amendment 3's `backmerge.yml` then routinely opened `main → next` PRs
+  (e.g. `#195`) so `next` merely *followed* `main`.
+
+Net effect: `main` became the integration lane and `next` a passive
+mirror — the **inverse** of D6 rules 1/3/4. Amendments 3 and 4 codified
+mechanics for that drifted flow, not for D6 as written.
+
+```mermaid
+flowchart LR
+  subgraph BEFORE["before — main-primary drift"]
+    P1[PRs / dependabot] --> M1[main]
+    M1 -->|backmerge.yml routine| N1[next<br/>passive mirror]
+    M1 -->|tag| R1[release]
+  end
+  subgraph AFTER["after — D6 as designed"]
+    P2[PRs / dependabot] --> N2[next<br/>integration + beta]
+    N2 -->|"git tag -s vX.Y.Z-beta.N"| B2[beta release]
+    N2 -->|"promotion PR (open-only, human merge)"| M2[main]
+    M2 -->|"git tag -s vX.Y.Z"| R2[stable release]
+    M2 -.->|hotfix only → backmerge.yml| N2
+  end
+```
+
+**Decision (effective 2026-05-19).** Operate D6 as written. No
+architectural change — D6 rules 1–6 stand; this Amendment removes the
+drift and reconciles Amendments 3/4:
+
+1. **PR target = `next`** (D6 rule 1, reaffirmed). All feature/fix/dependency
+   PRs target `next`. `.github/dependabot.yml` `target-branch` becomes
+   `next` for both ecosystems.
+2. **`main` is release-only** (D6 rule 3): it receives commits **only**
+   via a `next → main` promotion merge or a stable hotfix. The promotion
+   is a PR — **open-only, human-merged** (consistent with the project's
+   no-auto-merge-of-non-trivial-PRs posture); never auto-merged.
+3. **`backmerge.yml` is hotfix-scoped** (D6 rule 4). It is no longer the
+   routine integration mechanism (routine work no longer reaches `main`);
+   it remains correct for the rare direct-to-`main` stable hotfix, opening
+   the `main → next` PR so the beta lane never regresses. The workflow
+   itself is unchanged (`on: push: main`); in steady state `main` only
+   sees promotion/hotfix pushes, so it fires correctly and rarely.
+   Optionally skipping it on promotion merges is a future enhancement.
+4. **Amendment 4 is retained.** The only `main → next` PRs are now
+   post-hotfix back-merges — exactly the case Amendment 4's non-`strict`
+   resolution exists for. `next` stays non-`strict` with the same required
+   checks; `main` keeps `strict`.
+5. **Branch protection shape is unchanged.** `next` already carries the
+   same required checks + PR-required + enforce-admins (D6 rule 5 /
+   Amendment 4); `main` keeps `strict`. Only the *flow* changes, not the
+   protection configuration — no branch-protection API change is required.
+6. **`site.yml` unchanged.** Stable site from `origin/main`, dev rustdoc
+   from `origin/next`. The publish cadence inverts naturally (`next` now
+   leads) without a workflow edit.
+
+**First-cutover status.** D6 rule 6 is already satisfied: `next` exists
+carrying `0.2.1-beta.1` while `main` carries the clean `0.2.0`. No
+re-cutover is needed; this Amendment only stops the drift.
+
+**Migration checklist (post-merge of this ADR; mechanical, separate
+change-sets, human-gated):**
+
+- [ ] `.github/dependabot.yml`: `target-branch: next` (cargo +
+      github-actions). (PR targets `next`.)
+- [ ] Henceforth open all feature/fix/dependency PRs against `next`.
+- [ ] When blessing a stable release: drop `-beta.N` on `next`, open the
+      `next → main` promotion PR (open-only), human-merge, then tag
+      `vX.Y.Z` on `main` (D6 rule 3 / D1).
+- [ ] Routine `main → next` backmerge PRs cease; `#195`-style PRs only
+      recur after a stable hotfix.
+- [ ] No branch-protection API change (shape already matches §D6 rule 5 /
+      Amendment 4).
+
+D6 rules 1/3/4 are authoritative; this Amendment records that the
+implementation is being brought back into compliance with them and that
+Amendments 3/4 are reinterpreted under the corrected (designed) flow.
+
+## Amendment — 2026-05-19 (6): advisory `version-check` job (visibility; tag-trigger unchanged)
+
+**Motivation.** The D2 version gate (`scripts/release-version-gate.sh`,
+G0–G7) already exists, but D1 makes it run **only on a pushed signed
+tag** — so on normal PRs/branches it is invisible, and "would tagging
+this actually release?" is not observable until you cut the tag. The
+maintainer asked for that answer to be **visually obvious on every PR to
+both `next` and `main`**, while explicitly *not* wanting auto-release
+(that motivation was stated only to frame the ask; it is **not** a
+feature here and D1 is unchanged).
+
+**Decision.** Add `.github/workflows/version-check.yml`: an **advisory,
+non-blocking** job that, on `pull_request` and `push` to `next` and
+`main`, derives the prospective tag `v<[workspace.package].version>` and
+runs the *existing* gate script against it. G0–G6 and the live
+crates.io G3/G4 execute; G7 auto-SKIPs pre-tag (no signed tag object —
+per the script's documented guard). It surfaces the gate result as a
+named check so release-readiness is legible at a glance.
+
+Binding properties:
+
+1. **Release trigger unchanged.** A release is still cut *only* by a
+   human-pushed signed tag (D1). This job never tags, publishes, mutates
+   state, or auto-releases. "Auto-release when the check is green" is
+   explicitly **out of scope** — it would change D1, is an irreversible
+   publish, and contradicts Amendment 5 / D6 rule 3's human-gated
+   `next → main` promotion.
+2. **Advisory, not a gate.** The job reports honest PASS/FAIL but is
+   **not** added to `next`/`main` branch-protection required checks. It
+   informs; it does not block merges. (It may be promoted to required
+   later by a separate, explicit decision.)
+3. **Reading it.** Green on `next` = the `X.Y.Z-beta.N` version is
+   release-ready. Green on `main` = `main` carries a promoted,
+   not-yet-published version (the promotion window) — tagging would
+   release. Red is the *correct, informative* steady state on `main`
+   between releases (the published `X.Y.Z` cannot be re-released;
+   crates.io is immutable) and flags real problems elsewhere (missing
+   CHANGELOG section, `Cargo.lock` drift, lane/branch mismatch).
+4. **No new gate logic.** It reuses `scripts/release-version-gate.sh`
+   verbatim; there is one source of truth for the gate (D2). No
+   branch-protection API change is made.

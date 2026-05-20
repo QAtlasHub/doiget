@@ -100,7 +100,10 @@ fn doiget(root: &Utf8PathBuf) -> Command {
     let mut cmd = Command::cargo_bin("doiget").expect("locate doiget binary");
     cmd.env("DOIGET_STORE_ROOT", root.as_str())
         .env("HOME", root.as_str())
-        .env("USERPROFILE", root.as_str());
+        .env("USERPROFILE", root.as_str())
+        // #203: opt into human stdout — assert_cmd's captured stdout is
+        // non-TTY, which defaults to Quiet after #203 honoring.
+        .env("DOIGET_MODE", "human");
     cmd
 }
 
@@ -218,4 +221,51 @@ fn list_recent_on_empty_store_prints_only_header() {
         stdout, "safekey\tyear\ttitle\tfetched_at\n",
         "empty store should produce header-only stdout, got:\n{stdout}"
     );
+}
+
+// ---- #204 JSON-mode coverage --------------------------------------------
+
+#[test]
+fn info_json_emits_metadata_object() {
+    let (_dir_guard, root) = seeded_store();
+
+    let out = doiget(&root)
+        // The #203 helper sets DOIGET_MODE=human; override per-test for
+        // the JSON case (env_clear is too invasive — we still need
+        // DOIGET_STORE_ROOT / HOME for the resolver).
+        .env("DOIGET_MODE", "json")
+        .args(["info", "10.1234/alpha"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let s = String::from_utf8(out).expect("info JSON stdout utf-8");
+    let v: serde_json::Value = serde_json::from_str(&s).expect("info JSON parses");
+    // The Metadata struct's `title` field is the only stable assertion
+    // surface at this level (the rest is the on-disk TOML schema).
+    assert_eq!(v["title"], "First Quantum Result");
+}
+
+#[test]
+fn list_recent_json_emits_array_of_entries() {
+    let (_dir_guard, root) = seeded_store();
+
+    let out = doiget(&root)
+        .env("DOIGET_MODE", "json")
+        .args(["list-recent"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let s = String::from_utf8(out).expect("list-recent JSON stdout utf-8");
+    let v: serde_json::Value = serde_json::from_str(&s).expect("list-recent JSON parses");
+    let arr = v.as_array().expect("list-recent JSON is an array");
+    assert_eq!(arr.len(), 2, "seeded store has 2 entries");
+    // EntryInfo schema (#204): {safekey, title, year, fetched_at}.
+    for entry in arr {
+        assert!(entry["safekey"].is_string(), "safekey is a string");
+        assert!(entry["title"].is_string(), "title is a string");
+    }
 }

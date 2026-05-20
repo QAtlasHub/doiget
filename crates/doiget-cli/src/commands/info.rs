@@ -25,7 +25,12 @@ use super::resolve_store_root;
 /// written to stdout as TOML. On a missing entry, the function returns an
 /// error so the CLI exits non-zero — the caller (a shell pipeline) can
 /// distinguish "entry not in store" from "entry was empty".
-pub fn run(input: String) -> Result<()> {
+pub fn run(input: String, mode: super::output::OutputMode) -> Result<()> {
+    // `mode` honors ADR-0017: `Quiet` skips emission but still
+    // resolves the entry so the "not-found → exit non-zero" contract
+    // continues to hold (#203). `Json` serialises `Metadata` directly
+    // (it carries `Serialize`); the wire form is the field-name JSON of
+    // the on-disk TOML (#204).
     let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
     let safekey = ref_.safekey();
 
@@ -38,12 +43,10 @@ pub fn run(input: String) -> Result<()> {
 
     match metadata {
         Some(m) => {
-            // Re-serialize to TOML for stdout. We use `toml::to_string_pretty`
-            // for human readability; this is NOT the §7-normalized form
-            // written to disk, but `info` is a presentation surface, not a
-            // round-tripper.
-            let s = toml::to_string_pretty(&m)
-                .context("failed to serialize metadata to TOML for stdout")?;
+            if mode == super::output::OutputMode::Quiet {
+                // Quiet: existence-check only; exit 0 with no stdout.
+                return Ok(());
+            }
             // Workspace lints deny `print_stdout` (the `print!`/`println!`
             // macros) so JSON-RPC frames never collide with diagnostics.
             // `writeln!` / `write!` against an explicit `stdout().lock()`
@@ -51,6 +54,18 @@ pub fn run(input: String) -> Result<()> {
             // explicitly. See `docs/SECURITY.md` §3 / ADR-0001.
             let stdout = std::io::stdout();
             let mut out = stdout.lock();
+            if mode == super::output::OutputMode::Json {
+                let s = serde_json::to_string_pretty(&m)
+                    .context("failed to serialize metadata to JSON for stdout")?;
+                writeln!(out, "{s}").context("failed to write metadata JSON to stdout")?;
+                return Ok(());
+            }
+            // Human (default): re-serialize to TOML for stdout. We use
+            // `toml::to_string_pretty` for human readability; this is NOT
+            // the §7-normalized form written to disk, but `info` is a
+            // presentation surface, not a round-tripper.
+            let s = toml::to_string_pretty(&m)
+                .context("failed to serialize metadata to TOML for stdout")?;
             write!(out, "{s}").context("failed to write metadata to stdout")?;
             // toml::to_string_pretty already emits a trailing newline, but
             // be defensive in case a future toml-rs revision changes that.

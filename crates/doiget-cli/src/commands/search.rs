@@ -37,7 +37,10 @@ const FETCHED_AT_FMT: &str = "%Y-%m-%dT%H:%M:%SZ";
 /// error on stderr — the on-disk `Store::search` would otherwise return
 /// every entry up to `DEFAULT_LIMIT`, which is almost never what the caller
 /// intended.
-pub fn run(query: String) -> Result<()> {
+pub fn run(query: String, mode: super::output::OutputMode) -> Result<()> {
+    // `mode` honors ADR-0017: `Quiet` suppresses the TSV table; the
+    // empty-query bail!() and store error paths still raise (#203). Json
+    // body is tracked in #204.
     if query.trim().is_empty() {
         anyhow::bail!("search query is empty");
     }
@@ -48,8 +51,19 @@ pub fn run(query: String) -> Result<()> {
         .search(&query, DEFAULT_LIMIT)
         .with_context(|| format!("search failed for query {query:?}"))?;
 
+    if mode == super::output::OutputMode::Quiet {
+        return Ok(());
+    }
+
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
+    if mode == super::output::OutputMode::Json {
+        // #204: `EntryInfo` carries `Serialize`; emit a JSON array.
+        let s = serde_json::to_string_pretty(&entries)
+            .context("failed to serialize search entries to JSON")?;
+        writeln!(out, "{s}").context("failed to write search JSON to stdout")?;
+        return Ok(());
+    }
     writeln!(out, "safekey\tyear\ttitle\tfetched_at")
         .context("failed to write search header to stdout")?;
     for e in entries {

@@ -33,7 +33,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0014 | Docs split into NORMATIVE / INFORMATIVE with ADR change-control | Accepted | Phase 0 (in force) | #11 |
 | 0015 | No telemetry / phone-home / self-update | Accepted | standing policy (SCOPE.md #10/#11 + posture-lint) | #12 |
 | 0016 | Common foundation crates + deny list | Accepted | Phase 0 (deny.toml) | #13 |
-| 0017 | Output mode resolution (flag > env > implicit > TTY > quiet) | Accepted | Slice 9 stdout-purity + Slice 1 (see ADR note) | #14 |
+| 0017 | Output mode resolution (flag > env > implicit > TTY > quiet) | Accepted | Slice 9 stdout-purity + Slice 1 + #144 (full ladder, 0.2.1-beta.7) | #14 |
 | 0018 | Obsidian export is one-direction, optional Phase 7 | Proposed (Phase 7, unshipped) | — | #15 |
 | 0019 | Eight-safeguard legal posture (5 social + 3 technical) | Accepted | standing posture (Phase 1 onward) | #16 |
 | 0020 | reqwest TLS feature stack (rustls-only; ring provider) | Accepted (Amendment 1 2026-05-18: aws-lc-rs → ring, portability) | PR #30 / PR #49 / Amendment 1 | PR #30 / PR #49 |
@@ -41,7 +41,9 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0022 | Dry-run mode for fetch operations | Accepted | Slice 2 | #12 |
 | 0023 | Structured `denial_context` on error envelopes | Accepted | Slices 1/2 | #12 |
 | 0024 | CanonicalRef implementation + provenance log v1 → v2 migration | Accepted | Slice 4 | Slice 4 |
-| 0025 | Tag-driven release with version gate + beta/stable lanes | Accepted | PR #166 | maintainer review 2026-05-17 |
+| 0025 | Tag-driven release with version gate + beta/stable lanes | Accepted (Amend. 5 2026-05-19: D6 `next`-primary; Amend. 6 2026-05-19: advisory `version-check` job, D1 unchanged) | PR #166 / Amend. 5 / Amend. 6 | maintainer review 2026-05-17 |
+| 0026 | DOI suffix charset extension: permit `:` (SECURITY.md §1.1) | Accepted | #194 | #194 dogfood |
+| 0027 | redirect-allowlist: add physics-society / diamond-OA hosts to `oa-publisher` | Accepted | #193 | #193 dogfood |
 
 ## Conventions
 

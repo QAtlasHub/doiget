@@ -39,7 +39,7 @@ use std::io::Write;
 use anyhow::{bail, Context, Result};
 use camino::Utf8PathBuf;
 
-use doiget_core::provenance::{verify, VerifyIssueKind};
+use doiget_core::provenance::{verify_all, VerifyIssueKind};
 
 use super::fetch::CliExit;
 
@@ -62,7 +62,12 @@ fn print_err(args: std::fmt::Arguments<'_>) {
 /// per-issue breakdown is always written to stdout BEFORE returning, so a
 /// caller scripting this subcommand can inspect both the structured stdout
 /// and the non-zero exit code.
-pub fn run(verify_flag: bool) -> Result<()> {
+pub fn run(verify_flag: bool, mode: super::output::OutputMode) -> Result<()> {
+    // `mode` honors ADR-0017: `Quiet` suppresses the informational stdout
+    // (header + per-segment summary + per-issue lines). The verification
+    // itself still runs and the non-zero exit on issues is still raised,
+    // so quiet pipelines see the failure via exit code (#203). Rich Json
+    // body is tracked in #204.
     if !verify_flag {
         // Issue #149: a missing required flag is argument misuse →
         // `docs/ERRORS.md` §4 exit 2, NOT the generic exit 1 a bare
@@ -76,43 +81,136 @@ pub fn run(verify_flag: bool) -> Result<()> {
     }
 
     let log_path = resolve_log_path()?;
-    let report = verify(&log_path)
+    // §6: verify the full history — every rotated `.gz` segment
+    // (oldest→newest) plus the current `access.log`. Each segment is its
+    // own GENESIS-rooted chain; they are verified independently.
+    let segments = verify_all(&log_path)
         .with_context(|| format!("failed to read provenance log at {log_path}"))?;
+
+    let total_rows: usize = segments.iter().map(|(_, r)| r.total_rows).sum();
+    let total_ok: usize = segments.iter().map(|(_, r)| r.ok_rows).sum();
+    let total_issues: usize = segments.iter().map(|(_, r)| r.errors.len()).sum();
+    let multi = segments.len() > 1;
 
     // `print_stdout` is workspace-deny for MCP stdio safety — see module docs.
     // The `audit-log` CLI is the explicit human-facing channel; locking
     // `stdout()` and using `writeln!` is the sanctioned way to emit lines.
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    writeln!(out, "audit-log verify: {} rows", report.total_rows)
-        .context("failed to write header to stdout")?;
-    writeln!(out, "  ok:     {}", report.ok_rows)
-        .context("failed to write ok-row count to stdout")?;
-    writeln!(out, "  issues: {}", report.errors.len())
-        .context("failed to write issue count to stdout")?;
+    // `Quiet` mode short-circuits the emit block but keeps the bail!() at
+    // the bottom so failure-on-issues exit codes still fire (#203).
+    if mode == super::output::OutputMode::Json {
+        // #204: structured report. Schema:
+        //   {"total_rows", "total_ok", "total_issues",
+        //    "segments": [{"name", "rows", "ok", "issues"}],
+        //    "issues":   [{"segment", "line", "kind", "message"}]}
+        // Single value (NOT JSON-Lines) so the whole report parses with
+        // one `JSON.parse` call. Sibling commands' shapes are sibling
+        // schemas — see commands/{list_recent,search,config,info,provenance}.
+        #[derive(serde::Serialize)]
+        struct SegmentSummary<'a> {
+            name: &'a str,
+            rows: usize,
+            ok: usize,
+            issues: usize,
+        }
+        #[derive(serde::Serialize)]
+        struct IssueRecord<'a> {
+            segment: &'a str,
+            line: usize,
+            kind: &'static str,
+            message: &'a str,
+        }
+        #[derive(serde::Serialize)]
+        struct Report<'a> {
+            total_rows: usize,
+            total_ok: usize,
+            total_issues: usize,
+            segments: Vec<SegmentSummary<'a>>,
+            issues: Vec<IssueRecord<'a>>,
+        }
 
-    for issue in &report.errors {
-        // `VerifyIssueKind` is `#[non_exhaustive]` (forward-compat for
-        // future variants like `SessionIdChange`); the wildcard arm uses a
-        // generic label so older CLI builds keep producing well-formed
-        // output even when run against a newer core that adds variants.
-        let kind = match issue.kind {
-            VerifyIssueKind::ParseError => "parse",
-            VerifyIssueKind::PrevHashMismatch => "prev-hash",
-            VerifyIssueKind::ThisHashMismatch => "this-hash",
-            VerifyIssueKind::SequenceJump => "sequence",
-            _ => "other",
+        let mut segs: Vec<SegmentSummary> = Vec::with_capacity(segments.len());
+        let mut issues: Vec<IssueRecord> = Vec::new();
+        for (path, report) in &segments {
+            let seg = path.file_name().unwrap_or(path.as_str());
+            segs.push(SegmentSummary {
+                name: seg,
+                rows: report.total_rows,
+                ok: report.ok_rows,
+                issues: report.errors.len(),
+            });
+            for issue in &report.errors {
+                let kind = kind_label(issue.kind);
+                issues.push(IssueRecord {
+                    segment: seg,
+                    line: issue.line,
+                    kind,
+                    message: &issue.message,
+                });
+            }
+        }
+        let report = Report {
+            total_rows,
+            total_ok,
+            total_issues,
+            segments: segs,
+            issues,
         };
-        writeln!(out, "  line {}: {} — {}", issue.line, kind, issue.message)
-            .context("failed to write issue line to stdout")?;
+        let s =
+            serde_json::to_string_pretty(&report).context("serialize audit-log report to JSON")?;
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        writeln!(out, "{s}").context("failed to write audit-log JSON to stdout")?;
+    } else if mode != super::output::OutputMode::Quiet {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        // Aggregate header — byte-identical to the pre-rotation output when
+        // there is a single segment (back-compat with audit_log_e2e.rs).
+        writeln!(out, "audit-log verify: {total_rows} rows")
+            .context("failed to write header to stdout")?;
+        writeln!(out, "  ok:     {total_ok}").context("failed to write ok-row count to stdout")?;
+        writeln!(out, "  issues: {total_issues}")
+            .context("failed to write issue count to stdout")?;
+
+        for (path, report) in &segments {
+            let seg = path.file_name().unwrap_or(path.as_str());
+            if multi {
+                writeln!(
+                    out,
+                    "  segment {}: {} rows, {} ok, {} issues",
+                    seg,
+                    report.total_rows,
+                    report.ok_rows,
+                    report.errors.len()
+                )
+                .context("failed to write segment summary to stdout")?;
+            }
+            for issue in &report.errors {
+                // `VerifyIssueKind` is `#[non_exhaustive]` (forward-compat for
+                // future variants like `SessionIdChange`); the wildcard arm uses
+                // a generic label so older CLI builds keep producing well-formed
+                // output even when run against a newer core that adds variants.
+                let kind = kind_label(issue.kind);
+                if multi {
+                    writeln!(
+                        out,
+                        "  [{}] line {}: {} — {}",
+                        seg, issue.line, kind, issue.message
+                    )
+                } else {
+                    writeln!(out, "  line {}: {} — {}", issue.line, kind, issue.message)
+                }
+                .context("failed to write issue line to stdout")?;
+            }
+        }
     }
 
-    if report.errors.is_empty() {
+    if total_issues == 0 {
         Ok(())
     } else {
         bail!(
-            "audit-log: {} chain issue(s) detected — see stdout for details",
-            report.errors.len()
+            "audit-log: {} chain issue(s) detected across {} segment(s) — see stdout for details",
+            total_issues,
+            segments.len()
         )
     }
 }
@@ -133,6 +231,28 @@ pub fn run(verify_flag: bool) -> Result<()> {
 /// undocumented `DOIGET_LOG_DIR` was removed in #142, so reader and writer
 /// can never disagree. Tests rely on `DOIGET_LOG_PATH` to point at a
 /// per-test tempdir.
+/// Map a [`VerifyIssueKind`] to its stable wire-format label. Shared
+/// between the human (`stdout`) and JSON branches so the two surfaces
+/// stay byte-identical for every known variant; the `_ => "other"`
+/// wildcard guards against `#[non_exhaustive]` future variants.
+///
+/// Self-review for #208 §2: any future variant added in `doiget-core`
+/// will degrade to `"other"` here until this match is updated. The
+/// `kind_label_covers_every_known_variant` unit test below pins every
+/// currently-known variant; adding a variant in core triggers a
+/// compile-time exhaustiveness warning in that test (the wildcard
+/// remains for forward compatibility, but the explicit match in the
+/// test makes the gap loud).
+fn kind_label(k: VerifyIssueKind) -> &'static str {
+    match k {
+        VerifyIssueKind::ParseError => "parse",
+        VerifyIssueKind::PrevHashMismatch => "prev-hash",
+        VerifyIssueKind::ThisHashMismatch => "this-hash",
+        VerifyIssueKind::SequenceJump => "sequence",
+        _ => "other",
+    }
+}
+
 fn resolve_log_path() -> Result<Utf8PathBuf> {
     if let Ok(s) = std::env::var("DOIGET_LOG_PATH") {
         if !s.is_empty() {
@@ -162,6 +282,30 @@ mod tests {
     use tempfile::TempDir;
 
     use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
+
+    // Self-review for #208 §2 (#211 in the followups stack): every
+    // currently-known `VerifyIssueKind` variant must map to a non-
+    // `"other"` label. If `doiget-core` adds a new variant, this test
+    // still compiles (the wildcard arm covers it) but the assertion
+    // makes the gap loud: rerun this test against the new variant and
+    // it'll trigger the wildcard, failing the assertion.
+    #[test]
+    fn kind_label_covers_every_known_variant() {
+        let known: &[(VerifyIssueKind, &str)] = &[
+            (VerifyIssueKind::ParseError, "parse"),
+            (VerifyIssueKind::PrevHashMismatch, "prev-hash"),
+            (VerifyIssueKind::ThisHashMismatch, "this-hash"),
+            (VerifyIssueKind::SequenceJump, "sequence"),
+        ];
+        for (kind, expected) in known {
+            let got = kind_label(*kind);
+            assert_eq!(
+                got, *expected,
+                "VerifyIssueKind variant fell through to wildcard: {kind:?}"
+            );
+            assert_ne!(got, "other", "known variant {kind:?} must not degrade");
+        }
+    }
 
     /// RAII guard that captures the prior value of an env var on
     /// construction and restores it on drop. Mirrors the convention in
@@ -210,7 +354,8 @@ mod tests {
         // returned error carries a `CliExit(2)` so `main` exits 2
         // instead of the old generic 1.
         let _g = EnvGuard::unset("DOIGET_LOG_PATH");
-        let err = run(false).expect_err("--verify must be required in Phase 1");
+        let err = run(false, crate::commands::output::OutputMode::Human)
+            .expect_err("--verify must be required in Phase 1");
         let cli_exit = err
             .downcast_ref::<CliExit>()
             .expect("missing --verify must carry a CliExit (issue #149)");
@@ -248,7 +393,8 @@ mod tests {
         drop(log);
 
         let _g = EnvGuard::set("DOIGET_LOG_PATH", path.as_str());
-        run(true).expect("verify must pass on a clean log");
+        run(true, crate::commands::output::OutputMode::Human)
+            .expect("verify must pass on a clean log");
     }
 
     #[test]
@@ -261,6 +407,7 @@ mod tests {
         assert!(!path.exists(), "precondition: log must not exist");
 
         let _g = EnvGuard::set("DOIGET_LOG_PATH", path.as_str());
-        run(true).expect("verify must succeed on missing log");
+        run(true, crate::commands::output::OutputMode::Human)
+            .expect("verify must succeed on missing log");
     }
 }

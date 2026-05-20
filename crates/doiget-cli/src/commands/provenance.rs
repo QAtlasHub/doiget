@@ -30,13 +30,38 @@ use doiget_core::provenance::{migrate_v1_to_v2, MigrationReport};
 /// rewrite path runs: the original log is preserved as
 /// `<log_path>.v1-backup` and the migrated v2 log is atomically
 /// swapped in.
-pub fn migrate(dry_run: bool) -> Result<()> {
+pub fn migrate(dry_run: bool, output_mode: super::output::OutputMode) -> Result<()> {
+    // `output_mode` honors ADR-0017: `Quiet` suppresses the human
+    // summary, but the migration itself (mutation + backup rename) still
+    // runs and any error still propagates (#203). Json body is tracked
+    // in #204.
     let log_path = resolve_log_path()?;
     let report = migrate_v1_to_v2(&log_path, dry_run)
         .with_context(|| format!("migrating provenance log at {log_path}"))?;
 
+    if output_mode == super::output::OutputMode::Quiet {
+        return Ok(());
+    }
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
+    if output_mode == super::output::OutputMode::Json {
+        // #204: `MigrationReport` is `Serialize`. We wrap it with the
+        // `log_path` so the JSON consumer doesn't have to re-derive it
+        // from `DOIGET_LOG_PATH` / the platform's config dir.
+        #[derive(serde::Serialize)]
+        struct JsonReport<'a> {
+            log_path: &'a str,
+            report: &'a doiget_core::provenance::MigrationReport,
+        }
+        let payload = JsonReport {
+            log_path: log_path.as_str(),
+            report: &report,
+        };
+        let s =
+            serde_json::to_string_pretty(&payload).context("serialize migration report to JSON")?;
+        writeln!(out, "{s}").context("failed to write migration JSON to stdout")?;
+        return Ok(());
+    }
     emit_summary(&mut out, &log_path, &report)?;
     Ok(())
 }
@@ -140,6 +165,7 @@ mod tests {
         assert!(!path.exists(), "precondition");
 
         let _g = EnvGuard::set("DOIGET_LOG_PATH", path.as_str());
-        migrate(true).expect("dry-run on missing log must succeed");
+        migrate(true, crate::commands::output::OutputMode::Human)
+            .expect("dry-run on missing log must succeed");
     }
 }

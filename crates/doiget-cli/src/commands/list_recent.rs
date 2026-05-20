@@ -28,15 +28,32 @@ const FETCHED_AT_FMT: &str = "%Y-%m-%dT%H:%M:%SZ";
 /// Emits a tab-separated table on stdout. The column order is intentionally
 /// stable for `cut(1)` consumption; future fields will be APPENDED, not
 /// inserted.
-pub fn run(limit: usize) -> Result<()> {
+pub fn run(limit: usize, mode: super::output::OutputMode) -> Result<()> {
+    // `mode` honors ADR-0017: `Quiet` suppresses the TSV table but the
+    // store read still runs (so I/O failures surface as exit 1) (#203).
+    // Json body is tracked in #204.
     let store_root = resolve_store_root()?;
     let store = FsStore::new(store_root)?;
     let entries = store
         .list_recent(limit)
         .context("failed to list recent store entries")?;
 
+    if mode == super::output::OutputMode::Quiet {
+        return Ok(());
+    }
+
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
+    if mode == super::output::OutputMode::Json {
+        // #204: `EntryInfo` carries `Serialize`; emit a JSON array, one
+        // object per entry. Single value (NOT JSON-Lines) so the whole
+        // result round-trips through `JSON.parse` in one call — JSONL
+        // batch shape is a separate contract (ERRORS.md §3 / #205).
+        let s = serde_json::to_string_pretty(&entries)
+            .context("failed to serialize list-recent entries to JSON")?;
+        writeln!(out, "{s}").context("failed to write list-recent JSON to stdout")?;
+        return Ok(());
+    }
     writeln!(out, "safekey\tyear\ttitle\tfetched_at")
         .context("failed to write list-recent header to stdout")?;
     for e in entries {

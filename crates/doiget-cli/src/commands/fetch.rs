@@ -528,7 +528,15 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
 /// single `dry_run: bool` parameter — the option bundle's single-bool
 /// shape was YAGNI, and the wrapper only existed to spare integration
 /// tests a `FetchOptions::default()` literal.
-pub async fn run_with_options(input: String, dry_run: bool) -> Result<()> {
+pub async fn run_with_options(
+    input: String,
+    dry_run: bool,
+    _mode: super::output::OutputMode,
+) -> Result<()> {
+    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression of the
+    // success line is tracked in #203. The dry-run plan envelope is
+    // product output (the requested artifact) and is unaffected by
+    // mode.
     // Step 1: parse + safekey. Issue #119: render the cargo-style
     // `error[INVALID_REF]:` line + carry the exit code, rather than
     // letting the granular `RefParseError` fall out as an opaque

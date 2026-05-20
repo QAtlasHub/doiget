@@ -24,7 +24,10 @@ use super::resolve_store_root;
 /// On success, a BibTeX entry derived from the entry's `Metadata` is
 /// written to stdout. On a missing entry, the function returns an error
 /// so the CLI exits non-zero.
-pub fn run(input: String) -> Result<()> {
+pub fn run(input: String, _mode: super::output::OutputMode) -> Result<()> {
+    // `_mode` is threaded per ADR-0017 / #144. Bib's BibTeX output is
+    // product output (the requested artifact), not informational, so
+    // Quiet does NOT suppress it. No follow-up issue is needed here.
     let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
     let safekey = ref_.safekey();
 

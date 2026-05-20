@@ -64,6 +64,36 @@ jobs:
             exit 1
           fi
 
+      - name: LICENSE is verbatim SPDX MIT (no trailing prose)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GitHub's `licensee` classifies the repo as MIT only if LICENSE is
+          # (near-)verbatim SPDX MIT. Trailing prose (e.g. a `---` separator +
+          # a `Note:` paragraph) drops the similarity below threshold, so the
+          # repo reports `licenseInfo: Other` — which propagates to crates.io,
+          # SPDX scanners and shields. Keep posture/legal text in
+          # docs/LEGAL.md + the site posture page, never in LICENSE. See #157.
+          if [ "$(head -n1 LICENSE)" != "MIT License" ]; then
+            echo "::error::posture-lint: LICENSE line 1 must be exactly 'MIT License' (#157)"
+            exit 1
+          fi
+          if grep -nE '^(---|Note:)' LICENSE ; then
+            echo "::error::posture-lint: LICENSE has non-SPDX trailing prose ('---' / 'Note:'). Keep LICENSE verbatim SPDX MIT; posture text belongs in docs/LEGAL.md (#157)"
+            exit 1
+          fi
+          last_content="$(grep -n . LICENSE | tail -n1 | cut -d: -f1)"
+          software_line="$(grep -n '^SOFTWARE\.$' LICENSE | tail -n1 | cut -d: -f1 || true)"
+          if [ -z "$software_line" ] || [ "$last_content" != "$software_line" ]; then
+            echo "::error::posture-lint: content found after the SPDX MIT body (it must end at the line 'SOFTWARE.') — LICENSE is not verbatim MIT (#157)"
+            exit 1
+          fi
+          if grep -qU $'\r' LICENSE ; then
+            echo "::error::posture-lint: LICENSE has CRLF line endings; must be LF for licensee (#157)"
+            exit 1
+          fi
+          echo "LICENSE OK: verbatim SPDX MIT, no trailing prose, ends at SOFTWARE., LF."
+
   network-purity:
     # Phase 0 must make zero outbound network calls from the unit / integration
     # test suite. See `docs/PHASES.md` §3 working principle ("No external

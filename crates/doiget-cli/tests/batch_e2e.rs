@@ -19,6 +19,7 @@
 
 use camino::{Utf8Path, Utf8PathBuf};
 use doiget_cli::commands::batch;
+use doiget_cli::commands::output::OutputMode;
 use doiget_core::provenance::{LogEvent, LogResult, LogRow};
 use serial_test::serial;
 use tempfile::TempDir;
@@ -125,7 +126,7 @@ async fn batch_three_arxiv_refs_succeeds_end_to_end() {
     )
     .expect("write refs file");
 
-    batch::run_with_options(refs_path.as_str().to_string(), false)
+    batch::run_with_options(refs_path.as_str().to_string(), false, OutputMode::Human)
         .await
         .expect("batch::run_with_options succeeds");
 
@@ -237,7 +238,8 @@ async fn batch_with_malformed_ref_continues_and_returns_err() {
     )
     .expect("write refs file");
 
-    let result = batch::run_with_options(refs_path.as_str().to_string(), false).await;
+    let result =
+        batch::run_with_options(refs_path.as_str().to_string(), false, OutputMode::Human).await;
     let err = result.expect_err("batch with a malformed ref must surface an error to the binary");
     // Issue #143 / `docs/ERRORS.md` §4: the batch exit code is the number
     // of failures (capped at 255), NOT a blanket 1. Exactly one entry
