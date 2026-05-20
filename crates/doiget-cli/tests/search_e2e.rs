@@ -110,7 +110,10 @@ fn doiget(root: &Utf8PathBuf) -> Command {
     let mut cmd = Command::cargo_bin("doiget").expect("locate doiget binary");
     cmd.env("DOIGET_STORE_ROOT", root.as_str())
         .env("HOME", root.as_str())
-        .env("USERPROFILE", root.as_str());
+        .env("USERPROFILE", root.as_str())
+        // #203: opt into human stdout — assert_cmd's captured stdout is
+        // non-TTY, which defaults to Quiet after #203 honoring.
+        .env("DOIGET_MODE", "human");
     cmd
 }
 

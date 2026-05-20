@@ -30,13 +30,18 @@ use doiget_core::provenance::{migrate_v1_to_v2, MigrationReport};
 /// rewrite path runs: the original log is preserved as
 /// `<log_path>.v1-backup` and the migrated v2 log is atomically
 /// swapped in.
-pub fn migrate(dry_run: bool, _mode: super::output::OutputMode) -> Result<()> {
-    // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression and
-    // a Json body for the migration report are tracked in #203 / #204.
+pub fn migrate(dry_run: bool, output_mode: super::output::OutputMode) -> Result<()> {
+    // `output_mode` honors ADR-0017: `Quiet` suppresses the human
+    // summary, but the migration itself (mutation + backup rename) still
+    // runs and any error still propagates (#203). Json body is tracked
+    // in #204.
     let log_path = resolve_log_path()?;
     let report = migrate_v1_to_v2(&log_path, dry_run)
         .with_context(|| format!("migrating provenance log at {log_path}"))?;
 
+    if output_mode == super::output::OutputMode::Quiet {
+        return Ok(());
+    }
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     emit_summary(&mut out, &log_path, &report)?;
