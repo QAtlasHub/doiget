@@ -30,11 +30,17 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
+use camino::Utf8Path;
 
+use doiget_core::orchestrator::{FetchPaperOutcome, PdfLegStatus};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, RowInput};
-use doiget_core::{RateLimits, Ref, MCP_BATCH_MAX_SIZE};
+use doiget_core::refs::{self, Format, ParseError};
+use doiget_core::source::FetchError;
+use doiget_core::{DenialContext, ErrorCode, RateLimits, Ref, MCP_BATCH_MAX_SIZE};
 
-use super::fetch::{build_fetch_plan, emit_dry_run_plan_to_stdout, CliExit, FetchHarness};
+use super::fetch::{
+    build_fetch_plan, effective_blocked_code, emit_dry_run_plan_to_stdout, CliExit, FetchHarness,
+};
 use super::resolve_store_root;
 
 /// Run the `doiget batch <path>` subcommand.
@@ -81,15 +87,57 @@ pub async fn run_with_options(
     let raw =
         std::fs::read_to_string(&path).with_context(|| format!("reading batch file: {path}"))?;
 
-    // Step 2: parse refs — trim, drop blanks and `#`-prefixed comments. We
-    // keep the input strings (not parsed `Ref`s yet) so that per-ref parse
-    // failures can be logged with the original text.
-    let inputs: Vec<String> = raw
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|s| s.to_string())
-        .collect();
+    // Step 2: parse refs via the ADR-0030 bibliography adapter. The
+    // adapter auto-detects between plain refs / CSL-JSON / BibTeX
+    // (slice 2 follow-up) by path extension + content fingerprint,
+    // then yields one `Result<ParsedEntry, ParseError>` per
+    // discovered entry.
+    //
+    // To keep the rest of the pipeline byte-identical to the
+    // pre-ADR-0030 plain-refs flow, we materialise each entry into
+    // the same `inputs: Vec<String>` shape the downstream Step 7
+    // already drives. The Ok arm produces the canonical ref-input
+    // string; the per-entry `InvalidRef` arm produces the raw
+    // identifier verbatim so the downstream `Ref::parse` call still
+    // produces an `INVALID_REF` JSONL line with the offending
+    // string. Whole-input failures (`Decode` / `UnsupportedFormat`)
+    // abort before any fetch runs — the operator gets a single loud
+    // error rather than a silently-empty batch.
+    let path_utf8 = Utf8Path::new(&path);
+    let parsed = refs::parse_input(&raw, Format::Auto, Some(path_utf8));
+    let mut inputs: Vec<String> = Vec::with_capacity(parsed.len());
+    for entry in parsed {
+        match entry {
+            Ok(p) => inputs.push(p.ref_.as_input_str().to_string()),
+            Err(ParseError::InvalidRef { raw, .. }) => inputs.push(raw),
+            Err(ParseError::NoIdentifier { entry_key }) => {
+                // Synthesise a recognisable placeholder so Step 7's
+                // `Ref::parse` rejects this entry as `INVALID_REF`
+                // with the operator's citation key visible in the
+                // JSONL `ref` field. A future slice will plumb the
+                // structured `entry_key` into a dedicated error
+                // object field (ADR-0030 §6).
+                let placeholder = match entry_key {
+                    Some(k) => format!("<no-identifier:{k}>"),
+                    None => "<no-identifier>".to_string(),
+                };
+                inputs.push(placeholder);
+            }
+            Err(ParseError::Decode { format, message }) => {
+                return Err(anyhow!("input did not deserialise as {format}: {message}"));
+            }
+            Err(ParseError::UnsupportedFormat { format }) => {
+                return Err(anyhow!(
+                    "input format '{format}' is not yet supported — \
+                     re-export your library as CSL-JSON or plain refs"
+                ));
+            }
+            // `ParseError` is `#[non_exhaustive]`; any future variant
+            // surfaces as a generic invalid-ref entry so the batch
+            // does not silently swallow a new failure class.
+            Err(other) => inputs.push(format!("<unhandled parse error: {other}>")),
+        }
+    }
 
     // Step 3: enforce the hard cap before doing any work. The cap is the
     // same one the MCP `batch_fetch` tool enforces (`MCP_BATCH_MAX_SIZE`).
@@ -202,10 +250,15 @@ pub async fn run_with_options(
             let _permit = match sem_task.acquire_owned().await {
                 Ok(p) => p,
                 Err(_) => {
+                    // Map the semaphore-closed structural impossibility
+                    // to a typed `FetchError` (closest closed-set fit)
+                    // so `TaskOutcome::result` stays typed end-to-end.
                     return TaskOutcome {
                         input,
-                        result: Err(anyhow!("batch semaphore unexpectedly closed")),
-                    }
+                        result: Err(FetchError::SourceSchema {
+                            hint: "batch semaphore unexpectedly closed".to_string(),
+                        }),
+                    };
                 }
             };
             let result = harness_task.fetch_one(&ref_).await;
@@ -277,7 +330,7 @@ pub async fn run_with_options(
 #[derive(Debug)]
 struct TaskOutcome {
     input: String,
-    result: Result<()>,
+    result: Result<FetchPaperOutcome, FetchError>,
 }
 
 /// One-line summary written to stderr per ADR-0001 (stdio convention — the
@@ -347,16 +400,54 @@ fn classify_joined(
 ) -> JoinedOutcome {
     match joined {
         Ok(TaskOutcome { input, result }) => match result {
-            Ok(()) => JoinedOutcome {
-                is_error: false,
-                json_record: json_mode.then(|| build_jsonl_success(&input)),
-                log_breadcrumb: LogBreadcrumb::None,
-            },
+            Ok(outcome) => {
+                // #210 / `docs/ERRORS.md` §3+§6: a `Blocked` PDF leg
+                // is NOT a clean success even though the typed Result
+                // is `Ok` — surface it as a structured failure record
+                // with the `denial_context` the orchestrator carried
+                // on `PdfLegStatus::Blocked.denial`.
+                if let PdfLegStatus::Blocked {
+                    code,
+                    message,
+                    denial,
+                } = &outcome.pdf_leg
+                {
+                    let effective = effective_blocked_code(*code, denial.as_ref());
+                    let denial_value = denial.as_ref().and_then(denial_context_to_value);
+                    let record = json_mode.then(|| {
+                        build_jsonl_failure(
+                            Some(&input),
+                            effective.as_wire(),
+                            message,
+                            denial_value,
+                        )
+                    });
+                    let error_dbg =
+                        format!("pdf_leg=Blocked code={effective:?} message={message:?}");
+                    return JoinedOutcome {
+                        is_error: true,
+                        json_record: record,
+                        log_breadcrumb: LogBreadcrumb::FetchFailed { input, error_dbg },
+                    };
+                }
+                let result_value = json_mode.then(|| outcome_to_result_value(&outcome));
+                JoinedOutcome {
+                    is_error: false,
+                    json_record: json_mode
+                        .then(|| build_jsonl_success(&input, result_value.clone().flatten())),
+                    log_breadcrumb: LogBreadcrumb::None,
+                }
+            }
             Err(e) => {
                 let error_dbg = format!("{e:?}");
-                let json_msg = format!("{e:#}");
-                let record =
-                    json_mode.then(|| build_jsonl_failure(Some(&input), "FETCH_ERROR", &json_msg));
+                let json_msg = format!("{e}");
+                let code: ErrorCode = (&e).into();
+                let denial_value = Option::<DenialContext>::from(&e)
+                    .as_ref()
+                    .and_then(denial_context_to_value);
+                let record = json_mode.then(|| {
+                    build_jsonl_failure(Some(&input), code.as_wire(), &json_msg, denial_value)
+                });
                 JoinedOutcome {
                     is_error: true,
                     json_record: record,
@@ -372,7 +463,8 @@ fn classify_joined(
             // sentinel that a consumer doing `retry(rec["ref"])`
             // would mishandle. Self-review for #209 §1.
             let json_msg = format!("batch task panicked: {join_err}");
-            let record = json_mode.then(|| build_jsonl_failure(None, "FETCH_ERROR", &json_msg));
+            let record =
+                json_mode.then(|| build_jsonl_failure(None, "FETCH_ERROR", &json_msg, None));
             JoinedOutcome {
                 is_error: true,
                 json_record: record,
@@ -382,34 +474,77 @@ fn classify_joined(
     }
 }
 
-/// #205: build the JSON-Lines success record value for `ref_input`.
-/// Per ERRORS.md §3, the wire shape is `{"ok": true, "ref": "..."}`.
+/// Build the `result` sub-object for the JSONL success record per
+/// ERRORS.md §3: `{safekey, store_path, canonical_digest}`. Returns
+/// `None` if any field cannot be serialised; the caller falls back to
+/// the bare `{ok, ref}` shape so a serialisation glitch never drops
+/// the success signal.
+fn outcome_to_result_value(outcome: &FetchPaperOutcome) -> Option<serde_json::Value> {
+    Some(serde_json::json!({
+        "safekey":          outcome.safekey,
+        "store_path":       outcome.path.as_str(),
+        "canonical_digest": outcome.canonical_digest,
+    }))
+}
+
+/// Serialise a `DenialContext` to a JSON value for the `error.denial_context`
+/// field. `DenialContext: serde::Serialize` already; returns `None` on
+/// the (today unreachable) serialise-failure path rather than aborting
+/// the record.
+fn denial_context_to_value(dc: &DenialContext) -> Option<serde_json::Value> {
+    serde_json::to_value(dc).ok()
+}
+
+/// #205 + #210: build the JSON-Lines success record value for
+/// `ref_input`. Per ERRORS.md §3, the wire shape is
+/// `{"ok": true, "ref": "...", "result": {...}}` when `result` is
+/// `Some`, falling back to `{"ok": true, "ref": "..."}` when `result`
+/// is `None` (the latter is reserved for paths that don't carry a
+/// structured outcome — today every fetch path does, so `result` is
+/// `Some` in practice; the `None` arm preserves the unit-test path
+/// that asserts shape without constructing a full `FetchPaperOutcome`).
+///
 /// Returned as `serde_json::Value` so unit tests can assert the shape
 /// without a stdout-capture dance; the integration site wraps it with
 /// `println!`.
-fn build_jsonl_success(ref_input: &str) -> serde_json::Value {
-    serde_json::json!({ "ok": true, "ref": ref_input })
+fn build_jsonl_success(ref_input: &str, result: Option<serde_json::Value>) -> serde_json::Value {
+    match result {
+        Some(r) => serde_json::json!({ "ok": true, "ref": ref_input, "result": r }),
+        None => serde_json::json!({ "ok": true, "ref": ref_input }),
+    }
 }
 
-/// #205: build the JSON-Lines failure record value with `code` and
-/// `message`. The wire shape is
-/// `{"ok": false, "ref": "<ref>"|null, "error": {"code": "...", "message": "..."}}`.
+/// #205 + #210: build the JSON-Lines failure record value with `code`,
+/// `message`, and an optional `denial_context` (ADR-0023). The wire
+/// shape is `{"ok": false, "ref": "<ref>"|null, "error": {"code": "...",
+/// "message": "..."[, "denial_context": {...}]}}`.
+///
+/// `denial_context` is omitted from the record entirely when `None` —
+/// fields are not present rather than `null` — so consumers can use the
+/// `denial_context` key's presence as a discriminator between a typed
+/// policy denial and a bare transport / config error.
 ///
 /// `ref_input` is `Option<&str>` because the JoinSet panic arm has lost
 /// the originating input by the time the panic surfaces: serialising
 /// `null` is more honest than a sentinel string like `"<task-panic>"`
 /// (which a consumer doing `retry(rec["ref"])` would mishandle by
 /// trying to refetch the literal sentinel — self-review for #209 §1).
-///
-/// `denial_context` (ADR-0023 closed enum) is intentionally omitted in
-/// this PR — surfacing it requires `fetch_one` to return the structured
-/// outcome instead of `Result<()>`; tracked in #210 to keep this PR's
-/// diff focused on the contract surface.
-fn build_jsonl_failure(ref_input: Option<&str>, code: &str, message: &str) -> serde_json::Value {
+fn build_jsonl_failure(
+    ref_input: Option<&str>,
+    code: &str,
+    message: &str,
+    denial_context: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut error = serde_json::json!({ "code": code, "message": message });
+    if let Some(dc) = denial_context {
+        if let Some(obj) = error.as_object_mut() {
+            obj.insert("denial_context".to_string(), dc);
+        }
+    }
     serde_json::json!({
         "ok":    false,
         "ref":   ref_input,
-        "error": { "code": code, "message": message },
+        "error": error,
     })
 }
 
@@ -417,10 +552,12 @@ fn build_jsonl_failure(ref_input: Option<&str>, code: &str, message: &str) -> se
 /// (Step 7's `Ref::parse` branch); the JoinSet-drain site now uses
 /// [`classify_joined`] + an inline `println!`, so the matching
 /// `emit_jsonl_success` thin wrapper is no longer needed and was
-/// removed alongside the drain refactor.
+/// removed alongside the drain refactor. The `denial_context` slot is
+/// always `None` here — `INVALID_REF` is a pre-guard parse error, not
+/// a policy denial (`docs/ERRORS.md` §3.1).
 #[allow(clippy::print_stdout)]
 fn emit_jsonl_failure(ref_input: Option<&str>, code: &str, message: &str) {
-    println!("{}", build_jsonl_failure(ref_input, code, message));
+    println!("{}", build_jsonl_failure(ref_input, code, message, None));
 }
 
 // ---------------------------------------------------------------------------
@@ -435,29 +572,94 @@ mod tests {
     // ---- #205 JSON-Lines record shape (unit-level) ---------------------
 
     #[test]
-    fn jsonl_success_shape() {
-        let v = build_jsonl_success("10.1234/foo");
+    fn jsonl_success_shape_no_result() {
+        // Without a structured payload, the record falls back to the
+        // bare `{ok, ref}` shape — guards the `None` arm of
+        // `build_jsonl_success` (the unit-test path; production paths
+        // always pass `Some`).
+        let v = build_jsonl_success("10.1234/foo", None);
         assert_eq!(v["ok"], true);
         assert_eq!(v["ref"], "10.1234/foo");
         assert!(v.get("error").is_none(), "no error field on success");
+        assert!(
+            v.get("result").is_none(),
+            "no `result` key when caller passed None"
+        );
+    }
+
+    #[test]
+    fn jsonl_success_shape_with_result() {
+        // #210: the success record carries `result.{safekey, store_path,
+        // canonical_digest}`. The keys are part of the public wire format.
+        let payload = serde_json::json!({
+            "safekey":          "arxiv__2401.12345",
+            "store_path":       "/papers/arxiv__2401.12345.pdf",
+            "canonical_digest": "deadbeef".repeat(8),
+        });
+        let v = build_jsonl_success("arxiv:2401.12345", Some(payload));
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["ref"], "arxiv:2401.12345");
+        assert_eq!(v["result"]["safekey"], "arxiv__2401.12345");
+        assert_eq!(v["result"]["store_path"], "/papers/arxiv__2401.12345.pdf");
+        assert!(
+            v["result"]["canonical_digest"]
+                .as_str()
+                .map(|s| s.len() == 64)
+                .unwrap_or(false),
+            "canonical_digest MUST be a 64-char hex string: {v}"
+        );
     }
 
     #[test]
     fn jsonl_failure_shape_invalid_ref() {
-        let v = build_jsonl_failure(Some("not-a-doi"), "INVALID_REF", "bad ref");
+        let v = build_jsonl_failure(Some("not-a-doi"), "INVALID_REF", "bad ref", None);
         assert_eq!(v["ok"], false);
         assert_eq!(v["ref"], "not-a-doi");
         assert_eq!(v["error"]["code"], "INVALID_REF");
         assert_eq!(v["error"]["message"], "bad ref");
+        assert!(
+            v["error"].get("denial_context").is_none(),
+            "no denial_context on INVALID_REF (pre-guard parse error): {v}"
+        );
     }
 
     #[test]
     fn jsonl_failure_shape_fetch_error() {
-        let v = build_jsonl_failure(Some("arxiv:2401.12345"), "FETCH_ERROR", "boom");
+        let v = build_jsonl_failure(Some("arxiv:2401.12345"), "NETWORK_ERROR", "boom", None);
         assert_eq!(v["ok"], false);
         assert_eq!(v["ref"], "arxiv:2401.12345");
-        assert_eq!(v["error"]["code"], "FETCH_ERROR");
+        assert_eq!(v["error"]["code"], "NETWORK_ERROR");
         assert_eq!(v["error"]["message"], "boom");
+    }
+
+    #[test]
+    fn jsonl_failure_shape_with_denial_context() {
+        // #210: the structured `denial_context` carries the closed-enum
+        // `reason` + per-source detail when a CAPABILITY_DENIED failure
+        // surfaces. Hand-craft the value to pin the wire shape — the
+        // serializer is `DenialContext`'s own `Serialize` impl (ADR-0023).
+        let dc = serde_json::json!({
+            "reason":    "redirect_not_in_allowlist",
+            "source":    "oa-publisher",
+            "attempted": "evil.example.com",
+            "expected":  ["good-publisher.example.org"],
+        });
+        let v = build_jsonl_failure(
+            Some("10.1234/foo"),
+            "CAPABILITY_DENIED",
+            "redirect not in allowlist",
+            Some(dc),
+        );
+        assert_eq!(v["error"]["code"], "CAPABILITY_DENIED");
+        assert_eq!(
+            v["error"]["denial_context"]["reason"],
+            "redirect_not_in_allowlist"
+        );
+        assert_eq!(v["error"]["denial_context"]["source"], "oa-publisher");
+        assert_eq!(
+            v["error"]["denial_context"]["attempted"],
+            "evil.example.com"
+        );
     }
 
     #[test]
@@ -465,7 +667,7 @@ mod tests {
         // Self-review for #209 §1: a JoinSet panic loses the input, so
         // the record carries `ref: null` rather than a sentinel string
         // that a consumer doing `retry(rec["ref"])` would mishandle.
-        let v = build_jsonl_failure(None, "FETCH_ERROR", "batch task panicked: ...");
+        let v = build_jsonl_failure(None, "FETCH_ERROR", "batch task panicked: ...", None);
         assert_eq!(v["ok"], false);
         assert!(v["ref"].is_null(), "panic record's ref MUST be null: {v}");
         assert_eq!(v["error"]["code"], "FETCH_ERROR");
@@ -478,7 +680,11 @@ mod tests {
         let outcome = classify_joined(
             Ok(TaskOutcome {
                 input: "10.1234/foo".to_string(),
-                result: Ok(()),
+                result: Ok(FetchPaperOutcome::for_test_synthetic(
+                    "doi__10_1234_foo",
+                    "oa-publisher",
+                    PdfLegStatus::Fetched,
+                )),
             }),
             true,
         );
@@ -486,6 +692,10 @@ mod tests {
         let rec = outcome.json_record.expect("json_mode → record");
         assert_eq!(rec["ok"], true);
         assert_eq!(rec["ref"], "10.1234/foo");
+        // #210: structured `result` body present on success.
+        assert_eq!(rec["result"]["safekey"], "doi__10_1234_foo");
+        assert!(rec["result"]["store_path"].is_string());
+        assert!(rec["result"]["canonical_digest"].is_string());
         assert!(matches!(outcome.log_breadcrumb, LogBreadcrumb::None));
     }
 
@@ -494,7 +704,11 @@ mod tests {
         let outcome = classify_joined(
             Ok(TaskOutcome {
                 input: "10.1234/foo".to_string(),
-                result: Ok(()),
+                result: Ok(FetchPaperOutcome::for_test_synthetic(
+                    "doi__10_1234_foo",
+                    "oa-publisher",
+                    PdfLegStatus::Fetched,
+                )),
             }),
             false,
         );
@@ -503,11 +717,17 @@ mod tests {
     }
 
     #[test]
-    fn classify_joined_fetch_failure_emits_fetch_error() {
+    fn classify_joined_fetch_failure_emits_typed_code() {
+        // #210: the failure record now carries the typed ErrorCode wire
+        // string from `FetchError → ErrorCode`, not the generic
+        // `FETCH_ERROR`. `FetchError::SourceSchema` collapses to
+        // `INTERNAL_ERROR` (per `source.rs`'s closed-set mapping).
         let outcome = classify_joined(
             Ok(TaskOutcome {
                 input: "arxiv:2401.99999".to_string(),
-                result: Err(anyhow!("connection refused")),
+                result: Err(doiget_core::source::FetchError::SourceSchema {
+                    hint: "synthetic schema failure".to_string(),
+                }),
             }),
             true,
         );
@@ -515,11 +735,61 @@ mod tests {
         let rec = outcome.json_record.expect("json_mode → record");
         assert_eq!(rec["ok"], false);
         assert_eq!(rec["ref"], "arxiv:2401.99999");
-        assert_eq!(rec["error"]["code"], "FETCH_ERROR");
+        assert_eq!(rec["error"]["code"], "INTERNAL_ERROR");
         assert!(matches!(
             outcome.log_breadcrumb,
             LogBreadcrumb::FetchFailed { .. }
         ));
+    }
+
+    #[test]
+    fn classify_joined_blocked_pdf_emits_failure_with_denial_context() {
+        // #210: a `PdfLegStatus::Blocked` outcome is reported as a
+        // structured failure record carrying the `denial_context` the
+        // orchestrator captured at the policy-denial site. The
+        // `effective_blocked_code` reclassification promotes a
+        // redirect-not-in-allowlist denial from `NETWORK_ERROR` to
+        // `CAPABILITY_DENIED` so consumers see the policy class.
+        use doiget_core::{DenialContext, DenialReason, ErrorCode as Ec};
+        let blocked = PdfLegStatus::Blocked {
+            code: Ec::NetworkError,
+            message: "redirect not in allowlist".to_string(),
+            denial: Some(DenialContext {
+                reason: DenialReason::RedirectNotInAllowlist,
+                source: Some("oa-publisher".to_string()),
+                attempted: Some("evil.example.com".to_string()),
+                expected: Some(vec!["good-publisher.example.org".to_string()]),
+                hop_index: None,
+                cap: None,
+                actual: None,
+            }),
+        };
+        let outcome = classify_joined(
+            Ok(TaskOutcome {
+                input: "10.1234/foo".to_string(),
+                result: Ok(FetchPaperOutcome::for_test_synthetic(
+                    "doi__10_1234_foo",
+                    "oa-publisher",
+                    blocked,
+                )),
+            }),
+            true,
+        );
+        assert!(
+            outcome.is_error,
+            "Blocked PDF leg MUST be reported as error"
+        );
+        let rec = outcome.json_record.expect("json_mode → record");
+        assert_eq!(rec["ok"], false);
+        assert_eq!(rec["error"]["code"], "CAPABILITY_DENIED");
+        assert_eq!(
+            rec["error"]["denial_context"]["reason"],
+            "redirect_not_in_allowlist"
+        );
+        assert_eq!(
+            rec["error"]["denial_context"]["attempted"],
+            "evil.example.com"
+        );
     }
 
     #[test]
@@ -586,17 +856,17 @@ mod tests {
         // no embedded newlines) — required for the JSONL contract since
         // the production emitter wraps it with a single `println!` and
         // CI consumers split stdout by `\n`.
-        let s = build_jsonl_success("10.1/x").to_string();
+        let s = build_jsonl_success("10.1/x", None).to_string();
         assert!(
             !s.contains('\n'),
             "JSONL success must be single-line: {s:?}"
         );
-        let s2 = build_jsonl_failure(Some("10.1/x"), "FETCH_ERROR", "msg").to_string();
+        let s2 = build_jsonl_failure(Some("10.1/x"), "FETCH_ERROR", "msg", None).to_string();
         assert!(
             !s2.contains('\n'),
             "JSONL failure must be single-line: {s2:?}"
         );
-        let s3 = build_jsonl_failure(None, "FETCH_ERROR", "msg").to_string();
+        let s3 = build_jsonl_failure(None, "FETCH_ERROR", "msg", None).to_string();
         assert!(
             !s3.contains('\n'),
             "null-ref JSONL must be single-line: {s3:?}"

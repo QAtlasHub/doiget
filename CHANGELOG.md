@@ -10,6 +10,438 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+<<<<<<< HEAD
+=======
+## [0.4.1-beta.13] - 2026-05-21
+
+### Added
+
+- **[mcp]** New MCP tool `doiget_batch_from_bibliography` per
+  ADR-0030 D6 — accepts an absolute `path` to a CSL-JSON file
+  (BibTeX coming in the biblatex slice), parses it via
+  `doiget_core::refs::parse_input`, and fetches every resolvable
+  entry through the existing batch orchestrator. Each result row
+  carries the source bibliography's `entry_key` so a Zotero /
+  Mendeley plugin can bridge the fetched PDF back to the originating
+  reference.
+
+  Output shape (ADR-0030 D6):
+  ```json
+  {
+    "ok": true,
+    "summary": {"total": 12, "ok": 10, "failed": 1, "parse_errors": 1},
+    "results": [
+      {"entry_key":"Foo2024","ref":"10.1234/foo","ok":true,"path":"...","license":"cc-by",...},
+      {"entry_key":"NoId2025","ref":null,"ok":false,
+       "error":{"code":"INVALID_REF","message":"entry has no DOI / arXiv id"}}
+    ]
+  }
+  ```
+
+  `strict` input field (default `false`) controls whether the FIRST
+  per-entry parse error aborts the whole call (`true`) or surfaces
+  as a row next to successful siblings (`false`). A whole-input
+  decode failure (malformed CSL-JSON) always aborts regardless of
+  `strict`.
+
+  `doiget capabilities` JSON's `mcp_tools` array gains the new
+  `doiget_batch_from_bibliography` entry; the parity test is
+  updated in lockstep so the table cannot drift from the docs.
+
+  6 new MCP unit tests cover `parse_bibliography_format`'s token
+  acceptance (auto / refs / csl-json / bibtex / case-insensitivity /
+  underscore variants / unknown-token rejection).
+
+>>>>>>> 01150e7 (feat(mcp): doiget_batch_from_bibliography MCP tool (ADR-0030 D6))
+## [0.4.1-beta.12] - 2026-05-21
+
+### Added
+
+- **[core]** ADR-0029 fetch chain slice 1 — the DOI OA-PDF leg now
+  walks a multi-candidate chain instead of trying only
+  `best_oa_location` (#222). Candidate URLs are extracted from the
+  Unpaywall envelope in priority order (best_oa_location first, then
+  every distinct entry in `oa_locations[]`); the orchestrator
+  advances past any non-PDF / 403 / network failure until either one
+  candidate yields a valid PDF or every candidate is exhausted. Each
+  attempt emits its own `oa-publisher` Fetch provenance row, so the
+  audit trail captures every external request.
+
+  Recovers the dogfood case from the finite-temperature-MPS corpus:
+  a DOI hits `link.aps.org`, the publisher WAF returns 403, but the
+  same record's arXiv preprint is in `oa_locations[]`. Pre-slice-1
+  this surfaced as `PdfLegStatus::Blocked` + metadata-only; post-
+  slice-1 the chain advances to the arXiv preprint and writes a
+  real PDF.
+
+  New helper: `doiget_core::orchestrator::extract_oa_url_chain`
+  (private). Removes the now-superseded
+  `extract_best_oa_url_from_value` helper and migrates its tests to
+  the chain extractor; net + 3 unit tests covering ordering,
+  deduplication, fallback-on-no-best, and malformed-URL tolerance.
+  New e2e test
+  `fetch_doi_oa_chain_falls_back_to_secondary_when_best_returns_403`
+  exercises the WAF-block fallback flow end-to-end.
+
+### Notes
+
+- Out of scope for slice 1 (deferred follow-ups):
+  - The structured `chain: Vec<AttemptOutcome>` field on
+    `FetchError` and the new `ALL_FALLBACKS_EXHAUSTED` closed-enum
+    variant (ADR-0029 D5). Today an all-failed chain still surfaces
+    as `PdfLegStatus::Blocked` with the *last* attempt's reason on
+    `denial`; the structured per-attempt list is reserved for the
+    MCP / CLI JSON wire-shape slice that follows #212 alignment.
+  - The schema-additive `chain_attempt` / `chain_total` /
+    `chain_terminal` / `verified_by` columns on the provenance log
+    (ADR-0029 D4). Today each chain attempt is logged as a
+    standalone Fetch row indistinguishable from the pre-slice-1
+    shape; the per-attempt enrichment is deferred.
+
+## [0.4.1-beta.11] - 2026-05-21
+
+### Added
+
+- **[core]** New `doiget_core::refs` module per ADR-0030 slice 1 —
+  bibliography input adapters. Exposes
+  `Format { Auto, Refs, CslJson, Bibtex }`,
+  `ParsedEntry { ref_, entry_key }`,
+  `ParseError { NoIdentifier, InvalidRef, Decode,
+  UnsupportedFormat }` (closed-enum, `#[non_exhaustive]`), and
+  `parse_input(text, format, path) -> Vec<Result<ParsedEntry,
+  ParseError>>` plus per-format helpers. Honors the ADR-0030 D3
+  identifier-pick priority: `DOI` > arXiv (`archivePrefix == "arXiv"`
+  + `eprint`, or `note: "arXiv:…"`) > (PMID parking). 23 unit tests
+  cover format detection, all parser branches, the priority rule,
+  case-insensitive field matching, and Zotero / Mendeley wire shape
+  quirks.
+
+- **[cli]** `doiget batch library.json` accepts a CSL-JSON export
+  directly. The format is auto-detected from the path extension
+  (`.json` / `.csl`) and the file's leading non-comment character;
+  callers writing plain refs files (`.txt`) keep working with no
+  change. A malformed CSL-JSON document aborts the batch with a
+  loud whole-input error rather than silently behaving as an empty
+  batch. New e2e tests
+  `batch_json_csl_input_yields_one_record_per_entry` and
+  `batch_malformed_csl_json_aborts_with_decode_error`.
+
+### Changed
+
+- **[cli]** `batch` JSONL `ref` field is now the bare identifier per
+  `docs/PROVENANCE_LOG.md` §3 — `Ref::as_input_str()`'s canonical
+  form — rather than the raw file line. For an input line
+  `arxiv:2401.99999`, the failure record's `ref` is now
+  `"2401.99999"` (no URI scheme). DOI inputs were already in this
+  form. Wire-format-visible: CI consumers parsing the `ref` field
+  should switch from "string match input line" to "regex / parse as
+  DOI or arXiv id". Surfaced because the new `refs::parse_input`
+  pipeline normalises every entry through `Ref::parse` before
+  emitting; the pre-ADR-0030 flow echoed raw lines verbatim.
+
+### Notes
+
+- Out of scope for slice 1 (deferred to follow-up slices):
+  - BibTeX / `.bib` parsing — requires the `biblatex` crate
+    (+500 KB) and its cargo-vet transitive exemptions. Until that
+    ships, `Format::Bibtex` returns `ParseError::UnsupportedFormat`
+    with a helpful "re-export as CSL-JSON" hint, and `.bib` file
+    extensions surface that error on the first batch invocation.
+  - `--format` / `--strict` CLI flags.
+  - New MCP tool `doiget_batch_from_bibliography`.
+  - Plumbing `entry_key` into the JSONL `error` object as a typed
+    field (today the citation key is embedded in placeholder
+    `<no-identifier:KEY>` strings that the existing JSONL `ref`
+    surfaces verbatim).
+
+## [0.4.1-beta.10] - 2026-05-21
+
+### Added
+
+- **[mcp]** MCP-server `build_http_client_for_fetch` now merges
+  user-extension hosts from `<config_dir>/doiget/config.toml` per
+  ADR-0028 D2, mirroring the CLI path that landed in beta.8 (#220).
+  Before this slice, a user who configured
+  `[[network.additional_hosts]]` and invoked via `doiget serve`
+  saw no effect — only `doiget fetch` honored the extension. The
+  MCP merge closes that asymmetry; both surfaces now read the same
+  config file with identical failure handling (silent on
+  not-found, `tracing::warn!` on malformed, curated allowlist
+  continues regardless).
+
+- **[cli]** `doiget config doctor` adds a user-extension health
+  check (ADR-0028 D2-3): on a green run the new line reads
+  `[ ok ] user-extension hosts loaded: N`; on a malformed
+  `config.toml` it emits `[FAIL] user-extension config invalid:
+  <error>` and exits 2. A missing `config.toml` is normal (count
+  = 0, no failure) — the user simply has not extended the gate.
+
+- **[cli]** `doiget capabilities` JSON gains a top-level
+  `user_extension_count: usize` field (ADR-0028 D2-4) so an LLM
+  cold-booted into doiget can confirm at a glance whether the
+  curated allowlist has been extended on this host. The field
+  counts valid `[[network.additional_hosts]]` entries; parse
+  errors collapse to `0` (use `doiget config doctor` to
+  diagnose). `Capabilities` is `#[non_exhaustive]`, so adding the
+  field is additive for downstream Rust consumers; JSON consumers
+  should ignore unknown fields.
+
+### Changed
+
+- **[cli]** `commands::fetch::config_dir_utf8` lifted from private
+  to `pub(crate)` so sibling modules
+  (`commands::capabilities`, `commands::config`) resolve the same
+  `<config_dir>/doiget/` path the production HTTP-client builder
+  reads from. No behavior change.
+
+### Notes
+
+- Out of scope for this slice (still tracked under #220 / ADR-0028):
+  the `verified_by = "user"` provenance row field (D2-2). That
+  requires allowlist source-attribution plumbing through the
+  redirect closure and is deferred to a follow-up slice.
+
+## [0.4.1-beta.9] - 2026-05-21
+
+### Added
+
+- **[core]** `FetchPaperOutcome` (`doiget_core::orchestrator`) gains
+  two new fields: `safekey: String` and `canonical_digest: String`
+  (#210). Both are always populated — `safekey` from the input ref
+  (`Ref::safekey().as_str()`), `canonical_digest` from
+  `CanonicalRef::digest_hex()` under the outcome's
+  `resolver_profile`. Additive on a `#[non_exhaustive]` struct, so
+  downstream consumers continue to compile without changes.
+
+- **[cli]** `doiget batch --json` JSONL records carry the full
+  structured outcome per `docs/ERRORS.md` §3 (#210):
+  - **Success**: `{"ok":true,"ref":"...","result":{"safekey":"...","store_path":"...","canonical_digest":"..."}}`.
+    A CI consumer can now pull `safekey` to construct a store-relative
+    path and `canonical_digest` to deduplicate against an audit DB
+    without a follow-up `info` round-trip per ref.
+  - **Failure**: `{"ok":false,"ref":"...","error":{"code":"...","message":"...","denial_context":{...}}}`.
+    The `code` field is now the typed `ErrorCode` wire string (e.g.
+    `CAPABILITY_DENIED` / `NETWORK_ERROR` / `INTERNAL_ERROR`) — the
+    previous generic `FETCH_ERROR` only survives in the JoinSet
+    panic arm where no underlying `FetchError` exists. The
+    `denial_context` key is present only when the failure carries a
+    structured ADR-0023 denial; bare transport / config errors omit
+    the key entirely so consumers can use its presence as a typed-
+    denial discriminator.
+
+  A `PdfLegStatus::Blocked` outcome (an OA PDF was discovered but
+  could not be retrieved per #145) is now surfaced as a failure
+  record with the policy-class `denial_context`, rather than being
+  collapsed into the bare `{ok:true, ref}` shape that #205 left in
+  place. The `effective_blocked_code` reclassification (off-allowlist
+  / insecure-scheme / blocklisted-host → `CAPABILITY_DENIED`) is
+  shared between single-fetch and batch, so the wire code matches the
+  single-fetch CLI exit-code mapping.
+
+### Changed
+
+- **[cli]** `FetchHarness::fetch_one` signature changes from
+  `async fn (..., &Ref) -> anyhow::Result<()>` to
+  `async fn (..., &Ref) -> Result<FetchPaperOutcome, FetchError>`
+  (#210). The rendering + exit-code synthesis that used to live
+  inside `fetch_one` (Blocked-PDF reclassification, `error[CODE]:`
+  stderr, `CliExit` construction) now lives in the per-caller paths
+  (`commands::fetch::run_with_options` for single-fetch,
+  `commands::batch::classify_joined` for batch) so each surface can
+  emit its own machine-readable shape from the same typed outcome.
+  `pub(crate)`, not a public API.
+
+  - `commands::fetch::effective_blocked_code` is lifted from `fn` to
+    `pub(crate) fn` so the batch caller shares the single-fetch
+    reclassification rule.
+  - New `commands::fetch::outcome_is_clean_success` helper collapses
+    the typed `Result<FetchPaperOutcome, FetchError>` to the boolean
+    the `SessionEnd` row's `is_ok` field needs, so a Blocked PDF leg
+    never reads as a green session in the provenance log.
+
+- **[core]** New `#[doc(hidden)] pub fn FetchPaperOutcome::for_test_synthetic(...)`
+  test-only constructor in `doiget_core::orchestrator` so downstream
+  test code (`doiget-cli` batch unit tests) can drive
+  classification logic without running the full orchestrator. Not a
+  stable public API — the signature may change to fit test needs
+  without a `[BREAKING]` callout.
+
+### Notes
+
+- Out of scope (deferred to follow-up issues per #210's Out-of-scope
+  list):
+  - The MCP `doiget_fetch_paper` envelope upgrade to surface
+    `safekey` / `canonical_digest` (the FetchPaperOutcome fields
+    are populated; the envelope-side wire change is a separate
+    item).
+  - `canonical_digest` on `EntryInfo` (`info` / `list-recent` /
+    `search` JSON bodies).
+  - Single-fetch `--json` symmetric output (the CLI single-fetch JSON
+    branch mirroring batch JSONL's single record).
+
+## [0.4.1-beta.8] - 2026-05-21
+
+### Added
+
+- **[core]** New module `doiget_core::user_extension` per ADR-0028
+  D2 (#220). Users can extend the `oa-publisher` redirect allowlist
+  for their own deployment via `[[network.additional_hosts]]` in
+  `<config_dir>/doiget/config.toml`. Pattern grammar is restricted
+  (literal FQDN or single-suffix wildcard `*.<suffix>`); rejection
+  classes are surfaced as a closed-enum `PatternError` for
+  programmatic consumption by the future `doiget config doctor`
+  surface. The `host` field of `UserExtensionHost` is a
+  `HostPattern` newtype that runs validation through its serde
+  `Deserialize`, so the "valid pattern" invariant is type-level —
+  no `UserExtensionHost` value can exist with an invalid host. The
+  orchestrator's production HttpClient construction
+  (`commands::fetch::build_http_client`) loads and merges in one
+  pass; a missing config file is silent, a malformed config is
+  surfaced as `tracing::warn!` and the fetch continues with the
+  curated set.
+
+  Example:
+
+  ```toml
+  # ~/.config/doiget/config.toml
+  [[network.additional_hosts]]
+  host = "ruj.uj.edu.pl"
+  note = "Jagiellonian University Repository — Green OA"
+
+  [[network.additional_hosts]]
+  host = "*.uj.edu.pl"
+  ```
+
+  Out of scope for this slice (tracked as S3b): the
+  `verified_by = "user"` provenance row field (ADR-0028 D2-2),
+  the `doiget config doctor` surface (D2-3), the
+  `capability_gate.user_extension_count` field in `doiget
+  capabilities` JSON (D2-4), and the MCP-server-side merge in
+  `doiget-mcp` (a user who configures
+  `[[network.additional_hosts]]` and invokes via `doiget serve`
+  currently sees no effect; that is the load-bearing item S3b
+  closes).
+
+## [0.4.1-beta.7] - 2026-05-21
+
+### Fixed
+
+- **[core/http]** `http://` URLs returned by OpenAlex / Unpaywall
+  metadata for publishers that have since moved to HTTPS are
+  transparently upgraded to `https://` before the request leaves
+  the process (#220). Without this, the production
+  `https_only(true)` client refused to send and the fetch failed
+  with a generic builder error. The upgrade is skipped for
+  loopback hosts (`localhost`, the RFC 6761 `.localhost` TLD,
+  `127.0.0.0/8`, `::1`, IPv4-mapped IPv6 loopback) so the
+  `new_for_tests_allow_http*` wiremock path is unchanged. TLS
+  posture (ADR-0020) is preserved — the upgrade turns a
+  guaranteed-reject into a real TLS handshake, never a plaintext
+  fallback. Successful upgrades log at `tracing::info!` so the
+  rewrite appears in audit-level logs.
+
+## [0.4.1-beta.5] - 2026-05-21
+
+### Added
+
+- **[cli]** Four new global flags from CONFIG.md §5, completing the
+  documented surface (#211):
+  - `--store-root <PATH>` — overrides `DOIGET_STORE_ROOT` for the
+    on-disk paper store root. Path-shaped values; rejected at parse
+    time when empty or containing NUL bytes (review pass I6 / A4).
+  - `--log-path <PATH>` — overrides `DOIGET_LOG_PATH` for the
+    provenance-log file path. Same parse-time validation as
+    `--store-root`.
+  - `--color <auto|always|never>` — exposes the future ANSI emission
+    knob via the new `DOIGET_COLOR` env var. Surface-only in this
+    slice (no consumer emits ANSI today). The consumer-side resolver
+    will check `NO_COLOR` (present and non-empty per
+    <https://no-color.org/>, any value) **before** consulting
+    `DOIGET_COLOR`; the write boundary in
+    `apply_global_overrides` is intentionally simple and does NOT
+    inspect `NO_COLOR`.
+  - `--progress` / `--no-progress` — pair of mutually exclusive
+    flags writing `DOIGET_PROGRESS=1` / `0`. Surface-only: the
+    `fetch` / `batch` per-ref stderr line is unchanged here; the
+    consumer-side gate lands in a follow-up.
+
+  Each flag implements the CONFIG.md §1 precedence ladder
+  `flag > env > default` by overwriting the matching `DOIGET_*`
+  process env var at the very top of `run_dispatch`, BEFORE any
+  command resolver reads the environment. The existing resolvers
+  (`commands::fetch::resolve_store_root`, `resolve_log_path`,
+  `commands::audit_log::resolve_log_path`) keep their env-driven
+  shape and pick the new value up uniformly — no `ResolvedFlags`
+  struct threaded through eleven `run(..)` signatures.
+
+  Path flags use `camino::Utf8PathBuf` (workspace `clippy.toml`
+  disallowed-types policy bans `std::path::PathBuf`); validation
+  lives in `parse_utf8_path` and runs at clap's `value_parser`
+  layer so empty / NUL-byte inputs fail clean with exit 2.
+
+  Clap-level conflicts: `--progress` ↔ `--no-progress` (exit 2 on
+  both supplied); pre-existing `--mode` ↔ `--json` ↔ `--quiet`
+  conflicts unchanged.
+
+  19 new tests (15 unit on `apply_global_overrides`/`parse_utf8_path`
+  via `serial_test`; 4 e2e on clap conflicts, value acceptance, and
+  empty-value parse-time rejection). Includes a drift guard
+  (`output_color_env_strings_match_clap_parser_side`) that pairs
+  `OutputColor::as_env_value` against clap's `ValueEnum`
+  parser-side spelling — if `rename_all = "lower"` is ever changed,
+  the round-trip catches it.
+
+## [0.4.1-beta.2] - 2026-05-21
+
+### Fixed
+
+- **[cli]** `doiget capabilities` no longer silently exits with empty
+  stdout in non-TTY / agent execution contexts (#219, #220 ADR-0017
+  Amendment 1). The resolver now distinguishes **explicit** Quiet
+  (`--quiet` / `-q` / `--mode quiet` / `DOIGET_MODE=quiet`) from
+  **implicit** Quiet (the non-TTY default), and `capabilities` —
+  classified as an *artifact* command — suppresses stdout only on
+  explicit Quiet. Closes the LLM cold-boot deadlock where an agent
+  ran `doiget capabilities` over a captured pipe and got nothing
+  back. `OutputMode` enum wire format (`DOIGET_MODE` strings, the
+  `modes` array in capabilities JSON) is unchanged; the
+  `quiet_was_explicit` discriminator lives only in-memory on the
+  new `ResolvedOutput` returned by `commands::output::resolve()`.
+  `bib` / `csl` were already correct (they ignore mode); their
+  classification is now documented via the new
+  `is_artifact_command()` helper.
+
+## [0.4.1-beta.1] - 2026-05-21
+
+Beta-lane open for the v0.4 design (ADR-0017 Amendment 1 +
+ADR-0028 / 0029 / 0030, design-only — no code change yet).
+Workspace version is bumped to satisfy the version-gate G5
+(non-empty CHANGELOG section for the prospective tag) while the
+implementation slices S1-S8 land separately.
+
+### Added
+
+- **[design]** ADR-0017 Amendment 1: distinguish *explicit* vs
+  *implicit* `Quiet`, classify commands as artifact vs
+  informational. Closes the LLM cold-boot deadlock reported in
+  #219 / #220 once the implementation slice (S1) lands.
+- **[design]** ADR-0028: the capability gate's purpose is
+  **ToS compliance + verified curation**; users may extend it via
+  `config.toml` (literal hosts or single-suffix wildcards) with
+  per-attempt `verified_by = "user"` recorded in the provenance
+  log. Impersonation / WAF bypass / embedded headless browser
+  (#223) are permanently out-of-scope.
+- **[design]** ADR-0029: `fetch_one` resolves to an ordered chain
+  of candidate URLs (OpenAlex `oa_locations[]` order); each
+  attempt becomes its own provenance row (schema-additive on v2).
+  New closed-enum `FetchError` variant `ALL_FALLBACKS_EXHAUSTED`
+  carries `Vec<AttemptOutcome>`.
+- **[design]** ADR-0030: bibliography input adapters
+  (`.bib` / CSL-JSON) live in `doiget-core`; new MCP tool
+  `doiget_batch_from_bibliography` enables the Zotero plugin
+  distribution path. One identifier per entry
+  (DOI > arXiv > PMID); skip-and-warn on parse error by default.
+
 ## [0.3.0] - 2026-05-20
 
 Promotion of the `0.2.1-beta.1..beta.12` integration line on `next` to a

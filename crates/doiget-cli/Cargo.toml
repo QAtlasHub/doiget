@@ -69,7 +69,7 @@ predicates = { workspace = true }
 wiremock    = { workspace = true }
 # Serializes tests that mutate process-global env state — used by the
 # `fetch_arxiv_e2e` test and `doiget config` tests.
-serial_test = "3"
+serial_test = { workspace = true }
 # Build a gzipped rotated `.gz` segment fixture for the multi-segment
 # `audit-log --verify` e2e (provenance §6 / #140).
 flate2      = { workspace = true }
