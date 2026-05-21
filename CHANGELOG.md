@@ -10,6 +10,41 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.4.1-beta.5] - 2026-05-21
+
+### Added
+
+- **[cli]** Four new global flags from CONFIG.md §5, completing the
+  documented surface (#211):
+  - `--store-root <PATH>` — overrides `DOIGET_STORE_ROOT` for the
+    on-disk paper store root.
+  - `--log-path <PATH>` — overrides `DOIGET_LOG_PATH` for the
+    provenance-log file path.
+  - `--color <auto|always|never>` — exposes the future ANSI emission
+    knob via the new `DOIGET_COLOR` env var. Surface-only in this
+    slice (no consumer emits ANSI today); `NO_COLOR=1` continues to
+    win when consumers read it per <https://no-color.org/>.
+  - `--progress` / `--no-progress` — pair of mutually exclusive
+    flags writing `DOIGET_PROGRESS=1` / `0`. Surface-only: the
+    `fetch` / `batch` per-ref stderr line is unchanged here; the
+    consumer-side gate lands in a follow-up.
+
+  Each flag implements the CONFIG.md §1 precedence ladder
+  `flag > env > default` by overwriting the matching `DOIGET_*`
+  process env var at the very top of `run_dispatch`, BEFORE any
+  command resolver reads the environment. The existing resolvers
+  (`commands::fetch::resolve_store_root`, `resolve_log_path`,
+  `commands::audit_log::resolve_log_path`) keep their env-driven
+  shape and pick the new value up uniformly — no `ResolvedFlags`
+  struct threaded through eleven `run(..)` signatures.
+
+  Clap-level conflicts: `--progress` ↔ `--no-progress` (exit 2 on
+  both supplied); pre-existing `--mode` ↔ `--json` ↔ `--quiet`
+  conflicts unchanged.
+
+  12 new tests (8 unit on `apply_global_overrides` env precedence
+  via `serial_test`; 4 e2e on clap conflicts + value acceptance).
+
 ## [0.4.1-beta.2] - 2026-05-21
 
 ### Fixed
