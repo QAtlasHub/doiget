@@ -410,7 +410,7 @@ fn forced_implicit_for(command: &Option<Command>) -> Option<OutputMode> {
 /// concurrent-read soundness condition for `setenv` is therefore met.
 /// If a future change introduces an async background task that reads
 /// `DOIGET_STORE_ROOT` (or any other key this function writes), the
-/// applicaton of overrides must move ahead of the runtime
+/// application of overrides must move ahead of the runtime
 /// construction (i.e. above the `#[tokio::main]` boundary).
 ///
 /// The function intentionally has no error path: each flag value has
@@ -707,11 +707,7 @@ mod tests {
         // mechanical: clap's `to_possible_value().get_name()` is the
         // canonical parser-side spelling, and we assert each variant's
         // `as_env_value` matches it exactly.
-        for variant in [
-            OutputColor::Auto,
-            OutputColor::Always,
-            OutputColor::Never,
-        ] {
+        for variant in [OutputColor::Auto, OutputColor::Always, OutputColor::Never] {
             let parser_side = variant
                 .to_possible_value()
                 .expect("clap value-enum exposes every non-skipped variant");
@@ -805,17 +801,15 @@ mod tests {
         // exercised at the e2e layer; here we only assert the parse
         // attempt itself fails.
         let res = Cli::try_parse_from(["doiget", "--store-root", "", "capabilities"]);
-        assert!(res.is_err(), "--store-root with empty value MUST parse-fail");
+        assert!(
+            res.is_err(),
+            "--store-root with empty value MUST parse-fail"
+        );
     }
 
     #[test]
     fn cli_rejects_nul_in_path_flag_value_at_parse_time() {
-        let res = Cli::try_parse_from([
-            "doiget",
-            "--log-path",
-            "a/b\0/c",
-            "capabilities",
-        ]);
+        let res = Cli::try_parse_from(["doiget", "--log-path", "a/b\0/c", "capabilities"]);
         assert!(res.is_err(), "--log-path with NUL byte MUST parse-fail");
     }
 }
