@@ -63,7 +63,7 @@ serde_json  = { workspace = true }
 # Serializes env-var-mutating MCP integration tests (the Slice 1
 # `doiget_metadata_only` e2e tests stage `DOIGET_*_BASE` to redirect at
 # wiremock origins). Mirrors `doiget-cli/Cargo.toml`'s usage.
-serial_test = "3"
+serial_test = { workspace = true }
 wiremock    = { workspace = true }
 tempfile    = { workspace = true }
 # Slice 15b bibtex/csl export e2e seeds a Metadata fixture whose
