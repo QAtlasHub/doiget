@@ -1,4 +1,5 @@
-//! Output-mode resolution for the `doiget` CLI (ADR-0017, #144).
+//! Output-mode resolution for the `doiget` CLI (ADR-0017, #144;
+//! Amendment 1 = #219/#220).
 //!
 //! ADR-0017 specifies the precedence ladder
 //! `--mode > --json/--quiet > DOIGET_MODE env > subcommand-implicit > TTY > quiet`.
@@ -7,6 +8,14 @@
 //! CI job already enforces "MCP mode forbids non-JSON stdout"). The
 //! `forced_implicit` parameter to [`resolve`] expresses that override: when
 //! `Some(_)`, it overrides everything else.
+//!
+//! [`resolve`] returns a [`ResolvedOutput`] carrying the [`OutputMode`]
+//! plus a `quiet_was_explicit` discriminator. The distinction is
+//! load-bearing per ADR-0017 Amendment 1: artifact-producing commands
+//! (`bib` / `csl` / `capabilities` / `audit-log --verify --mode json`)
+//! suppress only on **explicit** Quiet (`--quiet` / `-q` /
+//! `DOIGET_MODE=quiet` / `--mode quiet`), not on the non-TTY default.
+//! Informational commands continue to suppress on any Quiet.
 //!
 //! Resolution is split into a pure function ([`resolve`]) plus a thin
 //! TTY-detection wrapper ([`stdout_is_tty`]) so the ladder is fully
@@ -86,19 +95,63 @@ pub enum FlagInput {
     None,
 }
 
-/// Resolve the effective [`OutputMode`] per ADR-0017.
+/// The resolved output state per ADR-0017 Amendment 1: the
+/// [`OutputMode`] the resolution ladder picked, plus a
+/// `quiet_was_explicit` discriminator that distinguishes the user's
+/// **explicit** request for silence (`--quiet` / `-q` /
+/// `DOIGET_MODE=quiet` / `--mode quiet`) from the resolver's
+/// **implicit** fallback to Quiet when stdout is not a TTY.
+///
+/// Per ADR-0017 Amendment 1, *informational* commands (audit-log Human,
+/// list-recent, search, info, config show/path, provenance migrate,
+/// fetch/batch status) suppress on any Quiet; *artifact* commands
+/// (`bib` / `csl` / `capabilities` / `audit-log --verify --mode json`)
+/// suppress only on **explicit** Quiet. The wire format of
+/// [`OutputMode`] (`DOIGET_MODE` string values, the `modes` array in
+/// `capabilities` JSON, the `--mode` clap values) is **unchanged**;
+/// this struct lives only in-memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedOutput {
+    /// The effective mode for this invocation.
+    pub mode: OutputMode,
+    /// `true` iff the user supplied an explicit Quiet signal
+    /// (`--quiet`, `-q`, `--mode quiet`, `DOIGET_MODE=quiet`).
+    /// `false` for the non-TTY fallback to Quiet, and for any
+    /// non-Quiet mode.
+    pub quiet_was_explicit: bool,
+}
+
+/// `true` if `name` identifies an artifact-producing subcommand whose
+/// stdout output IS the deliverable (per ADR-0017 Amendment 1).
+/// Artifact commands suppress only on **explicit** Quiet
+/// ([`ResolvedOutput::quiet_was_explicit`] == `true`).
+///
+/// `audit-log` is omitted on purpose: it is *informational* in Human
+/// mode and *artifact* in Json mode; the command checks the resolved
+/// mode rather than its name, so this classifier doesn't apply.
+pub fn is_artifact_command(name: &str) -> bool {
+    matches!(name, "bib" | "csl" | "capabilities")
+}
+
+/// Resolve the effective [`OutputMode`] per ADR-0017 and the
+/// `quiet_was_explicit` discriminator per ADR-0017 Amendment 1.
 ///
 /// Precedence (highest first):
 ///
 /// 1. `forced_implicit` — a subcommand-pinned mode that overrides
 ///    everything (e.g. `doiget serve` → `Mcp` per CONFIG.md §5; required
-///    for the Slice 9 stdout-purity invariant).
+///    for the Slice 9 stdout-purity invariant). Pinned modes are
+///    **never** counted as explicit user Quiet; they are system policy.
 /// 2. `flag` — `--mode` / `--json` / `--quiet` on the command line.
+///    A `Quiet` mode reached via `--mode quiet`, `--quiet`, or `-q`
+///    is **explicit**.
 /// 3. `env` — `DOIGET_MODE` (parsed by [`parse_env_mode`]; unrecognised
 ///    values are ignored, matching CONFIG.md §4's "doiget reads only the
-///    keys it knows about" posture).
+///    keys it knows about" posture). A `Quiet` mode reached via
+///    `DOIGET_MODE=quiet` is **explicit**.
 /// 4. `is_tty` — `Human` when stdout is a terminal, otherwise `Quiet`
-///    (CONFIG.md §3.b's "implicit + TTY > quiet (default)").
+///    (CONFIG.md §3.b's "implicit + TTY > quiet (default)"). A `Quiet`
+///    mode reached this way is **implicit**.
 ///
 /// This function is pure: no env reads, no I/O. The caller plumbs
 /// `env::var("DOIGET_MODE").ok()` and an `is_tty` probe in.
@@ -107,19 +160,33 @@ pub fn resolve(
     flag: FlagInput,
     env: Option<&str>,
     is_tty: bool,
-) -> OutputMode {
+) -> ResolvedOutput {
     if let Some(m) = forced_implicit {
-        return m;
+        return ResolvedOutput {
+            mode: m,
+            quiet_was_explicit: false,
+        };
     }
-    match flag {
-        FlagInput::Explicit(m) => m,
-        FlagInput::JsonShort => OutputMode::Json,
-        FlagInput::QuietShort => OutputMode::Quiet,
-        FlagInput::None => env.and_then(parse_env_mode).unwrap_or(if is_tty {
-            OutputMode::Human
-        } else {
-            OutputMode::Quiet
-        }),
+    let (mode, quiet_was_explicit) = match flag {
+        FlagInput::Explicit(OutputMode::Quiet) => (OutputMode::Quiet, true),
+        FlagInput::Explicit(m) => (m, false),
+        FlagInput::JsonShort => (OutputMode::Json, false),
+        FlagInput::QuietShort => (OutputMode::Quiet, true),
+        FlagInput::None => match env.and_then(parse_env_mode) {
+            Some(OutputMode::Quiet) => (OutputMode::Quiet, true),
+            Some(m) => (m, false),
+            None => {
+                if is_tty {
+                    (OutputMode::Human, false)
+                } else {
+                    (OutputMode::Quiet, false)
+                }
+            }
+        },
+    };
+    ResolvedOutput {
+        mode,
+        quiet_was_explicit,
     }
 }
 
@@ -156,44 +223,55 @@ mod tests {
     fn forced_mcp_wins_over_flag_env_and_tty() {
         // `doiget serve` MUST be `Mcp` even if the user passes
         // `--mode quiet` or sets `DOIGET_MODE=human` (CONFIG.md §5).
-        let m = resolve(
+        let out = resolve(
             Some(OutputMode::Mcp),
             FlagInput::Explicit(OutputMode::Quiet),
             Some("human"),
             true,
         );
-        assert_eq!(m, OutputMode::Mcp);
+        assert_eq!(out.mode, OutputMode::Mcp);
+        assert!(
+            !out.quiet_was_explicit,
+            "forced_implicit is system policy, never explicit user Quiet"
+        );
     }
 
     // ---- flag > env > tty ---------------------------------------------
 
     #[test]
     fn explicit_flag_wins_over_env_and_tty() {
-        let m = resolve(
+        let out = resolve(
             None,
             FlagInput::Explicit(OutputMode::Json),
             Some("human"),
             true,
         );
-        assert_eq!(m, OutputMode::Json);
+        assert_eq!(out.mode, OutputMode::Json);
+        assert!(!out.quiet_was_explicit);
     }
 
     #[test]
     fn json_short_flag_implies_json() {
-        let m = resolve(None, FlagInput::JsonShort, Some("human"), true);
-        assert_eq!(m, OutputMode::Json);
+        let out = resolve(None, FlagInput::JsonShort, Some("human"), true);
+        assert_eq!(out.mode, OutputMode::Json);
+        assert!(!out.quiet_was_explicit);
     }
 
     #[test]
     fn quiet_short_flag_implies_quiet() {
-        let m = resolve(None, FlagInput::QuietShort, Some("human"), true);
-        assert_eq!(m, OutputMode::Quiet);
+        let out = resolve(None, FlagInput::QuietShort, Some("human"), true);
+        assert_eq!(out.mode, OutputMode::Quiet);
+        assert!(
+            out.quiet_was_explicit,
+            "`--quiet`/`-q` is an explicit Quiet signal"
+        );
     }
 
     #[test]
     fn env_wins_when_no_flag() {
-        let m = resolve(None, FlagInput::None, Some("json"), true);
-        assert_eq!(m, OutputMode::Json);
+        let out = resolve(None, FlagInput::None, Some("json"), true);
+        assert_eq!(out.mode, OutputMode::Json);
+        assert!(!out.quiet_was_explicit);
     }
 
     #[test]
@@ -208,8 +286,12 @@ mod tests {
         // `DOIGET_MODE=garbage` is ignored, ladder continues to TTY.
         let tty = resolve(None, FlagInput::None, Some("garbage"), true);
         let pipe = resolve(None, FlagInput::None, Some("garbage"), false);
-        assert_eq!(tty, OutputMode::Human);
-        assert_eq!(pipe, OutputMode::Quiet);
+        assert_eq!(tty.mode, OutputMode::Human);
+        assert_eq!(pipe.mode, OutputMode::Quiet);
+        assert!(
+            !pipe.quiet_was_explicit,
+            "pipe-default Quiet is implicit, not explicit"
+        );
     }
 
     #[test]
@@ -219,39 +301,84 @@ mod tests {
         assert_eq!(parse_env_mode(""), None);
         assert_eq!(parse_env_mode("   "), None);
         let tty = resolve(None, FlagInput::None, Some(""), true);
-        assert_eq!(tty, OutputMode::Human);
+        assert_eq!(tty.mode, OutputMode::Human);
     }
 
     // ---- TTY tail ------------------------------------------------------
 
     #[test]
     fn tty_with_no_flag_no_env_yields_human() {
-        let m = resolve(None, FlagInput::None, None, true);
-        assert_eq!(m, OutputMode::Human);
+        let out = resolve(None, FlagInput::None, None, true);
+        assert_eq!(out.mode, OutputMode::Human);
+        assert!(!out.quiet_was_explicit);
     }
 
     #[test]
     fn no_tty_with_no_flag_no_env_yields_quiet() {
-        let m = resolve(None, FlagInput::None, None, false);
-        assert_eq!(m, OutputMode::Quiet);
+        let out = resolve(None, FlagInput::None, None, false);
+        assert_eq!(out.mode, OutputMode::Quiet);
+        assert!(
+            !out.quiet_was_explicit,
+            "non-TTY default to Quiet is implicit (#219 / #220 / ADR-0017 Am1)"
+        );
     }
 
     // ---- env never overrides flag, never beats forced_implicit --------
 
     #[test]
     fn env_does_not_override_explicit_flag() {
-        let m = resolve(
+        let out = resolve(
             None,
             FlagInput::Explicit(OutputMode::Quiet),
             Some("human"),
             true,
         );
-        assert_eq!(m, OutputMode::Quiet);
+        assert_eq!(out.mode, OutputMode::Quiet);
+        assert!(
+            out.quiet_was_explicit,
+            "`--mode quiet` is an explicit Quiet signal"
+        );
     }
 
     #[test]
     fn forced_implicit_overrides_env() {
-        let m = resolve(Some(OutputMode::Mcp), FlagInput::None, Some("human"), true);
-        assert_eq!(m, OutputMode::Mcp);
+        let out = resolve(Some(OutputMode::Mcp), FlagInput::None, Some("human"), true);
+        assert_eq!(out.mode, OutputMode::Mcp);
+    }
+
+    // ---- ADR-0017 Amendment 1: explicit vs implicit Quiet ------------
+
+    #[test]
+    fn doiget_mode_quiet_env_is_explicit_quiet() {
+        // DOIGET_MODE=quiet without any flag is treated as explicit
+        // user intent — artifact commands must respect it.
+        let out = resolve(None, FlagInput::None, Some("quiet"), true);
+        assert_eq!(out.mode, OutputMode::Quiet);
+        assert!(out.quiet_was_explicit);
+    }
+
+    #[test]
+    fn non_tty_quiet_default_is_implicit_quiet() {
+        // The TTY-driven fallback to Quiet is implicit — artifact
+        // commands (capabilities/bib/csl) MUST still emit. This is
+        // the #219/#220 LLM cold-boot fix.
+        let out = resolve(None, FlagInput::None, None, /* is_tty */ false);
+        assert_eq!(out.mode, OutputMode::Quiet);
+        assert!(!out.quiet_was_explicit);
+    }
+
+    // ---- artifact-command classifier (ADR-0017 Am1) ------------------
+
+    #[test]
+    fn artifact_command_classifier_covers_bib_csl_capabilities() {
+        assert!(is_artifact_command("bib"));
+        assert!(is_artifact_command("csl"));
+        assert!(is_artifact_command("capabilities"));
+        // audit-log is informational-vs-artifact per resolved mode,
+        // not per name; the classifier does NOT match it.
+        assert!(!is_artifact_command("audit-log"));
+        assert!(!is_artifact_command("fetch"));
+        assert!(!is_artifact_command("info"));
+        assert!(!is_artifact_command(""));
     }
 }

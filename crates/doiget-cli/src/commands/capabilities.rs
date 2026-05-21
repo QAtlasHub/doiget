@@ -652,17 +652,39 @@ fn arg_to_flag_spec(a: &clap::Arg) -> FlagSpec {
 // Entry point
 // ---------------------------------------------------------------------------
 
-/// Run the `doiget capabilities` subcommand. Honors [`super::output::OutputMode`]:
-/// `Quiet` suppresses stdout (#203); every other mode emits the same
-/// pretty-printed JSON inventory. The caller passes the live
-/// `clap::Command` so the clap walk operates on the binary's actual
-/// `Cli` tree (which the lib half of this crate can't reach
-/// directly — the `Cli` struct lives in `main.rs`).
-pub fn run(cli: &clap::Command, mode: super::output::OutputMode) -> Result<()> {
-    // `Quiet` is the one mode that suppresses (per ADR-0017 / #203).
-    // Every other mode emits the same pretty JSON: `capabilities` is a
-    // product-output command.
-    if mode == super::output::OutputMode::Quiet {
+/// Run the `doiget capabilities` subcommand.
+///
+/// `capabilities` is an **artifact** command per ADR-0017 Amendment 1:
+/// its stdout output IS the deliverable (the inventory JSON an LLM
+/// reads on cold-boot). It honors only **explicit** Quiet —
+/// `--quiet` / `-q` / `--mode quiet` / `DOIGET_MODE=quiet` — and emits
+/// the inventory on every other path. The `quiet_was_explicit`
+/// discriminator is what distinguishes the two cases:
+///
+/// | mode               | quiet_was_explicit | behaviour          |
+/// |--------------------|--------------------|--------------------|
+/// | non-`Quiet`        | -                  | emit               |
+/// | `Quiet` (explicit) | `true`             | suppress           |
+/// | `Quiet` (non-TTY)  | `false`            | **emit** (#219)    |
+///
+/// The non-TTY case is the one #219 / #220 report: an LLM tool
+/// executor captures stdout, so `stdout_is_tty()` is `false`, the
+/// resolver falls through to `Quiet`, but the caller wants the JSON
+/// inventory exactly because it's about to be machine-parsed. The
+/// table's bottom row is the fix.
+///
+/// The caller passes the live `clap::Command` so the clap walk
+/// operates on the binary's actual `Cli` tree (which the lib half of
+/// this crate can't reach directly — the `Cli` struct lives in
+/// `main.rs`).
+pub fn run(
+    cli: &clap::Command,
+    mode: super::output::OutputMode,
+    quiet_was_explicit: bool,
+) -> Result<()> {
+    // ADR-0017 Amendment 1: artifact command — suppress ONLY on
+    // explicit Quiet, never on the non-TTY implicit fallback.
+    if mode == super::output::OutputMode::Quiet && quiet_was_explicit {
         return Ok(());
     }
     let caps = build_capabilities(cli);
