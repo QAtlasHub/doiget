@@ -10,6 +10,49 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.4.1-beta.8] - 2026-05-21
+
+### Added
+
+- **[core]** New module `doiget_core::user_extension` per ADR-0028
+  D2 (#220). Users can extend the `oa-publisher` redirect allowlist
+  for their own deployment via `[[network.additional_hosts]]` in
+  `<config_dir>/doiget/config.toml`. Pattern grammar is restricted
+  (literal FQDN or single-suffix wildcard `*.<suffix>`); rejection
+  classes are surfaced as a closed-enum `PatternError` for
+  programmatic consumption by the future `doiget config doctor`
+  surface. The `host` field of `UserExtensionHost` is a
+  `HostPattern` newtype that runs validation through its serde
+  `Deserialize`, so the "valid pattern" invariant is type-level —
+  no `UserExtensionHost` value can exist with an invalid host. The
+  orchestrator's production HttpClient construction
+  (`commands::fetch::build_http_client`) loads and merges in one
+  pass; a missing config file is silent, a malformed config is
+  surfaced as `tracing::warn!` and the fetch continues with the
+  curated set.
+
+  Example:
+
+  ```toml
+  # ~/.config/doiget/config.toml
+  [[network.additional_hosts]]
+  host = "ruj.uj.edu.pl"
+  note = "Jagiellonian University Repository — Green OA"
+
+  [[network.additional_hosts]]
+  host = "*.uj.edu.pl"
+  ```
+
+  Out of scope for this slice (tracked as S3b): the
+  `verified_by = "user"` provenance row field (ADR-0028 D2-2),
+  the `doiget config doctor` surface (D2-3), the
+  `capability_gate.user_extension_count` field in `doiget
+  capabilities` JSON (D2-4), and the MCP-server-side merge in
+  `doiget-mcp` (a user who configures
+  `[[network.additional_hosts]]` and invokes via `doiget serve`
+  currently sees no effect; that is the load-bearing item S3b
+  closes).
+
 ## [0.4.1-beta.7] - 2026-05-21
 
 ### Fixed
