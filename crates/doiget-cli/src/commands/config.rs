@@ -373,14 +373,21 @@ mod tests {
     }
 
     /// ADR-0028 D2: a malformed `<config_dir>/doiget/config.toml`
-    /// causes `doiget config doctor` to FAIL (exit 2). POSIX-only
-    /// because `dirs::config_dir()` on Windows queries the Known
-    /// Folder API directly (ignores APPDATA env), so the test can't
-    /// redirect the config path in a child process the way it can
-    /// via `XDG_CONFIG_HOME` on POSIX. The malformed-config FAIL
-    /// path is platform-independent; this test covers the wiring
-    /// on the platform where it CAN be exercised.
-    #[cfg(unix)]
+    /// causes `doiget config doctor` to FAIL (exit 2). Linux-only
+    /// because `dirs::config_dir()` resolves differently on each
+    /// platform:
+    ///   - Linux: `$XDG_CONFIG_HOME` or `$HOME/.config` (env-driven,
+    ///     testable).
+    ///   - macOS: `~/Library/Application Support` (Known Folder via
+    ///     `NSSearchPathForDirectoriesInDomains`, ignores
+    ///     `XDG_CONFIG_HOME`).
+    ///   - Windows: `%FOLDERID_RoamingAppData%` (Known Folder API,
+    ///     ignores `APPDATA` env in child processes via
+    ///     `assert_cmd`).
+    /// The malformed-config FAIL path is platform-independent; this
+    /// test covers the wiring on the one platform where it CAN be
+    /// exercised in a hermetic test.
+    #[cfg(target_os = "linux")]
     #[test]
     #[serial_test::serial]
     fn doctor_fails_with_malformed_user_extension_config() {

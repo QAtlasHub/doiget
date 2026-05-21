@@ -134,8 +134,20 @@ pub async fn run_with_options(
             }
             // `ParseError` is `#[non_exhaustive]`; any future variant
             // surfaces as a generic invalid-ref entry so the batch
-            // does not silently swallow a new failure class.
-            Err(other) => inputs.push(format!("<unhandled parse error: {other}>")),
+            // does not silently swallow a new failure class. The
+            // `tracing::error!` makes the unknown variant LOUD in
+            // logs so an operator notices when this arm fires —
+            // otherwise the operator would only see an `INVALID_REF`
+            // JSONL row indistinguishable from any other parse
+            // failure.
+            Err(other) => {
+                tracing::error!(
+                    error = %other,
+                    "encountered unknown ParseError variant; batch continues with placeholder \
+                     INVALID_REF — this should never happen on a current doiget-core build"
+                );
+                inputs.push(format!("<unhandled parse error: {other}>"));
+            }
         }
     }
 
