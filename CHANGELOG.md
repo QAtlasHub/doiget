@@ -12,14 +12,15 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [0.4.0] - 2026-05-21
 
-Promotion of the `0.4.1-beta.1..beta.13` integration line on `next` to a
-stable release. SemVer **minor** bump (not patch) — this window
+Promotion of the `0.4.0-beta.1..beta.13` integration line on `next` to
+a stable release. SemVer **minor** bump (not patch) — this window
 introduces multiple new public surfaces (`doiget_core::refs` module,
 `doiget_batch_from_bibliography` MCP tool, `FetchPaperOutcome` field
 additions, user-extensible capability gate, fetch chain) and one CLI
 flag set expansion, alongside several behavioural changes for the
 OA-PDF leg and batch JSONL wire shape. Beta-window detail is preserved
-in `git log v0.3.0..v0.4.0` and the ADR set under `docs/DECISIONS/`.
+in the merge commits on `next` (see `git log --merges v0.3.0..HEAD`)
+and the ADR set under `docs/DECISIONS/`.
 
 ### Added
 
@@ -120,6 +121,11 @@ in `git log v0.3.0..v0.4.0` and the ADR set under `docs/DECISIONS/`.
   inventory on non-TTY pipes so an LLM cold-boot from a stripped
   environment is not silently empty. `ResolvedOutput { mode,
   quiet_was_explicit }` and `is_artifact_command()` helper added.
+  `audit-log --verify` is NOT routed through
+  `is_artifact_command()` — its `--mode json` body is produced by an
+  internal branch in the subcommand handler rather than by the
+  artifact-vs-informational discriminator; the wire shape is
+  unchanged on this release.
 
 - **[cli] `FetchHarness::fetch_one` returns
   `Result<FetchPaperOutcome, FetchError>` (#210)** — replaces the

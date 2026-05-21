@@ -868,9 +868,24 @@ async fn fetch_paper_doi(
             (r.license, label, chain)
         }
         Err(e) => {
+            // Unpaywall unreachable / errored. We continue with the
+            // Crossref-only metadata, but the resulting empty OA
+            // chain will be reported downstream as
+            // `PdfLegStatus::NoOaUrl` — semantically distinct from
+            // "Unpaywall confirmed no OA URL". The provenance log
+            // already carries an Unpaywall Fetch err row (the
+            // Unpaywall source impl logged its own attempt before
+            // returning), so the audit trail captures the cause; the
+            // tracing line below makes the orchestrator-level signal
+            // loud as well. Surfacing the distinction at the
+            // `PdfLegStatus` level (a new variant like
+            // `MetadataSourceUnavailable`) is a deliberate
+            // follow-up — see CHANGELOG `[0.4.0]` Notes.
             tracing::warn!(
                 error = %e,
-                "unpaywall fetch failed; continuing with crossref-only metadata"
+                doi = %doi.as_str(),
+                "unpaywall fetch failed; OA chain will be empty (downstream PdfLegStatus::NoOaUrl \
+                 is conservative — Unpaywall was unreachable, not authoritatively oa-free)"
             );
             ("unknown".to_string(), "crossref".to_string(), Vec::new())
         }
@@ -944,11 +959,33 @@ async fn fetch_paper_doi(
                     None,
                 )
             }
-            // Unreachable: `oa_chain` is non-empty in this branch, so
-            // at least one iteration set either `succeeded` or
-            // `last_err`. Conservative fallback if a future refactor
-            // breaks the invariant.
-            (None, None) => (PdfLegStatus::NoOaUrl, None),
+            // Defensive fallback. `oa_chain` is non-empty in this
+            // branch, so structurally at least one iteration must set
+            // either `succeeded` or `last_err`. If a future refactor
+            // breaks the invariant we fail CLOSED — surface a
+            // `Blocked` outcome with a self-describing message
+            // rather than `NoOaUrl` (which would falsely tell the
+            // caller no candidate URL was ever discovered). Routes
+            // to `INTERNAL_ERROR` so the CLI's exit-code mapping
+            // signals a doiget bug, not a remote failure.
+            (None, None) => {
+                tracing::error!(
+                    total = oa_chain.len(),
+                    "OA PDF chain walker exhausted without recording success or error \
+                     (defensive fallback — should be unreachable)"
+                );
+                (
+                    PdfLegStatus::Blocked {
+                        code: crate::ErrorCode::InternalError,
+                        message:
+                            "OA PDF chain walker exhausted without recording success or error \
+                             (orchestrator bug — please report)"
+                                .to_string(),
+                        denial: None,
+                    },
+                    None,
+                )
+            }
         }
     };
 
@@ -1104,11 +1141,17 @@ fn write_metadata_and_pdf(
         }
         Err(e) => {
             // Best-effort: record the StoreWrite failure before
-            // propagating. Surface as `SourceSchema` so the
+            // propagating the store.write error. We do NOT
+            // propagate the log-append error itself here — we're
+            // already in an error state from the store, and the
+            // primary failure is what the caller needs to act on.
+            // But the log-append failure is observable via tracing
+            // so an operator can spot a broken hash chain when
+            // both fail. Surface as `SourceSchema` so the
             // FetchError -> ErrorCode collapse routes it to
             // `INTERNAL_ERROR` (closest closed-set fit; `StoreError`
             // does not have a direct closed-set arm).
-            let _ = ctx.log.append(RowInput {
+            if let Err(log_err) = ctx.log.append(RowInput {
                 event: LogEvent::StoreWrite,
                 result: LogResult::Err,
                 capability: Capability::Oa,
@@ -1123,7 +1166,14 @@ fn write_metadata_and_pdf(
                 license: None,
                 store_path: Some(&store_path_relative),
                 canonical_digest: canonical_digest.as_deref(),
-            });
+            }) {
+                tracing::error!(
+                    store_err = %e,
+                    log_err = %log_err,
+                    "BOTH store.write AND provenance log append failed; \
+                     audit trail is broken for this attempt"
+                );
+            }
             Err(FetchError::SourceSchema {
                 hint: format!("store write failed: {e}"),
             })
