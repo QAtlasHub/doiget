@@ -165,6 +165,11 @@ wiremock    = "0.6"
 assert_cmd  = "2"
 predicates  = "3"
 proptest    = "1"
+# `serial_test` serialises env-mutating tests (DOIGET_*_BASE,
+# DOIGET_STORE_ROOT, etc.) within a single test binary. Lifted to
+# workspace deps in #228 review pass A6 so the three member crates
+# (core / cli / mcp) cannot drift on the major version.
+serial_test = "3"
 
 # Phase 4 (citation graph)
 petgraph = "0.6"

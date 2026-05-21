@@ -67,7 +67,7 @@ proptest     = { workspace = true }
 # `CapabilityProfile::from_env` resolution tests, which call
 # `std::env::set_var` / `remove_var`). See docs/CAPABILITY.md §2 and the
 # `EnvGuard` RAII guard in `crates/doiget-core/src/lib.rs::tests`.
-serial_test  = "3"
+serial_test  = { workspace = true }
 # `test-util` enables `tokio::test(start_paused = true)` and the
 # `tokio::time::pause()` / `advance()` API used by rate_limiter tests.
 tokio        = { workspace = true, features = ["test-util"] }

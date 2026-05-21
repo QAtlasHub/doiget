@@ -95,16 +95,47 @@ fn color_flag_is_accepted_for_each_value() {
 }
 
 #[test]
-fn progress_and_no_progress_each_accept_with_capabilities() {
-    // capabilities is artifact-output; --progress / --no-progress
-    // should not affect its JSON inventory. Both must be accepted.
+fn progress_flag_accepted_with_capabilities() {
+    // capabilities is artifact-output; --progress should not affect
+    // its JSON inventory. (A7: split from a 2-behavior test.)
     let dir = TempDir::new().expect("tempdir");
     doiget(&dir)
         .args(["--progress", "capabilities"])
         .assert()
         .success();
+}
+
+#[test]
+fn no_progress_flag_accepted_with_capabilities() {
+    // capabilities is artifact-output; --no-progress should not
+    // affect its JSON inventory. (A7: split from a 2-behavior test.)
+    let dir = TempDir::new().expect("tempdir");
     doiget(&dir)
         .args(["--no-progress", "capabilities"])
         .assert()
         .success();
+}
+
+#[test]
+fn store_root_empty_value_is_rejected_at_parse_time() {
+    // I6: an empty `--store-root` value previously slid through clap
+    // and `apply_global_overrides` would set DOIGET_STORE_ROOT="",
+    // silently differing from "unset" for downstream resolvers.
+    // `parse_utf8_path` now rejects empty at the parser layer.
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .args(["--store-root", "", "capabilities"])
+        .assert()
+        .failure()
+        .code(2);
+}
+
+#[test]
+fn log_path_empty_value_is_rejected_at_parse_time() {
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .args(["--log-path", "", "capabilities"])
+        .assert()
+        .failure()
+        .code(2);
 }
