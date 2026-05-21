@@ -155,9 +155,11 @@ fn capabilities_fetch_subcommand_carries_artifact_status() {
 
 #[test]
 fn capabilities_quiet_mode_produces_no_stdout() {
-    // ADR-0017 / #203: Quiet suppresses stdout even for product-output
-    // commands. The exit is still 0 (capabilities never errors on a
-    // missing env / store; pure introspection).
+    // ADR-0017 Am1: `capabilities` is an *artifact* command, so it
+    // suppresses stdout ONLY on **explicit** Quiet. Passing `--quiet`
+    // is the canonical explicit signal — output must be empty, exit 0
+    // (capabilities never errors on a missing env / store; pure
+    // introspection).
     let dir = TempDir::new().expect("tempdir");
     Command::cargo_bin("doiget")
         .expect("locate doiget binary")
@@ -169,6 +171,62 @@ fn capabilities_quiet_mode_produces_no_stdout() {
         .assert()
         .success()
         .stdout(predicates::str::is_empty());
+}
+
+#[test]
+fn capabilities_quiet_mode_via_doiget_mode_env_produces_no_stdout() {
+    // ADR-0017 Am1: `DOIGET_MODE=quiet` is an **explicit** Quiet
+    // signal (CONFIG.md §4 documents env vars as user-controlled),
+    // so `capabilities` must suppress on it just like `--quiet`.
+    let dir = TempDir::new().expect("tempdir");
+    Command::cargo_bin("doiget")
+        .expect("locate doiget binary")
+        .env("HOME", dir.path())
+        .env("USERPROFILE", dir.path())
+        .env("APPDATA", dir.path())
+        .env("XDG_CONFIG_HOME", dir.path())
+        .env("DOIGET_MODE", "quiet")
+        .arg("capabilities")
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty());
+}
+
+#[test]
+fn capabilities_non_tty_default_still_emits_inventory() {
+    // #219 / #220 + ADR-0017 Amendment 1 regression pin: under
+    // `assert_cmd`, stdout is captured (non-TTY), so the resolver
+    // falls through to `Quiet`. Before the Amendment that silenced
+    // `capabilities` — the LLM cold-boot deadlock the issues report.
+    // After the Amendment, the non-TTY fallback to Quiet is *implicit*
+    // and `capabilities` (artifact) must STILL emit the inventory.
+    //
+    // Constructs the command WITHOUT the `doiget()` helper's
+    // `DOIGET_MODE=human` override on purpose: that override was the
+    // workaround the helper applied to compensate for the bug.
+    let dir = TempDir::new().expect("tempdir");
+    let p = dir.path().to_str().expect("tempdir path utf-8");
+    let out = Command::cargo_bin("doiget")
+        .expect("locate doiget binary")
+        .env("HOME", p)
+        .env("USERPROFILE", p)
+        .env("APPDATA", p)
+        .env("XDG_CONFIG_HOME", p)
+        // Intentionally NOT setting DOIGET_MODE so the resolver lands
+        // on the non-TTY implicit Quiet path.
+        .env_remove("DOIGET_MODE")
+        .arg("capabilities")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v = parse_capabilities(out);
+    assert!(
+        v.get("subcommands").is_some(),
+        "capabilities MUST emit its JSON inventory on the non-TTY \
+         implicit-Quiet path (#219 / #220 regression)"
+    );
 }
 
 #[test]

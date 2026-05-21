@@ -233,12 +233,18 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
     // Resolve the effective output mode ONCE per invocation per ADR-0017.
     // The pure resolver lives in `commands::output`; this site is the
     // single I/O-touching layer that reads env + probes the TTY.
-    let mode = output::resolve(
+    // ADR-0017 Amendment 1: the resolver returns ResolvedOutput
+    // carrying mode + quiet_was_explicit; informational commands receive
+    // `out.mode` (their existing OutputMode signature), artifact
+    // commands additionally consume `out.quiet_was_explicit` so the
+    // non-TTY fallback to Quiet does NOT silence them (#219 / #220).
+    let out = output::resolve(
         forced_implicit_for(&cli.command),
         flag_input_from(&cli),
         std::env::var("DOIGET_MODE").ok().as_deref(),
         output::stdout_is_tty(),
     );
+    let mode = out.mode;
 
     match cli.command {
         None => {
@@ -284,14 +290,18 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             let profile = doiget_core::CapabilityProfile::from_env()?;
             doiget_mcp::Server::new(profile).run().await
         }
-        // #214: single-shot inventory for LLM cold-boot. We pass the
-        // live `clap::Command` AST so the subcommand list cannot
-        // drift from the parser. `capabilities::run` honors
-        // `--mode quiet` (suppresses) and emits pretty JSON in every
-        // other mode (product-output convention).
+        // #214 / #219 (ADR-0017 Amendment 1): single-shot inventory
+        // for LLM cold-boot. We pass the live `clap::Command` AST so
+        // the subcommand list cannot drift from the parser.
+        // `capabilities` is an *artifact* command — it suppresses
+        // stdout ONLY on **explicit** Quiet (`--quiet`/`-q`/
+        // `DOIGET_MODE=quiet`/`--mode quiet`), never on the non-TTY
+        // implicit fallback. The `quiet_was_explicit` discriminator
+        // is what closes the LLM cold-boot deadlock reported in
+        // #219 / #220.
         Some(Command::Capabilities) => {
             let cli_cmd = <Cli as clap::CommandFactory>::command();
-            doiget_cli::commands::capabilities::run(&cli_cmd, mode)
+            doiget_cli::commands::capabilities::run(&cli_cmd, mode, out.quiet_was_explicit)
         }
         // Phase 4 / Slice 16. Feature-gated to keep default release
         // binaries free of the OpenAlex-only citation walker.

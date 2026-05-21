@@ -10,6 +10,26 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.4.1-beta.2] - 2026-05-21
+
+### Fixed
+
+- **[cli]** `doiget capabilities` no longer silently exits with empty
+  stdout in non-TTY / agent execution contexts (#219, #220 ADR-0017
+  Amendment 1). The resolver now distinguishes **explicit** Quiet
+  (`--quiet` / `-q` / `--mode quiet` / `DOIGET_MODE=quiet`) from
+  **implicit** Quiet (the non-TTY default), and `capabilities` —
+  classified as an *artifact* command — suppresses stdout only on
+  explicit Quiet. Closes the LLM cold-boot deadlock where an agent
+  ran `doiget capabilities` over a captured pipe and got nothing
+  back. `OutputMode` enum wire format (`DOIGET_MODE` strings, the
+  `modes` array in capabilities JSON) is unchanged; the
+  `quiet_was_explicit` discriminator lives only in-memory on the
+  new `ResolvedOutput` returned by `commands::output::resolve()`.
+  `bib` / `csl` were already correct (they ignore mode); their
+  classification is now documented via the new
+  `is_artifact_command()` helper.
+
 ## [0.4.1-beta.1] - 2026-05-21
 
 Beta-lane open for the v0.4 design (ADR-0017 Amendment 1 +
