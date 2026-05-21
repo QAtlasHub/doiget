@@ -2050,6 +2050,51 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
         // including the hosts here cannot widen the network surface
         // beyond what the CapabilityProfile already permits.
         allowlists.extend(tier_2_allowlist());
+
+        // ADR-0028 D2: merge user-extension hosts from
+        // `<config_dir>/doiget/config.toml`. Mirrors the CLI path in
+        // `crates/doiget-cli/src/commands/fetch.rs::build_http_client`
+        // so the MCP server sees the same user-curated allowlist
+        // additions. Failure handling matches the CLI:
+        //   - missing config (file not found) is silent (Ok-empty);
+        //   - malformed config emits `tracing::warn!` and continues
+        //     with the curated allowlist;
+        //   - unresolvable config dir emits `tracing::debug!`.
+        match config_dir_utf8() {
+            Ok(cfg_dir) => {
+                let path = cfg_dir.join("doiget").join("config.toml");
+                match doiget_core::user_extension::load(&path) {
+                    Ok(user_hosts) if !user_hosts.is_empty() => {
+                        tracing::info!(
+                            count = user_hosts.len(),
+                            path = %path,
+                            "merging user-extension allowlist hosts (ADR-0028 D2)"
+                        );
+                        doiget_core::user_extension::merge_into_allowlists(
+                            &mut allowlists,
+                            &user_hosts,
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = %path,
+                            "failed to load user-extension allowlist; \
+                             falling back to curated set only"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "config dir unresolvable; \
+                     user-extension allowlist disabled (curated set only)"
+                );
+            }
+        }
+
         return HttpClient::new(allowlists)
             .map_err(|e| anyhow::anyhow!("building production HTTP client: {e}"));
     }
@@ -2076,6 +2121,34 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
         .map(|(s, h)| (s.as_str(), h.as_str()))
         .collect();
     Ok(HttpClient::new_for_tests_allow_http_multi(&entries))
+}
+
+/// Best-effort config-dir resolution. Honors `XDG_CONFIG_HOME` first
+/// (POSIX), then `APPDATA` (Windows), then falls back to
+/// `$HOME/.config` (or `%USERPROFILE%\.config` on Windows). Mirrors
+/// `crates/doiget-cli/src/commands/fetch.rs::config_dir_utf8` so the
+/// MCP server reads `<config_dir>/doiget/config.toml` from the same
+/// location the CLI writes it.
+///
+/// Returns `Err` only when none of `XDG_CONFIG_HOME` / `APPDATA` /
+/// `HOME` / `USERPROFILE` are set (or all set to empty), in which
+/// case the caller downgrades to "user extension disabled" rather
+/// than failing the whole request.
+fn config_dir_utf8() -> anyhow::Result<Utf8PathBuf> {
+    if let Ok(s) = std::env::var("XDG_CONFIG_HOME") {
+        if !s.is_empty() {
+            return Ok(Utf8PathBuf::from(s));
+        }
+    }
+    if let Ok(s) = std::env::var("APPDATA") {
+        if !s.is_empty() {
+            return Ok(Utf8PathBuf::from(s));
+        }
+    }
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| anyhow::anyhow!("neither HOME nor USERPROFILE is set"))?;
+    Ok(Utf8PathBuf::from(home).join(".config"))
 }
 
 /// Resolve the provenance log path. Mirrors the CLI's precedence
@@ -2276,6 +2349,95 @@ mod tests {
         // (the test process is shared with other tests).
         if std::env::var_os("HOME").is_some() || std::env::var_os("USERPROFILE").is_some() {
             assert!(resolve_store_root().is_some());
+        }
+    }
+
+    /// ADR-0028 D2: `build_http_client_for_fetch` MUST merge user-
+    /// extension allowlist hosts from `<config_dir>/doiget/config.toml`
+    /// into the oa-publisher allowlist before returning, mirroring the
+    /// CLI's `commands::fetch::build_http_client`. Drift here would
+    /// silently disable user-curated allowlist additions for the MCP
+    /// server while the CLI honors them.
+    ///
+    /// We can't read the HttpClient's internal allowlists directly
+    /// (the field is private), so we drive an end-to-end probe: write
+    /// a config.toml that adds `host = "ruj.uj.edu.pl"` to the user
+    /// extension, build the client, and call
+    /// `oa_publisher_allowlist_hosts` — the same helper the CLI test
+    /// uses (review pass M3). The function exposes the merged host
+    /// list without leaking client internals.
+    #[test]
+    #[serial_test::serial]
+    fn build_http_client_for_fetch_merges_user_extension_hosts() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg_root = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+        let doiget_dir = cfg_root.join("doiget");
+        std::fs::create_dir_all(doiget_dir.as_std_path()).expect("mk dir");
+        std::fs::write(
+            doiget_dir.join("config.toml").as_std_path(),
+            "[[network.additional_hosts]]\nhost = \"ruj.uj.edu.pl\"\n",
+        )
+        .expect("write config.toml");
+
+        let _guards = scoped_env_for_user_extension(cfg_root.as_str());
+
+        // No DOIGET_*_BASE overrides → takes the production branch
+        // that performs the user-extension merge.
+        let client = build_http_client_for_fetch().expect("build http client");
+        let oa = client
+            .source_allowlist("oa-publisher")
+            .expect("oa-publisher source must be registered");
+        assert!(
+            oa.redirect_hosts.iter().any(|h| h == "ruj.uj.edu.pl"),
+            "user-extension host must appear in the oa-publisher allowlist; \
+             got: {:?}",
+            oa.redirect_hosts
+        );
+    }
+
+    /// Set XDG_CONFIG_HOME / APPDATA / HOME / USERPROFILE so
+    /// `config_dir_utf8()` resolves to the supplied directory on
+    /// every supported test host. Returns guards that restore prior
+    /// values on drop.
+    fn scoped_env_for_user_extension(dir: &str) -> Vec<EnvGuard> {
+        vec![
+            EnvGuard::set("XDG_CONFIG_HOME", dir),
+            EnvGuard::set("APPDATA", dir),
+            EnvGuard::set("HOME", dir),
+            EnvGuard::set("USERPROFILE", dir),
+            EnvGuard::unset("DOIGET_ARXIV_BASE"),
+            EnvGuard::unset("DOIGET_CROSSREF_BASE"),
+            EnvGuard::unset("DOIGET_UNPAYWALL_BASE"),
+            EnvGuard::unset("DOIGET_OA_PUBLISHER_BASE"),
+            EnvGuard::unset("DOIGET_OPENALEX_BASE"),
+        ]
+    }
+
+    /// RAII env guard local to this tests module.
+    struct EnvGuard {
+        var: &'static str,
+        prior: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(var: &'static str, value: &str) -> Self {
+            let prior = std::env::var_os(var);
+            std::env::set_var(var, value);
+            EnvGuard { var, prior }
+        }
+        fn unset(var: &'static str) -> Self {
+            let prior = std::env::var_os(var);
+            std::env::remove_var(var);
+            EnvGuard { var, prior }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(v) => std::env::set_var(self.var, v),
+                None => std::env::remove_var(self.var),
+            }
         }
     }
 }

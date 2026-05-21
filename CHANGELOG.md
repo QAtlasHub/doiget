@@ -10,6 +10,53 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.4.1-beta.10] - 2026-05-21
+
+### Added
+
+- **[mcp]** MCP-server `build_http_client_for_fetch` now merges
+  user-extension hosts from `<config_dir>/doiget/config.toml` per
+  ADR-0028 D2, mirroring the CLI path that landed in beta.8 (#220).
+  Before this slice, a user who configured
+  `[[network.additional_hosts]]` and invoked via `doiget serve`
+  saw no effect — only `doiget fetch` honored the extension. The
+  MCP merge closes that asymmetry; both surfaces now read the same
+  config file with identical failure handling (silent on
+  not-found, `tracing::warn!` on malformed, curated allowlist
+  continues regardless).
+
+- **[cli]** `doiget config doctor` adds a user-extension health
+  check (ADR-0028 D2-3): on a green run the new line reads
+  `[ ok ] user-extension hosts loaded: N`; on a malformed
+  `config.toml` it emits `[FAIL] user-extension config invalid:
+  <error>` and exits 2. A missing `config.toml` is normal (count
+  = 0, no failure) — the user simply has not extended the gate.
+
+- **[cli]** `doiget capabilities` JSON gains a top-level
+  `user_extension_count: usize` field (ADR-0028 D2-4) so an LLM
+  cold-booted into doiget can confirm at a glance whether the
+  curated allowlist has been extended on this host. The field
+  counts valid `[[network.additional_hosts]]` entries; parse
+  errors collapse to `0` (use `doiget config doctor` to
+  diagnose). `Capabilities` is `#[non_exhaustive]`, so adding the
+  field is additive for downstream Rust consumers; JSON consumers
+  should ignore unknown fields.
+
+### Changed
+
+- **[cli]** `commands::fetch::config_dir_utf8` lifted from private
+  to `pub(crate)` so sibling modules
+  (`commands::capabilities`, `commands::config`) resolve the same
+  `<config_dir>/doiget/` path the production HTTP-client builder
+  reads from. No behavior change.
+
+### Notes
+
+- Out of scope for this slice (still tracked under #220 / ADR-0028):
+  the `verified_by = "user"` provenance row field (D2-2). That
+  requires allowlist source-attribution plumbing through the
+  redirect closure and is deferred to a follow-up slice.
+
 ## [0.4.1-beta.9] - 2026-05-21
 
 ### Added

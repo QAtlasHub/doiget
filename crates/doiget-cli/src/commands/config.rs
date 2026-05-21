@@ -173,6 +173,25 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
                 cfg.contact_email.is_some(),
                 &mut all_ok,
             );
+            // ADR-0028 D2: surface user-extension allowlist health. A
+            // missing config.toml is normal (curated set only); a
+            // present-but-malformed config.toml is a doctor failure so
+            // the operator finds out before fetch attempts silently
+            // skip the extension path. `user_extension::load` returns
+            // `Ok(vec![])` for not-found, so the OK arm always reports
+            // a count.
+            match doiget_core::user_extension::load(&cfg.config_path) {
+                Ok(hosts) => check(
+                    &format!("user-extension hosts loaded: {}", hosts.len()),
+                    true,
+                    &mut all_ok,
+                ),
+                Err(e) => check(
+                    &format!("user-extension config invalid: {e}"),
+                    false,
+                    &mut all_ok,
+                ),
+            }
             // Trying to actually create the dirs would have side-effects;
             // keep doctor read-only and just check existence of parents.
             if !all_ok {
@@ -351,6 +370,49 @@ mod tests {
         // every supported test host (CI runners always have $HOME).
         run("doctor".into(), crate::commands::output::OutputMode::Human)
             .expect("doctor should pass with contact email + real home dir");
+    }
+
+    /// ADR-0028 D2: a malformed `<config_dir>/doiget/config.toml`
+    /// causes `doiget config doctor` to FAIL (exit 2). POSIX-only
+    /// because `dirs::config_dir()` on Windows queries the Known
+    /// Folder API directly (ignores APPDATA env), so the test can't
+    /// redirect the config path in a child process the way it can
+    /// via `XDG_CONFIG_HOME` on POSIX. The malformed-config FAIL
+    /// path is platform-independent; this test covers the wiring
+    /// on the platform where it CAN be exercised.
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn doctor_fails_with_malformed_user_extension_config() {
+        let _g = unset_all_doiget_config_env();
+        let _email = EnvGuard::set("DOIGET_CONTACT_EMAIL", "alice@example.org");
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg_root = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+        let doiget_dir = cfg_root.join("doiget");
+        std::fs::create_dir_all(doiget_dir.as_std_path()).expect("mk dir");
+        let config_toml = doiget_dir.join("config.toml");
+        // Empty `host` value triggers `PatternError::Empty`, which
+        // the doctor surfaces as a FAIL. `note` is valid TOML so the
+        // top-level parse succeeds — only the pattern validation
+        // path produces the error we're pinning.
+        std::fs::write(
+            config_toml.as_std_path(),
+            "[[network.additional_hosts]]\nhost = \"\"\n",
+        )
+        .expect("write config.toml");
+
+        // POSIX `dirs::config_dir()` honors `XDG_CONFIG_HOME` first,
+        // so pointing it at our tempdir routes `cfg.config_path` to
+        // our crafted file.
+        let _x = EnvGuard::set("XDG_CONFIG_HOME", cfg_root.as_str());
+
+        let err = run("doctor".into(), crate::commands::output::OutputMode::Human)
+            .expect_err("doctor should fail when user-extension config is malformed");
+        let cli_exit = err
+            .downcast_ref::<CliExit>()
+            .expect("failing doctor must carry a CliExit");
+        assert_eq!(cli_exit.0, 2);
     }
 
     #[test]

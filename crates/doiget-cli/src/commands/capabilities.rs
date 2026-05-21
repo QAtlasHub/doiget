@@ -66,6 +66,13 @@ pub struct Capabilities {
     pub mcp_tools: &'static [McpTool],
     /// Canonical doc paths an LLM can pull for deeper context.
     pub docs: Docs,
+    /// Number of user-extension allowlist hosts loaded from
+    /// `<config_dir>/doiget/config.toml` per ADR-0028 D2. `0` if the
+    /// config file is missing, contains no `[[network.additional_hosts]]`,
+    /// or fails to parse — run `doiget config doctor` to diagnose parse
+    /// failures. Exposed so an LLM can confirm at cold-boot whether the
+    /// curated allowlist has been extended on this host.
+    pub user_extension_count: usize,
 }
 
 /// What kind of value (if any) a [`FlagSpec`] carries.
@@ -515,6 +522,24 @@ pub fn build_capabilities(cli: &clap::Command) -> Capabilities {
         env_vars: ENV_VARS,
         mcp_tools: MCP_TOOLS,
         docs: DOCS,
+        user_extension_count: user_extension_count(),
+    }
+}
+
+/// Count valid `[[network.additional_hosts]]` entries in
+/// `<config_dir>/doiget/config.toml` (ADR-0028 D2). Returns `0` on any
+/// failure — missing config, parse error, unresolvable config dir.
+/// Diagnose failures via `doiget config doctor`; here we only need a
+/// best-effort cold-boot signal for the inventory.
+fn user_extension_count() -> usize {
+    let cfg_dir = match super::fetch::config_dir_utf8() {
+        Ok(p) => p,
+        Err(_) => return 0,
+    };
+    let path = cfg_dir.join("doiget").join("config.toml");
+    match doiget_core::user_extension::load(&path) {
+        Ok(hosts) => hosts.len(),
+        Err(_) => 0,
     }
 }
 
@@ -822,6 +847,7 @@ mod tests {
             "env_vars",
             "mcp_tools",
             "docs",
+            "user_extension_count",
         ] {
             assert!(
                 v.get(key).is_some(),
@@ -1008,6 +1034,94 @@ mod tests {
     #[test]
     fn version_is_cargo_pkg_version() {
         assert_eq!(caps().version, env!("CARGO_PKG_VERSION"));
+    }
+
+    /// ADR-0028 D2: `user_extension_count` must reflect the number of
+    /// `[[network.additional_hosts]]` entries actually present in
+    /// `<config_dir>/doiget/config.toml`. The test points every
+    /// config-dir env var at a tempdir, writes a 2-host config, and
+    /// asserts the inventory reports `2`. Drift here would silently
+    /// hide user-curated allowlist hosts from the cold-boot JSON.
+    #[test]
+    #[serial_test::serial]
+    fn user_extension_count_reflects_config_toml_entries() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg_root = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+        let doiget_dir = cfg_root.join("doiget");
+        std::fs::create_dir_all(doiget_dir.as_std_path()).expect("mk dir");
+        let config_toml = doiget_dir.join("config.toml");
+        std::fs::write(
+            config_toml.as_std_path(),
+            "[[network.additional_hosts]]\n\
+             host = \"example.org\"\n\
+             \n\
+             [[network.additional_hosts]]\n\
+             host = \"*.example.net\"\n\
+             note = \"university OA mirror\"\n",
+        )
+        .expect("write config.toml");
+
+        let _x = EnvGuard::set("XDG_CONFIG_HOME", cfg_root.as_str());
+        let _a = EnvGuard::unset("APPDATA");
+        let _h = EnvGuard::unset("HOME");
+        let _u = EnvGuard::unset("USERPROFILE");
+
+        let cli = test_cli();
+        let caps = build_capabilities(&cli);
+        assert_eq!(
+            caps.user_extension_count, 2,
+            "expected 2 user-extension hosts, got {}",
+            caps.user_extension_count
+        );
+    }
+
+    /// Companion: with no config file (and a resolvable config dir),
+    /// the count is `0` — the curated allowlist is the entire surface.
+    /// Confirms the `Ok(vec![])` not-found path in `user_extension::load`
+    /// flows through unchanged.
+    #[test]
+    #[serial_test::serial]
+    fn user_extension_count_is_zero_without_config_toml() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg_root = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+
+        let _x = EnvGuard::set("XDG_CONFIG_HOME", cfg_root.as_str());
+        let _a = EnvGuard::unset("APPDATA");
+        let _h = EnvGuard::unset("HOME");
+        let _u = EnvGuard::unset("USERPROFILE");
+
+        let caps = build_capabilities(&test_cli());
+        assert_eq!(caps.user_extension_count, 0);
+    }
+
+    /// Minimal env-guard local to this tests module; mirrors the
+    /// pattern in `commands::config::tests` (each module keeps its
+    /// own copy so they stay leaf-level cheap).
+    struct EnvGuard {
+        var: &'static str,
+        prior: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(var: &'static str, value: &str) -> Self {
+            let prior = std::env::var_os(var);
+            std::env::set_var(var, value);
+            EnvGuard { var, prior }
+        }
+        fn unset(var: &'static str) -> Self {
+            let prior = std::env::var_os(var);
+            std::env::remove_var(var);
+            EnvGuard { var, prior }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(v) => std::env::set_var(self.var, v),
+                None => std::env::remove_var(self.var),
+            }
+        }
     }
 
     #[test]
