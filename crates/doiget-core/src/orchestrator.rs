@@ -1764,7 +1764,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_oa_url_chain_skips_unparseable_urls() {
+    fn extract_oa_url_chain_skips_unparsable_urls() {
         // A malformed URL in oa_locations[] is dropped silently
         // rather than aborting the chain — the metadata source can
         // emit a stray entry without poisoning the whole fetch.
