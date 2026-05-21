@@ -10,6 +10,45 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.4.1-beta.8] - 2026-05-21
+
+### Added
+
+- **[core]** New module `doiget_core::user_extension`: parser + merger
+  for `[[network.additional_hosts]]` entries in the user's
+  `config.toml`, per ADR-0028 D2 (#220). The orchestrator's
+  production HttpClient construction (`commands::fetch::build_http_client`)
+  now reads `<config_dir>/doiget/config.toml`, validates each entry
+  against the restricted ADR-0028 D2-1 pattern grammar (literal FQDN
+  or single-suffix wildcard `*.<suffix>` only — multi-segment globs,
+  bare wildcards, and non-host characters are parse errors), and
+  merges the user-added hosts into the `oa-publisher` allowlist
+  alongside the curated set. A missing config file is the normal case
+  ("no extensions"); a malformed file emits a `tracing::warn!` to
+  stderr but never aborts the fetch (the curated allowlist still
+  applies). Unblocks the real-world dogfood case where a Green-OA
+  paper lives on an institutional repo like `ruj.uj.edu.pl` that the
+  curated list cannot reasonably enumerate.
+
+  Example:
+
+  ```toml
+  # ~/.config/doiget/config.toml
+  [[network.additional_hosts]]
+  host = "ruj.uj.edu.pl"
+  note = "Jagiellonian University Repository — Green OA"
+
+  [[network.additional_hosts]]
+  host = "*.uj.edu.pl"
+  ```
+
+  Out of scope for this slice (tracked as S3b): the
+  `verified_by = "user"` provenance row field (ADR-0028 D2-2),
+  the `doiget config doctor` surface (D2-3), the
+  `capability_gate.user_extension_count` field in `doiget
+  capabilities` JSON (D2-4), and the MCP-server-side merge in
+  `doiget-mcp`.
+
 ## [0.4.1-beta.7] - 2026-05-21
 
 ### Fixed

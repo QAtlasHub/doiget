@@ -189,6 +189,44 @@ fn build_http_client() -> Result<HttpClient> {
         // the runtime gate; the allowlist is the transport gate.
         #[cfg(feature = "citation")]
         allowlists.extend(tier_2_allowlist());
+
+        // ADR-0028 D2: merge user-extension hosts from
+        // `<config_dir>/doiget/config.toml`'s
+        // `[[network.additional_hosts]]` table. Pattern grammar is
+        // restricted to literal FQDN or `*.<suffix>` (ADR-0028 D2-1);
+        // anything else is rejected at parse time. A missing config
+        // file is the normal case (treated as "no extensions").
+        //
+        // A malformed config is surfaced as a *warning* to stderr,
+        // never aborts the fetch — ADR-0028 D2 frames user-extension
+        // as opt-in convenience; the curated allowlist still applies.
+        // The user can then run `doiget config doctor` (S3b will add
+        // the surface) to see the offending entry.
+        if let Ok(cfg_dir) = config_dir_utf8() {
+            let path = cfg_dir.join("doiget").join("config.toml");
+            match doiget_core::user_extension::load(&path) {
+                Ok(user_hosts) if !user_hosts.is_empty() => {
+                    tracing::info!(
+                        count = user_hosts.len(),
+                        path = %path,
+                        "merging user-extension allowlist hosts (ADR-0028 D2)"
+                    );
+                    doiget_core::user_extension::merge_into_allowlists(
+                        &mut allowlists,
+                        &user_hosts,
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %path,
+                        "failed to load user-extension allowlist; falling back to curated set only"
+                    );
+                }
+            }
+        }
+
         return HttpClient::new(allowlists).context("building HTTP client");
     }
 
