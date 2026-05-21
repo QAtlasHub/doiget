@@ -7,8 +7,85 @@
 //! `graph`. `serve` runs the rmcp-based MCP server in `doiget-mcp` over
 //! stdio (ADR-0001).
 
-use clap::{Parser, Subcommand};
+use camino::Utf8PathBuf;
+use clap::{Parser, Subcommand, ValueEnum};
 use doiget_cli::commands::output::{self, FlagInput, OutputMode};
+
+/// `--color` value (#211 / CONFIG.md §5).
+///
+/// Honored by future ANSI emitters; `Auto` decides per-stderr-TTY at the
+/// emission site. The `NO_COLOR` cross-tool convention
+/// (<https://no-color.org/>) is honored by the *consumer-side* resolver,
+/// not at this write boundary: `apply_global_overrides` writes
+/// `DOIGET_COLOR` from the flag value unconditionally, and a future
+/// ANSI emitter MUST check `NO_COLOR` (present and non-empty, regardless
+/// of value) before consulting `DOIGET_COLOR`. The split keeps the
+/// write boundary stupid-simple and centralises the NO_COLOR
+/// precedence in the emitter's own resolver where it is closer to the
+/// actual rendering site.
+///
+/// This slice ships the *surface*: the flag is accepted and the resolved
+/// value is exposed via `DOIGET_COLOR` so any future ANSI consumer can
+/// read it through the same env-driven layer as the rest of the config.
+/// No consumer currently emits ANSI to be gated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[clap(rename_all = "lower")]
+enum OutputColor {
+    /// Color when stderr is a terminal, monochrome otherwise. This is
+    /// also the default when `--color` is not given; explicit
+    /// `--color auto` is therefore a no-op vs the default unless
+    /// `NO_COLOR` is set, in which case the *consumer-side* resolver
+    /// still forces monochrome regardless of `--color`.
+    Auto,
+    /// Always emit ANSI, even on a pipe. Note that `NO_COLOR` (present
+    /// + non-empty) still wins at the consumer-side resolver.
+    Always,
+    /// Never emit ANSI, even on a terminal.
+    Never,
+}
+
+impl OutputColor {
+    /// String representation written to `DOIGET_COLOR`.
+    ///
+    /// The match arms intentionally mirror the `#[clap(rename_all =
+    /// "lower")]` parser-side spelling so a round trip through clap →
+    /// `as_env_value` → env → future consumer is byte-identical.
+    /// The pair is pinned by
+    /// `tests::output_color_env_strings_match_clap_parser_side`, which
+    /// rejects each variant's string against clap's own
+    /// `ValueEnum::to_possible_value().get_name()` — if `rename_all`
+    /// is changed (or a variant renamed), the test fires before any
+    /// env consumer observes the drift.
+    fn as_env_value(self) -> &'static str {
+        match self {
+            OutputColor::Auto => "auto",
+            OutputColor::Always => "always",
+            OutputColor::Never => "never",
+        }
+    }
+}
+
+/// Custom value parser for path-shaped CLI arguments.
+///
+/// Rejects empty strings and NUL bytes at parse time. NUL would
+/// otherwise panic later in `std::env::set_var` (silent abort under
+/// `panic = "abort"`); the empty-string case was a documented silent
+/// failure path from the review pass (`apply_global_overrides`
+/// would have written `DOIGET_*=""` which downstream resolvers treat
+/// differently from an unset key).
+///
+/// Returning `Utf8PathBuf` honors the workspace `clippy.toml`
+/// disallowed-types policy (`std::path::PathBuf` is banned) and
+/// validates UTF-8 at the parse boundary instead of on first use.
+fn parse_utf8_path(raw: &str) -> Result<Utf8PathBuf, String> {
+    if raw.is_empty() {
+        return Err("path must not be empty".to_string());
+    }
+    if raw.contains('\0') {
+        return Err("path must not contain NUL bytes".to_string());
+    }
+    Ok(Utf8PathBuf::from(raw))
+}
 
 /// `doiget provenance ...` action selector. Ships only the v1→v2
 /// migration in Slice 4 (ADR-0024); further actions (e.g. `compact`,
@@ -75,8 +152,77 @@ struct Cli {
     #[arg(short = 'q', long, global = true, conflicts_with_all = ["mode", "json"])]
     quiet: bool,
 
+    /// Override the on-disk paper store root. CONFIG.md §5 / #211.
+    /// Precedence: this flag > `DOIGET_STORE_ROOT` env > default
+    /// (`$HOME/papers` on POSIX, `%USERPROFILE%\papers` on Windows).
+    /// Wins by overwriting `DOIGET_STORE_ROOT` for the lifetime of
+    /// this process before any command resolver reads it. Empty
+    /// strings and NUL bytes are rejected at parse time by
+    /// `parse_utf8_path`.
+    #[arg(long, global = true, value_name = "PATH", value_parser = parse_utf8_path)]
+    store_root: Option<Utf8PathBuf>,
+
+    /// Override the provenance-log file path. CONFIG.md §5 / #211.
+    /// Precedence: this flag > `DOIGET_LOG_PATH` env > default
+    /// (`<config_dir>/doiget/access.jsonl`). Same wins-by-env-overwrite
+    /// pattern as `--store-root` so existing resolvers
+    /// (`commands::fetch::resolve_log_path` / `commands::audit_log`)
+    /// pick the value up uniformly. Empty strings and NUL bytes are
+    /// rejected at parse time by `parse_utf8_path`.
+    #[arg(long, global = true, value_name = "PATH", value_parser = parse_utf8_path)]
+    log_path: Option<Utf8PathBuf>,
+
+    /// Force / suppress ANSI escapes on stderr output. CONFIG.md §5 /
+    /// #211. Precedence: this flag > consumer-side `NO_COLOR` check >
+    /// default (`auto`). See [`OutputColor`] for the precedence
+    /// rationale — `NO_COLOR` is honored at the emission boundary,
+    /// not at this write site.
+    ///
+    /// **Surface-only in this slice**: doiget currently emits no ANSI,
+    /// so the flag is accepted, validated, and exposed via the
+    /// `DOIGET_COLOR` env var for future emitters; nothing renders
+    /// differently today.
+    #[arg(long, global = true, value_enum)]
+    color: Option<OutputColor>,
+
+    /// Show the per-ref informational progress line on stderr.
+    /// Conflicts with `--no-progress`. CONFIG.md §5 / #211.
+    ///
+    /// **Surface-only in this slice**: the `fetch` / `batch` per-ref
+    /// stderr summary is unchanged in this PR; consumers that read
+    /// `DOIGET_PROGRESS=1` will respect it in a follow-up.
+    ///
+    /// The pair `progress` / `no_progress` encodes a three-state
+    /// value (true / false / unset) — see [`Cli::progress_choice`]
+    /// for the typed view that callers should consume.
+    #[arg(long, global = true, conflicts_with = "no_progress")]
+    progress: bool,
+
+    /// Suppress the per-ref informational progress line on stderr.
+    /// Conflicts with `--progress`. See [`Cli::progress_choice`].
+    #[arg(long, global = true, conflicts_with = "progress")]
+    no_progress: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
+}
+
+impl Cli {
+    /// Collapse the `progress` / `no_progress` bool pair into the
+    /// three-state value it actually represents (review pass I7).
+    ///
+    /// Returns `Some(true)` for `--progress`, `Some(false)` for
+    /// `--no-progress`, and `None` when neither flag was given.
+    /// The `(true, true)` case is unreachable thanks to clap's
+    /// `conflicts_with`, but the helper is unconditional so callers
+    /// don't need to remember which flag the if-arm prioritises.
+    fn progress_choice(&self) -> Option<bool> {
+        match (self.progress, self.no_progress) {
+            (true, _) => Some(true),
+            (_, true) => Some(false),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -229,7 +375,81 @@ fn forced_implicit_for(command: &Option<Command>) -> Option<OutputMode> {
     }
 }
 
+/// Apply the four CONFIG.md §5 global flags (#211) by overwriting the
+/// matching process env vars before any command resolver reads them.
+///
+/// This keeps the precedence ladder `flag > env > default` correct
+/// uniformly across every command without threading a new
+/// `ResolvedFlags` value through eleven `run(..)` signatures: the
+/// existing env-driven resolvers (`resolve_store_root`,
+/// `resolve_log_path`, the future `--color` / `--progress`
+/// consumers) keep reading env and will see the flag value when one
+/// is given.
+///
+/// `--color` and `--progress` / `--no-progress` are *surface-only* in
+/// this slice — they are accepted and exposed via `DOIGET_COLOR` /
+/// `DOIGET_PROGRESS` for future consumers, but doiget does not yet
+/// emit ANSI escapes or per-ref progress lines that would respect
+/// them. `NO_COLOR=1` (per <https://no-color.org/>) still wins over
+/// `--color always` because the consumer-side resolver checks
+/// `NO_COLOR` first by the standard convention.
+///
+/// **Thread safety:** `std::env::set_var` is safe on edition 2021 /
+/// Rust 1.86 (the workspace MSRV; cf. `Cargo.toml [workspace.package]
+/// edition`). Under edition 2024 it becomes `unsafe fn` (the
+/// `setenv` POSIX call is documented as non-thread-safe), and the
+/// workspace `-F unsafe-code` lint will need a localized
+/// `#[allow(unsafe_code)]` here when migrating. Tracked under #211
+/// follow-up.
+///
+/// We invoke this from `run_dispatch` (see call site below) before
+/// any `.await` in the function. The `#[tokio::main]` runtime has
+/// already constructed its multi-thread worker pool by that point,
+/// but the workers are parked on the work queue and do not read
+/// `environ`; the active thread is the binary's startup thread. The
+/// concurrent-read soundness condition for `setenv` is therefore met.
+/// If a future change introduces an async background task that reads
+/// `DOIGET_STORE_ROOT` (or any other key this function writes), the
+/// application of overrides must move ahead of the runtime
+/// construction (i.e. above the `#[tokio::main]` boundary).
+///
+/// The function intentionally has no error path: each flag value has
+/// already passed `parse_utf8_path` (empty and NUL rejected) or
+/// clap's `ValueEnum` (closed set of strings), so `set_var` cannot
+/// panic on the value. The function is fire-and-forget by design.
+fn apply_global_overrides(cli: &Cli) {
+    if let Some(v) = cli.store_root.as_deref() {
+        std::env::set_var("DOIGET_STORE_ROOT", v.as_str());
+    }
+    if let Some(v) = cli.log_path.as_deref() {
+        std::env::set_var("DOIGET_LOG_PATH", v.as_str());
+    }
+    if let Some(c) = cli.color {
+        std::env::set_var("DOIGET_COLOR", c.as_env_value());
+    }
+    // `--progress` / `--no-progress` collapse into a typed
+    // three-state via `Cli::progress_choice` (review pass I7). When
+    // neither is given we leave `DOIGET_PROGRESS` untouched so a
+    // user-set env value survives and the future consumer can fall
+    // back to its own TTY-based default.
+    if let Some(on) = cli.progress_choice() {
+        std::env::set_var("DOIGET_PROGRESS", if on { "1" } else { "0" });
+    }
+}
+
 async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
+    // CONFIG.md §5 / #211: apply global path / display flags by
+    // overwriting their env counterparts BEFORE any resolver reads
+    // them. The precedence
+    //
+    //   flag (this fn) > env > default
+    //
+    // is implemented by `apply_global_overrides`'s
+    // `--flag-wins-by-setting-env-first` pattern: when a flag is
+    // supplied, its value replaces the env value; when no flag is
+    // supplied, the env value (or the resolver's default) stands.
+    apply_global_overrides(&cli);
+
     // Resolve the effective output mode ONCE per invocation per ADR-0017.
     // The pure resolver lives in `commands::output`; this site is the
     // single I/O-touching layer that reads env + probes the TTY.
@@ -312,5 +532,284 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             total,
             per_paper,
         }) => doiget_cli::commands::graph::run(ref_, depth, total, per_paper, mode).await,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use serial_test::serial;
+
+    /// RAII guard restoring a single env var to its pre-test value (or
+    /// removing it if previously unset). The `apply_global_overrides`
+    /// tests mutate `DOIGET_STORE_ROOT` / `DOIGET_LOG_PATH` /
+    /// `DOIGET_COLOR` / `DOIGET_PROGRESS`; without restoration a
+    /// subsequent test on the same process would see stale state.
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn save(key: &'static str) -> Self {
+            Self {
+                key,
+                prev: std::env::var(key).ok(),
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn parse_cli(args: &[&str]) -> Cli {
+        // Prepend the binary name; clap requires argv[0].
+        let mut argv = vec!["doiget"];
+        argv.extend_from_slice(args);
+        Cli::parse_from(argv)
+    }
+
+    // ---- store_root precedence (flag > env) -----------------------------
+
+    #[test]
+    #[serial]
+    fn store_root_flag_overwrites_env() {
+        let _g = EnvGuard::save("DOIGET_STORE_ROOT");
+        std::env::set_var("DOIGET_STORE_ROOT", "/env/path");
+        let cli = parse_cli(&["--store-root", "/flag/path", "capabilities"]);
+        apply_global_overrides(&cli);
+        assert_eq!(
+            std::env::var("DOIGET_STORE_ROOT").unwrap(),
+            "/flag/path",
+            "--store-root MUST win over DOIGET_STORE_ROOT env"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn store_root_env_preserved_when_no_flag() {
+        let _g = EnvGuard::save("DOIGET_STORE_ROOT");
+        std::env::set_var("DOIGET_STORE_ROOT", "/env/path");
+        let cli = parse_cli(&["capabilities"]);
+        apply_global_overrides(&cli);
+        assert_eq!(
+            std::env::var("DOIGET_STORE_ROOT").unwrap(),
+            "/env/path",
+            "DOIGET_STORE_ROOT env MUST survive when --store-root is not given"
+        );
+    }
+
+    // ---- log_path precedence (flag > env) -------------------------------
+
+    #[test]
+    #[serial]
+    fn log_path_flag_overwrites_env() {
+        let _g = EnvGuard::save("DOIGET_LOG_PATH");
+        std::env::set_var("DOIGET_LOG_PATH", "/env/log.jsonl");
+        let cli = parse_cli(&["--log-path", "/flag/log.jsonl", "capabilities"]);
+        apply_global_overrides(&cli);
+        assert_eq!(
+            std::env::var("DOIGET_LOG_PATH").unwrap(),
+            "/flag/log.jsonl",
+            "--log-path MUST win over DOIGET_LOG_PATH env"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn log_path_env_preserved_when_no_flag() {
+        // Symmetric to `store_root_env_preserved_when_no_flag`: when
+        // `--log-path` is not given, a user-set `DOIGET_LOG_PATH` env
+        // value MUST NOT be blanked or clobbered by
+        // `apply_global_overrides`. A regression that swapped the
+        // `if let Some(v) = …` guard for an unconditional `set_var`
+        // would be silently caught here. Review pass I2.
+        let _g = EnvGuard::save("DOIGET_LOG_PATH");
+        std::env::set_var("DOIGET_LOG_PATH", "/env/log.jsonl");
+        let cli = parse_cli(&["capabilities"]);
+        apply_global_overrides(&cli);
+        assert_eq!(
+            std::env::var("DOIGET_LOG_PATH").unwrap(),
+            "/env/log.jsonl",
+            "DOIGET_LOG_PATH env MUST survive when --log-path is not given"
+        );
+    }
+
+    // ---- color flag -> DOIGET_COLOR env ---------------------------------
+
+    #[test]
+    #[serial]
+    fn color_flag_writes_doiget_color_env() {
+        let _g = EnvGuard::save("DOIGET_COLOR");
+        std::env::remove_var("DOIGET_COLOR");
+        for (arg, expected) in [("auto", "auto"), ("always", "always"), ("never", "never")] {
+            let cli = parse_cli(&["--color", arg, "capabilities"]);
+            apply_global_overrides(&cli);
+            assert_eq!(
+                std::env::var("DOIGET_COLOR").unwrap(),
+                expected,
+                "--color {arg} MUST write {expected} to DOIGET_COLOR"
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn color_unset_when_no_flag_leaves_env_untouched() {
+        let _g = EnvGuard::save("DOIGET_COLOR");
+        std::env::remove_var("DOIGET_COLOR");
+        let cli = parse_cli(&["capabilities"]);
+        apply_global_overrides(&cli);
+        assert!(
+            std::env::var("DOIGET_COLOR").is_err(),
+            "absent --color MUST leave DOIGET_COLOR unset"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn color_env_preserved_when_no_flag() {
+        // Sentinel-preservation symmetric to `neither_progress_…`. A
+        // user who has pre-set `DOIGET_COLOR` in their shell must see
+        // that value survive a `doiget` invocation that does NOT
+        // include `--color`. Review pass I3 — the previous test only
+        // exercised the unset → unset path, which is satisfied by a
+        // regression that blanks the env on every invocation.
+        let _g = EnvGuard::save("DOIGET_COLOR");
+        std::env::set_var("DOIGET_COLOR", "sentinel");
+        let cli = parse_cli(&["capabilities"]);
+        apply_global_overrides(&cli);
+        assert_eq!(
+            std::env::var("DOIGET_COLOR").unwrap(),
+            "sentinel",
+            "absent --color MUST NOT clobber a user-set DOIGET_COLOR env"
+        );
+    }
+
+    // ---- ValueEnum drift guard (A1 follow-up) ---------------------------
+
+    #[test]
+    fn output_color_env_strings_match_clap_parser_side() {
+        // `as_env_value` is a hand-written match; the clap parser-side
+        // strings come from `#[clap(rename_all = "lower")]` +
+        // `ValueEnum`. If anyone changes `rename_all` (or renames a
+        // variant) without updating `as_env_value`, the round trip
+        // `--color <s> → OutputColor → as_env_value → DOIGET_COLOR`
+        // would silently drift. This test makes the dependency
+        // mechanical: clap's `to_possible_value().get_name()` is the
+        // canonical parser-side spelling, and we assert each variant's
+        // `as_env_value` matches it exactly.
+        for variant in [OutputColor::Auto, OutputColor::Always, OutputColor::Never] {
+            let parser_side = variant
+                .to_possible_value()
+                .expect("clap value-enum exposes every non-skipped variant");
+            assert_eq!(
+                variant.as_env_value(),
+                parser_side.get_name(),
+                "as_env_value MUST mirror clap's rename_all-driven name for {variant:?}"
+            );
+        }
+    }
+
+    // ---- progress flags -> DOIGET_PROGRESS env --------------------------
+
+    #[test]
+    #[serial]
+    fn progress_flag_writes_one() {
+        let _g = EnvGuard::save("DOIGET_PROGRESS");
+        std::env::remove_var("DOIGET_PROGRESS");
+        let cli = parse_cli(&["--progress", "capabilities"]);
+        apply_global_overrides(&cli);
+        assert_eq!(std::env::var("DOIGET_PROGRESS").unwrap(), "1");
+    }
+
+    #[test]
+    #[serial]
+    fn no_progress_flag_writes_zero() {
+        let _g = EnvGuard::save("DOIGET_PROGRESS");
+        std::env::remove_var("DOIGET_PROGRESS");
+        let cli = parse_cli(&["--no-progress", "capabilities"]);
+        apply_global_overrides(&cli);
+        assert_eq!(std::env::var("DOIGET_PROGRESS").unwrap(), "0");
+    }
+
+    #[test]
+    #[serial]
+    fn neither_progress_nor_no_progress_leaves_env_untouched() {
+        let _g = EnvGuard::save("DOIGET_PROGRESS");
+        std::env::set_var("DOIGET_PROGRESS", "sentinel");
+        let cli = parse_cli(&["capabilities"]);
+        apply_global_overrides(&cli);
+        assert_eq!(
+            std::env::var("DOIGET_PROGRESS").unwrap(),
+            "sentinel",
+            "absent --progress/--no-progress MUST NOT clobber a user-set DOIGET_PROGRESS env"
+        );
+    }
+
+    // ---- parse_utf8_path (I6 empty, A4 NUL) -----------------------------
+
+    #[test]
+    fn parse_utf8_path_accepts_normal_path() {
+        let p = parse_utf8_path("/tmp/papers").expect("normal path");
+        assert_eq!(p.as_str(), "/tmp/papers");
+    }
+
+    #[test]
+    fn parse_utf8_path_accepts_windows_style_path() {
+        // The parser is intentionally non-validating beyond UTF-8,
+        // empty, and NUL — any other path-shaped string passes through
+        // (the platform's own path resolution decides validity).
+        let p = parse_utf8_path("C:\\Users\\me\\papers").expect("windows path");
+        assert_eq!(p.as_str(), "C:\\Users\\me\\papers");
+    }
+
+    #[test]
+    fn parse_utf8_path_rejects_empty_string() {
+        // Review pass I6: prevents silently writing `DOIGET_*=""`.
+        let err = parse_utf8_path("").expect_err("empty rejected");
+        assert!(
+            err.contains("empty"),
+            "error message MUST identify the empty-string condition, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_utf8_path_rejects_nul_byte() {
+        // Review pass A4: `std::env::set_var` panics on NUL bytes
+        // (and the workspace is `panic = abort` in release, so the
+        // process would die silently). Reject at the parse boundary.
+        let err = parse_utf8_path("a/b\0/c").expect_err("NUL rejected");
+        assert!(
+            err.to_ascii_lowercase().contains("nul"),
+            "error message MUST identify the NUL condition, got: {err}"
+        );
+    }
+
+    #[test]
+    fn cli_rejects_empty_path_flag_value_at_parse_time() {
+        // Clap returns Err from `try_parse_from` when a value_parser
+        // rejects the input. The parse failure exit code (2) is
+        // exercised at the e2e layer; here we only assert the parse
+        // attempt itself fails.
+        let res = Cli::try_parse_from(["doiget", "--store-root", "", "capabilities"]);
+        assert!(
+            res.is_err(),
+            "--store-root with empty value MUST parse-fail"
+        );
+    }
+
+    #[test]
+    fn cli_rejects_nul_in_path_flag_value_at_parse_time() {
+        let res = Cli::try_parse_from(["doiget", "--log-path", "a/b\0/c", "capabilities"]);
+        assert!(res.is_err(), "--log-path with NUL byte MUST parse-fail");
     }
 }

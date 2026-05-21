@@ -10,6 +10,57 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.4.1-beta.5] - 2026-05-21
+
+### Added
+
+- **[cli]** Four new global flags from CONFIG.md §5, completing the
+  documented surface (#211):
+  - `--store-root <PATH>` — overrides `DOIGET_STORE_ROOT` for the
+    on-disk paper store root. Path-shaped values; rejected at parse
+    time when empty or containing NUL bytes (review pass I6 / A4).
+  - `--log-path <PATH>` — overrides `DOIGET_LOG_PATH` for the
+    provenance-log file path. Same parse-time validation as
+    `--store-root`.
+  - `--color <auto|always|never>` — exposes the future ANSI emission
+    knob via the new `DOIGET_COLOR` env var. Surface-only in this
+    slice (no consumer emits ANSI today). The consumer-side resolver
+    will check `NO_COLOR` (present and non-empty per
+    <https://no-color.org/>, any value) **before** consulting
+    `DOIGET_COLOR`; the write boundary in
+    `apply_global_overrides` is intentionally simple and does NOT
+    inspect `NO_COLOR`.
+  - `--progress` / `--no-progress` — pair of mutually exclusive
+    flags writing `DOIGET_PROGRESS=1` / `0`. Surface-only: the
+    `fetch` / `batch` per-ref stderr line is unchanged here; the
+    consumer-side gate lands in a follow-up.
+
+  Each flag implements the CONFIG.md §1 precedence ladder
+  `flag > env > default` by overwriting the matching `DOIGET_*`
+  process env var at the very top of `run_dispatch`, BEFORE any
+  command resolver reads the environment. The existing resolvers
+  (`commands::fetch::resolve_store_root`, `resolve_log_path`,
+  `commands::audit_log::resolve_log_path`) keep their env-driven
+  shape and pick the new value up uniformly — no `ResolvedFlags`
+  struct threaded through eleven `run(..)` signatures.
+
+  Path flags use `camino::Utf8PathBuf` (workspace `clippy.toml`
+  disallowed-types policy bans `std::path::PathBuf`); validation
+  lives in `parse_utf8_path` and runs at clap's `value_parser`
+  layer so empty / NUL-byte inputs fail clean with exit 2.
+
+  Clap-level conflicts: `--progress` ↔ `--no-progress` (exit 2 on
+  both supplied); pre-existing `--mode` ↔ `--json` ↔ `--quiet`
+  conflicts unchanged.
+
+  19 new tests (15 unit on `apply_global_overrides`/`parse_utf8_path`
+  via `serial_test`; 4 e2e on clap conflicts, value acceptance, and
+  empty-value parse-time rejection). Includes a drift guard
+  (`output_color_env_strings_match_clap_parser_side`) that pairs
+  `OutputColor::as_env_value` against clap's `ValueEnum`
+  parser-side spelling — if `rename_all = "lower"` is ever changed,
+  the round-trip catches it.
+
 ## [0.4.1-beta.2] - 2026-05-21
 
 ### Fixed
