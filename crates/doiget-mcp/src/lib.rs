@@ -781,6 +781,267 @@ impl Server {
         }
     }
 
+    /// `doiget_batch_from_bibliography` — read a bibliography file
+    /// (CSL-JSON today; BibTeX in a follow-up slice) and fetch each
+    /// resolvable entry. Per ADR-0030 D6.
+    ///
+    /// Mirrors `doiget_batch_fetch`'s per-entry semantics: each
+    /// `ParsedEntry` becomes one element of `results[]`, success or
+    /// per-entry failure independent of siblings. Each result also
+    /// carries the source bibliography's citation key
+    /// (`entry_key`) — the load-bearing field that lets a Zotero /
+    /// Mendeley plugin bridge the fetched PDF back to the
+    /// originating reference (ADR-0030 §6).
+    ///
+    /// `strict` controls per-entry parse-error policy:
+    ///   - `strict: false` (default) — invalid entries surface as
+    ///     `{ok:false, error:{code:INVALID_REF, ...}}` rows next to
+    ///     successful siblings; the call as a whole still returns
+    ///     `ok: true`.
+    ///   - `strict: true` — the first per-entry parse error aborts
+    ///     the whole call with `INVALID_REF`; successful upstream
+    ///     entries are not flushed (the operator asked for
+    ///     all-or-nothing).
+    ///
+    /// A whole-input decode failure (malformed CSL-JSON) ALWAYS
+    /// aborts regardless of `strict` — the file structure is broken,
+    /// not the data inside.
+    #[tool(
+        description = "WHEN TO USE: User has a Zotero / Mendeley CSL-JSON export and wants to fetch all OA-resolvable entries.\n\
+                       INPUTS: path (absolute path to .bib / .csl / .json), format (\"auto\" | \"csl-json\" | \"bibtex\" | \"refs\", default \"auto\"), strict (bool, default false).\n\
+                       OUTPUTS: { ok: true, summary:{total,ok,failed,parse_errors}, results: [{entry_key, ref, ok, ...}] } OR { ok:false, error }.\n\
+                       COSTS: Same as batch_fetch — 1-3 s per entry, bounded by the 5/sec global rate cap.\n\
+                       SIDE EFFECTS: Writes PDFs / metadata TOMLs to the store. Appends one provenance row per attempt.\n\
+                       LIMITS: bibtex parsing is not yet shipped (re-export as CSL-JSON). Per-entry parse errors are reported in results unless strict=true."
+    )]
+    async fn doiget_batch_from_bibliography(
+        &self,
+        Parameters(input): Parameters<BatchFromBibliographyInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Step 1: resolve the format token.
+        let format = match parse_bibliography_format(input.format.as_deref()) {
+            Ok(f) => f,
+            Err(e) => {
+                return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                    ErrorCode::InvalidRef,
+                    &e,
+                )));
+            }
+        };
+
+        // Step 2: read the file. A missing / unreadable path aborts.
+        let raw = match std::fs::read_to_string(&input.path) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                    ErrorCode::InvalidRef,
+                    &format!("reading bibliography file {:?}: {e}", input.path),
+                )));
+            }
+        };
+
+        // Step 3: parse via the ADR-0030 adapter.
+        let path_utf8 = camino::Utf8Path::new(&input.path);
+        let parsed = doiget_core::refs::parse_input(&raw, format, Some(path_utf8));
+
+        // Pull whole-input failures out first — those always abort.
+        for entry in &parsed {
+            match entry {
+                Err(doiget_core::refs::ParseError::Decode { format, message }) => {
+                    return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                        ErrorCode::InvalidRef,
+                        &format!("input did not deserialise as {format}: {message}"),
+                    )));
+                }
+                Err(doiget_core::refs::ParseError::UnsupportedFormat { format }) => {
+                    return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                        ErrorCode::InvalidRef,
+                        &format!(
+                            "{format} parsing is not yet implemented — re-export your library as CSL-JSON"
+                        ),
+                    )));
+                }
+                _ => {}
+            }
+        }
+
+        // Step 4: classify per-entry outcomes into success-ready
+        // `Ref`s + parse-error rows. In `strict` mode any per-entry
+        // parse failure aborts the call.
+        let mut parse_errors: Vec<Value> = Vec::new();
+        let mut to_fetch: Vec<(Ref, Option<String>)> = Vec::new();
+        for entry in parsed {
+            match entry {
+                Ok(p) => to_fetch.push((p.ref_, p.entry_key)),
+                Err(doiget_core::refs::ParseError::InvalidRef {
+                    raw,
+                    entry_key,
+                    source,
+                }) => {
+                    if input.strict {
+                        return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                            ErrorCode::InvalidRef,
+                            &format!(
+                                "entry {entry_key:?} identifier {raw:?} did not parse \
+                                 (strict mode aborts): {source}"
+                            ),
+                        )));
+                    }
+                    parse_errors.push(json!({
+                        "entry_key": entry_key,
+                        "ref": raw,
+                        "ok": false,
+                        "error": {
+                            "code":    ErrorCode::InvalidRef,
+                            "message": source.to_string(),
+                        },
+                    }));
+                }
+                Err(doiget_core::refs::ParseError::NoIdentifier { entry_key }) => {
+                    if input.strict {
+                        return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                            ErrorCode::InvalidRef,
+                            &format!(
+                                "entry {entry_key:?} has no DOI / arXiv id \
+                                 (strict mode aborts)"
+                            ),
+                        )));
+                    }
+                    parse_errors.push(json!({
+                        "entry_key": entry_key,
+                        "ref":       Value::Null,
+                        "ok":        false,
+                        "error": {
+                            "code":    ErrorCode::InvalidRef,
+                            "message": "entry has no DOI / arXiv id",
+                        },
+                    }));
+                }
+                Err(_) => {
+                    // Decode / UnsupportedFormat already drained in
+                    // Step 3; this arm is defensive against future
+                    // `ParseError` variants.
+                    parse_errors.push(json!({
+                        "entry_key": Value::Null,
+                        "ref":       Value::Null,
+                        "ok":        false,
+                        "error": {
+                            "code":    ErrorCode::InvalidRef,
+                            "message": "unhandled bibliography parse error",
+                        },
+                    }));
+                }
+            }
+        }
+
+        // Enforce the same per-call ref cap `doiget_batch_fetch` does.
+        if to_fetch.len() > MAX_BATCH_REFS {
+            return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                ErrorCode::InvalidRef,
+                &format!(
+                    "too many resolvable entries: got {}, max {} (TOO_MANY_REFS)",
+                    to_fetch.len(),
+                    MAX_BATCH_REFS
+                ),
+            )));
+        }
+
+        // Step 5: stand up the shared context + store (mirrors
+        // `doiget_batch_fetch`). A context-init failure aborts the
+        // whole call.
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                    ErrorCode::InternalError,
+                    &format!("batch-from-bibliography context init failed: {e}"),
+                )));
+            }
+        };
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                    ErrorCode::InternalError,
+                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Oa,
+            ref_: None,
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        }) {
+            return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        // Step 6: fan out via the core orchestrator. The `Vec<Ref>`
+        // alignment with `entry_keys` lets us thread per-entry keys
+        // through to the result rows below.
+        let refs: Vec<Ref> = to_fetch.iter().map(|(r, _)| r.clone()).collect();
+        let entry_keys: Vec<Option<String>> = to_fetch.iter().map(|(_, k)| k.clone()).collect();
+        let batch_outcome = core_batch_fetch(&refs, &self.profile, &ctx, &store, &store_root).await;
+
+        let session_ok = batch_outcome
+            .as_ref()
+            .map(|b| b.results.iter().all(|r| r.outcome.is_ok()))
+            .unwrap_or(false)
+            && parse_errors.is_empty();
+
+        let _ = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if session_ok {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Oa,
+            ref_: None,
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        });
+
+        // Step 7: build the per-entry success / error rows. Per-entry
+        // parse-error rows from Step 4 come FIRST (the operator
+        // reads the records top-down; surfacing the parse failures
+        // before the fetch outcomes makes "which entries do I need
+        // to fix in my library" easy to scan).
+        let envelope = match batch_outcome {
+            Ok(b) => build_bibliography_envelope(&b, &refs, &entry_keys, parse_errors),
+            Err(e) => {
+                return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                    ErrorCode::from(e),
+                    "batch-from-bibliography orchestrator failed",
+                )));
+            }
+        };
+        Ok(CallToolResult::structured(envelope))
+    }
+
     /// `doiget_info` — read the metadata for a stored entry. Read-only.
     ///
     /// Per `docs/MCP_TOOLS.md` §1 (Phase 3 baseline). Mirrors the CLI's
@@ -1855,6 +2116,129 @@ fn fetch_paper_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value {
 // doiget_batch_fetch — input schema + envelopes (Slice 2)
 // ---------------------------------------------------------------------------
 
+/// JSON-schema-derived input for `doiget_batch_from_bibliography` per
+/// ADR-0030 D6.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct BatchFromBibliographyInput {
+    /// Absolute path to a bibliography file. CSL-JSON (.json / .csl)
+    /// is supported in slice 1; BibTeX (.bib) returns a structured
+    /// "not yet implemented" error pending the biblatex-crate slice.
+    pub path: String,
+    /// Optional format override. Accepted tokens (case-insensitive):
+    /// `auto` (default — extension + content fingerprint),
+    /// `csl-json`, `bibtex`, `refs`. Anything else surfaces as
+    /// `INVALID_REF`.
+    #[serde(default)]
+    pub format: Option<String>,
+    /// `true` aborts on the first per-entry parse error (no flushed
+    /// successes); `false` (default) emits parse errors as
+    /// `{ok:false, error:{code:INVALID_REF, ...}}` rows next to
+    /// successful siblings.
+    #[serde(default)]
+    pub strict: bool,
+}
+
+/// Resolve a `--format` token to a [`doiget_core::refs::Format`]. The
+/// tokens match the wire strings `Format::as_wire` emits so the MCP
+/// input schema and the CLI flag share the same vocabulary
+/// (ADR-0030 D4).
+fn parse_bibliography_format(token: Option<&str>) -> Result<doiget_core::refs::Format, String> {
+    use doiget_core::refs::Format;
+    match token.unwrap_or("auto").to_ascii_lowercase().as_str() {
+        "auto" => Ok(Format::Auto),
+        "refs" => Ok(Format::Refs),
+        "csl-json" | "csl_json" | "cslJson" => Ok(Format::CslJson),
+        "bibtex" | "biblatex" => Ok(Format::Bibtex),
+        other => Err(format!(
+            "unknown format {:?}; accepted: auto / refs / csl-json / bibtex",
+            other
+        )),
+    }
+}
+
+/// Build the bibliography-tool envelope: a `summary` block + a
+/// `results[]` array carrying parse-error rows first, then the
+/// fetch outcomes. Each fetch row mirrors `doiget_batch_fetch`'s
+/// per-entry shape with an extra `entry_key` field.
+fn build_bibliography_envelope(
+    batch: &doiget_core::orchestrator::BatchOutcome,
+    refs: &[Ref],
+    entry_keys: &[Option<String>],
+    parse_errors: Vec<Value>,
+) -> Value {
+    let fetch_ok = batch.results.iter().filter(|r| r.outcome.is_ok()).count();
+    let fetch_err = batch.results.len() - fetch_ok;
+    let summary = json!({
+        "total":        batch.results.len() + parse_errors.len(),
+        "ok":           fetch_ok,
+        "failed":       fetch_err,
+        "parse_errors": parse_errors.len(),
+    });
+
+    let mut results: Vec<Value> = parse_errors;
+    for ((entry, ref_), key) in batch.results.iter().zip(refs.iter()).zip(entry_keys.iter()) {
+        let mut obj = match &entry.outcome {
+            Ok(outcome) => serde_json::json!({
+                "entry_key":        key,
+                "ref":              ref_.as_input_str(),
+                "ok":               true,
+                "source":           outcome.source,
+                "resolver_profile": outcome.resolver_profile,
+                "license":          outcome.license,
+                "path":             outcome.path,
+                "size_bytes":       outcome.size_bytes,
+                "schema_version":   outcome.schema_version,
+                "pdf":              pdf_leg_json(&outcome.pdf_leg),
+            }),
+            Err(err) => {
+                let code: ErrorCode = match err {
+                    FetchError::NotEligible { .. } => ErrorCode::CapabilityDenied,
+                    FetchError::NoOaAvailable => ErrorCode::NoOaAvailable,
+                    FetchError::Http(_) => ErrorCode::NetworkError,
+                    FetchError::Log(_) => ErrorCode::LogError,
+                    FetchError::InvalidRef(_) => ErrorCode::InvalidRef,
+                    FetchError::SourceSchema { .. } => ErrorCode::InternalError,
+                    FetchError::TooManyRefs { .. } => ErrorCode::InvalidRef,
+                    _ => ErrorCode::InternalError,
+                };
+                let denial: Option<DenialContext> = err.into();
+                let mut error_obj = serde_json::Map::new();
+                error_obj.insert("code".into(), json!(code));
+                error_obj.insert("message".into(), json!(err.to_string()));
+                if let Some(dc) = denial {
+                    error_obj.insert(
+                        "denial_context".into(),
+                        denial_context_to_value(&dc, "batch_from_bibliography"),
+                    );
+                } else {
+                    error_obj.insert("denial_context".into(), Value::Null);
+                }
+                json!({
+                    "entry_key": key,
+                    "ref":       ref_.as_input_str(),
+                    "ok":        false,
+                    "error":     error_obj,
+                })
+            }
+        };
+        // Drop `entry_key: null` so the wire is minimal when the
+        // source bibliography had no key (e.g. plain-refs input).
+        if let Some(map) = obj.as_object_mut() {
+            if matches!(map.get("entry_key"), Some(Value::Null)) {
+                map.remove("entry_key");
+            }
+        }
+        results.push(obj);
+    }
+
+    json!({
+        "ok": true,
+        "summary": summary,
+        "results": results,
+    })
+}
+
 /// JSON-schema-derived input for `doiget_batch_fetch`.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -2339,6 +2723,70 @@ mod tests {
         // Additive back-compat fields.
         assert_eq!(v["ok"], true);
         assert_eq!(v["tier_1"], json!(["arxiv", "crossref", "unpaywall"]));
+    }
+
+    // ---- ADR-0030 D6: doiget_batch_from_bibliography helpers ------
+
+    #[test]
+    fn parse_bibliography_format_auto_when_missing_or_empty() {
+        assert_eq!(
+            parse_bibliography_format(None).unwrap(),
+            doiget_core::refs::Format::Auto
+        );
+    }
+
+    #[test]
+    fn parse_bibliography_format_accepts_canonical_tokens() {
+        assert_eq!(
+            parse_bibliography_format(Some("auto")).unwrap(),
+            doiget_core::refs::Format::Auto
+        );
+        assert_eq!(
+            parse_bibliography_format(Some("refs")).unwrap(),
+            doiget_core::refs::Format::Refs
+        );
+        assert_eq!(
+            parse_bibliography_format(Some("csl-json")).unwrap(),
+            doiget_core::refs::Format::CslJson
+        );
+        assert_eq!(
+            parse_bibliography_format(Some("bibtex")).unwrap(),
+            doiget_core::refs::Format::Bibtex
+        );
+    }
+
+    #[test]
+    fn parse_bibliography_format_is_case_insensitive() {
+        assert_eq!(
+            parse_bibliography_format(Some("CSL-JSON")).unwrap(),
+            doiget_core::refs::Format::CslJson
+        );
+        assert_eq!(
+            parse_bibliography_format(Some("BibTeX")).unwrap(),
+            doiget_core::refs::Format::Bibtex
+        );
+    }
+
+    #[test]
+    fn parse_bibliography_format_accepts_underscore_variant() {
+        // Some MCP clients prefer underscore tokens; honor both.
+        assert_eq!(
+            parse_bibliography_format(Some("csl_json")).unwrap(),
+            doiget_core::refs::Format::CslJson
+        );
+        assert_eq!(
+            parse_bibliography_format(Some("biblatex")).unwrap(),
+            doiget_core::refs::Format::Bibtex
+        );
+    }
+
+    #[test]
+    fn parse_bibliography_format_rejects_unknown_token() {
+        let err = parse_bibliography_format(Some("rdf")).unwrap_err();
+        assert!(
+            err.contains("rdf") && err.contains("auto"),
+            "error must name the offending token AND the accepted set: {err}"
+        );
     }
 
     #[test]

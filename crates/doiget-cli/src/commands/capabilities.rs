@@ -350,6 +350,15 @@ const MCP_TOOLS: &[McpTool] = &[
         name: "doiget_csl_export",
         schema_ref: "docs/MCP_TOOLS.md#1-tool-list",
     },
+    McpTool {
+        // ADR-0030 D6: parse a CSL-JSON / (future) BibTeX file and
+        // fetch each resolvable entry; each result row carries the
+        // source bibliography's `entry_key` so a Zotero / Mendeley
+        // plugin can bridge the fetched PDF back to the originating
+        // reference.
+        name: "doiget_batch_from_bibliography",
+        schema_ref: "docs/MCP_TOOLS.md#1-tool-list",
+    },
 ];
 
 const DOCS: Docs = Docs {
@@ -958,6 +967,7 @@ mod tests {
             "doiget_expand_citation_graph",
             "doiget_bibtex_export",
             "doiget_csl_export",
+            "doiget_batch_from_bibliography",
         ]
         .into_iter()
         .collect();

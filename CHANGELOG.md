@@ -10,6 +10,49 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+<<<<<<< HEAD
+=======
+## [0.4.1-beta.13] - 2026-05-21
+
+### Added
+
+- **[mcp]** New MCP tool `doiget_batch_from_bibliography` per
+  ADR-0030 D6 — accepts an absolute `path` to a CSL-JSON file
+  (BibTeX coming in the biblatex slice), parses it via
+  `doiget_core::refs::parse_input`, and fetches every resolvable
+  entry through the existing batch orchestrator. Each result row
+  carries the source bibliography's `entry_key` so a Zotero /
+  Mendeley plugin can bridge the fetched PDF back to the originating
+  reference.
+
+  Output shape (ADR-0030 D6):
+  ```json
+  {
+    "ok": true,
+    "summary": {"total": 12, "ok": 10, "failed": 1, "parse_errors": 1},
+    "results": [
+      {"entry_key":"Foo2024","ref":"10.1234/foo","ok":true,"path":"...","license":"cc-by",...},
+      {"entry_key":"NoId2025","ref":null,"ok":false,
+       "error":{"code":"INVALID_REF","message":"entry has no DOI / arXiv id"}}
+    ]
+  }
+  ```
+
+  `strict` input field (default `false`) controls whether the FIRST
+  per-entry parse error aborts the whole call (`true`) or surfaces
+  as a row next to successful siblings (`false`). A whole-input
+  decode failure (malformed CSL-JSON) always aborts regardless of
+  `strict`.
+
+  `doiget capabilities` JSON's `mcp_tools` array gains the new
+  `doiget_batch_from_bibliography` entry; the parity test is
+  updated in lockstep so the table cannot drift from the docs.
+
+  6 new MCP unit tests cover `parse_bibliography_format`'s token
+  acceptance (auto / refs / csl-json / bibtex / case-insensitivity /
+  underscore variants / unknown-token rejection).
+
+>>>>>>> 01150e7 (feat(mcp): doiget_batch_from_bibliography MCP tool (ADR-0030 D6))
 ## [0.4.1-beta.12] - 2026-05-21
 
 ### Added
