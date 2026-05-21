@@ -10,6 +10,25 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.4.1-beta.7] - 2026-05-21
+
+### Fixed
+
+- **[core/http]** Legacy `http://` URLs returned by OpenAlex /
+  Unpaywall metadata (e.g. `http://link.aps.org/pdf/…` for older
+  APS records) are now transparently upgraded to `https://` before
+  the request leaves the process (#220, see ADR-0028 D3 — accept-
+  list, non-impersonating). Without this, the production
+  `https_only(true)` client refuses to send the request and the
+  fetch fails with a generic builder error even though the host
+  has supported HTTPS for years. The upgrade is total but
+  intentionally skipped for loopback hosts (`localhost`,
+  `127.0.0.0/8`, `::1`) so the `new_for_tests_allow_http*`
+  wiremock path is unchanged. TLS posture is preserved: if the
+  upgraded host doesn't serve HTTPS the connection fails at the
+  TLS handshake with a normal `NETWORK_ERROR`, never falling back
+  to plaintext.
+
 ## [0.4.1-beta.5] - 2026-05-21
 
 ### Added

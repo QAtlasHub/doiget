@@ -722,6 +722,27 @@ impl HttpClient {
         headers: &[(&str, &str)],
         check_pdf_magic: bool,
     ) -> Result<(Bytes, Url), HttpError> {
+        // #220: legacy OpenAlex / Unpaywall metadata sometimes contains
+        // `http://` URLs for publishers that have since moved to HTTPS
+        // (`http://link.aps.org/pdf/...` is the common case). The
+        // production client is built with `https_only(true)` and would
+        // refuse to send such a request, so today the fetch fails at
+        // the reqwest layer with a generic builder error. Upgrading the
+        // scheme to `https` before send turns the failure into a
+        // legitimate fetch in 99 %+ of academic-publisher cases (APS,
+        // IOP, SciPost, Springer, Crossref, OpenAlex all serve HTTPS
+        // for years now). The upgrade is intentionally skipped for
+        // loopback hosts so the `new_for_tests_allow_http*` wiremock
+        // path still works.
+        //
+        // TLS posture unchanged: a redirected URL is still verified by
+        // the redirect-allowlist closure on the upgraded scheme; an
+        // upgraded URL whose host doesn't serve HTTPS will fail at the
+        // TLS handshake with a normal `NETWORK_ERROR`, not an insecure
+        // fallback. See ADR-0028 D3 ("non-impersonating tweaks are
+        // accept-list").
+        let url = upgrade_http_to_https(url);
+
         let client = self
             .clients
             .get(source)
@@ -1047,6 +1068,54 @@ fn ensure_crypto_provider() {
     });
 }
 
+/// Upgrade an `http://` URL to `https://` for legacy publisher metadata
+/// (#220). Loopback hosts (`localhost`, `127.0.0.0/8`, `::1`) are
+/// returned unchanged so the `new_for_tests_allow_http*` wiremock path
+/// continues to talk plain HTTP to the local fixture server.
+///
+/// Non-`http` schemes (including `https`, `file`, anything else) are
+/// returned unchanged. The function is total: it never panics and
+/// never returns an error — if `set_scheme` somehow refuses the change
+/// the original URL is returned, and the production client's
+/// `https_only(true)` will then reject the send with a clear network
+/// error, preserving the original posture.
+fn upgrade_http_to_https(url: Url) -> Url {
+    if url.scheme() != "http" {
+        return url;
+    }
+    // Loopback skip: `Url::host()` returns a typed `Host` enum so
+    // IPv4 (127.0.0.0/8) and IPv6 (::1) loopback can be detected
+    // structurally — `host_str()`'s bracket-stripping for IPv6 is
+    // not portable to match against. The `localhost` literal is
+    // also covered (it can resolve to either family).
+    match url.host() {
+        None => {
+            // Cannot-be-base URL (e.g. `http:foo`) — `set_scheme`
+            // would reject the conversion. Leave it untouched; the
+            // downstream client will reject it.
+            return url;
+        }
+        Some(url::Host::Domain(d)) if d.eq_ignore_ascii_case("localhost") => return url,
+        Some(url::Host::Ipv4(ip)) if ip.is_loopback() => return url,
+        Some(url::Host::Ipv6(ip)) if ip.is_loopback() => return url,
+        _ => {}
+    }
+    let mut upgraded = url.clone();
+    if upgraded.set_scheme("https").is_err() {
+        // The `url` crate documents the failure modes for `set_scheme`;
+        // `http -> https` is supported because both are "special"
+        // schemes with the same syntax. The fallback exists for
+        // defence in depth.
+        return url;
+    }
+    tracing::debug!(
+        original = %url,
+        upgraded = %upgraded,
+        "upgraded http -> https for legacy publisher metadata (#220)"
+    );
+    upgraded
+}
+
 fn build_client(allowlist: SourceAllowlist) -> Result<Client, reqwest::Error> {
     ensure_crypto_provider();
 
@@ -1133,6 +1202,69 @@ mod tests {
     use super::*;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // ---------------------------------------------------------------
+    // http -> https scheme upgrade (#220) — pure unit tests, no network.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn upgrade_http_to_https_rewrites_public_http_url() {
+        let input = Url::parse("http://link.aps.org/pdf/10.1103/PhysRev.123.456").unwrap();
+        let out = upgrade_http_to_https(input.clone());
+        assert_eq!(out.scheme(), "https");
+        assert_eq!(out.host_str(), Some("link.aps.org"));
+        assert_eq!(out.path(), "/pdf/10.1103/PhysRev.123.456");
+    }
+
+    #[test]
+    fn upgrade_http_to_https_preserves_port_path_query_fragment() {
+        let input = Url::parse("http://example.org:8080/a/b?q=1#frag").unwrap();
+        let out = upgrade_http_to_https(input);
+        assert_eq!(out.as_str(), "https://example.org:8080/a/b?q=1#frag");
+    }
+
+    #[test]
+    fn upgrade_http_to_https_is_idempotent_on_https() {
+        let input = Url::parse("https://api.crossref.org/works/10.1234/foo").unwrap();
+        let out = upgrade_http_to_https(input.clone());
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn upgrade_http_to_https_skips_localhost() {
+        // wiremock binds to `127.0.0.1:PORT`; the loopback exception
+        // is the load-bearing rule that keeps `new_for_tests_allow_http*`
+        // working alongside the production fetch path.
+        let input = Url::parse("http://localhost:7878/pdf").unwrap();
+        let out = upgrade_http_to_https(input.clone());
+        assert_eq!(out, input, "localhost MUST NOT be upgraded");
+    }
+
+    #[test]
+    fn upgrade_http_to_https_skips_127_loopback_block() {
+        for host in ["127.0.0.1", "127.0.0.42", "127.255.255.254"] {
+            let raw = format!("http://{host}:1234/x");
+            let input = Url::parse(&raw).unwrap();
+            let out = upgrade_http_to_https(input.clone());
+            assert_eq!(out, input, "host `{host}` MUST NOT be upgraded");
+        }
+    }
+
+    #[test]
+    fn upgrade_http_to_https_skips_ipv6_loopback() {
+        let input = Url::parse("http://[::1]:9000/path").unwrap();
+        let out = upgrade_http_to_https(input.clone());
+        assert_eq!(out, input, "IPv6 loopback MUST NOT be upgraded");
+    }
+
+    #[test]
+    fn upgrade_http_to_https_preserves_case_in_path() {
+        // Some publishers (e.g. APS legacy redirects) use mixed-case
+        // path segments; upgrade must NOT lowercase or canonicalise.
+        let input = Url::parse("http://link.aps.org/PDF/10.1103/PhysRevB.109.045136").unwrap();
+        let out = upgrade_http_to_https(input);
+        assert_eq!(out.path(), "/PDF/10.1103/PhysRevB.109.045136");
+    }
 
     // ---------------------------------------------------------------
     // Allowlist matching — pure unit tests, no network.
