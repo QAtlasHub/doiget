@@ -1,0 +1,607 @@
+//! Bibliography input adapters per ADR-0030.
+//!
+//! Parses three input shapes into an iterator of `Ref`s with optional
+//! `entry_key` provenance back to the source bibliography:
+//!
+//! - **Plain refs**: one `doi:…` / `arxiv:…` / bare-DOI / bare-arXiv id
+//!   per line, with `#`-prefixed comments and blank lines tolerated.
+//!   The existing `doiget batch <refs.txt>` shape.
+//! - **CSL-JSON**: a JSON array of entries with `id` (citation key),
+//!   `DOI`, and optionally `archivePrefix = "arXiv"` + `eprint`
+//!   fields. Parsed via the workspace's existing `serde_json` — no
+//!   new dependency.
+//! - **BibTeX / BibLaTeX (.bib)**: deferred to a follow-up slice (the
+//!   `biblatex` crate adds cargo-vet exemption churn that is
+//!   independent of the slice 1 wire shape; users with a `.bib`
+//!   library can re-export it as CSL-JSON from Zotero today).
+//!
+//! Identifier-pick priority per ADR-0030 D3: `doi` > `arxiv` > `pmid`
+//! (PMID adapter parking until the `Ref::Pmid` variant lands in a
+//! later slice; current code carries the rule through without
+//! producing a `Pmid` ref).
+//!
+//! Parse-error policy per ADR-0030 D5: a single entry's failure is
+//! captured per-entry and does NOT abort the whole batch. The caller
+//! decides whether to skip-and-warn (default) or fail-closed
+//! (`--strict`).
+
+use camino::Utf8Path;
+use thiserror::Error;
+
+use crate::{Ref, RefParseError};
+
+/// One successfully-parsed bibliography entry.
+///
+/// `entry_key` echoes the source bibliography's citation key
+/// (BibTeX `@article{KEY,…}` / CSL-JSON `"id"`) so downstream
+/// automation can bridge the fetch outcome back to the originating
+/// reference — the load-bearing field for the Zotero / Mendeley
+/// "attach fetched PDF to this reference" workflow per ADR-0030 §6.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ParsedEntry {
+    /// The identifier the adapter chose for this entry (`Ref::Doi` /
+    /// `Ref::Arxiv`).
+    pub ref_: Ref,
+    /// The source bibliography's citation key, when one is available.
+    /// `None` for plain-refs input (no key concept) and for any
+    /// future input shape that lacks per-entry keys.
+    pub entry_key: Option<String>,
+}
+
+/// Why a single bibliography entry failed to produce a `Ref`.
+///
+/// Closed-enum so the failure-class can be exposed at the
+/// `docs/ERRORS.md` §3 INVALID_REF surface without leaking parser
+/// internals.
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ParseError {
+    /// The line did not contain a `doi:` / `arxiv:` / bare-DOI /
+    /// bare-arXiv id — empty (after trimming) or just a comment.
+    /// Plain-refs path filters these out silently; CSL-JSON path
+    /// emits this when an entry has no resolvable identifier.
+    #[error("entry has no DOI / arXiv id (entry_key={entry_key:?})")]
+    NoIdentifier {
+        /// The source bibliography's citation key, when known.
+        entry_key: Option<String>,
+    },
+    /// The identifier was present but `Ref::parse` rejected it
+    /// (malformed DOI suffix, invalid arXiv id shape, etc.).
+    #[error(
+        "entry identifier {raw:?} did not parse as a Ref \
+         (entry_key={entry_key:?}): {source}"
+    )]
+    InvalidRef {
+        /// The raw identifier string the parser saw.
+        raw: String,
+        /// The source bibliography's citation key, when known.
+        entry_key: Option<String>,
+        /// The structured `Ref::parse` failure.
+        #[source]
+        source: RefParseError,
+    },
+    /// The whole input did not deserialise — CSL-JSON that is not a
+    /// JSON array, top-level malformed JSON, etc. This is a
+    /// whole-input failure, not a per-entry failure; callers receive
+    /// it as the sole `Err` element of the result iterator.
+    #[error("input did not deserialise as {format}: {message}")]
+    Decode {
+        /// Which parser branch produced the failure (`"csl-json"`).
+        format: &'static str,
+        /// `serde_json::Error::to_string()`.
+        message: String,
+    },
+    /// Format requested or detected, but the parser for that format is
+    /// not yet shipped. Today this is the `.bib` / BibLaTeX path —
+    /// users should re-export their library as CSL-JSON from Zotero
+    /// until slice 2 ships.
+    #[error(
+        "{format} parsing is not yet implemented — \
+         re-export as CSL-JSON from your reference manager, \
+         or wait for the BibLaTeX slice (ADR-0030 D2 follow-up)"
+    )]
+    UnsupportedFormat {
+        /// The format token (`"bibtex"`).
+        format: &'static str,
+    },
+}
+
+/// Input-shape discriminator per ADR-0030 D4.
+///
+/// `Auto` means "detect from path extension and/or content
+/// fingerprint"; the explicit variants name a parser directly and
+/// skip detection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Format {
+    /// Detect from file extension if a path was supplied, else from
+    /// content fingerprint; fall through to [`Format::Refs`].
+    Auto,
+    /// Plain refs — one identifier per line, `#` comments, blanks.
+    Refs,
+    /// CSL-JSON array per <https://citationstyles.org/>.
+    CslJson,
+    /// BibTeX / BibLaTeX. Currently unsupported — parser ships in a
+    /// follow-up slice.
+    Bibtex,
+}
+
+impl Format {
+    /// Wire token used by the CLI `--format` flag and the MCP tool
+    /// input schema's `format` field per ADR-0030 §6.
+    pub fn as_wire(&self) -> &'static str {
+        match self {
+            Format::Auto => "auto",
+            Format::Refs => "refs",
+            Format::CslJson => "csl-json",
+            Format::Bibtex => "bibtex",
+        }
+    }
+}
+
+/// Detect the input format per ADR-0030 D4.
+///
+/// Precedence: file extension first (when `path` is `Some`), then
+/// content fingerprint, then fallback to [`Format::Refs`]. The
+/// caller's explicit `--format` flag should short-circuit this
+/// function — it is the slowest of the three precedence rules in the
+/// ADR.
+pub fn detect_format(path: Option<&Utf8Path>, content: &str) -> Format {
+    if let Some(p) = path {
+        let ext = p.extension().unwrap_or_default().to_ascii_lowercase();
+        match ext.as_str() {
+            "bib" | "biblatex" => return Format::Bibtex,
+            "json" | "csl" => return Format::CslJson,
+            _ => {}
+        }
+    }
+    // Content fingerprint: peek the first non-blank, non-comment line.
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.starts_with('@') {
+            return Format::Bibtex;
+        }
+        if trimmed.starts_with('[') || trimmed.starts_with('{') {
+            return Format::CslJson;
+        }
+        break;
+    }
+    Format::Refs
+}
+
+/// Parse `text` per `format`, dispatching to the matching shape
+/// parser. `path` is consulted only when `format == Format::Auto` to
+/// drive [`detect_format`].
+///
+/// Returns one element per discovered entry — `Ok` for entries that
+/// produced a `Ref`, `Err` for per-entry failures the caller should
+/// surface as a JSONL `INVALID_REF` line. A whole-input decode
+/// failure ([`ParseError::Decode`]) is returned as a single-element
+/// `Err` so the caller's exit-code path treats it as one parse error
+/// rather than zero.
+pub fn parse_input(
+    text: &str,
+    format: Format,
+    path: Option<&Utf8Path>,
+) -> Vec<Result<ParsedEntry, ParseError>> {
+    let resolved = match format {
+        Format::Auto => detect_format(path, text),
+        other => other,
+    };
+    match resolved {
+        Format::Refs | Format::Auto => parse_plain_refs(text),
+        Format::CslJson => parse_csl_json(text),
+        Format::Bibtex => vec![Err(ParseError::UnsupportedFormat { format: "bibtex" })],
+    }
+}
+
+/// Parse plain refs — the existing batch input format. One ref per
+/// non-blank, non-comment line. `entry_key` is always `None` for this
+/// shape; plain refs have no citation-key concept.
+pub fn parse_plain_refs(text: &str) -> Vec<Result<ParsedEntry, ParseError>> {
+    let mut out = Vec::new();
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        out.push(match Ref::parse(line) {
+            Ok(ref_) => Ok(ParsedEntry {
+                ref_,
+                entry_key: None,
+            }),
+            Err(e) => Err(ParseError::InvalidRef {
+                raw: line.to_string(),
+                entry_key: None,
+                source: e,
+            }),
+        });
+    }
+    out
+}
+
+/// Parse a CSL-JSON document — a JSON array of objects, each with at
+/// least an `id` (citation key) and one of `DOI`, or `archivePrefix`
+/// + `eprint` (arXiv).
+///
+/// Identifier-pick priority per ADR-0030 D3:
+///
+/// 1. `DOI` field (case-sensitive per the CSL-JSON spec but Zotero
+///    sometimes emits `doi` lowercase — we accept both).
+/// 2. `archivePrefix == "arXiv"` (case-insensitive) + `eprint`
+///    (or `note: "arXiv:..."` shape Zotero emits).
+/// 3. (PMID parking — `Ref::Pmid` not yet defined; PMIDs in CSL-JSON
+///    are recorded as parse failures with `NoIdentifier` until the
+///    variant lands.)
+///
+/// `entry_key` is the `id` field verbatim.
+pub fn parse_csl_json(text: &str) -> Vec<Result<ParsedEntry, ParseError>> {
+    let parsed: serde_json::Result<Vec<serde_json::Value>> = serde_json::from_str(text);
+    let entries = match parsed {
+        Ok(arr) => arr,
+        Err(e) => {
+            return vec![Err(ParseError::Decode {
+                format: "csl-json",
+                message: e.to_string(),
+            })]
+        }
+    };
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        // `id` is usually a string in real-world Zotero exports but
+        // the spec allows numeric ids too — stringify either form so
+        // the operator can find the entry in their library.
+        let entry_key = entry.get("id").and_then(|v| {
+            if let Some(s) = v.as_str() {
+                Some(s.to_string())
+            } else if v.is_number() {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        });
+        out.push(parse_csl_entry(&entry, entry_key));
+    }
+    out
+}
+
+/// Pick the highest-priority identifier on a single CSL-JSON entry
+/// and parse it. Honors ADR-0030 D3 priority.
+fn parse_csl_entry(
+    entry: &serde_json::Value,
+    entry_key: Option<String>,
+) -> Result<ParsedEntry, ParseError> {
+    // Priority 1: DOI (both `DOI` per spec and `doi` lowercase per
+    // real-world exports). Zotero emits uppercase; Mendeley sometimes
+    // lowercase.
+    if let Some(doi) = entry
+        .get("DOI")
+        .or_else(|| entry.get("doi"))
+        .and_then(|v| v.as_str())
+    {
+        let raw = doi.trim();
+        if !raw.is_empty() {
+            return match Ref::parse(raw) {
+                Ok(ref_) => Ok(ParsedEntry { ref_, entry_key }),
+                Err(e) => Err(ParseError::InvalidRef {
+                    raw: raw.to_string(),
+                    entry_key,
+                    source: e,
+                }),
+            };
+        }
+    }
+    // Priority 2: arXiv — `archivePrefix == "arXiv"` (CSL extension)
+    // OR the Zotero-specific `note: "arXiv:..."` shape.
+    let is_arxiv = entry
+        .get("archivePrefix")
+        .or_else(|| entry.get("archive_prefix"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.eq_ignore_ascii_case("arxiv"))
+        .unwrap_or(false);
+    if is_arxiv {
+        if let Some(eprint) = entry.get("eprint").and_then(|v| v.as_str()) {
+            let raw = eprint.trim();
+            if !raw.is_empty() {
+                let with_scheme = if raw.to_ascii_lowercase().starts_with("arxiv:") {
+                    raw.to_string()
+                } else {
+                    format!("arxiv:{raw}")
+                };
+                return match Ref::parse(&with_scheme) {
+                    Ok(ref_) => Ok(ParsedEntry { ref_, entry_key }),
+                    Err(e) => Err(ParseError::InvalidRef {
+                        raw: with_scheme,
+                        entry_key,
+                        source: e,
+                    }),
+                };
+            }
+        }
+    }
+    // Fallback: scan `note` for an embedded `arXiv:NNNN.NNNNN` —
+    // Zotero often stores the arXiv id there instead of a typed
+    // field. The pattern is intentionally narrow (must follow the
+    // canonical "arXiv:" prefix); free-text DOIs in notes are NOT
+    // mined here.
+    if let Some(note) = entry.get("note").and_then(|v| v.as_str()) {
+        if let Some(idx) = note.to_ascii_lowercase().find("arxiv:") {
+            let tail = &note[idx + "arxiv:".len()..];
+            // Take chars matching the arXiv id alphabet (digits / dot /
+            // slash / letters / hyphen) — stop at the first separator
+            // so the rest of the note is ignored.
+            let id: String = tail
+                .chars()
+                .take_while(|c| matches!(c, '0'..='9' | '.' | '/' | 'a'..='z' | 'A'..='Z' | '-'))
+                .collect();
+            if !id.is_empty() {
+                let with_scheme = format!("arxiv:{id}");
+                return match Ref::parse(&with_scheme) {
+                    Ok(ref_) => Ok(ParsedEntry { ref_, entry_key }),
+                    Err(e) => Err(ParseError::InvalidRef {
+                        raw: with_scheme,
+                        entry_key,
+                        source: e,
+                    }),
+                };
+            }
+        }
+    }
+    Err(ParseError::NoIdentifier { entry_key })
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    // ---- detect_format ---------------------------------------------
+
+    #[test]
+    fn detect_by_bib_extension() {
+        let p = Utf8Path::new("/tmp/library.bib");
+        assert_eq!(detect_format(Some(p), ""), Format::Bibtex);
+    }
+
+    #[test]
+    fn detect_by_json_extension() {
+        let p = Utf8Path::new("/tmp/library.json");
+        assert_eq!(detect_format(Some(p), ""), Format::CslJson);
+    }
+
+    #[test]
+    fn detect_by_csl_extension() {
+        let p = Utf8Path::new("/tmp/library.csl");
+        assert_eq!(detect_format(Some(p), ""), Format::CslJson);
+    }
+
+    #[test]
+    fn detect_by_fingerprint_bibtex_at_sign() {
+        let body = "# comment\n\n@article{foo,\n  doi = {10.1/x}\n}\n";
+        assert_eq!(detect_format(None, body), Format::Bibtex);
+    }
+
+    #[test]
+    fn detect_by_fingerprint_csl_json_array() {
+        let body = "[{\"id\":\"foo\",\"DOI\":\"10.1/x\"}]";
+        assert_eq!(detect_format(None, body), Format::CslJson);
+    }
+
+    #[test]
+    fn detect_by_fingerprint_falls_through_to_refs() {
+        let body = "doi:10.1234/foo\narxiv:2401.12345\n";
+        assert_eq!(detect_format(None, body), Format::Refs);
+    }
+
+    // ---- plain refs ------------------------------------------------
+
+    #[test]
+    fn plain_refs_parses_mix_with_comments_and_blanks() {
+        let body = "\
+# header comment
+doi:10.1234/foo
+
+   arxiv:2401.12345
+# trailing comment
+";
+        let parsed = parse_plain_refs(body);
+        assert_eq!(parsed.len(), 2);
+        let okays: Vec<_> = parsed.into_iter().filter_map(Result::ok).collect();
+        assert!(matches!(okays[0].ref_, Ref::Doi(_)));
+        assert!(matches!(okays[1].ref_, Ref::Arxiv(_)));
+        assert!(okays.iter().all(|e| e.entry_key.is_none()));
+    }
+
+    #[test]
+    fn plain_refs_surface_per_line_invalid_refs() {
+        let body = "doi:10.1234/foo\nnot-a-ref\narxiv:2401.12345\n";
+        let parsed = parse_plain_refs(body);
+        assert_eq!(parsed.len(), 3);
+        assert!(parsed[0].is_ok());
+        assert!(matches!(parsed[1], Err(ParseError::InvalidRef { .. })));
+        assert!(parsed[2].is_ok());
+    }
+
+    // ---- CSL-JSON --------------------------------------------------
+
+    #[test]
+    fn csl_json_picks_doi_when_present() {
+        let body = r#"[{"id":"foo2024","DOI":"10.1234/foo"}]"#;
+        let parsed = parse_csl_json(body);
+        assert_eq!(parsed.len(), 1);
+        let entry = parsed.into_iter().next().unwrap().expect("entry parses");
+        assert!(matches!(entry.ref_, Ref::Doi(_)));
+        assert_eq!(entry.entry_key.as_deref(), Some("foo2024"));
+    }
+
+    #[test]
+    fn csl_json_accepts_lowercase_doi_field() {
+        // Mendeley exports sometimes lowercase the field name.
+        let body = r#"[{"id":"x","doi":"10.5555/bar"}]"#;
+        let parsed = parse_csl_json(body);
+        let entry = parsed.into_iter().next().unwrap().expect("entry parses");
+        assert!(matches!(entry.ref_, Ref::Doi(_)));
+    }
+
+    #[test]
+    fn csl_json_picks_arxiv_via_archive_prefix_and_eprint() {
+        let body = r#"[{"id":"arx","archivePrefix":"arXiv","eprint":"2401.12345"}]"#;
+        let parsed = parse_csl_json(body);
+        let entry = parsed.into_iter().next().unwrap().expect("entry parses");
+        assert!(matches!(entry.ref_, Ref::Arxiv(_)));
+    }
+
+    #[test]
+    fn csl_json_arxiv_archive_prefix_is_case_insensitive() {
+        let body = r#"[{"id":"arx","archivePrefix":"ARXIV","eprint":"2401.12345"}]"#;
+        let parsed = parse_csl_json(body);
+        let entry = parsed.into_iter().next().unwrap().expect("entry parses");
+        assert!(matches!(entry.ref_, Ref::Arxiv(_)));
+    }
+
+    #[test]
+    fn csl_json_doi_beats_arxiv_when_both_present() {
+        // ADR-0030 D3: priority is DOI > arXiv > PMID.
+        let body = r#"[{
+            "id":"both",
+            "DOI":"10.1234/foo",
+            "archivePrefix":"arXiv",
+            "eprint":"2401.12345"
+        }]"#;
+        let parsed = parse_csl_json(body);
+        let entry = parsed.into_iter().next().unwrap().expect("entry parses");
+        assert!(matches!(entry.ref_, Ref::Doi(_)));
+    }
+
+    #[test]
+    fn csl_json_arxiv_from_note_field() {
+        // Zotero often dumps "arXiv:NNNN.NNNNN" into the note field
+        // instead of a typed field.
+        let body = r#"[{"id":"znote","note":"Comment: 12 pages. arXiv:2401.12345"}]"#;
+        let parsed = parse_csl_json(body);
+        let entry = parsed.into_iter().next().unwrap().expect("entry parses");
+        assert!(matches!(entry.ref_, Ref::Arxiv(_)));
+    }
+
+    #[test]
+    fn csl_json_entry_without_any_identifier_yields_no_identifier_error() {
+        let body = r#"[{"id":"empty","title":"no ids here"}]"#;
+        let parsed = parse_csl_json(body);
+        assert!(matches!(
+            parsed.into_iter().next().unwrap(),
+            Err(ParseError::NoIdentifier { .. })
+        ));
+    }
+
+    #[test]
+    fn csl_json_invalid_doi_surface_as_invalid_ref_per_entry() {
+        let body = r#"[{"id":"bad","DOI":"not-a-doi"}]"#;
+        let parsed = parse_csl_json(body);
+        match &parsed[0] {
+            Err(ParseError::InvalidRef { raw, entry_key, .. }) => {
+                assert_eq!(raw, "not-a-doi");
+                assert_eq!(entry_key.as_deref(), Some("bad"));
+            }
+            other => panic!("expected InvalidRef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn csl_json_top_level_malformed_yields_single_decode_error() {
+        let body = "{this is not JSON}";
+        let parsed = parse_csl_json(body);
+        assert_eq!(parsed.len(), 1);
+        assert!(matches!(
+            parsed[0],
+            Err(ParseError::Decode {
+                format: "csl-json",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn csl_json_non_array_top_level_yields_decode_error() {
+        // A single-entry object (not an array) is not a valid CSL-JSON
+        // document by the spec — the top level MUST be an array even
+        // for a single entry.
+        let body = r#"{"id":"x","DOI":"10.1/x"}"#;
+        let parsed = parse_csl_json(body);
+        assert!(matches!(
+            parsed[0],
+            Err(ParseError::Decode {
+                format: "csl-json",
+                ..
+            })
+        ));
+    }
+
+    // ---- parse_input dispatch -------------------------------------
+
+    #[test]
+    fn parse_input_auto_dispatches_csl_json_by_content() {
+        let body = r#"[{"id":"foo","DOI":"10.1234/foo"}]"#;
+        let parsed = parse_input(body, Format::Auto, None);
+        assert_eq!(parsed.len(), 1);
+        assert!(matches!(
+            parsed[0],
+            Ok(ParsedEntry {
+                ref_: Ref::Doi(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parse_input_auto_dispatches_refs_by_content() {
+        let body = "doi:10.1234/foo\n";
+        let parsed = parse_input(body, Format::Auto, None);
+        assert_eq!(parsed.len(), 1);
+        assert!(matches!(
+            parsed[0],
+            Ok(ParsedEntry {
+                ref_: Ref::Doi(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parse_input_bibtex_returns_unsupported_format_error() {
+        let body = "@article{foo, doi={10.1234/x}}";
+        let parsed = parse_input(body, Format::Bibtex, None);
+        assert_eq!(parsed.len(), 1);
+        assert!(matches!(
+            parsed[0],
+            Err(ParseError::UnsupportedFormat { format: "bibtex" })
+        ));
+    }
+
+    #[test]
+    fn parse_input_auto_with_path_uses_extension() {
+        let body = "[]";
+        let parsed = parse_input(body, Format::Auto, Some(Utf8Path::new("foo.csl")));
+        assert_eq!(
+            parsed.len(),
+            0,
+            "empty array yields zero entries: {parsed:?}"
+        );
+    }
+
+    // ---- Format::as_wire ------------------------------------------
+
+    #[test]
+    fn format_wire_strings_are_stable() {
+        // Pinned because the strings appear in the CLI --format flag,
+        // the MCP tool input schema, and the JSON-Lines parse-error
+        // records (ADR-0030 §6). A drift would be a wire-format break.
+        assert_eq!(Format::Auto.as_wire(), "auto");
+        assert_eq!(Format::Refs.as_wire(), "refs");
+        assert_eq!(Format::CslJson.as_wire(), "csl-json");
+        assert_eq!(Format::Bibtex.as_wire(), "bibtex");
+    }
+}

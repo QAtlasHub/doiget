@@ -100,10 +100,16 @@ fn batch_json_fetch_failure_emits_fetch_error_jsonl() {
     assert_eq!(lines.len(), 1, "exactly one JSONL record, got: {stdout}");
     let v: Value = serde_json::from_str(lines[0]).expect("line parses as JSON");
     assert_eq!(v["ok"], Value::Bool(false));
-    assert_eq!(v["ref"], "arxiv:2401.99999");
-    // #210: the typed `FetchError → ErrorCode` mapping now surfaces the
-    // closed-set wire code (`NETWORK_ERROR` for a transport-layer
-    // connect-refused) instead of the previous generic `FETCH_ERROR`.
+    // ADR-0030 + #210: the batch input now goes through
+    // `refs::parse_input` → `Ref::as_input_str()`, which returns the
+    // bare identifier per docs/PROVENANCE_LOG.md §3 (no `arxiv:` URI
+    // scheme — that prefix is stripped at parse time). The
+    // pre-ADR-0030 pipeline echoed the raw file line verbatim.
+    assert_eq!(v["ref"], "2401.99999");
+    // #210: the typed `FetchError → ErrorCode` mapping now surfaces
+    // the closed-set wire code (`NETWORK_ERROR` for a transport-
+    // layer connect-refused) instead of the previous generic
+    // `FETCH_ERROR`.
     assert_eq!(
         v["error"]["code"], "NETWORK_ERROR",
         "connect-refused at the transport layer MUST surface as NETWORK_ERROR"
@@ -157,7 +163,9 @@ async fn batch_json_success_emits_structured_result_record() {
 
     let v: Value = serde_json::from_str(lines[0]).expect("line parses as JSON");
     assert_eq!(v["ok"], Value::Bool(true));
-    assert_eq!(v["ref"], "arxiv:2401.12345");
+    // ADR-0030: ref is the canonical bare identifier
+    // (`Ref::as_input_str`), not the raw input line.
+    assert_eq!(v["ref"], "2401.12345");
     let result = v.get("result").expect("success record carries `result`");
     assert!(
         result["safekey"]
@@ -186,6 +194,90 @@ async fn batch_json_success_emits_structured_result_record() {
             .chars()
             .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
         "canonical_digest MUST be lowercase hex only: got {digest:?}"
+    );
+}
+
+/// ADR-0030 slice 1: `doiget batch library.json` reads a CSL-JSON
+/// export from a reference manager (Zotero / Mendeley) and walks the
+/// resulting Refs through the same per-entry pipeline as plain refs.
+///
+/// This test seeds a 2-entry CSL-JSON file with one valid DOI and one
+/// `archivePrefix=arXiv` entry, points the arxiv resolver at a closed
+/// loopback (no actual fetch — the goal here is purely to verify the
+/// adapter integration produces two JSONL lines, not to exercise the
+/// orchestrator twice). Both entries surface as JSONL records with
+/// the correct `ref` field, confirming the CSL-JSON parser landed
+/// upstream of the fetch pipeline.
+#[test]
+fn batch_json_csl_input_yields_one_record_per_entry() {
+    let dir = TempDir::new().expect("tempdir");
+    let lib = dir.path().join("library.json");
+    let body = r#"[
+        {"id":"FooDOI","DOI":"10.1234/foo"},
+        {"id":"BarArxiv","archivePrefix":"arXiv","eprint":"2401.12345"}
+    ]"#;
+    std::fs::File::create(&lib)
+        .expect("create library.json")
+        .write_all(body.as_bytes())
+        .expect("write library");
+
+    let output = doiget(&dir)
+        // Closed port → every fetch fails fast; the test cares about
+        // record count + per-record `ref` strings, not about success.
+        .env("DOIGET_ARXIV_BASE", "http://127.0.0.1:1/")
+        .env("DOIGET_CROSSREF_BASE", "http://127.0.0.1:1/")
+        .env("DOIGET_UNPAYWALL_BASE", "http://127.0.0.1:1/")
+        .args(["--json", "batch", lib.to_str().unwrap()])
+        .assert()
+        .failure() // every fetch fails → exit > 0
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).expect("stdout utf-8");
+    let lines: Vec<&str> = stdout.lines().filter(|s| !s.trim().is_empty()).collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "expected one JSONL record per CSL-JSON entry, got: {stdout}"
+    );
+    let refs: Vec<String> = lines
+        .iter()
+        .map(|l| {
+            let v: Value = serde_json::from_str(l).expect("line parses as JSON");
+            v["ref"].as_str().expect("ref is string").to_string()
+        })
+        .collect();
+    assert!(
+        refs.iter().any(|r| r.contains("10.1234/foo")),
+        "DOI entry must appear: {refs:?}"
+    );
+    assert!(
+        refs.iter().any(|r| r.contains("2401.12345")),
+        "arXiv entry must appear: {refs:?}"
+    );
+}
+
+/// ADR-0030 slice 1: a malformed CSL-JSON document is surfaced as a
+/// loud whole-input parse error before any fetch runs, not silently
+/// treated as an empty batch.
+#[test]
+fn batch_malformed_csl_json_aborts_with_decode_error() {
+    let dir = TempDir::new().expect("tempdir");
+    let lib = dir.path().join("library.json");
+    std::fs::File::create(&lib)
+        .expect("create library.json")
+        .write_all(b"{this is not JSON}")
+        .expect("write library");
+
+    let assert_result = doiget(&dir)
+        .args(["batch", lib.to_str().unwrap()])
+        .assert()
+        .failure();
+    let stderr =
+        String::from_utf8(assert_result.get_output().stderr.clone()).expect("stderr utf-8");
+    assert!(
+        stderr.contains("csl-json") && stderr.to_lowercase().contains("deserialise"),
+        "stderr must name the failed format + 'deserialise' verb: {stderr:?}"
     );
 }
 

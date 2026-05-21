@@ -10,6 +10,62 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.4.1-beta.11] - 2026-05-21
+
+### Added
+
+- **[core]** New `doiget_core::refs` module per ADR-0030 slice 1 —
+  bibliography input adapters. Exposes
+  `Format { Auto, Refs, CslJson, Bibtex }`,
+  `ParsedEntry { ref_, entry_key }`,
+  `ParseError { NoIdentifier, InvalidRef, Decode,
+  UnsupportedFormat }` (closed-enum, `#[non_exhaustive]`), and
+  `parse_input(text, format, path) -> Vec<Result<ParsedEntry,
+  ParseError>>` plus per-format helpers. Honors the ADR-0030 D3
+  identifier-pick priority: `DOI` > arXiv (`archivePrefix == "arXiv"`
+  + `eprint`, or `note: "arXiv:…"`) > (PMID parking). 23 unit tests
+  cover format detection, all parser branches, the priority rule,
+  case-insensitive field matching, and Zotero / Mendeley wire shape
+  quirks.
+
+- **[cli]** `doiget batch library.json` accepts a CSL-JSON export
+  directly. The format is auto-detected from the path extension
+  (`.json` / `.csl`) and the file's leading non-comment character;
+  callers writing plain refs files (`.txt`) keep working with no
+  change. A malformed CSL-JSON document aborts the batch with a
+  loud whole-input error rather than silently behaving as an empty
+  batch. New e2e tests
+  `batch_json_csl_input_yields_one_record_per_entry` and
+  `batch_malformed_csl_json_aborts_with_decode_error`.
+
+### Changed
+
+- **[cli]** `batch` JSONL `ref` field is now the bare identifier per
+  `docs/PROVENANCE_LOG.md` §3 — `Ref::as_input_str()`'s canonical
+  form — rather than the raw file line. For an input line
+  `arxiv:2401.99999`, the failure record's `ref` is now
+  `"2401.99999"` (no URI scheme). DOI inputs were already in this
+  form. Wire-format-visible: CI consumers parsing the `ref` field
+  should switch from "string match input line" to "regex / parse as
+  DOI or arXiv id". Surfaced because the new `refs::parse_input`
+  pipeline normalises every entry through `Ref::parse` before
+  emitting; the pre-ADR-0030 flow echoed raw lines verbatim.
+
+### Notes
+
+- Out of scope for slice 1 (deferred to follow-up slices):
+  - BibTeX / `.bib` parsing — requires the `biblatex` crate
+    (+500 KB) and its cargo-vet transitive exemptions. Until that
+    ships, `Format::Bibtex` returns `ParseError::UnsupportedFormat`
+    with a helpful "re-export as CSL-JSON" hint, and `.bib` file
+    extensions surface that error on the first batch invocation.
+  - `--format` / `--strict` CLI flags.
+  - New MCP tool `doiget_batch_from_bibliography`.
+  - Plumbing `entry_key` into the JSONL `error` object as a typed
+    field (today the citation key is embedded in placeholder
+    `<no-identifier:KEY>` strings that the existing JSONL `ref`
+    surfaces verbatim).
+
 ## [0.4.1-beta.10] - 2026-05-21
 
 ### Added
