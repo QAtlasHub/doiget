@@ -128,6 +128,7 @@ pub struct UserExtensionHost {
 impl UserExtensionHost {
     /// Test-only constructor. Production callers go through [`load`].
     #[cfg(test)]
+    #[allow(clippy::expect_used)]
     pub(crate) fn for_test(host: &str) -> Self {
         Self {
             host: HostPattern::new(host).expect("test host must be valid"),
@@ -473,8 +474,14 @@ mod tests {
 
     #[test]
     fn validate_pattern_rejects_whitespace() {
-        assert_eq!(validate_pattern("  example.org"), Err(PatternError::Whitespace));
-        assert_eq!(validate_pattern("example.org  "), Err(PatternError::Whitespace));
+        assert_eq!(
+            validate_pattern("  example.org"),
+            Err(PatternError::Whitespace)
+        );
+        assert_eq!(
+            validate_pattern("example.org  "),
+            Err(PatternError::Whitespace)
+        );
     }
 
     #[test]
@@ -613,12 +620,15 @@ mod tests {
     #[test]
     fn parse_rejects_unknown_field_inside_additional_hosts_entry() {
         // The [[network.additional_hosts]] table itself uses
-        // deny_unknown_fields, so typos like `hsot = "..."` surface
-        // as a parse error (review pass I5).
+        // deny_unknown_fields, so typos and stray keys surface as a
+        // parse error (review pass I5). The unknown-key string is
+        // chosen so the typos lint doesn't fight us — `notez`
+        // doesn't trip any English-word dictionary while still
+        // exercising the deny_unknown_fields code path.
         let toml = r#"
             [[network.additional_hosts]]
             host = "ruj.uj.edu.pl"
-            commet = "typo"
+            notez = "typo"
         "#;
         let err = parse_str(toml, p("config.toml")).expect_err("typo must fail");
         assert!(matches!(err, UserExtensionError::Parse { .. }));
@@ -691,11 +701,8 @@ mod tests {
 
     #[test]
     fn parse_rejects_malformed_toml() {
-        let err = parse_str(
-            "[[network.additional_hosts\nhost=\"foo\"",
-            p("config.toml"),
-        )
-        .expect_err("malformed toml must error");
+        let err = parse_str("[[network.additional_hosts\nhost=\"foo\"", p("config.toml"))
+            .expect_err("malformed toml must error");
         assert!(matches!(err, UserExtensionError::Parse { .. }));
     }
 
@@ -704,9 +711,7 @@ mod tests {
     #[test]
     fn load_returns_empty_when_file_missing() {
         let td = tempfile::TempDir::new().unwrap();
-        let path = Utf8Path::from_path(td.path())
-            .unwrap()
-            .join("missing.toml");
+        let path = Utf8Path::from_path(td.path()).unwrap().join("missing.toml");
         let got = load(&path).expect("missing file MUST be Ok(empty)");
         assert_eq!(got, vec![]);
     }
