@@ -10,6 +10,84 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.4.1-beta.9] - 2026-05-21
+
+### Added
+
+- **[core]** `FetchPaperOutcome` (`doiget_core::orchestrator`) gains
+  two new fields: `safekey: String` and `canonical_digest: String`
+  (#210). Both are always populated — `safekey` from the input ref
+  (`Ref::safekey().as_str()`), `canonical_digest` from
+  `CanonicalRef::digest_hex()` under the outcome's
+  `resolver_profile`. Additive on a `#[non_exhaustive]` struct, so
+  downstream consumers continue to compile without changes.
+
+- **[cli]** `doiget batch --json` JSONL records carry the full
+  structured outcome per `docs/ERRORS.md` §3 (#210):
+  - **Success**: `{"ok":true,"ref":"...","result":{"safekey":"...","store_path":"...","canonical_digest":"..."}}`.
+    A CI consumer can now pull `safekey` to construct a store-relative
+    path and `canonical_digest` to deduplicate against an audit DB
+    without a follow-up `info` round-trip per ref.
+  - **Failure**: `{"ok":false,"ref":"...","error":{"code":"...","message":"...","denial_context":{...}}}`.
+    The `code` field is now the typed `ErrorCode` wire string (e.g.
+    `CAPABILITY_DENIED` / `NETWORK_ERROR` / `INTERNAL_ERROR`) — the
+    previous generic `FETCH_ERROR` only survives in the JoinSet
+    panic arm where no underlying `FetchError` exists. The
+    `denial_context` key is present only when the failure carries a
+    structured ADR-0023 denial; bare transport / config errors omit
+    the key entirely so consumers can use its presence as a typed-
+    denial discriminator.
+
+  A `PdfLegStatus::Blocked` outcome (an OA PDF was discovered but
+  could not be retrieved per #145) is now surfaced as a failure
+  record with the policy-class `denial_context`, rather than being
+  collapsed into the bare `{ok:true, ref}` shape that #205 left in
+  place. The `effective_blocked_code` reclassification (off-allowlist
+  / insecure-scheme / blocklisted-host → `CAPABILITY_DENIED`) is
+  shared between single-fetch and batch, so the wire code matches the
+  single-fetch CLI exit-code mapping.
+
+### Changed
+
+- **[cli]** `FetchHarness::fetch_one` signature changes from
+  `async fn (..., &Ref) -> anyhow::Result<()>` to
+  `async fn (..., &Ref) -> Result<FetchPaperOutcome, FetchError>`
+  (#210). The rendering + exit-code synthesis that used to live
+  inside `fetch_one` (Blocked-PDF reclassification, `error[CODE]:`
+  stderr, `CliExit` construction) now lives in the per-caller paths
+  (`commands::fetch::run_with_options` for single-fetch,
+  `commands::batch::classify_joined` for batch) so each surface can
+  emit its own machine-readable shape from the same typed outcome.
+  `pub(crate)`, not a public API.
+
+  - `commands::fetch::effective_blocked_code` is lifted from `fn` to
+    `pub(crate) fn` so the batch caller shares the single-fetch
+    reclassification rule.
+  - New `commands::fetch::outcome_is_clean_success` helper collapses
+    the typed `Result<FetchPaperOutcome, FetchError>` to the boolean
+    the `SessionEnd` row's `is_ok` field needs, so a Blocked PDF leg
+    never reads as a green session in the provenance log.
+
+- **[core]** New `#[doc(hidden)] pub fn FetchPaperOutcome::for_test_synthetic(...)`
+  test-only constructor in `doiget_core::orchestrator` so downstream
+  test code (`doiget-cli` batch unit tests) can drive
+  classification logic without running the full orchestrator. Not a
+  stable public API — the signature may change to fit test needs
+  without a `[BREAKING]` callout.
+
+### Notes
+
+- Out of scope (deferred to follow-up issues per #210's Out-of-scope
+  list):
+  - The MCP `doiget_fetch_paper` envelope upgrade to surface
+    `safekey` / `canonical_digest` (the FetchPaperOutcome fields
+    are populated; the envelope-side wire change is a separate
+    item).
+  - `canonical_digest` on `EntryInfo` (`info` / `list-recent` /
+    `search` JSON bodies).
+  - Single-fetch `--json` symmetric output (the CLI single-fetch JSON
+    branch mirroring batch JSONL's single record).
+
 ## [0.4.1-beta.8] - 2026-05-21
 
 ### Added

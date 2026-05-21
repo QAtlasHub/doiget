@@ -431,63 +431,31 @@ impl FetchHarness {
     /// [`doiget_core::orchestrator::fetch_paper`] for the actual work
     /// (which both CLI and MCP now share). This function keeps the
     /// CLI-only stderr success-line print.
-    pub(crate) async fn fetch_one(&self, ref_: &Ref) -> Result<()> {
+    pub(crate) async fn fetch_one(&self, ref_: &Ref) -> Result<FetchPaperOutcome, FetchError> {
+        // Pure data path: return the typed outcome (or typed error)
+        // without any CLI-only rendering or exit-code synthesis. The
+        // single-fetch caller (`run_with_options`) and the batch
+        // caller (`commands::batch::classify_joined`) each render the
+        // human / JSON surface and map to `CliExit` themselves — see
+        // #210 for the rationale (batch's `--json` JSONL needs the
+        // structured `FetchPaperOutcome` to emit `result.{safekey,
+        // store_path, canonical_digest}` on success and
+        // `denial_context` on a `PdfLegStatus::Blocked` outcome, which
+        // was unreachable through the previous `Result<()>`
+        // signature).
         let ctx = self.fetch_context();
-        match core_fetch_paper(ref_, &self.profile, &ctx, &self.store, self.store.root()).await {
-            Ok(outcome) => {
-                // Issue #145 / `docs/ERRORS.md` §3 + §6: a `Blocked` PDF
-                // leg means an OA PDF *was* discovered but could not be
-                // retrieved. Metadata was written, but this is NOT a
-                // clean success — emitting only `print_success` here made
-                // a denied PDF visually indistinguishable from a genuine
-                // metadata-only result and exited 0 (a silent failure).
-                // Route it through the SAME `error[CODE]:` stderr channel
-                // + `cli_exit_code(...)` mapping `fetch` already uses for
-                // `CapabilityDenied`, using the structured code the
-                // orchestrator mapped from the underlying transport error.
-                if let PdfLegStatus::Blocked {
-                    code,
-                    message,
-                    denial,
-                } = &outcome.pdf_leg
-                {
-                    // Issue #145 / `docs/ERRORS.md` §2 + §3: the core
-                    // collapses *every* `FetchError::Http(_)` to
-                    // `ErrorCode::NetworkError` (see
-                    // `doiget_core::source.rs`'s `From<&FetchError> for
-                    // ErrorCode`). For a genuine transport/DNS/TLS fault
-                    // that is correct ("retry usually fine"). But an
-                    // off-allowlist / redirect-denied / insecure-scheme OA
-                    // PDF leg is a DELIBERATE policy block — retrying never
-                    // helps — yet it would otherwise surface as
-                    // `NETWORK_ERROR` → generic exit 1, misrepresenting a
-                    // flaky network. The orchestrator already preserves the
-                    // real reason on `denial` (the `From<&HttpError> for
-                    // Option<DenialContext>` impl walks reqwest's source
-                    // chain, so even a redirect denial wrapped as
-                    // `HttpError::Network` still yields
-                    // `DenialReason::RedirectNotInAllowlist`). Reclassify
-                    // the *policy* denials here at the CLI layer to
-                    // `CapabilityDenied` → `error[CAPABILITY_DENIED]:` →
-                    // exit 3 (the same code `fetch`/`graph` already use for
-                    // `ErrorCode::CapabilityDenied`).
-                    let effective = effective_blocked_code(*code, denial.as_ref());
-                    render_blocked_error(ref_, &outcome, effective, message, denial.as_ref());
-                    return Err(anyhow::Error::new(CliExit(cli_exit_code(effective))));
-                }
-                emit_success_line(ref_, &outcome);
-                Ok(())
-            }
-            Err(e) => {
-                // Issue #119: render the cargo-style `error[CODE]:`
-                // line + denial note HERE (while the error is still
-                // typed), then carry only the exit code to `main`.
-                render_fetch_error(&e);
-                let code: ErrorCode = (&e).into();
-                Err(anyhow::Error::new(CliExit(cli_exit_code(code))))
-            }
-        }
+        core_fetch_paper(ref_, &self.profile, &ctx, &self.store, self.store.root()).await
     }
+}
+
+/// `true` iff the outcome represents a clean fetch: `Fetched` (full
+/// PDF) or `NoOaUrl` (metadata-only by design). A `Blocked` PDF leg
+/// is a failure for SessionEnd / exit-code purposes — an OA PDF was
+/// discovered but could not be retrieved — even though the metadata
+/// TOML did land on disk. Pulled out so both `run_with_options` and
+/// `commands::batch` agree on the failure boundary.
+pub(crate) fn outcome_is_clean_success(outcome: &FetchPaperOutcome) -> bool {
+    !matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. })
 }
 
 /// CLI-only one-line success message on stderr (ADR-0001 stdio
@@ -623,15 +591,47 @@ pub async fn run_with_options(
     // surrounding fetch MUST NOT proceed (`docs/PROVENANCE_LOG.md` §5).
     harness.log_session_start(Some(ref_.as_input_str()))?;
 
-    // Step 4: dispatch on ref kind.
+    // Step 4: dispatch on ref kind. `fetch_one` now returns the
+    // typed `FetchPaperOutcome` / `FetchError` per #210; the
+    // single-fetch caller (this fn) owns rendering + exit code.
     let result = harness.fetch_one(&ref_).await;
 
-    // Step 5: emit SessionEnd regardless of outcome. Best-effort: if this
-    // append also fails, surface the underlying fetch error (or a fresh one
-    // if the fetch was Ok).
-    harness.log_session_end(result.is_ok(), Some(ref_.as_input_str()));
+    // Step 5: emit SessionEnd regardless of outcome. A `Blocked` PDF
+    // leg is NOT a clean success even though the typed `Result` is
+    // `Ok` — `outcome_is_clean_success` collapses both halves so the
+    // SessionEnd `is_ok` field matches the user-facing exit code.
+    let session_ok = match &result {
+        Ok(o) => outcome_is_clean_success(o),
+        Err(_) => false,
+    };
+    harness.log_session_end(session_ok, Some(ref_.as_input_str()));
 
-    result
+    // Step 6: render the user-facing surface and map to `CliExit`.
+    // The Blocked-PDF reclassification logic that used to live inside
+    // `fetch_one` was lifted here verbatim so the batch caller can
+    // share the same `effective_blocked_code` / `render_blocked_error`
+    // helpers (issue #210 / #145).
+    match result {
+        Ok(outcome) => {
+            if let PdfLegStatus::Blocked {
+                code,
+                message,
+                denial,
+            } = &outcome.pdf_leg
+            {
+                let effective = effective_blocked_code(*code, denial.as_ref());
+                render_blocked_error(&ref_, &outcome, effective, message, denial.as_ref());
+                return Err(anyhow::Error::new(CliExit(cli_exit_code(effective))));
+            }
+            emit_success_line(&ref_, &outcome);
+            Ok(())
+        }
+        Err(e) => {
+            render_fetch_error(&e);
+            let code: ErrorCode = (&e).into();
+            Err(anyhow::Error::new(CliExit(cli_exit_code(code))))
+        }
+    }
 }
 
 /// Single-line user-visible success message, written to stderr per ADR-0001
@@ -694,7 +694,7 @@ impl std::error::Error for CliExit {}
 /// Non-policy blocks (no `denial`, or a non-policy reason such as
 /// `SizeCapExceeded` / `ContentTypeMismatch`) keep the core's code so a
 /// genuine transport failure still reads as `NETWORK_ERROR`.
-fn effective_blocked_code(code: ErrorCode, denial: Option<&DenialContext>) -> ErrorCode {
+pub(crate) fn effective_blocked_code(code: ErrorCode, denial: Option<&DenialContext>) -> ErrorCode {
     match denial.map(|d| d.reason) {
         Some(
             DenialReason::RedirectNotInAllowlist

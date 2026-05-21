@@ -604,6 +604,54 @@ pub struct FetchPaperOutcome {
     /// reason an OA PDF existed but could not be retrieved, so the
     /// CLI / MCP surface it instead of a silent metadata-only success.
     pub pdf_leg: PdfLegStatus,
+    /// Per-ref [`crate::Safekey`] stringified (`Ref::safekey().as_str()`).
+    /// Exposed on the outcome so JSON-mode CLI / MCP callers can
+    /// emit a structured success body without re-parsing the input
+    /// ref (#210 / `docs/ERRORS.md` §3). Always populated.
+    pub safekey: String,
+    /// ADR-0021 §1 canonical-digest as 64-char lowercase hex for the
+    /// resolver_profile that produced this outcome's audit identity.
+    /// For an arXiv fetch this is the digest under `"arxiv"`; for a
+    /// DOI OA PDF leg this is under `"oa-publisher"`; for the DOI
+    /// metadata-only fallback this is under the metadata source key
+    /// (`"crossref"` / `"unpaywall"`). Always populated.
+    pub canonical_digest: String,
+}
+
+impl FetchPaperOutcome {
+    /// Test-only constructor for downstream crates (`doiget-cli`,
+    /// `doiget-mcp`) that need to drive classification / rendering
+    /// logic without running the full orchestrator. Produces a
+    /// minimal but structurally-valid outcome — all required fields
+    /// populated with defensible stubs — so unit tests can assert
+    /// the surrounding behavior (JSONL shape, exit-code mapping,
+    /// PDF-leg branching) in isolation.
+    ///
+    /// `#[doc(hidden)]` because this is not a stable public API; the
+    /// signature may change to fit test needs without a CHANGELOG
+    /// `[BREAKING]` callout.
+    #[doc(hidden)]
+    pub fn for_test_synthetic(
+        safekey: impl Into<String>,
+        source: impl Into<String>,
+        pdf_leg: PdfLegStatus,
+    ) -> Self {
+        let safekey: String = safekey.into();
+        let source: String = source.into();
+        Self {
+            source: source.clone(),
+            resolver_profile: source.clone(),
+            license: "unknown".to_string(),
+            path: Utf8PathBuf::from(format!("/tmp/{safekey}.pdf")),
+            size_bytes: 0,
+            schema_version: SCHEMA_VERSION.to_string(),
+            pdf_leg,
+            safekey: safekey.clone(),
+            // 32 bytes of `0x00` → a stable, non-secret digest stub
+            // that's still 64 chars of lowercase hex.
+            canonical_digest: "00".repeat(32),
+        }
+    }
 }
 
 /// Resolve a [`Ref`] to a PDF (or metadata-only fallback) and write it
@@ -751,6 +799,8 @@ async fn fetch_paper_arxiv(
     drop(tmp);
 
     let path = store_root.join(format!("{}.pdf", safekey.as_str()));
+    let canonical_digest =
+        crate::CanonicalRef::new(crate::SourceType::Arxiv, id.as_str(), "arxiv", None).digest_hex();
     Ok(FetchPaperOutcome {
         source: "arxiv".to_string(),
         resolver_profile: "arxiv".to_string(),
@@ -761,6 +811,8 @@ async fn fetch_paper_arxiv(
         // arXiv always delivers the PDF (or the whole fn already
         // returned Err above) — there is no metadata-only fallback.
         pdf_leg: PdfLegStatus::Fetched,
+        safekey: safekey.as_str().to_string(),
+        canonical_digest,
     })
 }
 
@@ -918,6 +970,13 @@ async fn fetch_paper_doi(
             .join(".metadata")
             .join(format!("{}.toml", safekey.as_str()))
     };
+    let canonical_digest = crate::CanonicalRef::new(
+        crate::SourceType::Doi,
+        doi.as_str(),
+        &final_source_label,
+        None,
+    )
+    .digest_hex();
     Ok(FetchPaperOutcome {
         source: final_source_label.clone(),
         resolver_profile: final_source_label,
@@ -926,6 +985,8 @@ async fn fetch_paper_doi(
         size_bytes,
         schema_version: SCHEMA_VERSION.to_string(),
         pdf_leg,
+        safekey: safekey.as_str().to_string(),
+        canonical_digest,
     })
 }
 
