@@ -722,25 +722,10 @@ impl HttpClient {
         headers: &[(&str, &str)],
         check_pdf_magic: bool,
     ) -> Result<(Bytes, Url), HttpError> {
-        // #220: legacy OpenAlex / Unpaywall metadata sometimes contains
-        // `http://` URLs for publishers that have since moved to HTTPS
-        // (`http://link.aps.org/pdf/...` is the common case). The
-        // production client is built with `https_only(true)` and would
-        // refuse to send such a request, so today the fetch fails at
-        // the reqwest layer with a generic builder error. Upgrading the
-        // scheme to `https` before send turns the failure into a
-        // legitimate fetch in 99 %+ of academic-publisher cases (APS,
-        // IOP, SciPost, Springer, Crossref, OpenAlex all serve HTTPS
-        // for years now). The upgrade is intentionally skipped for
-        // loopback hosts so the `new_for_tests_allow_http*` wiremock
-        // path still works.
-        //
-        // TLS posture unchanged: a redirected URL is still verified by
-        // the redirect-allowlist closure on the upgraded scheme; an
-        // upgraded URL whose host doesn't serve HTTPS will fail at the
-        // TLS handshake with a normal `NETWORK_ERROR`, not an insecure
-        // fallback. See ADR-0028 D3 ("non-impersonating tweaks are
-        // accept-list").
+        // Normalise legacy `http://` URLs returned by OpenAlex /
+        // Unpaywall metadata before send. See `upgrade_http_to_https`
+        // for the rationale (TLS posture preserved per ADR-0020) and
+        // the loopback carve-out.
         let url = upgrade_http_to_https(url);
 
         let client = self
@@ -1068,52 +1053,96 @@ fn ensure_crypto_provider() {
     });
 }
 
-/// Upgrade an `http://` URL to `https://` for legacy publisher metadata
-/// (#220). Loopback hosts (`localhost`, `127.0.0.0/8`, `::1`) are
-/// returned unchanged so the `new_for_tests_allow_http*` wiremock path
-/// continues to talk plain HTTP to the local fixture server.
+/// Upgrade an `http://` URL to `https://` for legacy publisher
+/// metadata. Loopback hosts (`localhost`, any RFC 6761 `.localhost`
+/// TLD subdomain, `127.0.0.0/8`, `::1`, IPv4-mapped IPv6 loopback)
+/// are returned unchanged so the `new_for_tests_allow_http*` wiremock
+/// path continues to talk plain HTTP to the local fixture server.
 ///
-/// Non-`http` schemes (including `https`, `file`, anything else) are
-/// returned unchanged. The function is total: it never panics and
-/// never returns an error — if `set_scheme` somehow refuses the change
-/// the original URL is returned, and the production client's
-/// `https_only(true)` will then reject the send with a clear network
-/// error, preserving the original posture.
+/// Non-`http` schemes (`https`, `file`, anything else) and cannot-be-
+/// base URLs are returned unchanged. The function is total: it never
+/// panics and never returns an error.
+///
+/// # Audit / posture
+///
+/// On a successful upgrade the function emits a `tracing::info!` event
+/// so the rewrite appears in the operator's default-level structured
+/// log. On the (in-practice unreachable) `set_scheme` failure path a
+/// `tracing::warn!` event is emitted before returning the original
+/// URL; the production client's `https_only(true)` then rejects the
+/// send with a clear network error, preserving the TLS posture
+/// established by ADR-0020.
+///
+/// # `Domain("localhost")` arm subtlety
+///
+/// The url crate resolves the bare host `localhost` to `127.0.0.1`
+/// (Ipv4 variant) when parsing an `http://` URL, so the `Domain` arm
+/// does NOT fire for that case (the `Ipv4` arm catches it). The arm
+/// IS load-bearing for the RFC 6761 `.localhost` TLD (e.g.
+/// `myservice.localhost`, `api.localhost`), which the url crate does
+/// NOT auto-resolve to an IP and keeps as `Host::Domain`.
 fn upgrade_http_to_https(url: Url) -> Url {
     if url.scheme() != "http" {
         return url;
     }
-    // Loopback skip: `Url::host()` returns a typed `Host` enum so
-    // IPv4 (127.0.0.0/8) and IPv6 (::1) loopback can be detected
-    // structurally — `host_str()`'s bracket-stripping for IPv6 is
-    // not portable to match against. The `localhost` literal is
-    // also covered (it can resolve to either family).
     match url.host() {
         None => {
             // Cannot-be-base URL (e.g. `http:foo`) — `set_scheme`
-            // would reject the conversion. Leave it untouched; the
-            // downstream client will reject it.
+            // would reject the conversion.
             return url;
         }
-        Some(url::Host::Domain(d)) if d.eq_ignore_ascii_case("localhost") => return url,
+        Some(url::Host::Domain(d)) if is_localhost_domain(d) => return url,
         Some(url::Host::Ipv4(ip)) if ip.is_loopback() => return url,
-        Some(url::Host::Ipv6(ip)) if ip.is_loopback() => return url,
-        _ => {}
+        Some(url::Host::Ipv6(ip)) if is_ipv6_loopback(ip) => return url,
+        Some(_) => {}
     }
     let mut upgraded = url.clone();
     if upgraded.set_scheme("https").is_err() {
-        // The `url` crate documents the failure modes for `set_scheme`;
+        // url-crate `set_scheme` is documented to fail only for
+        // cannot-be-base URLs and a few cross-family transitions;
         // `http -> https` is supported because both are "special"
-        // schemes with the same syntax. The fallback exists for
-        // defence in depth.
+        // schemes. The fallback below is defence-in-depth.
+        tracing::warn!(
+            url = %url,
+            "set_scheme(http -> https) failed unexpectedly; \
+             sending original URL — https_only(true) will reject",
+        );
         return url;
     }
-    tracing::debug!(
+    tracing::info!(
         original = %url,
         upgraded = %upgraded,
-        "upgraded http -> https for legacy publisher metadata (#220)"
+        "upgraded http -> https for legacy publisher metadata"
     );
     upgraded
+}
+
+/// `true` for the `localhost` literal and any RFC 6761 `.localhost`
+/// TLD subdomain (`myservice.localhost`, `api.localhost`, etc.).
+/// ASCII-case-insensitive per host-name conventions.
+fn is_localhost_domain(d: &str) -> bool {
+    if d.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let suffix = ".localhost";
+    let d_bytes = d.as_bytes();
+    let s_bytes = suffix.as_bytes();
+    if d_bytes.len() <= s_bytes.len() {
+        return false;
+    }
+    let tail = &d_bytes[d_bytes.len() - s_bytes.len()..];
+    tail.eq_ignore_ascii_case(s_bytes)
+}
+
+/// `true` for `::1` and any IPv4-mapped loopback
+/// (`::ffff:127.0.0.0/8`). `Ipv6Addr::is_loopback()` covers only `::1`,
+/// so dual-stack callers that hit `[::ffff:127.0.0.1]` would otherwise
+/// be silently upgraded.
+fn is_ipv6_loopback(ip: std::net::Ipv6Addr) -> bool {
+    if ip.is_loopback() {
+        return true;
+    }
+    matches!(ip.to_ipv4_mapped(), Some(v4) if v4.is_loopback())
 }
 
 fn build_client(allowlist: SourceAllowlist) -> Result<Client, reqwest::Error> {
@@ -1264,6 +1293,118 @@ mod tests {
         let input = Url::parse("http://link.aps.org/PDF/10.1103/PhysRevB.109.045136").unwrap();
         let out = upgrade_http_to_https(input);
         assert_eq!(out.path(), "/PDF/10.1103/PhysRevB.109.045136");
+    }
+
+    // ---- Review-pass extensions ------------------------------------
+
+    #[test]
+    fn upgrade_http_to_https_skips_dot_localhost_tld() {
+        // RFC 6761 reserves the entire `.localhost` TLD for loopback.
+        // A developer running `http://myservice.localhost:8080/` MUST
+        // NOT see their URL silently upgraded to https.
+        for raw in [
+            "http://myservice.localhost/",
+            "http://api.localhost:8080/x",
+            "http://a.b.LOCALHOST/y",
+        ] {
+            let input = Url::parse(raw).unwrap();
+            let out = upgrade_http_to_https(input.clone());
+            assert_eq!(out, input, "{raw} MUST NOT be upgraded");
+        }
+    }
+
+    #[test]
+    fn upgrade_http_to_https_skips_ipv4_mapped_ipv6_loopback() {
+        // `::ffff:127.0.0.1` is the IPv4-mapped IPv6 form of 127.0.0.1.
+        // `Ipv6Addr::is_loopback()` alone returns false for this form,
+        // so dual-stack callers binding wiremock to it would be
+        // silently upgraded without the `to_ipv4_mapped()` check.
+        for raw in [
+            "http://[::ffff:127.0.0.1]:9000/x",
+            "http://[::ffff:127.0.0.42]/y",
+        ] {
+            let input = Url::parse(raw).unwrap();
+            let out = upgrade_http_to_https(input.clone());
+            assert_eq!(out, input, "{raw} MUST NOT be upgraded");
+        }
+    }
+
+    #[test]
+    fn upgrade_http_to_https_is_noop_on_non_http_schemes() {
+        // The first guard (`url.scheme() != "http"`) covers everything
+        // that isn't http: https (idempotent), file, data, ftp...
+        for raw in [
+            "https://api.crossref.org/works/10.1234/foo",
+            "file:///etc/passwd",
+            "data:text/plain,hello",
+            "ftp://ftp.example.org/papers/",
+        ] {
+            let input = Url::parse(raw).unwrap();
+            let out = upgrade_http_to_https(input.clone());
+            assert_eq!(
+                out, input,
+                "{raw} non-http scheme MUST be returned unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn upgrade_http_to_https_http_url_always_has_host() {
+        // The url crate's parser enforces authority for "special"
+        // schemes (`http`, `https`, `ws`, `wss`, `ftp`, `file`).
+        // `Url::parse("http:foo")` synthesises a Domain("foo")
+        // authority, so an http URL with `host() == None` is
+        // unreachable from `Url::parse`. The `None` arm in
+        // `upgrade_http_to_https` is defence-in-depth only — pinned
+        // here so a future url-crate behavior change is caught.
+        let url = Url::parse("http:foo").expect("parse");
+        assert!(
+            url.host().is_some(),
+            "http URLs always carry a host per WHATWG URL spec"
+        );
+        // The fn still produces a sensible result (upgrade applies).
+        let out = upgrade_http_to_https(url.clone());
+        assert_eq!(out.scheme(), "https");
+    }
+
+    #[test]
+    fn upgrade_http_to_https_skips_localhost_case_insensitive() {
+        // The literal `localhost` is resolved by the url crate to
+        // `127.0.0.1` (Ipv4) at parse time for `http://` URLs, so the
+        // Ipv4 arm catches lowercase. The Domain-arm coverage is
+        // load-bearing only for the `.localhost` TLD case, but we
+        // still pin the casefold semantics in case the url crate
+        // changes its parsing rules.
+        for raw in ["http://LOCALHOST/", "http://Localhost:8080/x"] {
+            let input = Url::parse(raw).unwrap();
+            let out = upgrade_http_to_https(input.clone());
+            assert_eq!(out, input, "{raw} MUST NOT be upgraded");
+        }
+    }
+
+    #[test]
+    fn is_localhost_domain_matches_literal_and_tld_suffix() {
+        assert!(is_localhost_domain("localhost"));
+        assert!(is_localhost_domain("LOCALHOST"));
+        assert!(is_localhost_domain("api.localhost"));
+        assert!(is_localhost_domain("nested.api.localhost"));
+        assert!(is_localhost_domain("X.LocalHost"));
+        assert!(!is_localhost_domain("localhost.example.org"));
+        assert!(!is_localhost_domain("notlocalhost"));
+        assert!(!is_localhost_domain(""));
+        assert!(!is_localhost_domain(".localhost")); // empty label not valid
+    }
+
+    #[test]
+    fn is_ipv6_loopback_covers_both_pure_and_mapped() {
+        use std::net::Ipv6Addr;
+        assert!(is_ipv6_loopback(Ipv6Addr::LOCALHOST)); // ::1
+        assert!(is_ipv6_loopback("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(is_ipv6_loopback("::ffff:127.0.0.42".parse().unwrap()));
+        assert!(!is_ipv6_loopback("::".parse().unwrap()));
+        assert!(!is_ipv6_loopback("2001:db8::1".parse().unwrap()));
+        // IPv4-mapped non-loopback must NOT be considered loopback.
+        assert!(!is_ipv6_loopback("::ffff:1.2.3.4".parse().unwrap()));
     }
 
     // ---------------------------------------------------------------
