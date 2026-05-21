@@ -14,21 +14,22 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Added
 
-- **[core]** New module `doiget_core::user_extension`: parser + merger
-  for `[[network.additional_hosts]]` entries in the user's
-  `config.toml`, per ADR-0028 D2 (#220). The orchestrator's
-  production HttpClient construction (`commands::fetch::build_http_client`)
-  now reads `<config_dir>/doiget/config.toml`, validates each entry
-  against the restricted ADR-0028 D2-1 pattern grammar (literal FQDN
-  or single-suffix wildcard `*.<suffix>` only — multi-segment globs,
-  bare wildcards, and non-host characters are parse errors), and
-  merges the user-added hosts into the `oa-publisher` allowlist
-  alongside the curated set. A missing config file is the normal case
-  ("no extensions"); a malformed file emits a `tracing::warn!` to
-  stderr but never aborts the fetch (the curated allowlist still
-  applies). Unblocks the real-world dogfood case where a Green-OA
-  paper lives on an institutional repo like `ruj.uj.edu.pl` that the
-  curated list cannot reasonably enumerate.
+- **[core]** New module `doiget_core::user_extension` per ADR-0028
+  D2 (#220). Users can extend the `oa-publisher` redirect allowlist
+  for their own deployment via `[[network.additional_hosts]]` in
+  `<config_dir>/doiget/config.toml`. Pattern grammar is restricted
+  (literal FQDN or single-suffix wildcard `*.<suffix>`); rejection
+  classes are surfaced as a closed-enum `PatternError` for
+  programmatic consumption by the future `doiget config doctor`
+  surface. The `host` field of `UserExtensionHost` is a
+  `HostPattern` newtype that runs validation through its serde
+  `Deserialize`, so the "valid pattern" invariant is type-level —
+  no `UserExtensionHost` value can exist with an invalid host. The
+  orchestrator's production HttpClient construction
+  (`commands::fetch::build_http_client`) loads and merges in one
+  pass; a missing config file is silent, a malformed config is
+  surfaced as `tracing::warn!` and the fetch continues with the
+  curated set.
 
   Example:
 
@@ -47,7 +48,10 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   the `doiget config doctor` surface (D2-3), the
   `capability_gate.user_extension_count` field in `doiget
   capabilities` JSON (D2-4), and the MCP-server-side merge in
-  `doiget-mcp`.
+  `doiget-mcp` (a user who configures
+  `[[network.additional_hosts]]` and invokes via `doiget serve`
+  currently sees no effect; that is the load-bearing item S3b
+  closes).
 
 ## [0.4.1-beta.7] - 2026-05-21
 

@@ -191,39 +191,49 @@ fn build_http_client() -> Result<HttpClient> {
         allowlists.extend(tier_2_allowlist());
 
         // ADR-0028 D2: merge user-extension hosts from
-        // `<config_dir>/doiget/config.toml`'s
-        // `[[network.additional_hosts]]` table. Pattern grammar is
-        // restricted to literal FQDN or `*.<suffix>` (ADR-0028 D2-1);
-        // anything else is rejected at parse time. A missing config
-        // file is the normal case (treated as "no extensions").
+        // `<config_dir>/doiget/config.toml`. See
+        // `doiget_core::user_extension` for the wire contract and
+        // the (deferred) S3b provenance / doctor / capabilities
+        // surfaces.
         //
-        // A malformed config is surfaced as a *warning* to stderr,
-        // never aborts the fetch — ADR-0028 D2 frames user-extension
-        // as opt-in convenience; the curated allowlist still applies.
-        // The user can then run `doiget config doctor` (S3b will add
-        // the surface) to see the offending entry.
-        if let Ok(cfg_dir) = config_dir_utf8() {
-            let path = cfg_dir.join("doiget").join("config.toml");
-            match doiget_core::user_extension::load(&path) {
-                Ok(user_hosts) if !user_hosts.is_empty() => {
-                    tracing::info!(
-                        count = user_hosts.len(),
-                        path = %path,
-                        "merging user-extension allowlist hosts (ADR-0028 D2)"
-                    );
-                    doiget_core::user_extension::merge_into_allowlists(
-                        &mut allowlists,
-                        &user_hosts,
-                    );
+        // Failure handling is opt-in-convenience: a missing config
+        // is silent (Ok-empty), a malformed config emits
+        // `tracing::warn!` and continues with the curated allowlist,
+        // and an unresolvable config dir emits `tracing::debug!`
+        // (only happens in stripped envs with no HOME / XDG /
+        // APPDATA — review pass I3 / A1).
+        match config_dir_utf8() {
+            Ok(cfg_dir) => {
+                let path = cfg_dir.join("doiget").join("config.toml");
+                match doiget_core::user_extension::load(&path) {
+                    Ok(user_hosts) if !user_hosts.is_empty() => {
+                        tracing::info!(
+                            count = user_hosts.len(),
+                            path = %path,
+                            "merging user-extension allowlist hosts (ADR-0028 D2)"
+                        );
+                        doiget_core::user_extension::merge_into_allowlists(
+                            &mut allowlists,
+                            &user_hosts,
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = %path,
+                            "failed to load user-extension allowlist; \
+                             falling back to curated set only"
+                        );
+                    }
                 }
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        path = %path,
-                        "failed to load user-extension allowlist; falling back to curated set only"
-                    );
-                }
+            }
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "config dir unresolvable; \
+                     user-extension allowlist disabled (curated set only)"
+                );
             }
         }
 
@@ -824,6 +834,7 @@ fn render_blocked_error(
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn new_session_id_is_26_chars() {
@@ -837,6 +848,108 @@ mod tests {
             id.chars().all(|c| c.is_ascii_alphanumeric()),
             "ulid must be ASCII alphanumeric: {:?}",
             id
+        );
+    }
+
+    /// Review pass C2: end-to-end coverage of the user-extension
+    /// merge inside `build_http_client`. Without this test the
+    /// production path that turns a `config.toml`
+    /// `[[network.additional_hosts]]` entry into a passing
+    /// allowlist match is unexercised — every existing e2e sets
+    /// `DOIGET_*_BASE` and short-circuits into the test-mode
+    /// builder above.
+    #[test]
+    #[serial]
+    fn build_http_client_merges_user_extension_into_oa_publisher_allowlist() {
+        use std::io::Write;
+
+        // Construct a tempdir + minimal config.toml under it.
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let cfg_dir = td.path().join("doiget");
+        std::fs::create_dir_all(&cfg_dir).expect("mkdir doiget/");
+        let cfg_path = cfg_dir.join("config.toml");
+        let mut f = std::fs::File::create(&cfg_path).expect("create config.toml");
+        f.write_all(
+            br#"
+[[network.additional_hosts]]
+host = "ruj.uj.edu.pl"
+note = "Jagiellonian"
+
+[[network.additional_hosts]]
+host = "*.uj.edu.pl"
+"#,
+        )
+        .expect("write config.toml");
+        drop(f);
+
+        // Save + override env so `config_dir_utf8()` lands on the
+        // tempdir. Restored on Drop by EnvGuard. We also clear the
+        // five `DOIGET_*_BASE` env vars to force the production
+        // branch of `build_http_client`.
+        struct EnvGuard {
+            key: &'static str,
+            prev: Option<String>,
+        }
+        impl EnvGuard {
+            fn save(key: &'static str) -> Self {
+                Self {
+                    key,
+                    prev: std::env::var(key).ok(),
+                }
+            }
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.prev {
+                    Some(v) => std::env::set_var(self.key, v),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+        let _g0 = EnvGuard::save("XDG_CONFIG_HOME");
+        let _g1 = EnvGuard::save("APPDATA");
+        let _g2 = EnvGuard::save("HOME");
+        let _g3 = EnvGuard::save("USERPROFILE");
+        let _g4 = EnvGuard::save("DOIGET_ARXIV_BASE");
+        let _g5 = EnvGuard::save("DOIGET_CROSSREF_BASE");
+        let _g6 = EnvGuard::save("DOIGET_UNPAYWALL_BASE");
+        let _g7 = EnvGuard::save("DOIGET_OA_PUBLISHER_BASE");
+        let _g8 = EnvGuard::save("DOIGET_OPENALEX_BASE");
+        std::env::set_var("XDG_CONFIG_HOME", td.path());
+        std::env::set_var("APPDATA", td.path());
+        std::env::set_var("HOME", td.path());
+        std::env::set_var("USERPROFILE", td.path());
+        std::env::remove_var("DOIGET_ARXIV_BASE");
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+        std::env::remove_var("DOIGET_UNPAYWALL_BASE");
+        std::env::remove_var("DOIGET_OA_PUBLISHER_BASE");
+        std::env::remove_var("DOIGET_OPENALEX_BASE");
+
+        let client = build_http_client().expect("HttpClient builds");
+        let oa = client
+            .source_allowlist("oa-publisher")
+            .expect("oa-publisher source registered");
+
+        // Pre-existing curated allowlist still effective.
+        assert!(
+            oa.redirect_hosts.iter().any(|p| p == "*.aps.org"),
+            "curated *.aps.org MUST still be present after merge; got {:?}",
+            oa.redirect_hosts
+        );
+        // User-added literal host passes match.
+        assert!(
+            oa.matches("ruj.uj.edu.pl"),
+            "literal `ruj.uj.edu.pl` from user config MUST match"
+        );
+        // User-added wildcard passes match for a subdomain.
+        assert!(
+            oa.matches("alpha.uj.edu.pl"),
+            "wildcard `*.uj.edu.pl` from user config MUST match alpha.uj.edu.pl"
+        );
+        // Unrelated host MUST still fail.
+        assert!(
+            !oa.matches("ruj.uj.edu.ru"),
+            "host outside the suffix MUST NOT match"
         );
     }
 
