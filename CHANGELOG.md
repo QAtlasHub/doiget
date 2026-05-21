@@ -10,6 +10,51 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.4.1-beta.12] - 2026-05-21
+
+### Added
+
+- **[core]** ADR-0029 fetch chain slice 1 — the DOI OA-PDF leg now
+  walks a multi-candidate chain instead of trying only
+  `best_oa_location` (#222). Candidate URLs are extracted from the
+  Unpaywall envelope in priority order (best_oa_location first, then
+  every distinct entry in `oa_locations[]`); the orchestrator
+  advances past any non-PDF / 403 / network failure until either one
+  candidate yields a valid PDF or every candidate is exhausted. Each
+  attempt emits its own `oa-publisher` Fetch provenance row, so the
+  audit trail captures every external request.
+
+  Recovers the dogfood case from the finite-temperature-MPS corpus:
+  a DOI hits `link.aps.org`, the publisher WAF returns 403, but the
+  same record's arXiv preprint is in `oa_locations[]`. Pre-slice-1
+  this surfaced as `PdfLegStatus::Blocked` + metadata-only; post-
+  slice-1 the chain advances to the arXiv preprint and writes a
+  real PDF.
+
+  New helper: `doiget_core::orchestrator::extract_oa_url_chain`
+  (private). Removes the now-superseded
+  `extract_best_oa_url_from_value` helper and migrates its tests to
+  the chain extractor; net + 3 unit tests covering ordering,
+  deduplication, fallback-on-no-best, and malformed-URL tolerance.
+  New e2e test
+  `fetch_doi_oa_chain_falls_back_to_secondary_when_best_returns_403`
+  exercises the WAF-block fallback flow end-to-end.
+
+### Notes
+
+- Out of scope for slice 1 (deferred follow-ups):
+  - The structured `chain: Vec<AttemptOutcome>` field on
+    `FetchError` and the new `ALL_FALLBACKS_EXHAUSTED` closed-enum
+    variant (ADR-0029 D5). Today an all-failed chain still surfaces
+    as `PdfLegStatus::Blocked` with the *last* attempt's reason on
+    `denial`; the structured per-attempt list is reserved for the
+    MCP / CLI JSON wire-shape slice that follows #212 alignment.
+  - The schema-additive `chain_attempt` / `chain_total` /
+    `chain_terminal` / `verified_by` columns on the provenance log
+    (ADR-0029 D4). Today each chain attempt is logged as a
+    standalone Fetch row indistinguishable from the pre-slice-1
+    shape; the per-attempt enrichment is deferred.
+
 ## [0.4.1-beta.11] - 2026-05-21
 
 ### Added
