@@ -134,7 +134,14 @@ fn home_dir_utf8() -> Result<Utf8PathBuf> {
 
 /// Best-effort config-dir resolution. Honors `XDG_CONFIG_HOME` first
 /// (POSIX), then `APPDATA` (Windows), then falls back to `$HOME/.config`.
-fn config_dir_utf8() -> Result<Utf8PathBuf> {
+///
+/// Crate-visible so sibling modules (`commands::capabilities`,
+/// `commands::config`) can resolve the same `<config_dir>/doiget/`
+/// path the production HTTP-client builder reads from. Keep the
+/// signature stable: any divergence between this and the MCP-side
+/// copy (`crates/doiget-mcp/src/lib.rs::config_dir_utf8`) would
+/// silently desync the user-extension allowlist surfaces.
+pub(crate) fn config_dir_utf8() -> Result<Utf8PathBuf> {
     if let Some(s) = read_env_utf8("XDG_CONFIG_HOME")? {
         return Ok(Utf8PathBuf::from(s));
     }
