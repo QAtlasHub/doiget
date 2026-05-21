@@ -475,3 +475,137 @@ async fn fetch_doi_crossref_down_unpaywall_oa_still_yields_pdf() {
     drop(env);
     drop(td);
 }
+
+/// ADR-0029 fetch chain: when `best_oa_location` returns a non-PDF
+/// failure (here: HTTP 403 simulating a publisher WAF block) and
+/// `oa_locations[]` contains an alternate URL that DOES yield a
+/// PDF, the orchestrator must advance through the chain and write
+/// the fallback PDF.
+///
+/// The dogfood case this exists for: a DOI hits `link.aps.org` and
+/// is WAF-blocked (403), but the same OpenAlex / Unpaywall record
+/// already names an arXiv preprint that resolves under
+/// `oa-publisher` rate-limit posture. Pre-ADR-0029, the user had to
+/// discover that URL manually; post-ADR-0029, the chain walker
+/// recovers automatically.
+#[tokio::test]
+#[serial]
+async fn fetch_doi_oa_chain_falls_back_to_secondary_when_best_returns_403() {
+    let server = MockServer::start().await;
+    let base_uri = server.uri();
+    let blocked_url = format!("{}/oa/blocked.pdf", base_uri);
+    let fallback_url = format!("{}/oa/fallback.pdf", base_uri);
+
+    // Crossref happy path.
+    Mock::given(method("GET"))
+        .and(path(format!("/works/{}", TEST_DOI)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(crossref_body()))
+        .mount(&server)
+        .await;
+
+    // Unpaywall envelope: best_oa_location names the (about-to-fail)
+    // publisher URL; oa_locations[] carries an alternate that the
+    // chain walker advances to after the first attempt fails.
+    let upw_body = serde_json::json!({
+        "doi": TEST_DOI,
+        "is_oa": true,
+        "title": "E2E chain test paper",
+        "best_oa_location": {
+            "url":         blocked_url,
+            "url_for_pdf": blocked_url,
+            "license":     "cc-by"
+        },
+        "oa_locations": [
+            { "url_for_pdf": blocked_url },
+            { "url_for_pdf": fallback_url }
+        ]
+    });
+    Mock::given(method("GET"))
+        .and(path(format!("/v2/{}", TEST_DOI_ENCODED)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(upw_body))
+        .mount(&server)
+        .await;
+
+    // First candidate: 403 (publisher WAF stand-in). Empty body.
+    Mock::given(method("GET"))
+        .and(path("/oa/blocked.pdf"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    // Second candidate: valid PDF. The chain walker MUST land here.
+    let pdf_body = b"%PDF-fallback-bytes\n".to_vec();
+    Mock::given(method("GET"))
+        .and(path("/oa/fallback.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(pdf_body.clone()))
+        .mount(&server)
+        .await;
+
+    let td = TempDir::new().expect("tempdir");
+    let temp_root: Utf8PathBuf = Utf8Path::from_path(td.path())
+        .expect("temp dir is utf-8")
+        .to_path_buf();
+    let store_root = temp_root.join("papers");
+    let log_path = temp_root.join("log.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_CROSSREF_BASE", &base_uri);
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", base_uri));
+    env.set("DOIGET_OA_PUBLISHER_BASE", &base_uri);
+
+    fetch::run_with_options(format!("doi:{}", TEST_DOI), false, OutputMode::Human)
+        .await
+        .expect("chain walker must succeed on the fallback candidate");
+
+    // The PDF on disk MUST be the fallback body, not the blocked URL's
+    // empty 403 body — confirms the chain advanced past the first hit.
+    let pdf_path = store_root.join("doi_10.1234_test.pdf");
+    let pdf_bytes = std::fs::read(pdf_path.as_std_path()).expect("read pdf");
+    assert_eq!(
+        pdf_bytes, pdf_body,
+        "stored PDF MUST be the fallback candidate's body"
+    );
+    assert!(pdf_bytes.starts_with(b"%PDF-"));
+
+    // Provenance log MUST show two oa-publisher Fetch rows — the first
+    // an Err (403), the second an Ok (fallback success). Pre-ADR-0029
+    // there was only one oa-publisher row (the err) and a blocked
+    // metadata-only fallback.
+    let rows = read_log_rows(&log_path);
+    let oa_rows: Vec<&LogRow> = rows
+        .iter()
+        .filter(|r| r.event == LogEvent::Fetch && r.source.as_deref() == Some("oa-publisher"))
+        .collect();
+    assert_eq!(
+        oa_rows.len(),
+        2,
+        "expected 2 oa-publisher Fetch rows (one per chain candidate), got {}: {:?}",
+        oa_rows.len(),
+        oa_rows.iter().map(|r| &r.result).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        oa_rows[0].result,
+        LogResult::Err,
+        "first chain attempt is the 403"
+    );
+    assert_eq!(
+        oa_rows[1].result,
+        LogResult::Ok,
+        "second chain attempt is the fallback PDF success"
+    );
+
+    // Hash chain stays intact across the multi-attempt OA leg.
+    assert_eq!(rows[0].prev_hash, "GENESIS");
+    for i in 1..rows.len() {
+        assert_eq!(
+            rows[i].prev_hash,
+            rows[i - 1].this_hash,
+            "hash chain break at row {i}"
+        );
+    }
+
+    drop(env);
+    drop(td);
+}

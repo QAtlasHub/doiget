@@ -852,43 +852,85 @@ async fn fetch_paper_doi(
         .unwrap_or(Value::Null);
     let extracted = extract_crossref_fields(&crossref_meta);
 
-    // Unpaywall second — license enrichment + OA URL discovery. A
-    // failure here is non-fatal: we still write the Crossref-derived
-    // metadata.
+    // Unpaywall second — license enrichment + OA URL chain discovery.
+    // A failure here is non-fatal: we still write the Crossref-
+    // derived metadata.
     let unpaywall = unpaywall_source_from_env(&unpaywall_contact);
     let upw_result = unpaywall.fetch(ref_, profile, ctx).await;
-    let (license, source_label, oa_url) = match upw_result {
+    let (license, source_label, oa_chain) = match upw_result {
         Ok(r) => {
-            let oa = extract_best_oa_url_from_value(r.metadata_json.as_ref());
+            let chain = extract_oa_url_chain(r.metadata_json.as_ref());
             let label = if r.license != "unknown" {
                 "unpaywall".to_string()
             } else {
                 "crossref".to_string()
             };
-            (r.license, label, oa)
+            (r.license, label, chain)
         }
         Err(e) => {
             tracing::warn!(
                 error = %e,
                 "unpaywall fetch failed; continuing with crossref-only metadata"
             );
-            ("unknown".to_string(), "crossref".to_string(), None)
+            ("unknown".to_string(), "crossref".to_string(), Vec::new())
         }
     };
 
-    // OA PDF leg. Try the URL Unpaywall returned via the `oa-publisher`
-    // source allowlist. Magic-byte check is enforced inside
-    // `HttpClient::fetch_pdf`. Issue #118: a failure here is NEVER
-    // silently turned into a clean metadata-only success — the
-    // structured reason is carried out on `PdfLegStatus::Blocked` so
-    // the CLI / MCP can explain WHY the PDF could not be fetched.
-    let (pdf_leg, pdf_bytes) = match oa_url {
-        None => (PdfLegStatus::NoOaUrl, None),
-        Some(url) => match try_fetch_oa_pdf(doi, &url, ctx).await {
-            Ok((bytes, _final_url)) => (PdfLegStatus::Fetched, Some(bytes)),
-            Err(e) => {
-                // Borrow for the denial side-channel + human message,
-                // then consume into the closed ErrorCode last.
+    // OA PDF leg — ADR-0029 fetch chain. Walk the candidate URL list
+    // in order; first successful PDF wins, all-failed surfaces as
+    // `PdfLegStatus::Blocked` with the LAST attempt's error (the most
+    // informative for the operator — typically the network /
+    // allowlist reason the chain could not be exhausted). Each
+    // `try_fetch_oa_pdf` call already emits its own per-attempt
+    // provenance row (`oa-publisher` Fetch ok / err), so the audit
+    // trail captures every external request without orchestrator-
+    // side bookkeeping.
+    //
+    // Issue #118: a failure here is NEVER silently turned into a
+    // clean metadata-only success — the structured reason is carried
+    // out on `PdfLegStatus::Blocked`.
+    let (pdf_leg, pdf_bytes) = if oa_chain.is_empty() {
+        (PdfLegStatus::NoOaUrl, None)
+    } else {
+        let mut succeeded: Option<Vec<u8>> = None;
+        let mut last_err: Option<HttpError> = None;
+        let total = oa_chain.len();
+        for (idx, candidate) in oa_chain.iter().enumerate() {
+            let attempt = idx + 1;
+            tracing::debug!(
+                attempt,
+                total,
+                url = %candidate,
+                "trying OA PDF candidate (ADR-0029 chain)"
+            );
+            match try_fetch_oa_pdf(doi, candidate, ctx).await {
+                Ok((bytes, _final_url)) => {
+                    if attempt > 1 {
+                        tracing::info!(
+                            attempt,
+                            total,
+                            url = %candidate,
+                            "OA PDF chain succeeded on fallback candidate (ADR-0029)"
+                        );
+                    }
+                    succeeded = Some(bytes);
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        attempt,
+                        total,
+                        url = %candidate,
+                        error = %e,
+                        "OA PDF candidate failed; advancing to next (ADR-0029 chain)"
+                    );
+                    last_err = Some(e);
+                }
+            }
+        }
+        match (succeeded, last_err) {
+            (Some(bytes), _) => (PdfLegStatus::Fetched, Some(bytes)),
+            (None, Some(e)) => {
                 let fe = FetchError::Http(e);
                 let denial: Option<crate::DenialContext> = (&fe).into();
                 let message = fe.to_string();
@@ -902,7 +944,12 @@ async fn fetch_paper_doi(
                     None,
                 )
             }
-        },
+            // Unreachable: `oa_chain` is non-empty in this branch, so
+            // at least one iteration set either `succeeded` or
+            // `last_err`. Conservative fallback if a future refactor
+            // breaks the invariant.
+            (None, None) => (PdfLegStatus::NoOaUrl, None),
+        }
     };
 
     // Issue #120: Crossref is non-fatal, but if it failed AND the OA
@@ -1303,12 +1350,60 @@ fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
     }
 }
 
-/// Pull the preferred OA URL out of an Unpaywall `metadata_json`
-/// envelope. Tries `best_oa_location.url_for_pdf` first (direct PDF
-/// link), falling back to `best_oa_location.url`.
-fn extract_best_oa_url_from_value(meta: Option<&Value>) -> Option<url::Url> {
-    let meta = meta?;
-    let loc = meta.get("best_oa_location")?;
+/// Pull the ordered chain of candidate OA URLs out of an Unpaywall
+/// `metadata_json` envelope per ADR-0029 D2.
+///
+/// Order is `best_oa_location` first (when present), then every
+/// distinct entry in `oa_locations[]`. Duplicate URLs are deduped by
+/// exact string match so a candidate that appears as both the "best"
+/// entry and an array element is fetched at most once.
+///
+/// Each location's URL is resolved via the same `url_for_pdf` →
+/// `url` fallback the single-URL extractor uses.
+///
+/// Returns `Vec::new()` when no OA location was reported (the chain
+/// is empty and the caller surfaces [`PdfLegStatus::NoOaUrl`]).
+fn extract_oa_url_chain(meta: Option<&Value>) -> Vec<url::Url> {
+    let meta = match meta {
+        Some(m) => m,
+        None => return Vec::new(),
+    };
+    let mut out: Vec<url::Url> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut push_unique = |u: url::Url| {
+        let key = u.as_str().to_string();
+        if seen.insert(key) {
+            out.push(u);
+        }
+    };
+
+    // Priority 1: best_oa_location (Unpaywall's own quality-ordered
+    // pick — ADR-0029 D2 NORMATIVE: defer to the metadata source's
+    // ordering).
+    if let Some(best) = meta.get("best_oa_location") {
+        if let Some(u) = pull_oa_url_from_location(best) {
+            push_unique(u);
+        }
+    }
+    // Priority 2: every entry in oa_locations[] after the best one.
+    // The fallback target this ADR exists to enable is precisely the
+    // arXiv preprint that lives here when `best_oa_location` is a
+    // WAF-blocked publisher URL.
+    if let Some(arr) = meta.get("oa_locations").and_then(|v| v.as_array()) {
+        for loc in arr {
+            if let Some(u) = pull_oa_url_from_location(loc) {
+                push_unique(u);
+            }
+        }
+    }
+    out
+}
+
+/// Resolve a single OA location object to a `url::Url`. Tries
+/// `url_for_pdf` first (the direct PDF link Unpaywall annotates when
+/// it knows one), falling back to `url` (the landing page). Returns
+/// `None` if neither field is present or parses.
+fn pull_oa_url_from_location(loc: &Value) -> Option<url::Url> {
     let candidate = loc
         .get("url_for_pdf")
         .and_then(|v| v.as_str())
@@ -1531,33 +1626,111 @@ mod tests {
     }
 
     #[test]
-    fn extract_best_oa_url_from_value_prefers_url_for_pdf() {
+    fn extract_oa_url_chain_prefers_best_url_for_pdf() {
+        // `best_oa_location.url_for_pdf` is the highest-priority
+        // candidate (ADR-0029 D2 — defer to the metadata source's
+        // ordering). Falls back to `best_oa_location.url` only when
+        // no PDF link is annotated.
         let meta = serde_json::json!({
             "best_oa_location": {
                 "url_for_pdf": "https://example.org/pdf",
                 "url": "https://example.org/landing"
             }
         });
-        let url = extract_best_oa_url_from_value(Some(&meta)).expect("Some(Url)");
-        assert_eq!(url.as_str(), "https://example.org/pdf");
+        let chain = extract_oa_url_chain(Some(&meta));
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].as_str(), "https://example.org/pdf");
     }
 
     #[test]
-    fn extract_best_oa_url_from_value_falls_back_to_url() {
+    fn extract_oa_url_chain_falls_back_to_url_when_url_for_pdf_absent() {
         let meta = serde_json::json!({
             "best_oa_location": {
                 "url": "https://example.org/landing"
             }
         });
-        let url = extract_best_oa_url_from_value(Some(&meta)).expect("Some(Url)");
-        assert_eq!(url.as_str(), "https://example.org/landing");
+        let chain = extract_oa_url_chain(Some(&meta));
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].as_str(), "https://example.org/landing");
     }
 
     #[test]
-    fn extract_best_oa_url_from_value_none_on_missing() {
+    fn extract_oa_url_chain_is_empty_when_no_locations() {
         let meta = serde_json::json!({});
-        assert!(extract_best_oa_url_from_value(Some(&meta)).is_none());
-        assert!(extract_best_oa_url_from_value(None).is_none());
+        assert!(extract_oa_url_chain(Some(&meta)).is_empty());
+        assert!(extract_oa_url_chain(None).is_empty());
+    }
+
+    #[test]
+    fn extract_oa_url_chain_appends_oa_locations_after_best() {
+        // ADR-0029 D2: best_oa_location first, then the rest of
+        // oa_locations in metadata-source order. This is the load-
+        // bearing test: it pins the fact that an arXiv preprint
+        // listed *after* a WAF-blocked publisher in oa_locations[]
+        // becomes a fallback candidate the chain walker can reach.
+        let meta = serde_json::json!({
+            "best_oa_location": {
+                "url_for_pdf": "https://publisher.example.org/pdf"
+            },
+            "oa_locations": [
+                {"url_for_pdf": "https://publisher.example.org/pdf"},
+                {"url_for_pdf": "https://arxiv.org/pdf/2401.12345"},
+                {"url": "https://repo.example.edu/handle/123"}
+            ]
+        });
+        let chain = extract_oa_url_chain(Some(&meta));
+        let strs: Vec<&str> = chain.iter().map(|u| u.as_str()).collect();
+        assert_eq!(
+            strs,
+            vec![
+                "https://publisher.example.org/pdf",
+                "https://arxiv.org/pdf/2401.12345",
+                "https://repo.example.edu/handle/123",
+            ],
+            "chain ordering MUST be best_oa_location first, oa_locations[] verbatim after"
+        );
+    }
+
+    #[test]
+    fn extract_oa_url_chain_dedupes_repeated_urls() {
+        // A URL that appears as both `best_oa_location` and an entry
+        // in `oa_locations[]` is fetched at most once. Without this,
+        // a publisher whose record has the same URL in both slots
+        // would consume two HTTP requests + two rate-limit ticks.
+        let meta = serde_json::json!({
+            "best_oa_location": {
+                "url_for_pdf": "https://example.org/pdf"
+            },
+            "oa_locations": [
+                {"url_for_pdf": "https://example.org/pdf"},
+                {"url_for_pdf": "https://example.org/pdf"},
+                {"url_for_pdf": "https://arxiv.org/pdf/2401.12345"}
+            ]
+        });
+        let chain = extract_oa_url_chain(Some(&meta));
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].as_str(), "https://example.org/pdf");
+        assert_eq!(chain[1].as_str(), "https://arxiv.org/pdf/2401.12345");
+    }
+
+    #[test]
+    fn extract_oa_url_chain_skips_unparseable_urls() {
+        // A malformed URL in oa_locations[] is dropped silently
+        // rather than aborting the chain — the metadata source can
+        // emit a stray entry without poisoning the whole fetch.
+        let meta = serde_json::json!({
+            "best_oa_location": {
+                "url_for_pdf": "https://good.example.org/pdf"
+            },
+            "oa_locations": [
+                {"url_for_pdf": "not a url"},
+                {"url_for_pdf": "https://arxiv.org/pdf/2401.12345"}
+            ]
+        });
+        let chain = extract_oa_url_chain(Some(&meta));
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].as_str(), "https://good.example.org/pdf");
+        assert_eq!(chain[1].as_str(), "https://arxiv.org/pdf/2401.12345");
     }
 
     #[test]
