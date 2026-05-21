@@ -30,9 +30,11 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
+use camino::Utf8Path;
 
 use doiget_core::orchestrator::{FetchPaperOutcome, PdfLegStatus};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, RowInput};
+use doiget_core::refs::{self, Format, ParseError};
 use doiget_core::source::FetchError;
 use doiget_core::{DenialContext, ErrorCode, RateLimits, Ref, MCP_BATCH_MAX_SIZE};
 
@@ -85,15 +87,57 @@ pub async fn run_with_options(
     let raw =
         std::fs::read_to_string(&path).with_context(|| format!("reading batch file: {path}"))?;
 
-    // Step 2: parse refs — trim, drop blanks and `#`-prefixed comments. We
-    // keep the input strings (not parsed `Ref`s yet) so that per-ref parse
-    // failures can be logged with the original text.
-    let inputs: Vec<String> = raw
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|s| s.to_string())
-        .collect();
+    // Step 2: parse refs via the ADR-0030 bibliography adapter. The
+    // adapter auto-detects between plain refs / CSL-JSON / BibTeX
+    // (slice 2 follow-up) by path extension + content fingerprint,
+    // then yields one `Result<ParsedEntry, ParseError>` per
+    // discovered entry.
+    //
+    // To keep the rest of the pipeline byte-identical to the
+    // pre-ADR-0030 plain-refs flow, we materialise each entry into
+    // the same `inputs: Vec<String>` shape the downstream Step 7
+    // already drives. The Ok arm produces the canonical ref-input
+    // string; the per-entry `InvalidRef` arm produces the raw
+    // identifier verbatim so the downstream `Ref::parse` call still
+    // produces an `INVALID_REF` JSONL line with the offending
+    // string. Whole-input failures (`Decode` / `UnsupportedFormat`)
+    // abort before any fetch runs — the operator gets a single loud
+    // error rather than a silently-empty batch.
+    let path_utf8 = Utf8Path::new(&path);
+    let parsed = refs::parse_input(&raw, Format::Auto, Some(path_utf8));
+    let mut inputs: Vec<String> = Vec::with_capacity(parsed.len());
+    for entry in parsed {
+        match entry {
+            Ok(p) => inputs.push(p.ref_.as_input_str().to_string()),
+            Err(ParseError::InvalidRef { raw, .. }) => inputs.push(raw),
+            Err(ParseError::NoIdentifier { entry_key }) => {
+                // Synthesise a recognisable placeholder so Step 7's
+                // `Ref::parse` rejects this entry as `INVALID_REF`
+                // with the operator's citation key visible in the
+                // JSONL `ref` field. A future slice will plumb the
+                // structured `entry_key` into a dedicated error
+                // object field (ADR-0030 §6).
+                let placeholder = match entry_key {
+                    Some(k) => format!("<no-identifier:{k}>"),
+                    None => "<no-identifier>".to_string(),
+                };
+                inputs.push(placeholder);
+            }
+            Err(ParseError::Decode { format, message }) => {
+                return Err(anyhow!("input did not deserialise as {format}: {message}"));
+            }
+            Err(ParseError::UnsupportedFormat { format }) => {
+                return Err(anyhow!(
+                    "input format '{format}' is not yet supported — \
+                     re-export your library as CSL-JSON or plain refs"
+                ));
+            }
+            // `ParseError` is `#[non_exhaustive]`; any future variant
+            // surfaces as a generic invalid-ref entry so the batch
+            // does not silently swallow a new failure class.
+            Err(other) => inputs.push(format!("<unhandled parse error: {other}>")),
+        }
+    }
 
     // Step 3: enforce the hard cap before doing any work. The cap is the
     // same one the MCP `batch_fetch` tool enforces (`MCP_BATCH_MAX_SIZE`).
