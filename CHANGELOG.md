@@ -10,6 +10,37 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.4.1-beta.1] - 2026-05-21
+
+Beta-lane open for the v0.4 design (ADR-0017 Amendment 1 +
+ADR-0028 / 0029 / 0030, design-only — no code change yet).
+Workspace version is bumped to satisfy the version-gate G5
+(non-empty CHANGELOG section for the prospective tag) while the
+implementation slices S1-S8 land separately.
+
+### Added
+
+- **[design]** ADR-0017 Amendment 1: distinguish *explicit* vs
+  *implicit* `Quiet`, classify commands as artifact vs
+  informational. Closes the LLM cold-boot deadlock reported in
+  #219 / #220 once the implementation slice (S1) lands.
+- **[design]** ADR-0028: the capability gate's purpose is
+  **ToS compliance + verified curation**; users may extend it via
+  `config.toml` (literal hosts or single-suffix wildcards) with
+  per-attempt `verified_by = "user"` recorded in the provenance
+  log. Impersonation / WAF bypass / embedded headless browser
+  (#223) are permanently out-of-scope.
+- **[design]** ADR-0029: `fetch_one` resolves to an ordered chain
+  of candidate URLs (OpenAlex `oa_locations[]` order); each
+  attempt becomes its own provenance row (schema-additive on v2).
+  New closed-enum `FetchError` variant `ALL_FALLBACKS_EXHAUSTED`
+  carries `Vec<AttemptOutcome>`.
+- **[design]** ADR-0030: bibliography input adapters
+  (`.bib` / CSL-JSON) live in `doiget-core`; new MCP tool
+  `doiget_batch_from_bibliography` enables the Zotero plugin
+  distribution path. One identifier per entry
+  (DOI > arXiv > PMID); skip-and-warn on parse error by default.
+
 ## [0.3.0] - 2026-05-20
 
 Promotion of the `0.2.1-beta.1..beta.12` integration line on `next` to a

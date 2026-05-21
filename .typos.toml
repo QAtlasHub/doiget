@@ -11,6 +11,11 @@
 # `flate`: substring of the gzip crate name `flate2` (provenance §6
 # rotation, #140) — a real crate identifier, not a misspelling of "flat".
 flate = "flate"
+# `rquest`: actively-maintained reqwest fork
+# (https://crates.io/crates/rquest); referenced in ADR-0028 (D3)
+# as one of the impersonation libraries explicitly out-of-scope.
+# Not a misspelling of "request" or "quest".
+rquest = "rquest"
 
 [files]
 # Generated / vendored / fixture files where typo enforcement is not useful.
