@@ -28,6 +28,8 @@ Additional tools:
 | `doiget_expand_citation_graph` | BFS expansion of citations. Hard-capped. |
 | `doiget_bibtex_export` | BibTeX for one or many entries. |
 | `doiget_csl_export` | CSL JSON for one or many entries. |
+| `doiget_resolve_citation` | Resolve a free-form bibliographic citation string to ranked DOI candidates. |
+| `doiget_batch_resolve_citations` | Batch resolve bibliographic citation strings to ranked DOI candidates. |
 
 ## 2. Naming and convention
 
@@ -296,3 +298,11 @@ type MetadataOnlyResult =
 Posture: covered by the same posture-lint check as ADR-0022 §5 — a
 `metadata_only` codepath that reaches `HttpClient::fetch_pdf` is a hard
 failure.
+
+## 12. `doiget_resolve_citation` and `doiget_batch_resolve_citations` (NORMATIVE)
+
+`doiget_resolve_citation` resolves a free-form bibliographic citation string to ranked DOI candidates via the Crossref works query API.
+
+`doiget_batch_resolve_citations` batch-resolves multiple citation strings (up to 50).
+
+Both tools calculate token-based overlap similarity scores, filter out results with a score < 0.5, and sort candidates by score descending. No local store writes or provenance logs are created.

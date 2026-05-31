@@ -55,6 +55,7 @@ use doiget_core::orchestrator::{
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
 use doiget_core::source::{FetchContext, FetchError};
+use doiget_core::sources::crossref::CrossrefSource;
 use doiget_core::store::{EntryInfo, FsStore, Store};
 use doiget_core::{
     CapabilityProfile, DenialContext, ErrorCode, RateLimits, Ref, MAX_BATCH_REFS, SCHEMA_VERSION,
@@ -1528,6 +1529,132 @@ impl Server {
     ) -> Result<CallToolResult, ErrorData> {
         Ok(self.export_citations(&input.refs, CiteFmt::Csl))
     }
+
+    /// `doiget_resolve_citation` — resolve a free-form bibliographic citation string to ranked DOI candidates.
+    #[tool(
+        description = "WHEN TO USE: Resolve a free-form bibliographic citation string (e.g. 'Onsager 1944') to ranked DOI candidates.\n\
+                       INPUTS: query (bibliographic citation query string), limit (maximum number of candidates to return, default: 5).\n\
+                       OUTPUTS: { ok: true, query, candidates: [ { doi, title, author, year, score, source } ] } OR { ok: false, error }.\n\
+                       COSTS: 1-2 s round-trip.\n\
+                       SIDE EFFECTS: none.\n\
+                       LIMITS: Returns candidates with similarity score >= 0.5."
+    )]
+    async fn doiget_resolve_citation(
+        &self,
+        Parameters(input): Parameters<ResolveCitationInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(serde_json::json!({
+                    "ok": false,
+                    "error": format!("context initialization failed: {e}"),
+                })));
+            }
+        };
+
+        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
+        let crossref_base = std::env::var("DOIGET_CROSSREF_BASE").ok();
+        
+        let source = if let Some(base_str) = crossref_base {
+            let base = match url::Url::parse(&base_str) {
+                Ok(b) => b,
+                Err(e) => return Ok(CallToolResult::structured(serde_json::json!({
+                    "ok": false,
+                    "error": format!("invalid DOIGET_CROSSREF_BASE: {e}"),
+                }))),
+            };
+            CrossrefSource::with_base(base, contact_email)
+        } else {
+            CrossrefSource::new(contact_email)
+        };
+
+        match source.resolve_citation(&input.query, input.limit, &ctx).await {
+            Ok(candidates) => {
+                Ok(CallToolResult::structured(serde_json::json!({
+                    "ok": true,
+                    "query": input.query,
+                    "candidates": candidates,
+                })))
+            }
+            Err(e) => {
+                Ok(CallToolResult::structured(serde_json::json!({
+                    "ok": false,
+                    "error": format!("resolve failed: {e}"),
+                })))
+            }
+        }
+    }
+
+    /// `doiget_batch_resolve_citations` — resolve multiple free-form bibliographic citation strings to ranked DOI candidates.
+    #[tool(
+        description = "WHEN TO USE: Resolve multiple free-form bibliographic citation strings in batch.\n\
+                       INPUTS: queries (array of query strings), limit (maximum number of candidates per query, default: 5).\n\
+                       OUTPUTS: { ok: true, results: [ { query, candidates: [ { doi, title, author, year, score, source } ] } ] } OR { ok: false, error }.\n\
+                       COSTS: 1-2 s round-trip per query.\n\
+                       SIDE EFFECTS: none.\n\
+                       LIMITS: Returns candidates with similarity score >= 0.5. At most 50 queries per call."
+    )]
+    async fn doiget_batch_resolve_citations(
+        &self,
+        Parameters(input): Parameters<BatchResolveCitationsInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if input.queries.len() > 50 {
+            return Ok(CallToolResult::structured(serde_json::json!({
+                "ok": false,
+                "error": "At most 50 queries per call.",
+            })));
+        }
+
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(serde_json::json!({
+                    "ok": false,
+                    "error": format!("context initialization failed: {e}"),
+                })));
+            }
+        };
+
+        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
+        let crossref_base = std::env::var("DOIGET_CROSSREF_BASE").ok();
+        
+        let source = if let Some(base_str) = crossref_base {
+            let base = match url::Url::parse(&base_str) {
+                Ok(b) => b,
+                Err(e) => return Ok(CallToolResult::structured(serde_json::json!({
+                    "ok": false,
+                    "error": format!("invalid DOIGET_CROSSREF_BASE: {e}"),
+                }))),
+            };
+            CrossrefSource::with_base(base, contact_email)
+        } else {
+            CrossrefSource::new(contact_email)
+        };
+
+        let mut results = Vec::new();
+        for query in &input.queries {
+            match source.resolve_citation(query, input.limit, &ctx).await {
+                Ok(candidates) => {
+                    results.push(serde_json::json!({
+                        "query": query,
+                        "candidates": candidates,
+                    }));
+                }
+                Err(e) => {
+                    results.push(serde_json::json!({
+                        "query": query,
+                        "error": format!("resolve failed: {e}"),
+                    }));
+                }
+            }
+        }
+
+        Ok(CallToolResult::structured(serde_json::json!({
+            "ok": true,
+            "results": results,
+        })))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1685,6 +1812,34 @@ pub struct CslExportInput {
     /// DOIs / arXiv ids to render. 1..=200; each validated via
     /// `Ref::parse` with per-ref error reporting.
     pub refs: Vec<String>,
+}
+
+/// JSON-schema-derived input for the `doiget_resolve_citation` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct ResolveCitationInput {
+    /// Bibliographic citation query string (e.g. "Onsager 1944").
+    pub query: String,
+    /// Maximum number of candidates to return (default: 5).
+    #[serde(default = "default_resolve_limit")]
+    pub limit: u8,
+}
+
+/// JSON-schema-derived input for the `doiget_batch_resolve_citations` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct BatchResolveCitationsInput {
+    /// Bibliographic citation query strings.
+    pub queries: Vec<String>,
+    /// Maximum number of candidates to return per query (default: 5).
+    #[serde(default = "default_resolve_limit")]
+    pub limit: u8,
+}
+
+fn default_resolve_limit() -> u8 {
+    5
 }
 
 /// Hard cap on refs accepted by a single `doiget_bibtex_export` /
