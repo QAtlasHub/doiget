@@ -973,35 +973,7 @@ async fn fetch_paper_doi(
             // caller no candidate URL was ever discovered). Routes
             // to `INTERNAL_ERROR` so the CLI's exit-code mapping
             // signals a doiget bug, not a remote failure.
-            (None, None) => {
-                tracing::error!(
-                    total = oa_chain.len(),
-                    "OA PDF chain walker exhausted without recording success or error \
-                     (defensive fallback — should be unreachable)"
-                );
-                (
-                    PdfLegStatus::Blocked {
-                        code: crate::ErrorCode::InternalError,
-                        message:
-                            "OA PDF chain walker exhausted without recording success or error \
-                             (orchestrator bug — please report)"
-                                .to_string(),
-                        denial: None,
-                        suggested_arxiv_id: None,
-                    },
-                    None,
-                )
-            }
-            // Defensive fallback. `oa_chain` is non-empty in this
-            // branch, so structurally at least one iteration must set
-            // either `succeeded` or `last_err`. If a future refactor
-            // breaks the invariant we fail CLOSED — surface a
-            // `Blocked` outcome with a self-describing message
-            // rather than `NoOaUrl` (which would falsely tell the
-            // caller no candidate URL was ever discovered). Routes
-            // to `INTERNAL_ERROR` so the CLI's exit-code mapping
-            // signals a doiget bug, not a remote failure.
-            (None, None) => {
+                        (None, None) => {
                 tracing::error!(
                     total = oa_chain.len(),
                     "OA PDF chain walker exhausted without recording success or error \
