@@ -499,11 +499,19 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
             code,
             message,
             denial,
+            suggested_arxiv_id,
         } => {
             // Same #145 reclassification as the primary interception in
             // `fetch_one`, so this fail-closed fallback stays consistent.
             let effective = effective_blocked_code(*code, denial.as_ref());
-            render_blocked_error(ref_, outcome, effective, message, denial.as_ref());
+            render_blocked_error(
+                ref_,
+                outcome,
+                effective,
+                message,
+                denial.as_ref(),
+                suggested_arxiv_id.as_deref(),
+            );
         }
         // `PdfLegStatus` is `#[non_exhaustive]`; a future variant
         // degrades to the size-based wording rather than failing the
@@ -624,10 +632,18 @@ pub async fn run_with_options(
                 code,
                 message,
                 denial,
+                suggested_arxiv_id,
             } = &outcome.pdf_leg
             {
                 let effective = effective_blocked_code(*code, denial.as_ref());
-                render_blocked_error(&ref_, &outcome, effective, message, denial.as_ref());
+                render_blocked_error(
+                    &ref_,
+                    &outcome,
+                    effective,
+                    message,
+                    denial.as_ref(),
+                    suggested_arxiv_id.as_deref(),
+                );
                 return Err(anyhow::Error::new(CliExit(cli_exit_code(effective))));
             }
             emit_success_line(&ref_, &outcome);
@@ -781,6 +797,7 @@ fn render_blocked_error(
     code: ErrorCode,
     message: &str,
     denial: Option<&DenialContext>,
+    suggested_arxiv_id: Option<&str>,
 ) {
     let label = match ref_ {
         Ref::Arxiv(id) => format!("arxiv:{}", id.as_str()),
@@ -831,6 +848,12 @@ fn render_blocked_error(
         "  = note: metadata-only record written to {}",
         outcome.path
     ));
+    if let Some(arxiv_id) = suggested_arxiv_id {
+        print_err(format_args!(
+            "  = suggest: Try fetching the arXiv version: doiget fetch arxiv:{}",
+            arxiv_id
+        ));
+    }
 }
 
 // ---------------------------------------------------------------------------
