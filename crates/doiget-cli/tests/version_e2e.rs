@@ -97,7 +97,7 @@ async fn version_check_newer_available_human_output() {
     let dir = TempDir::new().expect("tempdir");
     let out = doiget(&dir)
         .args(["version", "--check"])
-        .env("DOIGET_GITHUB_BASE", &server.uri())
+        .env("DOIGET_GITHUB_BASE", server.uri())
         .assert()
         .success()
         .get_output()
@@ -125,7 +125,7 @@ async fn version_check_up_to_date_human_output() {
     let dir = TempDir::new().expect("tempdir");
     let out = doiget(&dir)
         .args(["version", "--check"])
-        .env("DOIGET_GITHUB_BASE", &server.uri())
+        .env("DOIGET_GITHUB_BASE", server.uri())
         .assert()
         .success()
         .get_output()
@@ -152,7 +152,7 @@ async fn version_check_json_mode_emits_structured_object() {
     let dir = TempDir::new().expect("tempdir");
     let out = doiget(&dir)
         .args(["version", "--check", "--mode", "json"])
-        .env("DOIGET_GITHUB_BASE", &server.uri())
+        .env("DOIGET_GITHUB_BASE", server.uri())
         .assert()
         .success()
         .get_output()
@@ -191,7 +191,7 @@ async fn version_check_skips_draft_releases() {
     let dir = TempDir::new().expect("tempdir");
     let out = doiget(&dir)
         .args(["version", "--check", "--mode", "json"])
-        .env("DOIGET_GITHUB_BASE", &server.uri())
+        .env("DOIGET_GITHUB_BASE", server.uri())
         .assert()
         .success()
         .get_output()
@@ -219,7 +219,7 @@ async fn version_check_skips_prerelease_flag_releases() {
     let dir = TempDir::new().expect("tempdir");
     let out = doiget(&dir)
         .args(["version", "--check", "--mode", "json"])
-        .env("DOIGET_GITHUB_BASE", &server.uri())
+        .env("DOIGET_GITHUB_BASE", server.uri())
         .assert()
         .success()
         .get_output()
@@ -252,7 +252,7 @@ async fn version_check_skips_tags_with_beta_suffix() {
     let dir = TempDir::new().expect("tempdir");
     let out = doiget(&dir)
         .args(["version", "--check", "--mode", "json"])
-        .env("DOIGET_GITHUB_BASE", &server.uri())
+        .env("DOIGET_GITHUB_BASE", server.uri())
         .assert()
         .success()
         .get_output()
@@ -291,7 +291,7 @@ async fn version_check_picks_first_stable_skipping_unstable() {
     let dir = TempDir::new().expect("tempdir");
     let out = doiget(&dir)
         .args(["version", "--check", "--mode", "json"])
-        .env("DOIGET_GITHUB_BASE", &server.uri())
+        .env("DOIGET_GITHUB_BASE", server.uri())
         .assert()
         .success()
         .get_output()
@@ -317,7 +317,7 @@ async fn version_check_rate_limited_json_reports_error() {
     let dir = TempDir::new().expect("tempdir");
     let out = doiget(&dir)
         .args(["version", "--check", "--mode", "json"])
-        .env("DOIGET_GITHUB_BASE", &server.uri())
+        .env("DOIGET_GITHUB_BASE", server.uri())
         .assert()
         .success() // must never hard-fail on a network error
         .get_output()
@@ -347,7 +347,7 @@ async fn version_check_rate_limited_human_exits_zero() {
     let dir = TempDir::new().expect("tempdir");
     doiget(&dir)
         .args(["version", "--check"])
-        .env("DOIGET_GITHUB_BASE", &server.uri())
+        .env("DOIGET_GITHUB_BASE", server.uri())
         .assert()
         .success()
         .stdout(contains("version check failed"));
@@ -365,7 +365,7 @@ async fn version_check_empty_releases_reports_error() {
     let dir = TempDir::new().expect("tempdir");
     let out = doiget(&dir)
         .args(["version", "--check", "--mode", "json"])
-        .env("DOIGET_GITHUB_BASE", &server.uri())
+        .env("DOIGET_GITHUB_BASE", server.uri())
         .assert()
         .success()
         .get_output()
@@ -377,4 +377,71 @@ async fn version_check_empty_releases_reports_error() {
         "empty releases must report error; got: {v}"
     );
     assert!(v["latest"].is_null(), "latest must be null; got: {v}");
+}
+
+#[tokio::test]
+async fn version_check_quiet_suppresses_network_call() {
+    // With --quiet the command must exit 0 and produce no stdout,
+    // even when --check is also passed. The mock is intentionally not
+    // mounted: if the subprocess made a network call it would fail or
+    // produce output, both of which would cause the assertion to fail.
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .args(["version", "--check", "--quiet"])
+        // Point at localhost on a port with no listener; any actual
+        // network attempt would surface as an error, not silence.
+        .env("DOIGET_GITHUB_BASE", "http://127.0.0.1:1")
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[tokio::test]
+async fn version_check_newer_available_human_prints_release_url() {
+    let server = MockServer::start().await;
+    let tag = "v1.0.0";
+    let expected_url = format!("https://github.com/sotashimozono/doiget/releases/tag/{tag}");
+    Mock::given(method("GET"))
+        .and(path("/repos/sotashimozono/doiget/releases"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(releases_body(tag, false, false)))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .args(["version", "--check"])
+        .env("DOIGET_GITHUB_BASE", server.uri())
+        .assert()
+        .success()
+        .stdout(contains(&expected_url));
+}
+
+#[tokio::test]
+async fn version_check_json_up_to_date_newer_available_false() {
+    let server = MockServer::start().await;
+    // v0.1.0 is older than any current build — newer_available must be false.
+    Mock::given(method("GET"))
+        .and(path("/repos/sotashimozono/doiget/releases"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(releases_body("v0.1.0", false, false)),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    let out = doiget(&dir)
+        .args(["version", "--check", "--mode", "json"])
+        .env("DOIGET_GITHUB_BASE", server.uri())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(
+        v["newer_available"],
+        serde_json::json!(false),
+        "v0.1.0 must not be reported as newer; got: {v}"
+    );
+    assert!(v.get("error").is_none(), "no error on success; got: {v}");
 }

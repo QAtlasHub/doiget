@@ -22,6 +22,7 @@
 //! so callers never receive a hard error just because GitHub is slow.
 
 use std::io::Write;
+use std::time::Duration;
 
 use anyhow::Result;
 use serde::Serialize;
@@ -32,19 +33,32 @@ const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
 const RELEASES_API: &str = "https://api.github.com/repos/sotashimozono/doiget/releases";
 
+/// Connect + read timeout for the version check HTTP request.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Return the releases endpoint URL, honouring `DOIGET_GITHUB_BASE` for
 /// integration tests (same override pattern as `DOIGET_CROSSREF_BASE` etc.).
-fn releases_url() -> String {
+///
+/// Returns an error when `DOIGET_GITHUB_BASE` is set but not a valid URL.
+fn releases_url() -> anyhow::Result<String> {
     match std::env::var("DOIGET_GITHUB_BASE").ok() {
-        Some(base) => format!(
-            "{}/repos/sotashimozono/doiget/releases",
-            base.trim_end_matches('/')
-        ),
-        None => RELEASES_API.to_string(),
+        Some(base) => {
+            url::Url::parse(&base)
+                .map_err(|e| anyhow::anyhow!("invalid DOIGET_GITHUB_BASE: {e}"))?;
+            Ok(format!(
+                "{}/repos/sotashimozono/doiget/releases",
+                base.trim_end_matches('/')
+            ))
+        }
+        None => Ok(RELEASES_API.to_string()),
     }
 }
 
 /// Output shape for `--check` in JSON mode.
+///
+/// On failure `latest`, `newer_available`, and `html_url` are `null`;
+/// `error` carries a human-readable reason. These `null` fields are stable
+/// wire format — they are present, not absent, in the error path.
 #[derive(Debug, Serialize)]
 pub struct VersionCheckResult {
     /// Current compiled-in version.
@@ -134,9 +148,12 @@ async fn try_fetch_latest() -> anyhow::Result<VersionCheckResult> {
     doiget_core::http::init_tls();
     let client = reqwest::Client::builder()
         .user_agent(format!("doiget/{CURRENT}"))
+        .timeout(CHECK_TIMEOUT)
         .build()?;
 
-    let resp = client.get(releases_url()).send().await.map_err(|e| {
+    let url = releases_url()?;
+
+    let resp = client.get(url).send().await.map_err(|e| {
         if e.is_connect() || e.is_timeout() {
             anyhow::anyhow!("unreachable")
         } else {
@@ -194,13 +211,20 @@ async fn try_fetch_latest() -> anyhow::Result<VersionCheckResult> {
 
 /// Return `true` when `candidate` is strictly newer than `current` by
 /// dot-separated numeric comparison on the version core (before any `-`
-/// pre-release suffix).
+/// pre-release suffix). Both vectors are padded to equal length so that
+/// `"1.0"` and `"1.0.0"` compare equal rather than the shorter one
+/// appearing lesser.
 fn is_newer(candidate: &str, current: &str) -> bool {
     let parse = |s: &str| -> Vec<u64> {
         let core = s.split('-').next().unwrap_or(s);
         core.split('.').map(|p| p.parse().unwrap_or(0)).collect()
     };
-    parse(candidate) > parse(current)
+    let mut a = parse(candidate);
+    let mut b = parse(current);
+    let len = a.len().max(b.len());
+    a.resize(len, 0);
+    b.resize(len, 0);
+    a > b
 }
 
 /// Return `true` when a version string has a known pre-release suffix.
@@ -228,10 +252,33 @@ mod tests {
     }
 
     #[test]
+    fn is_newer_pads_mismatched_component_counts() {
+        // "1.0" and "1.0.0" must compare equal, not report "1.0" as older.
+        assert!(!is_newer("1.0", "1.0.0"));
+        assert!(!is_newer("1.0.0", "1.0"));
+        assert!(is_newer("1.0.1", "1.0"));
+    }
+
+    #[test]
     fn has_prerelease_suffix_cases() {
         assert!(has_prerelease_suffix("0.4.1-beta.0"));
         assert!(has_prerelease_suffix("1.0.0-alpha"));
         assert!(has_prerelease_suffix("1.0.0-rc.1"));
         assert!(!has_prerelease_suffix("0.4.0"));
+    }
+
+    #[test]
+    fn releases_url_rejects_invalid_base() {
+        std::env::set_var("DOIGET_GITHUB_BASE", "not a url !!!");
+        let result = releases_url();
+        std::env::remove_var("DOIGET_GITHUB_BASE");
+        assert!(result.is_err(), "invalid base must return Err");
+    }
+
+    #[test]
+    fn releases_url_falls_back_to_production_when_unset() {
+        std::env::remove_var("DOIGET_GITHUB_BASE");
+        let url = releases_url().expect("fallback must succeed");
+        assert_eq!(url, RELEASES_API);
     }
 }
