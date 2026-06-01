@@ -973,7 +973,7 @@ async fn fetch_paper_doi(
             // caller no candidate URL was ever discovered). Routes
             // to `INTERNAL_ERROR` so the CLI's exit-code mapping
             // signals a doiget bug, not a remote failure.
-                        (None, None) => {
+            (None, None) => {
                 tracing::error!(
                     total = oa_chain.len(),
                     "OA PDF chain walker exhausted without recording success or error \
@@ -1600,8 +1600,14 @@ mod tests {
         let urls = [
             ("https://arxiv.org/pdf/1901.12345.pdf", Some("1901.12345")),
             ("https://arxiv.org/abs/1901.12345", Some("1901.12345")),
-            ("https://www.arxiv.org/pdf/cond-mat/9501001.pdf", Some("cond-mat/9501001")),
-            ("https://export.arxiv.org/abs/cond-mat/9501001", Some("cond-mat/9501001")),
+            (
+                "https://www.arxiv.org/pdf/cond-mat/9501001.pdf",
+                Some("cond-mat/9501001"),
+            ),
+            (
+                "https://export.arxiv.org/abs/cond-mat/9501001",
+                Some("cond-mat/9501001"),
+            ),
             ("https://example.org/pdf/1901.12345.pdf", None),
         ];
         for (url_str, expected) in urls {
