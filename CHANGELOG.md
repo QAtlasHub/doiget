@@ -17,6 +17,7 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 - **[core]** Support resolving free-form bibliographic citation strings to ranked DOI candidates via Crossref Works query API. Compute a token-based overlap similarity score to filter (score >= 0.5) and rank candidates.
 - **[cli]** The `doiget fetch` command prints a suggested arXiv command when a primary PDF fetch is blocked but an arXiv alternative is available.
 - **[cli]** Add `doiget resolve-citation "<query>"` command and `doiget batch-resolve-citations` command (which reads queries from stdin line-by-line) to return resolved DOI candidates in JSON.
+- **[cli]** Add `doiget version [--check]` command to print the current version and optionally query GitHub Releases for the latest stable tag.
 - **[mcp]** The `doiget_fetch` MCP tool output includes the `suggested_arxiv_id` in the `pdf_leg` object when blocked.
 - **[mcp]** Add `doiget_resolve_citation` and `doiget_batch_resolve_citations` MCP tools to resolve bibliographic citation strings to ranked DOI candidates.
 
