@@ -134,7 +134,20 @@ pub async fn metadata_only(
     // Resolver cache (docs/CACHE.md): on a hit within TTL, return the
     // cached outcome without touching the network — this is what lets
     // `doiget verify` avoid upstream rate limits across repeated runs.
-    if let Some(root) = &ctx.cache_root {
+    //
+    // The cache key is the ref's safekey only, so it MUST NOT be shared
+    // across different resolver endpoints. When any `DOIGET_*_BASE`
+    // override is set (wiremock in tests, or a non-production endpoint),
+    // the cache is bypassed entirely — otherwise a wiremock-fabricated
+    // entry could be written to (or read from) the real production cache
+    // for the same ref, silently serving fake metadata.
+    let cache_root = if resolver_base_overridden() {
+        None
+    } else {
+        ctx.cache_root.as_deref()
+    };
+
+    if let Some(root) = cache_root {
         if let Some(cached) = crate::resolver_cache::read(root, ref_) {
             return Ok(cached);
         }
@@ -158,10 +171,24 @@ pub async fn metadata_only(
     };
 
     // Best-effort cache write (never fails the resolve).
-    if let Some(root) = &ctx.cache_root {
+    if let Some(root) = cache_root {
         crate::resolver_cache::write(root, ref_, &outcome);
     }
     Ok(outcome)
+}
+
+/// Whether any resolver base-URL override is set. When true the resolver
+/// cache is bypassed, so a non-production endpoint (wiremock in tests) can
+/// never share cache entries with the real Crossref / Unpaywall / arXiv
+/// endpoints for the same ref.
+fn resolver_base_overridden() -> bool {
+    [
+        "DOIGET_CROSSREF_BASE",
+        "DOIGET_UNPAYWALL_BASE",
+        "DOIGET_ARXIV_BASE",
+    ]
+    .iter()
+    .any(|k| std::env::var_os(k).is_some())
 }
 
 /// Resolve a [`Ref`] to metadata with **no local persistence**.

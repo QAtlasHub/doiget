@@ -41,7 +41,10 @@ fn doiget(dir: &TempDir) -> Command {
         .env("XDG_CONFIG_HOME", p)
         .env("APPDATA", p)
         .env("DOIGET_STORE_ROOT", p)
-        .env("DOIGET_LOG_PATH", log_path);
+        .env("DOIGET_LOG_PATH", log_path)
+        // Pin the resolver cache to the temp dir so a test never reads or
+        // writes the developer's real ~/.cache/doiget.
+        .env("DOIGET_CACHE_ROOT", p);
     cmd
 }
 
@@ -213,4 +216,41 @@ async fn verify_unresolved_arxiv_warns_by_default_fails_strict() {
         .assert()
         .failure()
         .stdout(contains("\"status\":\"unresolved\""));
+}
+
+#[tokio::test]
+async fn verify_with_base_override_does_not_write_cache() {
+    // Regression guard: when a DOIGET_*_BASE override is set (wiremock),
+    // the resolver cache MUST be bypassed so a wiremock-fabricated entry
+    // never poisons the real production cache for the same ref.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_ATOM_FEED))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    let bib = write_bib(
+        &dir,
+        "refs.bib",
+        "@article{x, eprint = {2401.12345}, archivePrefix = {arXiv}}",
+    );
+    // doiget() sets DOIGET_CACHE_ROOT to the temp dir; the cache, if it
+    // were written, would land in <temp>/resolver/.
+    doiget(&dir)
+        .args(["verify", &bib])
+        .env("DOIGET_ARXIV_BASE", server.uri())
+        .assert()
+        .success()
+        .stdout(contains("\"status\":\"valid\""));
+
+    let resolver_dir = dir.path().join("resolver");
+    let entries = std::fs::read_dir(&resolver_dir)
+        .map(|rd| rd.count())
+        .unwrap_or(0);
+    assert_eq!(
+        entries, 0,
+        "base override must bypass the cache; found {entries} cache entries in {resolver_dir:?}"
+    );
 }
