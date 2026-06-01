@@ -234,6 +234,7 @@ fn has_prerelease_suffix(version: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
