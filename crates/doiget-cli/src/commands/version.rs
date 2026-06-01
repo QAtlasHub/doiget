@@ -32,6 +32,18 @@ const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
 const RELEASES_API: &str = "https://api.github.com/repos/sotashimozono/doiget/releases";
 
+/// Return the releases endpoint URL, honouring `DOIGET_GITHUB_BASE` for
+/// integration tests (same override pattern as `DOIGET_CROSSREF_BASE` etc.).
+fn releases_url() -> String {
+    match std::env::var("DOIGET_GITHUB_BASE").ok() {
+        Some(base) => format!(
+            "{}/repos/sotashimozono/doiget/releases",
+            base.trim_end_matches('/')
+        ),
+        None => RELEASES_API.to_string(),
+    }
+}
+
 /// Output shape for `--check` in JSON mode.
 #[derive(Debug, Serialize)]
 pub struct VersionCheckResult {
@@ -119,11 +131,12 @@ async fn fetch_latest() -> VersionCheckResult {
 }
 
 async fn try_fetch_latest() -> anyhow::Result<VersionCheckResult> {
+    doiget_core::http::init_tls();
     let client = reqwest::Client::builder()
         .user_agent(format!("doiget/{CURRENT}"))
         .build()?;
 
-    let resp = client.get(RELEASES_API).send().await.map_err(|e| {
+    let resp = client.get(releases_url()).send().await.map_err(|e| {
         if e.is_connect() || e.is_timeout() {
             anyhow::anyhow!("unreachable")
         } else {
