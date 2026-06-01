@@ -1,3 +1,4 @@
+// allow: outbound-network
 //! `doiget version [--check]` — print the current version and optionally
 //! query GitHub Releases for the latest stable tag.
 //!
