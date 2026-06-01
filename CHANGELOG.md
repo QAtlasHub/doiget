@@ -21,7 +21,6 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 - **[mcp]** Add `doiget_resolve_citation` and `doiget_batch_resolve_citations` MCP tools to resolve bibliographic citation strings to ranked DOI candidates.
 
 
-
 ## [0.4.0] - 2026-05-21
 
 Promotion of the `0.4.0-beta.1..beta.13` integration line on `next` to
