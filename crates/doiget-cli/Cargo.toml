@@ -55,6 +55,8 @@ ulid               = { workspace = true }
 # URL parsing for the source-base env-var overrides
 # (`DOIGET_ARXIV_BASE` / `DOIGET_CROSSREF_BASE` / `DOIGET_UNPAYWALL_BASE`).
 url                = { workspace = true }
+# Used by `doiget version --check` to query the GitHub Releases API.
+reqwest            = { workspace = true }
 # Production dep: the orchestrator stages PDF bytes to a tempfile so the
 # existing `Store::write(_, _, Some(&Utf8Path))` atomic-rename code path
 # applies (Source impls return `Bytes`, Store takes a path).
