@@ -16,6 +16,9 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 - **[cli]** `[verify]` config section (`on_missing_id = "warn" | "error" | "skip"`, `strict`) controlling how id-less and unresolved entries affect the exit code. `--strict` overrides the config.
 - **[ci]** `doiget-verify` composite GitHub Action (`.github/actions/verify`) so other repositories can gate their bibliography references in CI.
 
+### Fixed
+- **[core]** arXiv metadata (Atom) now queries `export.arxiv.org/api/query` instead of `arxiv.org/api/query`, which redirected and failed the resolve. PDFs still use `arxiv.org`; the two endpoints now use separate bases. Fixes arXiv `eprint` references resolving as `unresolved` in `doiget verify` / `doiget_metadata_only`.
+
 ## [0.4.1-beta.0] - 2026-05-31
 
 ### Added
