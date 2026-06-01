@@ -22,6 +22,9 @@ A single-binary CLI plus stdio MCP server that:
    (see [`STORE.md`](STORE.md)).
 4. Exposes a stdio MCP server with a fixed set of structured tools to agent hosts (see
    [`MCP_TOOLS.md`](MCP_TOOLS.md)).
+5. Verifies that the DOI / arXiv references in a bibliography file (`.bib` / CSL-JSON /
+   plain refs) resolve to real metadata, as a CI gate (`doiget verify`), without
+   downloading PDFs — resolution-only reuse of (1).
 
 That is the totality of doiget's intended scope. All other functionality is either
 explicitly out of scope below or requires a new ADR.

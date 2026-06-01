@@ -1,0 +1,63 @@
+name: "doiget verify references"
+description: >-
+  Check that every DOI / arXiv reference in a bibliography file
+  (.bib / CSL-JSON / plain refs) resolves to real metadata via Crossref /
+  arXiv. Does not download PDFs. Fails the job on malformed ids, and —
+  with strict — on unresolved or id-less entries.
+author: "sotashimozono"
+branding:
+  icon: "check-circle"
+  color: "blue"
+
+inputs:
+  path:
+    description: "Path to the bibliography file to verify."
+    required: true
+  format:
+    description: "Input format: auto | refs | csl-json | bibtex."
+    required: false
+    default: "auto"
+  strict:
+    description: >-
+      Fail the job on unresolved (well-formed but non-resolving) and
+      id-less entries, not just malformed ones. Set to "true" in a
+      network-stable lane.
+    required: false
+    default: "false"
+  contact-email:
+    description: >-
+      Polite-pool contact email sent to Crossref / Unpaywall as the
+      mailto parameter. Override with your project's contact address.
+    required: false
+    default: "doiget-verify@users.noreply.github.com"
+
+runs:
+  using: "composite"
+  steps:
+    # Pinned to the same stable toolchain SHA the doiget workspace CI uses.
+    - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+    # Build the doiget binary from THIS action's checked-out ref, so the
+    # version that runs always matches the `uses: …@ref` the caller pinned.
+    # `$GITHUB_ACTION_PATH` is `<repo>/.github/actions/verify`; three levels
+    # up is the workspace root.
+    - name: Build & install doiget
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo install --path "$GITHUB_ACTION_PATH/../../../crates/doiget-cli" --locked
+    - name: Verify references
+      shell: bash
+      # Inputs are passed via env, never interpolated into the script body,
+      # to avoid GitHub Actions expression-injection.
+      env:
+        DOIGET_CONTACT_EMAIL: ${{ inputs.contact-email }}
+        VERIFY_PATH: ${{ inputs.path }}
+        VERIFY_FORMAT: ${{ inputs.format }}
+        VERIFY_STRICT: ${{ inputs.strict }}
+      run: |
+        set -euo pipefail
+        args=(verify "$VERIFY_PATH" --format "$VERIFY_FORMAT" --mode json)
+        if [ "$VERIFY_STRICT" = "true" ]; then
+          args+=(--strict)
+        fi
+        doiget "${args[@]}"

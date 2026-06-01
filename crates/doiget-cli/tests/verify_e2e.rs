@@ -10,6 +10,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
@@ -35,6 +36,10 @@ fn doiget(dir: &TempDir) -> Command {
     let log_path = format!("{p}/log.jsonl");
     cmd.env("HOME", p)
         .env("USERPROFILE", p)
+        // Pin the config dir to the temp dir on both POSIX and Windows so
+        // a written `<temp>/doiget/config.toml` is the one verify reads.
+        .env("XDG_CONFIG_HOME", p)
+        .env("APPDATA", p)
         .env("DOIGET_STORE_ROOT", p)
         .env("DOIGET_LOG_PATH", log_path);
     cmd
@@ -45,6 +50,15 @@ fn write_bib(dir: &TempDir, name: &str, content: &str) -> String {
     let path = dir.path().join(name);
     std::fs::write(&path, content).expect("write bib fixture");
     path.to_str().expect("utf-8 path").to_string()
+}
+
+/// Write a `<dir>/doiget/config.toml` so the temp HOME resolves a
+/// `[verify]` section. `doiget()` sets `XDG_CONFIG_HOME` to the temp dir,
+/// so the config dir is `<dir>/doiget/`.
+fn write_config(dir: &TempDir, body: &str) {
+    let cfg_dir = dir.path().join("doiget");
+    std::fs::create_dir_all(&cfg_dir).expect("mkdir config dir");
+    std::fs::write(cfg_dir.join("config.toml"), body).expect("write config.toml");
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +99,49 @@ fn verify_missing_id_strict_fails() {
         .args(["verify", &bib, "--strict"])
         .assert()
         .failure()
+        .stdout(contains("\"status\":\"unverifiable\""));
+}
+
+#[test]
+fn verify_config_on_missing_id_error_fails_without_strict() {
+    // `[verify] on_missing_id = "error"` makes an id-less entry fail the
+    // run even without the `--strict` CLI flag.
+    let dir = TempDir::new().expect("tempdir");
+    write_config(&dir, "[verify]\non_missing_id = \"error\"\n");
+    let bib = write_bib(&dir, "refs.bib", "@book{x, title = {No Id}}");
+    doiget(&dir)
+        .args(["verify", &bib])
+        .assert()
+        .failure()
+        .stdout(contains("\"status\":\"unverifiable\""));
+}
+
+#[test]
+fn verify_config_on_missing_id_skip_drops_entry() {
+    // `skip` drops the id-less entry: no record emitted, run exits 0.
+    let dir = TempDir::new().expect("tempdir");
+    write_config(&dir, "[verify]\non_missing_id = \"skip\"\n");
+    let bib = write_bib(&dir, "refs.bib", "@book{x, title = {No Id}}");
+    doiget(&dir)
+        .args(["verify", &bib])
+        .assert()
+        .success()
+        .stdout(contains("unverifiable").not());
+}
+
+#[test]
+fn verify_config_strict_does_not_let_skip_drop_idless_entries() {
+    // `[verify] strict = true` + `on_missing_id = "skip"`: a strict run
+    // must not silently drop id-less entries — they surface (as a warning)
+    // so the summary stays honest. The run still exits 0 (skip→warn, not
+    // error), but the record IS emitted.
+    let dir = TempDir::new().expect("tempdir");
+    write_config(&dir, "[verify]\nstrict = true\non_missing_id = \"skip\"\n");
+    let bib = write_bib(&dir, "refs.bib", "@book{x, title = {No Id}}");
+    doiget(&dir)
+        .args(["verify", &bib])
+        .assert()
+        .success()
         .stdout(contains("\"status\":\"unverifiable\""));
 }
 

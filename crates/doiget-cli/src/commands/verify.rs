@@ -31,10 +31,31 @@ use camino::Utf8Path;
 use doiget_core::orchestrator::resolve_only;
 use doiget_core::refs::{parse_input, Format, ParseError};
 use doiget_core::source::FetchContext;
+use doiget_core::verify_config::{self, OnMissingId};
 use doiget_core::{CapabilityProfile, RateLimits};
 
 use super::fetch::CliExit;
 use super::output::OutputMode;
+
+/// Resolve the `[verify]` config from `<config_dir>/doiget/config.toml`.
+/// Best-effort: a missing file is defaults; a malformed file degrades to
+/// defaults with a stderr warning rather than aborting the run.
+fn load_verify_config() -> verify_config::VerifyConfig {
+    let path = match crate::commands::fetch::config_dir_utf8() {
+        Ok(dir) => dir.join("doiget").join("config.toml"),
+        Err(_) => return verify_config::VerifyConfig::default(),
+    };
+    match verify_config::load(&path) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("warning: ignoring [verify] config: {e}");
+            }
+            verify_config::VerifyConfig::default()
+        }
+    }
+}
 
 /// Build a metadata-resolution context: HTTP client, rate limiter, and
 /// provenance log resolved from the environment. Mirrors
@@ -71,11 +92,31 @@ fn parse_format(s: &str) -> Result<Format> {
 }
 
 /// Entry point for `doiget verify <path> [--format] [--strict]`.
-pub async fn run(path: String, format: String, strict: bool, mode: OutputMode) -> Result<()> {
+pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMode) -> Result<()> {
     let fmt = parse_format(&format)?;
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read reference file {path}"))?;
     let entries = parse_input(&text, fmt, Some(Utf8Path::new(&path)));
+
+    // Resolve effective policy: CLI `--strict` is the strictest setting,
+    // forcing both unresolved and id-less entries to fail and overriding
+    // the `[verify]` config.
+    let config = load_verify_config();
+    let strict = cli_strict || config.strict;
+    let on_missing = if cli_strict {
+        // CLI --strict is the strictest setting: id-less entries fail.
+        OnMissingId::Error
+    } else if strict {
+        // strict came from `[verify] strict = true`: unresolved ids fail.
+        // Do not let `skip` silently drop id-less entries in a strict run —
+        // surface them at least as a warning so the summary is honest.
+        match config.on_missing_id {
+            OnMissingId::Skip => OnMissingId::Warn,
+            other => other,
+        }
+    } else {
+        config.on_missing_id
+    };
 
     let ctx = build_context()?;
     let profile = CapabilityProfile::from_env().context("resolving capability profile")?;
@@ -86,6 +127,12 @@ pub async fn run(path: String, format: String, strict: bool, mode: OutputMode) -
     let mut unverifiable = 0u32;
 
     for entry in entries {
+        // `on_missing_id = "skip"` drops id-less entries entirely —
+        // before they are counted or emitted.
+        if matches!(&entry, Err(ParseError::NoIdentifier { .. })) && on_missing == OnMissingId::Skip
+        {
+            continue;
+        }
         let record = match entry {
             Ok(parsed) => {
                 let ref_ = parsed.ref_;
@@ -101,8 +148,18 @@ pub async fn run(path: String, format: String, strict: bool, mode: OutputMode) -
                         })
                     }
                     Err(e) => {
-                        unresolved += 1;
                         let code: doiget_core::ErrorCode = (&e).into();
+                        // A provenance-log write failure is fail-closed
+                        // (docs/SECURITY.md §1.8): it is an operator-side
+                        // fault, NOT a "this reference doesn't resolve"
+                        // signal, so it must abort the run rather than be
+                        // counted as a soft `unresolved` that CI passes.
+                        if code == doiget_core::ErrorCode::LogError {
+                            return Err(anyhow::anyhow!(
+                                "provenance log error during verify (aborting): {e}"
+                            ));
+                        }
+                        unresolved += 1;
                         serde_json::json!({
                             "ok": false,
                             "ref": ref_.as_input_str(),
@@ -175,7 +232,13 @@ pub async fn run(path: String, format: String, strict: bool, mode: OutputMode) -
         }
     }
 
-    let failing = illegal + if strict { unresolved + unverifiable } else { 0 };
+    let failing = illegal
+        + if strict { unresolved } else { 0 }
+        + if on_missing == OnMissingId::Error {
+            unverifiable
+        } else {
+            0
+        };
     if failing == 0 {
         Ok(())
     } else {
