@@ -26,6 +26,7 @@ pub mod source;
 pub mod sources;
 pub mod store;
 pub mod user_extension;
+pub mod verify_config;
 
 // Phase 4 citation graph (ADR-0010). Compile-gated by the `citation`
 // Cargo feature, which itself enables the `metadata` feature so the
