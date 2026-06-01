@@ -360,7 +360,7 @@ fn parse_csl_entry(
 /// zero — matching the CSL-JSON behaviour.
 ///
 /// Identifier-pick priority per ADR-0030 D3: `doi` field, then
-/// `eprint` (arXiv). See [`parse_bibtex_entry`].
+/// `eprint` (arXiv). See `parse_bibtex_entry`.
 pub fn parse_bibtex(text: &str) -> Vec<Result<ParsedEntry, ParseError>> {
     let bib = match Bibliography::parse(text) {
         Ok(b) => b,
@@ -404,7 +404,7 @@ fn parse_bibtex_entry(
     // id when the prefix names arXiv OR is absent (the dominant
     // single-preprint-server convention); a prefix that names something
     // else (e.g. `eprinttype = {pubmed}`) is skipped rather than
-    // mis-parsed.
+    // parsed incorrectly.
     if let Ok(eprint) = entry.eprint() {
         let raw = eprint.trim();
         if !raw.is_empty() && arxiv_eligible(entry) {
