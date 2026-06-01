@@ -415,6 +415,17 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
             json_mode: JsonMode::Supported,
             feature_gated: None,
         },
+        "verify" => SubcommandMeta {
+            examples: &[
+                "doiget verify refs.bib",
+                "doiget verify library.bib --strict",
+                "doiget verify refs.txt --format refs",
+            ],
+            // Emits one JSON-Lines record per entry regardless of mode;
+            // the JSONL stream is the product output.
+            json_mode: JsonMode::Artifact,
+            feature_gated: None,
+        },
         "info" => SubcommandMeta {
             examples: &[
                 "doiget info 10.1234/foo",
