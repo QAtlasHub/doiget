@@ -82,6 +82,10 @@ criteria = "safe-to-deploy"
 version = "0.40.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.biblatex]]
+version = "0.11.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.block-buffer]]
 version = "0.12.0"
 criteria = "safe-to-deploy"
@@ -446,6 +450,10 @@ criteria = "safe-to-deploy"
 version = "0.9.12"
 criteria = "safe-to-deploy"
 
+[[exemptions.paste]]
+version = "1.0.15"
+criteria = "safe-to-deploy"
+
 [[exemptions.pastey]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
@@ -552,6 +560,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.rmcp-macros]]
 version = "1.7.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.roman-numerals-rs]]
+version = "3.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustc-hash]]
@@ -686,6 +698,14 @@ criteria = "safe-to-deploy"
 version = "1.2.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.strum]]
+version = "0.27.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.strum_macros]]
+version = "0.27.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.syn]]
 version = "2.0.117"
 criteria = "safe-to-deploy"
@@ -712,6 +732,14 @@ criteria = "safe-to-deploy"
 
 [[exemptions.tinyvec]]
 version = "1.11.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.tinyvec]]
+version = "1.11.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.tinyvec_macros]]
+version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio]]
@@ -804,6 +832,14 @@ criteria = "safe-to-deploy"
 
 [[exemptions.unicode-ident]]
 version = "1.0.24"
+criteria = "safe-to-deploy"
+
+[[exemptions.unicode-normalization]]
+version = "0.1.25"
+criteria = "safe-to-deploy"
+
+[[exemptions.unscanny]]
+version = "0.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.untrusted]]
