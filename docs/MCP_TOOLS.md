@@ -91,6 +91,8 @@ type FetchResult =
       license: string,
       size_bytes: number,
       schema_version: string,
+      // Issue #118 / #243: PDF leg status. Always present on ok:true responses.
+      pdf: PdfLeg,
     }
   | { ok: true, dry_run: true, ref: RefShape, plan: FetchPlan,
       rate_limit_budget: { global_per_sec: number, per_source_min_gap_ms: number } }
@@ -98,6 +100,22 @@ type FetchResult =
       ref: string,
       error: { code: ErrorCode, message: string, denial_context?: DenialContext }
     };
+
+type PdfLeg =
+  | { status: "fetched" }
+  | { status: "no_oa_url" }
+  | { status: "blocked",
+      code: ErrorCode,
+      message: string,
+      // Present when the failure was an allowlist / scheme denial (ADR-0023).
+      denial_context?: DenialContext,
+      // Present when Unpaywall metadata includes an arXiv alternative URL
+      // for the same paper. The version suffix (e.g. `v2`) is stripped so
+      // the ID refers to the latest version. Use as:
+      //   doiget fetch arxiv:<suggested_arxiv_id>
+      suggested_arxiv_id?: string,
+    }
+  | { status: "unknown" };
 
 type DenialContext = {
   reason: "redirect_not_in_allowlist" | "insecure_scheme"

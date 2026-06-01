@@ -1467,21 +1467,49 @@ fn pull_oa_url_from_location(loc: &Value) -> Option<url::Url> {
     url::Url::parse(candidate).ok()
 }
 
-/// Helper to parse clean arXiv IDs from URLs like arxiv.org/pdf/1901.12345.pdf
+/// Helper to parse clean arXiv IDs from URLs like arxiv.org/pdf/1901.12345.pdf.
+///
+/// Strips the trailing `.pdf` extension and any version suffix (`v1`, `v2`, …)
+/// so the returned ID refers to the latest version rather than pinning a
+/// specific one. Returns `None` for non-arXiv hosts or unrecognised path shapes.
 fn extract_arxiv_id_from_url(url: &url::Url) -> Option<String> {
-    if let Some(host) = url.host_str() {
-        if host == "arxiv.org" || host == "www.arxiv.org" || host == "export.arxiv.org" {
-            let path = url.path();
-            if path.starts_with("/pdf/") {
-                let stripped = path.strip_prefix("/pdf/")?;
-                let stripped = stripped.strip_suffix(".pdf").unwrap_or(stripped);
-                return Some(stripped.to_string());
-            } else if path.starts_with("/abs/") {
-                return Some(path.strip_prefix("/abs/")?.to_string());
-            }
+    let host = url.host_str()?;
+    let is_arxiv = matches!(
+        host,
+        "arxiv.org" | "www.arxiv.org" | "export.arxiv.org" | "e-print.arxiv.org"
+    );
+    if !is_arxiv {
+        return None;
+    }
+    let path = url.path();
+    let raw = if path.starts_with("/pdf/") {
+        let s = path.strip_prefix("/pdf/")?;
+        s.strip_suffix(".pdf").unwrap_or(s)
+    } else if path.starts_with("/abs/") {
+        path.strip_prefix("/abs/")?
+    } else {
+        return None;
+    };
+    Some(strip_arxiv_version(raw).to_string())
+}
+
+/// Strip a trailing arXiv version suffix (`v1`, `v2`, …) from an ID string.
+///
+/// Recognises the suffix only when the `v` is **preceded by a digit** (ruling
+/// out category fragments like `quant-ph`) and followed by one or more ASCII
+/// digits. Leaves IDs without a recognisable version suffix unchanged.
+fn strip_arxiv_version(id: &str) -> &str {
+    if let Some(v_pos) = id.rfind('v') {
+        let before_v = id[..v_pos].chars().next_back();
+        let suffix = &id[v_pos + 1..];
+        if before_v.map_or(false, |c| c.is_ascii_digit())
+            && !suffix.is_empty()
+            && suffix.bytes().all(|b| b.is_ascii_digit())
+        {
+            return &id[..v_pos];
         }
     }
-    None
+    id
 }
 
 fn unpaywall_email_from_env(fallback_contact: &str) -> String {
@@ -1598,8 +1626,13 @@ mod tests {
     #[test]
     fn test_extract_arxiv_id_from_url() {
         let urls = [
+            // Basic new-style ID
             ("https://arxiv.org/pdf/1901.12345.pdf", Some("1901.12345")),
             ("https://arxiv.org/abs/1901.12345", Some("1901.12345")),
+            // Version suffix is stripped
+            ("https://arxiv.org/pdf/1901.12345v2.pdf", Some("1901.12345")),
+            ("https://arxiv.org/abs/1901.12345v3", Some("1901.12345")),
+            // Old-style category/ID
             (
                 "https://www.arxiv.org/pdf/cond-mat/9501001.pdf",
                 Some("cond-mat/9501001"),
@@ -1608,12 +1641,40 @@ mod tests {
                 "https://export.arxiv.org/abs/cond-mat/9501001",
                 Some("cond-mat/9501001"),
             ),
+            // Old-style with version stripped
+            (
+                "https://arxiv.org/pdf/cond-mat/9501001v1.pdf",
+                Some("cond-mat/9501001"),
+            ),
+            // e-print subdomain
+            (
+                "https://e-print.arxiv.org/pdf/2401.12345.pdf",
+                Some("2401.12345"),
+            ),
+            // Non-arXiv host
             ("https://example.org/pdf/1901.12345.pdf", None),
         ];
         for (url_str, expected) in urls {
             let url = url::Url::parse(url_str).unwrap();
-            assert_eq!(extract_arxiv_id_from_url(&url), expected.map(String::from));
+            assert_eq!(
+                extract_arxiv_id_from_url(&url),
+                expected.map(String::from),
+                "url: {url_str}"
+            );
         }
+    }
+
+    #[test]
+    fn test_strip_arxiv_version() {
+        assert_eq!(strip_arxiv_version("2401.12345v2"), "2401.12345");
+        assert_eq!(strip_arxiv_version("2401.12345v10"), "2401.12345");
+        assert_eq!(strip_arxiv_version("2401.12345"), "2401.12345");
+        assert_eq!(
+            strip_arxiv_version("cond-mat/9501001v3"),
+            "cond-mat/9501001"
+        );
+        // "v" not followed by digits — unchanged
+        assert_eq!(strip_arxiv_version("quant-phv5"), "quant-phv5");
     }
 
     #[test]
