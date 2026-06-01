@@ -223,6 +223,7 @@ mod tests {
                 rate_limiter,
                 log,
                 session_id,
+                cache_root: None,
             },
         )
     }

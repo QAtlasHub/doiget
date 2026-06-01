@@ -29,6 +29,7 @@ fn build_context() -> Result<FetchContext> {
         rate_limiter,
         log,
         session_id,
+        cache_root: None,
     })
 }
 

@@ -72,11 +72,16 @@ fn build_context() -> Result<FetchContext> {
         doiget_core::provenance::ProvenanceLog::open(log_path, session_id.clone())
             .context("failed to open provenance log for verify")?,
     );
+    // Enable the resolver cache (docs/CACHE.md): repeat verifies of the
+    // same reference are served from disk, avoiding upstream rate limits.
+    // Best-effort — if the cache dir can't be resolved, run without it.
+    let cache_root = crate::commands::fetch::cache_dir_utf8().ok();
     Ok(FetchContext {
         http,
         rate_limiter,
         log,
         session_id,
+        cache_root,
     })
 }
 

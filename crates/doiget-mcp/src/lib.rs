@@ -2550,6 +2550,10 @@ fn build_fetch_context() -> anyhow::Result<FetchContext> {
         rate_limiter,
         log,
         session_id,
+        // Resolver cache disabled on the MCP path for now; the resolve
+        // cache (docs/CACHE.md) is wired through `doiget verify` first.
+        // Enabling it here for metadata_only / resolve_paper is a follow-up.
+        cache_root: None,
     })
 }
 
