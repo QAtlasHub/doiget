@@ -1502,7 +1502,7 @@ fn strip_arxiv_version(id: &str) -> &str {
     if let Some(v_pos) = id.rfind('v') {
         let before_v = id[..v_pos].chars().next_back();
         let suffix = &id[v_pos + 1..];
-        if before_v.map_or(false, |c| c.is_ascii_digit())
+        if before_v.is_some_and(|c| c.is_ascii_digit())
             && !suffix.is_empty()
             && suffix.bytes().all(|b| b.is_ascii_digit())
         {
