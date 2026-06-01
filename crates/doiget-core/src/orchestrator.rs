@@ -39,7 +39,7 @@ use crate::{ArxivId, CapabilityProfile, Doi, Ref, Safekey, MAX_BATCH_REFS, SCHEM
 /// `metadata` is serialized as-is by the MCP envelope builder
 /// (`crates/doiget-mcp/src/lib.rs`); we deliberately do NOT normalize
 /// here so the agent can see exactly what the source returned.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct MetadataOnlyOutcome {
     /// Resolver key that produced the metadata payload. One of
@@ -131,22 +131,37 @@ pub async fn metadata_only(
     profile: &CapabilityProfile,
     ctx: &FetchContext,
 ) -> Result<MetadataOnlyOutcome, FetchError> {
-    match ref_ {
-        Ref::Doi(doi) => metadata_only_doi(doi, ref_, profile, ctx).await,
+    // Resolver cache (docs/CACHE.md): on a hit within TTL, return the
+    // cached outcome without touching the network — this is what lets
+    // `doiget verify` avoid upstream rate limits across repeated runs.
+    if let Some(root) = &ctx.cache_root {
+        if let Some(cached) = crate::resolver_cache::read(root, ref_) {
+            return Ok(cached);
+        }
+    }
+
+    let outcome = match ref_ {
+        Ref::Doi(doi) => metadata_only_doi(doi, ref_, profile, ctx).await?,
         Ref::Arxiv(id) => {
             let arxiv = arxiv_source_from_env();
             let metadata = arxiv.fetch_metadata_only(id, ctx).await?;
             // Pure resolver — no store write here (see fn doc); the
             // store-write side effect lives in `metadata_only_to_store`.
-            Ok(MetadataOnlyOutcome {
+            MetadataOnlyOutcome {
                 source: arxiv.name().to_string(),
                 resolver_profile: arxiv.name().to_string(),
                 license: Some("arxiv-default".to_string()),
                 oa_url: None,
                 metadata,
-            })
+            }
         }
+    };
+
+    // Best-effort cache write (never fails the resolve).
+    if let Some(root) = &ctx.cache_root {
+        crate::resolver_cache::write(root, ref_, &outcome);
     }
+    Ok(outcome)
 }
 
 /// Resolve a [`Ref`] to metadata with **no local persistence**.
@@ -1974,6 +1989,7 @@ mod tests {
                     .expect("provenance log"),
             ),
             session_id: "01J0000000000000000000TEST".into(),
+            cache_root: None,
         };
         let profile = CapabilityProfile::from_env().expect("clean env");
         let store = FsStore::new(store_root.clone()).expect("fs store");
@@ -2037,6 +2053,7 @@ mod tests {
                     .expect("provenance log"),
             ),
             session_id: "01J0000000000000000000TEST".into(),
+            cache_root: None,
         };
 
         let doi = Doi("10.1234/example".to_string());
@@ -2097,6 +2114,7 @@ mod tests {
                     .expect("provenance log"),
             ),
             session_id: "01J0000000000000000000TEST".into(),
+            cache_root: None,
         };
 
         let doi = Doi("10.1234/example".to_string());
@@ -2235,6 +2253,7 @@ mod tests {
                     .expect("provenance log"),
             ),
             session_id: "01J0000000000000000000TEST".into(),
+            cache_root: None,
         };
 
         let doi = Doi("10.1234/example".to_string());
@@ -2349,6 +2368,7 @@ mod tests {
                     .expect("provenance log"),
             ),
             session_id: "01J0000000000000000000TEST".into(),
+            cache_root: None,
         };
         let store = FsStore::new(store_root.clone()).expect("fs store");
         (server, ctx, store, store_root, td)
@@ -2480,6 +2500,7 @@ mod tests {
                     .expect("provenance log"),
             ),
             session_id: "01J0000000000000000000TEST".into(),
+            cache_root: None,
         };
         let store = FsStore::new(store_root.clone()).expect("fs store");
         let profile = CapabilityProfile::from_env().expect("clean env");

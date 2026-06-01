@@ -24,12 +24,14 @@ Override root via `DOIGET_CACHE_ROOT` env or `[cache] root` in `config.toml`.
 
 ```toml
 schema_version = "1.0"
-fetched_at     = "2026-05-05T08:30:12Z"
+fetched_at     = "2026-05-05T08:30:12Z"   # RFC 3339 UTC
 ttl_seconds    = 604800            # 7 days for resolver, 30*24*3600 for citations
 source         = "crossref"
-
-[response]
-# raw or normalized response body, source-specific
+# Resolver outcome serialized as a JSON string. The metadata payload is
+# arbitrary JSON that does not round-trip cleanly as a TOML table, so the
+# whole MetadataOnlyOutcome (source / resolver_profile / license / oa_url /
+# metadata) is stored as one JSON blob under `response`.
+response       = "{\"source\":\"crossref\", ... }"
 ```
 
 A cache entry is invalid if `now() > fetched_at + ttl_seconds`. Invalid entries are
