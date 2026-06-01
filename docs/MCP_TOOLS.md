@@ -28,6 +28,8 @@ Additional tools:
 | `doiget_expand_citation_graph` | BFS expansion of citations. Hard-capped. |
 | `doiget_bibtex_export` | BibTeX for one or many entries. |
 | `doiget_csl_export` | CSL JSON for one or many entries. |
+| `doiget_resolve_citation` | Resolve a free-form bibliographic citation string to ranked DOI candidates. |
+| `doiget_batch_resolve_citations` | Batch resolve bibliographic citation strings to ranked DOI candidates. |
 
 ## 2. Naming and convention
 
@@ -91,6 +93,8 @@ type FetchResult =
       license: string,
       size_bytes: number,
       schema_version: string,
+      // Issue #118 / #243: PDF leg status. Always present on ok:true responses.
+      pdf: PdfLeg,
     }
   | { ok: true, dry_run: true, ref: RefShape, plan: FetchPlan,
       rate_limit_budget: { global_per_sec: number, per_source_min_gap_ms: number } }
@@ -98,6 +102,22 @@ type FetchResult =
       ref: string,
       error: { code: ErrorCode, message: string, denial_context?: DenialContext }
     };
+
+type PdfLeg =
+  | { status: "fetched" }
+  | { status: "no_oa_url" }
+  | { status: "blocked",
+      code: ErrorCode,
+      message: string,
+      // Present when the failure was an allowlist / scheme denial (ADR-0023).
+      denial_context?: DenialContext,
+      // Present when Unpaywall metadata includes an arXiv alternative URL
+      // for the same paper. The version suffix (e.g. `v2`) is stripped so
+      // the ID refers to the latest version. Use as:
+      //   doiget fetch arxiv:<suggested_arxiv_id>
+      suggested_arxiv_id?: string,
+    }
+  | { status: "unknown" };
 
 type DenialContext = {
   reason: "redirect_not_in_allowlist" | "insecure_scheme"
@@ -296,3 +316,11 @@ type MetadataOnlyResult =
 Posture: covered by the same posture-lint check as ADR-0022 §5 — a
 `metadata_only` codepath that reaches `HttpClient::fetch_pdf` is a hard
 failure.
+
+## 12. `doiget_resolve_citation` and `doiget_batch_resolve_citations` (NORMATIVE)
+
+`doiget_resolve_citation` resolves a free-form bibliographic citation string to ranked DOI candidates via the Crossref works query API.
+
+`doiget_batch_resolve_citations` batch-resolves multiple citation strings (up to 50).
+
+Both tools calculate token-based overlap similarity scores, filter out results with a score < 0.5, and sort candidates by score descending. No local store writes or provenance logs are created.

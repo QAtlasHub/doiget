@@ -468,3 +468,118 @@ async fn batch_fetch_partial_failure_emits_per_ref_outcomes() -> anyhow::Result<
     drop(td);
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// suggested_arxiv_id — issue #243
+// ---------------------------------------------------------------------------
+
+/// When all OA-chain PDF candidates fail and at least one candidate URL is
+/// hosted on arxiv.org, `doiget_fetch_paper` MUST include `suggested_arxiv_id`
+/// in the `pdf` object of the success envelope (the PDF leg is `blocked`).
+/// The version suffix (e.g. `v2`) must be stripped so the suggestion points
+/// to the latest version rather than a pinned one.
+#[tokio::test]
+#[serial_test::serial]
+async fn fetch_paper_doi_blocked_pdf_includes_suggested_arxiv_id() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+
+    // Crossref metadata — minimal envelope.
+    // Crossref uses `Url::join("/works/<doi>")` which does NOT percent-encode
+    // the `/` inside the DOI suffix, so wiremock matches the raw path.
+    Mock::given(method("GET"))
+        .and(path("/works/10.1234/suggest-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "ok",
+            "message": {
+                "title": ["Suggestion Test Paper"],
+                "author": [{"family": "Doe", "given": "Jane"}],
+                "issued": {"date-parts": [[2024, 1, 1]]}
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // Unpaywall metadata — `best_oa_location` points to a versioned arXiv URL.
+    // The arXiv host is off the `oa-publisher` allowlist (which only permits
+    // the wiremock host), so the PDF leg will be denied at the pre-fetch
+    // allowlist check, triggering PdfLegStatus::Blocked with a suggestion.
+    // Unpaywall uses `path_segments_mut().push()` which percent-encodes `/`.
+    Mock::given(method("GET"))
+        .and(path("/v2/10.1234%2Fsuggest-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "doi": "10.1234/suggest-test",
+            "is_oa": true,
+            "best_oa_location": {
+                "url_for_pdf": "https://arxiv.org/pdf/2401.99999v2.pdf",
+                "url": "https://arxiv.org/abs/2401.99999v2",
+                "license": "cc-by"
+            },
+            "oa_locations": [
+                {
+                    "url_for_pdf": "https://arxiv.org/pdf/2401.99999v2.pdf",
+                    "url": "https://arxiv.org/abs/2401.99999v2"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let temp_root = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .to_path_buf();
+    let store_root = temp_root.join("papers");
+    let log_path = temp_root.join("log.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", server.uri()));
+    // Register only the wiremock host for oa-publisher. arxiv.org is absent
+    // so the arXiv OA candidate is denied → PdfLegStatus::Blocked.
+    env.set("DOIGET_OA_PUBLISHER_BASE", &server.uri());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/suggest-test"));
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_fetch_paper").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_fetch_paper uses CallToolResult::structured");
+
+    // Metadata fetch succeeds (ok:true) but PDF leg is blocked.
+    assert_eq!(
+        structured["ok"],
+        serde_json::json!(true),
+        "envelope should be ok:true (metadata was written); got: {structured:?}"
+    );
+    assert_eq!(
+        structured["pdf"]["status"],
+        serde_json::json!("blocked"),
+        "pdf leg must be blocked; got: {:?}",
+        structured["pdf"]
+    );
+    // Version suffix `v2` must be stripped — suggestion points to latest version.
+    assert_eq!(
+        structured["pdf"]["suggested_arxiv_id"],
+        serde_json::json!("2401.99999"),
+        "suggested_arxiv_id must be present and version-stripped; got: {:?}",
+        structured["pdf"]["suggested_arxiv_id"]
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}

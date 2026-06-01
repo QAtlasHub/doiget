@@ -288,6 +288,29 @@ enum Command {
         #[command(subcommand)]
         action: ProvenanceAction,
     },
+    /// Print the current version. With `--check`, query GitHub Releases for
+    /// the latest stable tag and report whether an update is available.
+    Version {
+        /// Check GitHub Releases for a newer stable release.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Resolve a bibliographic citation string to ranked DOI candidates.
+    #[command(name = "resolve-citation")]
+    ResolveCitation {
+        /// Bibliographic citation query string (e.g. "Onsager 1944").
+        query: String,
+        /// Maximum number of candidates to return (default: 5).
+        #[arg(long, default_value_t = 5)]
+        limit: u8,
+    },
+    /// Batch resolve bibliographic citation strings from stdin.
+    #[command(name = "batch-resolve-citations")]
+    BatchResolveCitations {
+        /// Maximum number of candidates to return per citation (default: 5).
+        #[arg(long, default_value_t = 5)]
+        limit: u8,
+    },
     /// Run as an MCP server over stdio.
     Serve,
     /// Emit a single JSON inventory of the binary's full surface
@@ -488,6 +511,13 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Info { ref_ }) => doiget_cli::commands::info::run(ref_, mode),
         Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit, mode),
         Some(Command::Search { query }) => doiget_cli::commands::search::run(query, mode),
+        Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
+        Some(Command::ResolveCitation { query, limit }) => {
+            doiget_cli::commands::resolve_citation::run(query, limit, mode).await
+        }
+        Some(Command::BatchResolveCitations { limit }) => {
+            doiget_cli::commands::resolve_citation::run_batch(limit, mode).await
+        }
         Some(Command::Fetch { ref_, dry_run }) => {
             doiget_cli::commands::fetch::run_with_options(ref_, dry_run, mode).await
         }
