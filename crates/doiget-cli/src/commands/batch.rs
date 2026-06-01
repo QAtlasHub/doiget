@@ -422,6 +422,7 @@ fn classify_joined(
                     code,
                     message,
                     denial,
+                    ..
                 } = &outcome.pdf_leg
                 {
                     let effective = effective_blocked_code(*code, denial.as_ref());
@@ -775,6 +776,7 @@ mod tests {
                 cap: None,
                 actual: None,
             }),
+            suggested_arxiv_id: None,
         };
         let outcome = classify_joined(
             Ok(TaskOutcome {

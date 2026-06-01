@@ -2019,6 +2019,7 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             code,
             message,
             denial,
+            suggested_arxiv_id,
         } => {
             let mut o = serde_json::Map::new();
             o.insert("status".into(), json!("blocked"));
@@ -2037,6 +2038,9 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
                     "denial_context".into(),
                     denial_context_to_value(dc, "fetch_paper_pdf_leg"),
                 );
+            }
+            if let Some(arxiv_id) = suggested_arxiv_id {
+                o.insert("suggested_arxiv_id".into(), json!(arxiv_id));
             }
             Value::Object(o)
         }

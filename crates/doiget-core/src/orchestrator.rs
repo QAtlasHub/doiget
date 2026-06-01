@@ -556,6 +556,9 @@ pub enum PdfLegStatus {
         /// Structured denial side-channel (ADR-0023) when the failure
         /// was an allowlist / scheme denial; `None` otherwise.
         denial: Option<crate::DenialContext>,
+        /// Actionable suggested arXiv ID for the same paper when Unpaywall
+        /// metadata includes an arXiv alternative but the PDF leg was blocked.
+        suggested_arxiv_id: Option<String>,
     },
 }
 
@@ -950,11 +953,13 @@ async fn fetch_paper_doi(
                 let denial: Option<crate::DenialContext> = (&fe).into();
                 let message = fe.to_string();
                 let code: crate::ErrorCode = fe.into();
+                let suggested_arxiv_id = oa_chain.iter().find_map(extract_arxiv_id_from_url);
                 (
                     PdfLegStatus::Blocked {
                         code,
                         message,
                         denial,
+                        suggested_arxiv_id,
                     },
                     None,
                 )
@@ -982,6 +987,7 @@ async fn fetch_paper_doi(
                              (orchestrator bug — please report)"
                                 .to_string(),
                         denial: None,
+                        suggested_arxiv_id: None,
                     },
                     None,
                 )
@@ -1461,6 +1467,23 @@ fn pull_oa_url_from_location(loc: &Value) -> Option<url::Url> {
     url::Url::parse(candidate).ok()
 }
 
+/// Helper to parse clean arXiv IDs from URLs like arxiv.org/pdf/1901.12345.pdf
+fn extract_arxiv_id_from_url(url: &url::Url) -> Option<String> {
+    if let Some(host) = url.host_str() {
+        if host == "arxiv.org" || host == "www.arxiv.org" || host == "export.arxiv.org" {
+            let path = url.path();
+            if path.starts_with("/pdf/") {
+                let stripped = path.strip_prefix("/pdf/")?;
+                let stripped = stripped.strip_suffix(".pdf").unwrap_or(stripped);
+                return Some(stripped.to_string());
+            } else if path.starts_with("/abs/") {
+                return Some(path.strip_prefix("/abs/")?.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn unpaywall_email_from_env(fallback_contact: &str) -> String {
     std::env::var("DOIGET_UNPAYWALL_EMAIL").unwrap_or_else(|_| fallback_contact.to_string())
 }
@@ -1571,6 +1594,27 @@ pub fn batch_fetch_plans(
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_extract_arxiv_id_from_url() {
+        let urls = [
+            ("https://arxiv.org/pdf/1901.12345.pdf", Some("1901.12345")),
+            ("https://arxiv.org/abs/1901.12345", Some("1901.12345")),
+            (
+                "https://www.arxiv.org/pdf/cond-mat/9501001.pdf",
+                Some("cond-mat/9501001"),
+            ),
+            (
+                "https://export.arxiv.org/abs/cond-mat/9501001",
+                Some("cond-mat/9501001"),
+            ),
+            ("https://example.org/pdf/1901.12345.pdf", None),
+        ];
+        for (url_str, expected) in urls {
+            let url = url::Url::parse(url_str).unwrap();
+            assert_eq!(extract_arxiv_id_from_url(&url), expected.map(String::from));
+        }
+    }
 
     #[test]
     fn extract_crossref_oa_url_finds_first_url() {
