@@ -53,24 +53,36 @@ use crate::{ArxivId, CapabilityProfile, Ref};
 /// this via the `*.arxiv.org` glob.
 const PDF_BASE: &str = "https://arxiv.org";
 
-/// arXiv [`Source`] impl. Phase 1 returns the PDF bytes and skips metadata
-/// (the export.arxiv.org Atom feed is documented but XML parsing is
-/// deferred to a follow-up PR — TODO Phase 1+).
+/// Default base for the Atom metadata endpoint. arXiv serves the API at
+/// `https://export.arxiv.org/api/query` — a DIFFERENT host from the PDF
+/// endpoint. Hitting `arxiv.org/api/query` instead redirects and fails
+/// the metadata leg, so the two endpoints must use separate bases.
+/// `export.arxiv.org` is covered by the `*.arxiv.org` allowlist glob.
+const META_BASE: &str = "https://export.arxiv.org";
+
+/// arXiv [`Source`] impl. PDFs are served from `arxiv.org`; Atom metadata
+/// from `export.arxiv.org` — see [`ArxivSource::metadata_url`].
 #[derive(Clone, Debug)]
 pub struct ArxivSource {
+    /// PDF endpoint base (`arxiv.org` in production).
     base: Url,
+    /// Atom metadata endpoint base (`export.arxiv.org` in production).
+    meta_base: Url,
 }
 
 impl ArxivSource {
-    /// Production constructor. Uses the public arxiv.org PDF endpoint.
+    /// Production constructor. PDFs from `arxiv.org`, Atom metadata from
+    /// `export.arxiv.org`.
     pub fn new() -> Self {
-        // The hard-coded `PDF_BASE` is a `'static` string literal known
-        // at compile time to be a valid absolute URL. The `expect` here
-        // can only fire if the constant itself regresses, which is
-        // exercised at every test run via `ArxivSource::new()`.
+        // Both hard-coded constants are `'static` string literals known at
+        // compile time to be valid absolute URLs; the `expect`s can only
+        // fire if a constant regresses, which every `ArxivSource::new()`
+        // test exercises.
         #[allow(clippy::expect_used)]
-        let base = Url::parse(PDF_BASE).expect("hard-coded base URL is valid");
-        Self { base }
+        let base = Url::parse(PDF_BASE).expect("hard-coded PDF base URL is valid");
+        #[allow(clippy::expect_used)]
+        let meta_base = Url::parse(META_BASE).expect("hard-coded meta base URL is valid");
+        Self { base, meta_base }
     }
 
     /// Construct with an arbitrary base URL.
@@ -78,9 +90,14 @@ impl ArxivSource {
     /// The orchestrator (`doiget-cli::commands::fetch`) uses this to honor
     /// the `DOIGET_ARXIV_BASE` env var, which lets integration tests point
     /// the source at a wiremock origin without resorting to compile-time
-    /// gates. Production callers use [`ArxivSource::new`].
+    /// gates. Both the PDF and metadata legs share the one override base
+    /// (a single wiremock origin serves both paths). Production callers
+    /// use [`ArxivSource::new`].
     pub fn with_base(base: Url) -> Self {
-        Self { base }
+        Self {
+            meta_base: base.clone(),
+            base,
+        }
     }
 
     /// Build the PDF URL for a given arXiv id. arXiv accepts both
@@ -115,7 +132,7 @@ impl ArxivSource {
     /// `id_list=cond-mat%2F9501001`.
     fn metadata_url(&self, id: &ArxivId) -> Result<Url, FetchError> {
         let mut url = self
-            .base
+            .meta_base
             .join("/api/query")
             .map_err(|e| FetchError::SourceSchema {
                 hint: format!("arxiv metadata URL construction failed: {e}"),
@@ -631,6 +648,32 @@ mod tests {
         let id = ArxivId::parse("2401.12345").expect("valid id");
         let r = Ref::Arxiv(id);
         assert!(s.can_serve(&profile(), &r));
+    }
+
+    #[test]
+    fn production_metadata_url_uses_export_host_pdf_uses_arxiv() {
+        // Regression guard: the Atom metadata leg MUST hit
+        // export.arxiv.org, while PDFs hit arxiv.org. Sending metadata to
+        // arxiv.org/api/query redirects and fails the resolve.
+        let s = ArxivSource::new();
+        let id = ArxivId::parse("1706.03762").expect("valid id");
+        let meta = s.metadata_url(&id).expect("meta url");
+        assert_eq!(meta.host_str(), Some("export.arxiv.org"));
+        assert_eq!(meta.path(), "/api/query");
+        let pdf = s.pdf_url(&id).expect("pdf url");
+        assert_eq!(pdf.host_str(), Some("arxiv.org"));
+    }
+
+    #[test]
+    fn with_base_shares_one_origin_for_both_legs() {
+        // The DOIGET_ARXIV_BASE override (wiremock) serves both paths from
+        // a single origin, so meta and PDF must resolve to the same host.
+        let s = ArxivSource::with_base("http://127.0.0.1:9999".parse().expect("url"));
+        let id = ArxivId::parse("2401.12345").expect("valid id");
+        assert_eq!(
+            s.metadata_url(&id).expect("meta").host_str(),
+            s.pdf_url(&id).expect("pdf").host_str()
+        );
     }
 
     #[test]
