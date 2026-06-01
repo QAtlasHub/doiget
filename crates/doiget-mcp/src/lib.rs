@@ -1553,36 +1553,38 @@ impl Server {
             }
         };
 
-        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
+        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL")
+            .unwrap_or_else(|_| "doiget@localhost".to_string());
         let crossref_base = std::env::var("DOIGET_CROSSREF_BASE").ok();
-        
+
         let source = if let Some(base_str) = crossref_base {
             let base = match url::Url::parse(&base_str) {
                 Ok(b) => b,
-                Err(e) => return Ok(CallToolResult::structured(serde_json::json!({
-                    "ok": false,
-                    "error": format!("invalid DOIGET_CROSSREF_BASE: {e}"),
-                }))),
+                Err(e) => {
+                    return Ok(CallToolResult::structured(serde_json::json!({
+                        "ok": false,
+                        "error": format!("invalid DOIGET_CROSSREF_BASE: {e}"),
+                    })))
+                }
             };
             CrossrefSource::with_base(base, contact_email)
         } else {
             CrossrefSource::new(contact_email)
         };
 
-        match source.resolve_citation(&input.query, input.limit, &ctx).await {
-            Ok(candidates) => {
-                Ok(CallToolResult::structured(serde_json::json!({
-                    "ok": true,
-                    "query": input.query,
-                    "candidates": candidates,
-                })))
-            }
-            Err(e) => {
-                Ok(CallToolResult::structured(serde_json::json!({
-                    "ok": false,
-                    "error": format!("resolve failed: {e}"),
-                })))
-            }
+        match source
+            .resolve_citation(&input.query, input.limit, &ctx)
+            .await
+        {
+            Ok(candidates) => Ok(CallToolResult::structured(serde_json::json!({
+                "ok": true,
+                "query": input.query,
+                "candidates": candidates,
+            }))),
+            Err(e) => Ok(CallToolResult::structured(serde_json::json!({
+                "ok": false,
+                "error": format!("resolve failed: {e}"),
+            }))),
         }
     }
 
@@ -1616,16 +1618,19 @@ impl Server {
             }
         };
 
-        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
+        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL")
+            .unwrap_or_else(|_| "doiget@localhost".to_string());
         let crossref_base = std::env::var("DOIGET_CROSSREF_BASE").ok();
-        
+
         let source = if let Some(base_str) = crossref_base {
             let base = match url::Url::parse(&base_str) {
                 Ok(b) => b,
-                Err(e) => return Ok(CallToolResult::structured(serde_json::json!({
-                    "ok": false,
-                    "error": format!("invalid DOIGET_CROSSREF_BASE: {e}"),
-                }))),
+                Err(e) => {
+                    return Ok(CallToolResult::structured(serde_json::json!({
+                        "ok": false,
+                        "error": format!("invalid DOIGET_CROSSREF_BASE: {e}"),
+                    })))
+                }
             };
             CrossrefSource::with_base(base, contact_email)
         } else {

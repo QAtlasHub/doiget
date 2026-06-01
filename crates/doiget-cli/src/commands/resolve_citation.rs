@@ -16,7 +16,7 @@ use super::output::OutputMode;
 fn build_context() -> Result<FetchContext> {
     let session_id = crate::commands::fetch::new_session_id();
     let log_path = crate::commands::fetch::resolve_log_path()?;
-    
+
     let http = Arc::new(crate::commands::fetch::build_http_client()?);
     let rate_limiter = Arc::new(doiget_core::rate_limiter::RateLimiter::new(
         RateLimits::HARD_CODED,
@@ -47,7 +47,7 @@ pub async fn run(query: String, limit: u8, mode: OutputMode) -> Result<()> {
 
     let ctx = build_context()?;
     let crossref_base = std::env::var("DOIGET_CROSSREF_BASE").ok();
-    
+
     let source = if let Some(base_str) = crossref_base {
         let base = url::Url::parse(&base_str).context("invalid DOIGET_CROSSREF_BASE")?;
         CrossrefSource::with_base(base, contact_email())
@@ -60,10 +60,7 @@ pub async fn run(query: String, limit: u8, mode: OutputMode) -> Result<()> {
         .await
         .context("failed to resolve citation via Crossref")?;
 
-    let result = ResolveResult {
-        query,
-        candidates,
-    };
+    let result = ResolveResult { query, candidates };
 
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -85,7 +82,7 @@ pub async fn run(query: String, limit: u8, mode: OutputMode) -> Result<()> {
 pub async fn run_batch(limit: u8, mode: OutputMode) -> Result<()> {
     let ctx = build_context()?;
     let crossref_base = std::env::var("DOIGET_CROSSREF_BASE").ok();
-    
+
     let source = if let Some(base_str) = crossref_base {
         let base = url::Url::parse(&base_str).context("invalid DOIGET_CROSSREF_BASE")?;
         CrossrefSource::with_base(base, contact_email())

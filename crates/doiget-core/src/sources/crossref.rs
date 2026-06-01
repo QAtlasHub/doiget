@@ -90,9 +90,12 @@ impl CrossrefSource {
 
         // 2. Build works query URL
         // /works?query.bibliographic=<query>&rows=<rows>&mailto=<email>
-        let mut url = self.base.join("/works").map_err(|e| FetchError::SourceSchema {
-            hint: format!("crossref resolve_citation URL construction failed: {e}"),
-        })?;
+        let mut url = self
+            .base
+            .join("/works")
+            .map_err(|e| FetchError::SourceSchema {
+                hint: format!("crossref resolve_citation URL construction failed: {e}"),
+            })?;
         url.query_pairs_mut()
             .append_pair("query.bibliographic", query)
             .append_pair("rows", &rows.to_string())
@@ -188,7 +191,11 @@ impl CrossrefSource {
         }
 
         // 6. Sort candidates by score descending
-        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         Ok(candidates)
     }
@@ -549,7 +556,10 @@ mod tests {
         let s = crossref_for(&server);
         let (_td, ctx) = build_test_context(&host);
 
-        let candidates = s.resolve_citation("Onsager 1944", 2, &ctx).await.expect("resolve ok");
+        let candidates = s
+            .resolve_citation("Onsager 1944", 2, &ctx)
+            .await
+            .expect("resolve ok");
 
         // The query "Onsager 1944" has tokens ["onsager", "1944"].
         // The first candidate has both "onsager" (author family) and "1944" (issued year). Score is 1.0.

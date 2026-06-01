@@ -182,7 +182,9 @@ async fn test_doiget_batch_resolve_citations_e2e() -> anyhow::Result<()> {
 
     let result = client
         .peer()
-        .call_tool(CallToolRequestParams::new("doiget_batch_resolve_citations").with_arguments(args))
+        .call_tool(
+            CallToolRequestParams::new("doiget_batch_resolve_citations").with_arguments(args),
+        )
         .await?;
     let structured = result
         .structured_content
