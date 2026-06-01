@@ -295,6 +295,21 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Verify that every DOI / arXiv reference in a bibliography file
+    /// (.bib / CSL-JSON / plain refs) resolves to real metadata. Does
+    /// not download PDFs or write to the store. Emits one JSON-Lines
+    /// record per entry; exits non-zero on failures.
+    Verify {
+        /// Path to the bibliography file to verify.
+        path: String,
+        /// Input format; auto-detected from extension / content by default.
+        #[arg(long, default_value = "auto")]
+        format: String,
+        /// Treat unresolved and id-less entries as failures (exit
+        /// non-zero), not just warnings. Use in a network-stable CI lane.
+        #[arg(long)]
+        strict: bool,
+    },
     /// Resolve a bibliographic citation string to ranked DOI candidates.
     #[command(name = "resolve-citation")]
     ResolveCitation {
@@ -512,6 +527,11 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit, mode),
         Some(Command::Search { query }) => doiget_cli::commands::search::run(query, mode),
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
+        Some(Command::Verify {
+            path,
+            format,
+            strict,
+        }) => doiget_cli::commands::verify::run(path, format, strict, mode).await,
         Some(Command::ResolveCitation { query, limit }) => {
             doiget_cli::commands::resolve_citation::run(query, limit, mode).await
         }

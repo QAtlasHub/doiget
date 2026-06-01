@@ -59,6 +59,9 @@ futures-util = { workspace = true }
 # Streaming XML parser for the arXiv Atom feed. See B.1 in
 # `crates/doiget-core/src/sources/arxiv.rs::parse_atom_feed`.
 quick-xml    = { workspace = true }
+# BibTeX / BibLaTeX bibliography input parser (ADR-0030 D2). Default-on:
+# `.bib` → `ParsedEntry` in `src/refs.rs::parse_bibtex`.
+biblatex     = { workspace = true }
 
 [dev-dependencies]
 wiremock     = { workspace = true }

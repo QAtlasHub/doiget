@@ -10,10 +10,9 @@
 //!   `DOI`, and optionally `archivePrefix = "arXiv"` + `eprint`
 //!   fields. Parsed via the workspace's existing `serde_json` — no
 //!   new dependency.
-//! - **BibTeX / BibLaTeX (.bib)**: deferred to a follow-up slice (the
-//!   `biblatex` crate adds cargo-vet exemption churn that is
-//!   independent of the slice 1 wire shape; users with a `.bib`
-//!   library can re-export it as CSL-JSON from Zotero today).
+//! - **BibTeX / BibLaTeX (.bib)**: parsed via the `biblatex` crate
+//!   (ADR-0030 D2). One `@entrytype{KEY, …}` per entry; the `doi`
+//!   field is preferred, falling back to an arXiv `eprint`.
 //!
 //! Identifier-pick priority per ADR-0030 D3: `doi` > `arxiv` > `pmid`
 //! (PMID adapter parking until the `Ref::Pmid` variant lands in a
@@ -25,6 +24,7 @@
 //! decides whether to skip-and-warn (default) or fail-closed
 //! (`--strict`).
 
+use biblatex::{Bibliography, ChunksExt};
 use camino::Utf8Path;
 use thiserror::Error;
 
@@ -87,22 +87,19 @@ pub enum ParseError {
     /// it as the sole `Err` element of the result iterator.
     #[error("input did not deserialise as {format}: {message}")]
     Decode {
-        /// Which parser branch produced the failure (`"csl-json"`).
+        /// Which parser branch produced the failure (`"csl-json"` /
+        /// `"bibtex"`).
         format: &'static str,
         /// `serde_json::Error::to_string()`.
         message: String,
     },
-    /// Format requested or detected, but the parser for that format is
-    /// not yet shipped. Today this is the `.bib` / BibLaTeX path —
-    /// users should re-export their library as CSL-JSON from Zotero
-    /// until slice 2 ships.
-    #[error(
-        "{format} parsing is not yet implemented — \
-         re-export as CSL-JSON from your reference manager, \
-         or wait for the BibLaTeX slice (ADR-0030 D2 follow-up)"
-    )]
+    /// Format requested or detected, but no parser for it is shipped.
+    /// Retained as a forward-compatible variant for input shapes not
+    /// yet implemented (e.g. a future RIS adapter); the `bibtex` and
+    /// `csl-json` paths are both live today.
+    #[error("{format} parsing is not yet implemented")]
     UnsupportedFormat {
-        /// The format token (`"bibtex"`).
+        /// The format token naming the unsupported shape.
         format: &'static str,
     },
 }
@@ -122,8 +119,7 @@ pub enum Format {
     Refs,
     /// CSL-JSON array per <https://citationstyles.org/>.
     CslJson,
-    /// BibTeX / BibLaTeX. Currently unsupported — parser ships in a
-    /// follow-up slice.
+    /// BibTeX / BibLaTeX, parsed via the `biblatex` crate (ADR-0030 D2).
     Bibtex,
 }
 
@@ -195,7 +191,7 @@ pub fn parse_input(
     match resolved {
         Format::Refs | Format::Auto => parse_plain_refs(text),
         Format::CslJson => parse_csl_json(text),
-        Format::Bibtex => vec![Err(ParseError::UnsupportedFormat { format: "bibtex" })],
+        Format::Bibtex => parse_bibtex(text),
     }
 }
 
@@ -352,6 +348,99 @@ fn parse_csl_entry(
         }
     }
     Err(ParseError::NoIdentifier { entry_key })
+}
+
+/// Parse a BibTeX / BibLaTeX document via the `biblatex` crate
+/// (ADR-0030 D2). One `@entrytype{KEY, …}` produces one entry;
+/// `entry_key` is the citation key verbatim.
+///
+/// A whole-input parse failure (malformed BibTeX the `biblatex` crate
+/// rejects) is returned as a single-element [`ParseError::Decode`] so
+/// the caller's exit-code path counts it as one error rather than
+/// zero — matching the CSL-JSON behaviour.
+///
+/// Identifier-pick priority per ADR-0030 D3: `doi` field, then
+/// `eprint` (arXiv). See `parse_bibtex_entry`.
+pub fn parse_bibtex(text: &str) -> Vec<Result<ParsedEntry, ParseError>> {
+    let bib = match Bibliography::parse(text) {
+        Ok(b) => b,
+        Err(e) => {
+            return vec![Err(ParseError::Decode {
+                format: "bibtex",
+                message: e.to_string(),
+            })]
+        }
+    };
+    bib.iter()
+        .map(|entry| parse_bibtex_entry(entry, Some(entry.key.clone())))
+        .collect()
+}
+
+/// Pick the highest-priority identifier on a single BibTeX entry and
+/// parse it. Honors ADR-0030 D3 priority (`doi` > arXiv `eprint`).
+fn parse_bibtex_entry(
+    entry: &biblatex::Entry,
+    entry_key: Option<String>,
+) -> Result<ParsedEntry, ParseError> {
+    // Priority 1: `doi` field. The typed accessor formats the chunk
+    // value to a `String`; `Err` means the field is absent or not a
+    // plain string, which we treat as "no DOI here" and fall through.
+    if let Ok(doi) = entry.doi() {
+        let raw = doi.trim();
+        if !raw.is_empty() {
+            return match Ref::parse(raw) {
+                Ok(ref_) => Ok(ParsedEntry { ref_, entry_key }),
+                Err(e) => Err(ParseError::InvalidRef {
+                    raw: raw.to_string(),
+                    entry_key,
+                    source: e,
+                }),
+            };
+        }
+    }
+    // Priority 2: arXiv via the `eprint` field. The BibTeX convention
+    // is `eprint = {2204.12345}` with `archivePrefix = {arXiv}` (or the
+    // BibLaTeX `eprinttype = {arxiv}`). We accept the eprint as an arXiv
+    // id when the prefix names arXiv OR is absent (the dominant
+    // single-preprint-server convention); a prefix that names something
+    // else (e.g. `eprinttype = {pubmed}`) is skipped rather than
+    // parsed incorrectly.
+    if let Ok(eprint) = entry.eprint() {
+        let raw = eprint.trim();
+        if !raw.is_empty() && arxiv_eligible(entry) {
+            let with_scheme = if raw.to_ascii_lowercase().starts_with("arxiv:") {
+                raw.to_string()
+            } else {
+                format!("arxiv:{raw}")
+            };
+            return match Ref::parse(&with_scheme) {
+                Ok(ref_) => Ok(ParsedEntry { ref_, entry_key }),
+                Err(e) => Err(ParseError::InvalidRef {
+                    raw: with_scheme,
+                    entry_key,
+                    source: e,
+                }),
+            };
+        }
+    }
+    Err(ParseError::NoIdentifier { entry_key })
+}
+
+/// Whether an `eprint` field should be interpreted as an arXiv id.
+/// True when `archivePrefix` / `eprinttype` names arXiv (case-
+/// insensitive) or is absent; false when it explicitly names a
+/// different preprint server.
+fn arxiv_eligible(entry: &biblatex::Entry) -> bool {
+    match entry
+        .get("archiveprefix")
+        .or_else(|| entry.get("eprinttype"))
+    {
+        Some(chunks) => chunks
+            .format_verbatim()
+            .to_ascii_lowercase()
+            .contains("arxiv"),
+        None => true,
+    }
 }
 
 #[cfg(test)]
@@ -570,15 +659,146 @@ doi:10.1234/foo
         ));
     }
 
+    // ---- BibTeX parsing (ADR-0030 D2) -----------------------------
+
     #[test]
-    fn parse_input_bibtex_returns_unsupported_format_error() {
-        let body = "@article{foo, doi={10.1234/x}}";
-        let parsed = parse_input(body, Format::Bibtex, None);
+    fn bibtex_picks_doi_and_preserves_key() {
+        let body = r#"@article{Onsager1944,
+            author = {Onsager, Lars},
+            title  = {Crystal Statistics},
+            doi    = {10.1103/PhysRev.65.117}
+        }"#;
+        let parsed = parse_bibtex(body);
+        assert_eq!(parsed.len(), 1);
+        let entry = parsed.into_iter().next().unwrap().expect("entry parses");
+        assert!(matches!(entry.ref_, Ref::Doi(_)));
+        assert_eq!(entry.entry_key.as_deref(), Some("Onsager1944"));
+    }
+
+    #[test]
+    fn bibtex_picks_arxiv_via_eprint() {
+        let body = r#"@article{Pollmann2012,
+            title         = {Detection of SPT order},
+            eprint        = {1010.3732},
+            archivePrefix = {arXiv}
+        }"#;
+        let entry = parse_bibtex(body)
+            .into_iter()
+            .next()
+            .unwrap()
+            .expect("entry parses");
+        assert!(matches!(entry.ref_, Ref::Arxiv(_)));
+    }
+
+    #[test]
+    fn bibtex_bare_eprint_without_prefix_is_arxiv() {
+        // The dominant convention: a lone `eprint` field is an arXiv id.
+        let body = "@misc{x, eprint = {2204.12345}}";
+        let entry = parse_bibtex(body)
+            .into_iter()
+            .next()
+            .unwrap()
+            .expect("entry parses");
+        assert!(matches!(entry.ref_, Ref::Arxiv(_)));
+    }
+
+    #[test]
+    fn bibtex_non_arxiv_eprinttype_is_skipped() {
+        // eprinttype names a different server → not an arXiv id, and
+        // there is no DOI, so the entry has no resolvable identifier.
+        let body = "@article{x, eprint = {12345678}, eprinttype = {pubmed}}";
+        let res = parse_bibtex(body).into_iter().next().unwrap();
+        assert!(matches!(res, Err(ParseError::NoIdentifier { .. })));
+    }
+
+    #[test]
+    fn bibtex_doi_beats_arxiv_when_both_present() {
+        // ADR-0030 D3: priority is DOI > arXiv > PMID.
+        let body = r#"@article{both,
+            doi           = {10.1234/foo},
+            eprint        = {2401.12345},
+            archivePrefix = {arXiv}
+        }"#;
+        let entry = parse_bibtex(body)
+            .into_iter()
+            .next()
+            .unwrap()
+            .expect("entry parses");
+        assert!(matches!(entry.ref_, Ref::Doi(_)));
+    }
+
+    #[test]
+    fn bibtex_multiple_entries_each_yield_a_result() {
+        let body = r#"
+            @article{a, doi = {10.1103/PhysRev.65.117}}
+            @article{b, eprint = {1010.3732}, archivePrefix = {arXiv}}
+            @article{c, title = {no identifier here}}
+        "#;
+        let parsed = parse_bibtex(body);
+        assert_eq!(parsed.len(), 3);
+        assert!(matches!(
+            parsed[0],
+            Ok(ParsedEntry {
+                ref_: Ref::Doi(_),
+                ..
+            })
+        ));
+        assert!(matches!(
+            parsed[1],
+            Ok(ParsedEntry {
+                ref_: Ref::Arxiv(_),
+                ..
+            })
+        ));
+        assert!(matches!(parsed[2], Err(ParseError::NoIdentifier { .. })));
+    }
+
+    #[test]
+    fn bibtex_entry_without_identifier_yields_no_identifier_error() {
+        let body = "@book{nodoi, title = {A Book}, author = {Author, A.}}";
+        let res = parse_bibtex(body).into_iter().next().unwrap();
+        assert!(matches!(res, Err(ParseError::NoIdentifier { .. })));
+    }
+
+    #[test]
+    fn bibtex_invalid_doi_surfaces_as_invalid_ref_per_entry() {
+        let body = "@article{bad, doi = {not-a-doi}}";
+        let res = parse_bibtex(body).into_iter().next().unwrap();
+        assert!(matches!(res, Err(ParseError::InvalidRef { .. })));
+    }
+
+    #[test]
+    fn bibtex_malformed_input_yields_single_decode_error() {
+        // A truncated entry the biblatex parser rejects outright.
+        let body = "@article{unterminated, doi = {10.1234/x}";
+        let parsed = parse_bibtex(body);
         assert_eq!(parsed.len(), 1);
         assert!(matches!(
             parsed[0],
-            Err(ParseError::UnsupportedFormat { format: "bibtex" })
+            Err(ParseError::Decode {
+                format: "bibtex",
+                ..
+            })
         ));
+    }
+
+    #[test]
+    fn parse_input_bibtex_dispatches_and_parses() {
+        let body = "@article{foo, doi = {10.1234/foo}}";
+        let parsed = parse_input(body, Format::Bibtex, None);
+        assert_eq!(parsed.len(), 1);
+        let entry = parsed.into_iter().next().unwrap().expect("entry parses");
+        assert!(matches!(entry.ref_, Ref::Doi(_)));
+        assert_eq!(entry.entry_key.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn parse_input_auto_dispatches_bibtex_by_content() {
+        // Leading `@article{` fingerprint routes to the BibTeX parser.
+        let body = "@article{auto, doi = {10.1234/auto}}";
+        let parsed = parse_input(body, Format::Auto, None);
+        let entry = parsed.into_iter().next().unwrap().expect("entry parses");
+        assert!(matches!(entry.ref_, Ref::Doi(_)));
     }
 
     #[test]
