@@ -76,6 +76,9 @@ doiget fetch arXiv:2401.12345
 # Batch fetch
 doiget batch refs.txt
 
+# Verify a bibliography's references resolve (no PDF download) — CI gate
+doiget verify docs/references.bib --strict
+
 # Inspect what was fetched
 doiget info 10.1103/PhysRevLett.130.200601
 

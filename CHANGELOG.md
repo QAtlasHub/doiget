@@ -10,6 +10,12 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Added
+- **[core]** BibTeX / BibLaTeX (`.bib`) bibliography input via the `biblatex` crate, completing the ADR-0030 D2 parser slice. `doiget batch` and `doiget verify` now accept `.bib` files; identifier priority is `doi` > arXiv `eprint`.
+- **[cli]** `doiget verify <path>` — check that every DOI / arXiv reference in a `.bib` / CSL-JSON / plain-refs file resolves to real metadata, **without** downloading PDFs or writing to the store. Emits one JSON-Lines record per entry; exit code is the failing-entry count (capped at 255).
+- **[cli]** `[verify]` config section (`on_missing_id = "warn" | "error" | "skip"`, `strict`) controlling how id-less and unresolved entries affect the exit code. `--strict` overrides the config.
+- **[ci]** `doiget-verify` composite GitHub Action (`.github/actions/verify`) so other repositories can gate their bibliography references in CI.
+
 ## [0.4.1-beta.0] - 2026-05-31
 
 ### Added
