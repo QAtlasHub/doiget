@@ -130,6 +130,22 @@ fn verify_config_on_missing_id_skip_drops_entry() {
 }
 
 #[test]
+fn verify_config_strict_does_not_let_skip_drop_idless_entries() {
+    // `[verify] strict = true` + `on_missing_id = "skip"`: a strict run
+    // must not silently drop id-less entries — they surface (as a warning)
+    // so the summary stays honest. The run still exits 0 (skip→warn, not
+    // error), but the record IS emitted.
+    let dir = TempDir::new().expect("tempdir");
+    write_config(&dir, "[verify]\nstrict = true\non_missing_id = \"skip\"\n");
+    let bib = write_bib(&dir, "refs.bib", "@book{x, title = {No Id}}");
+    doiget(&dir)
+        .args(["verify", &bib])
+        .assert()
+        .success()
+        .stdout(contains("\"status\":\"unverifiable\""));
+}
+
+#[test]
 fn verify_unknown_format_flag_errors() {
     let dir = TempDir::new().expect("tempdir");
     let bib = write_bib(&dir, "refs.bib", "@article{x, doi = {10.1234/foo}}");

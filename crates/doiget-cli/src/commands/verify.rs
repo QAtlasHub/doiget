@@ -104,7 +104,16 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
     let config = load_verify_config();
     let strict = cli_strict || config.strict;
     let on_missing = if cli_strict {
+        // CLI --strict is the strictest setting: id-less entries fail.
         OnMissingId::Error
+    } else if strict {
+        // strict came from `[verify] strict = true`: unresolved ids fail.
+        // Do not let `skip` silently drop id-less entries in a strict run —
+        // surface them at least as a warning so the summary is honest.
+        match config.on_missing_id {
+            OnMissingId::Skip => OnMissingId::Warn,
+            other => other,
+        }
     } else {
         config.on_missing_id
     };
@@ -139,8 +148,18 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                         })
                     }
                     Err(e) => {
-                        unresolved += 1;
                         let code: doiget_core::ErrorCode = (&e).into();
+                        // A provenance-log write failure is fail-closed
+                        // (docs/SECURITY.md §1.8): it is an operator-side
+                        // fault, NOT a "this reference doesn't resolve"
+                        // signal, so it must abort the run rather than be
+                        // counted as a soft `unresolved` that CI passes.
+                        if code == doiget_core::ErrorCode::LogError {
+                            return Err(anyhow::anyhow!(
+                                "provenance log error during verify (aborting): {e}"
+                            ));
+                        }
+                        unresolved += 1;
                         serde_json::json!({
                             "ok": false,
                             "ref": ref_.as_input_str(),
