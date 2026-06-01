@@ -1,0 +1,147 @@
+// allow: outbound-network
+//! End-to-end tests for `doiget cite <ref>`.
+//!
+//! `cite` resolves a reference live and prints a clean BibTeX entry on
+//! stdout (a `doi2bib`-style helper). Both the DOI (Crossref) and arXiv
+//! paths are exercised against wiremock origins via `DOIGET_*_BASE`, so
+//! no outbound call is made. The malformed-id case needs no network —
+//! `Ref::parse` rejects it before any resolver runs.
+
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
+use assert_cmd::Command;
+use predicates::str::contains;
+use serde_json::json;
+use tempfile::TempDir;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// DOI whose Crossref `/works/<doi>` mock is mounted below. Crossref's
+/// URL builder uses `Url::join("/works/<doi>")`, which does NOT
+/// percent-encode the `/` in the suffix, so the mock path is the literal
+/// `/works/10.1234/cite.test`.
+const TEST_DOI: &str = "10.1234/cite.test";
+
+/// Crossref `message` envelope (CrossrefSource returns `envelope.message`,
+/// so the body the orchestrator stores is this object, with the outer
+/// `{status, message}` wrapper added by the mock response).
+fn crossref_body() -> serde_json::Value {
+    json!({
+        "status": "ok",
+        "message": {
+            "title": ["A Synthetic Result on <i>Spin</i> Chains"],
+            "author": [
+                { "family": "Doe", "given": "Jane" },
+                { "family": "Roe", "given": "Richard" },
+            ],
+            "issued": { "date-parts": [[2026, 1, 1]] },
+            "container-title": ["Synthetic Journal of Physics"],
+            "publisher": "Synthetic Society",
+            "ISSN": ["1234-5678"],
+            "type": "journal-article",
+        }
+    })
+}
+
+/// Reusable synthetic Atom feed for the arXiv path.
+const SAMPLE_ATOM_FEED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.12345v1</id>
+    <title>Example arXiv Paper Title</title>
+    <summary>This is an example abstract.</summary>
+    <author><name>Jane Doe</name></author>
+    <published>2024-01-15T00:00:00Z</published>
+  </entry>
+</feed>"#;
+
+/// Build a `doiget` command with a temp HOME / store / log / cache so the
+/// developer's real environment is never touched.
+fn doiget(dir: &TempDir) -> Command {
+    let mut cmd = Command::cargo_bin("doiget").expect("locate doiget binary");
+    let p = dir.path().to_str().expect("tempdir path utf-8");
+    let log_path = format!("{p}/log.jsonl");
+    cmd.env("HOME", p)
+        .env("USERPROFILE", p)
+        .env("XDG_CONFIG_HOME", p)
+        .env("APPDATA", p)
+        .env("DOIGET_STORE_ROOT", p)
+        .env("DOIGET_LOG_PATH", log_path)
+        .env("DOIGET_CACHE_ROOT", p);
+    cmd
+}
+
+#[test]
+fn cite_typo_doi_is_rejected() {
+    // `1O.1234` uses letter O — `Ref::parse` rejects it before any
+    // network call, so cite exits non-zero with no BibTeX on stdout.
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .args(["cite", "1O.1234/typo"])
+        .assert()
+        .failure();
+}
+
+#[tokio::test]
+async fn cite_doi_emits_enriched_bibtex() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/works/{TEST_DOI}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(crossref_body()))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .args(["cite", TEST_DOI])
+        .env("DOIGET_CROSSREF_BASE", server.uri())
+        .assert()
+        .success()
+        // journal-article → @article, with the Crossref-enriched fields.
+        .stdout(contains("@article{"))
+        .stdout(contains("A Synthetic Result on Spin Chains")) // <i> stripped
+        .stdout(contains("author     = {Doe, Jane and Roe, Richard},"))
+        .stdout(contains("year       = {2026},"))
+        .stdout(contains("journal    = {Synthetic Journal of Physics},"))
+        .stdout(contains("publisher  = {Synthetic Society},"))
+        .stdout(contains("issn       = {1234-5678},"))
+        .stdout(contains("doi        = {10.1234/cite.test},"));
+}
+
+#[tokio::test]
+async fn cite_arxiv_emits_bibtex() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_ATOM_FEED))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .args(["cite", "arxiv:2401.12345"])
+        .env("DOIGET_ARXIV_BASE", server.uri())
+        .assert()
+        .success()
+        // arXiv has no Crossref `type`, so it renders as @misc.
+        .stdout(contains("@misc{"))
+        .stdout(contains("Example arXiv Paper Title"));
+}
+
+#[tokio::test]
+async fn cite_unresolved_doi_fails() {
+    let server = MockServer::start().await;
+    // 404 for the works endpoint and the unpaywall fallback → unresolved.
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .args(["cite", TEST_DOI])
+        .env("DOIGET_CROSSREF_BASE", server.uri())
+        .env("DOIGET_UNPAYWALL_BASE", server.uri())
+        .assert()
+        .failure();
+}

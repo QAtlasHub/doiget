@@ -90,15 +90,55 @@ fn push_field(out: &mut String, key: &str, value: &str) {
 
 /// Strip BibTeX-unsafe `{` / `}` from `value`, warning once per field so
 /// the dropped characters are visible in stderr / structured logs.
+///
+/// Crossref embeds HTML / MathML markup in titles and venues (`<i>`,
+/// `<sub>`, `<mml:math>…</mml:math>`); those `<…>` tags are removed first
+/// (their inner text is kept) so the rendered BibTeX is clean enough to
+/// paste into a `.bib`. This is the same pragmatic trade-off doi2bib
+/// makes — it is a tag scrubber, not a TeX-aware math translator, so a
+/// title's math markup collapses to its plain-text content rather than to
+/// `$…$`.
 fn strip_bibtex_unsafe(key: &str, value: &str) -> String {
-    if value.contains('{') || value.contains('}') {
+    let detagged = strip_markup_tags(value);
+    if detagged.contains('{') || detagged.contains('}') {
         tracing::warn!(
             field = key,
             "stripping literal '{{'/'}}' from BibTeX field value; \
              a TeX-aware escaper lands in a Phase 2 follow-up"
         );
     }
-    value.chars().filter(|c| !matches!(c, '{' | '}')).collect()
+    detagged
+        .chars()
+        .filter(|c| !matches!(c, '{' | '}'))
+        .collect()
+}
+
+/// Remove HTML / MathML markup tags (`<i>`, `<sub>`, `<mml:math>`, …),
+/// keeping the text between them. Equivalent to deleting every `<…>`
+/// run: a deliberately simple angle-bracket scanner, not an HTML parser.
+///
+/// A `<` with no matching `>` (e.g. genuine inline math `a < b` that
+/// Crossref left unescaped) leaves the remainder verbatim — only
+/// well-formed tag runs are dropped. Strings with no markup return
+/// unchanged without allocating a scan buffer.
+fn strip_markup_tags(value: &str) -> String {
+    if !(value.contains('<') && value.contains('>')) {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(lt) = rest.find('<') {
+        match rest[lt..].find('>') {
+            Some(gt_rel) => {
+                out.push_str(&rest[..lt]);
+                rest = &rest[lt + gt_rel + 1..];
+            }
+            // No closing '>' for this '<': keep the remainder as-is.
+            None => break,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +346,29 @@ mod tests {
         let mut m = fixture(Some("journal-article"));
         m.title = "A {curly} Title".to_string();
         assert!(to_bibtex("k", &m).contains("title      = {A curly Title},"));
+    }
+
+    #[test]
+    fn bibtex_html_mathml_tags_stripped() {
+        let mut m = fixture(Some("journal-article"));
+        // A Crossref-style title with MathML + an inline italic tag.
+        m.title = "Spin-<i>S</i> chains with <mml:math><mml:mi>S</mml:mi>\
+                   </mml:math>=1 order"
+            .to_string();
+        let s = to_bibtex("k", &m);
+        assert!(
+            s.contains("title      = {Spin-S chains with S=1 order},"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn bibtex_unescaped_lt_without_close_is_preserved() {
+        // A bare `<` with no closing `>` is genuine math, not a tag:
+        // keep the remainder verbatim rather than swallowing it.
+        let mut m = fixture(Some("journal-article"));
+        m.title = "Regime a < b holds".to_string();
+        assert!(to_bibtex("k", &m).contains("title      = {Regime a < b holds},"));
     }
 
     // ---- CSL ----

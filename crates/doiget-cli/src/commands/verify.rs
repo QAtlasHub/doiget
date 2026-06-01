@@ -23,16 +23,13 @@
 //! to stdout regardless of mode; the summary goes to stderr unless
 //! `--quiet`.
 
-use std::sync::Arc;
-
 use anyhow::{bail, Context, Result};
 use camino::Utf8Path;
 
 use doiget_core::orchestrator::resolve_only;
 use doiget_core::refs::{parse_input, Format, ParseError};
-use doiget_core::source::FetchContext;
 use doiget_core::verify_config::{self, OnMissingId};
-use doiget_core::{CapabilityProfile, RateLimits};
+use doiget_core::CapabilityProfile;
 
 use super::fetch::CliExit;
 use super::output::OutputMode;
@@ -55,34 +52,6 @@ fn load_verify_config() -> verify_config::VerifyConfig {
             verify_config::VerifyConfig::default()
         }
     }
-}
-
-/// Build a metadata-resolution context: HTTP client, rate limiter, and
-/// provenance log resolved from the environment. Mirrors
-/// `resolve_citation::build_context`; verify never persists to the store,
-/// so no store handle is constructed.
-fn build_context() -> Result<FetchContext> {
-    let session_id = crate::commands::fetch::new_session_id();
-    let log_path = crate::commands::fetch::resolve_log_path()?;
-    let http = Arc::new(crate::commands::fetch::build_http_client()?);
-    let rate_limiter = Arc::new(doiget_core::rate_limiter::RateLimiter::new(
-        RateLimits::HARD_CODED,
-    ));
-    let log = Arc::new(
-        doiget_core::provenance::ProvenanceLog::open(log_path, session_id.clone())
-            .context("failed to open provenance log for verify")?,
-    );
-    // Enable the resolver cache (docs/CACHE.md): repeat verifies of the
-    // same reference are served from disk, avoiding upstream rate limits.
-    // Best-effort — if the cache dir can't be resolved, run without it.
-    let cache_root = crate::commands::fetch::cache_dir_utf8().ok();
-    Ok(FetchContext {
-        http,
-        rate_limiter,
-        log,
-        session_id,
-        cache_root,
-    })
 }
 
 /// Map the `--format` flag token to a [`Format`].
@@ -123,7 +92,7 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
         config.on_missing_id
     };
 
-    let ctx = build_context()?;
+    let ctx = crate::commands::fetch::build_resolve_context()?;
     let profile = CapabilityProfile::from_env().context("resolving capability profile")?;
 
     let mut valid = 0u32;

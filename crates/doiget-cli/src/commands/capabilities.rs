@@ -457,6 +457,13 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
             json_mode: JsonMode::Artifact,
             feature_gated: None,
         },
+        "cite" => SubcommandMeta {
+            examples: &["doiget cite 10.1234/foo", "doiget cite arxiv:2401.12345"],
+            // BibTeX output is the product (resolved live); `--mode` is
+            // informational, mirroring `bib`.
+            json_mode: JsonMode::Artifact,
+            feature_gated: None,
+        },
         "csl" => SubcommandMeta {
             examples: &["doiget csl 10.1234/foo"],
             json_mode: JsonMode::Artifact,
@@ -828,6 +835,11 @@ mod tests {
             .subcommand(
                 Command::new("bib")
                     .about("BibTeX export")
+                    .arg(Arg::new("ref").required(true)),
+            )
+            .subcommand(
+                Command::new("cite")
+                    .about("Live BibTeX")
                     .arg(Arg::new("ref").required(true)),
             )
             .subcommand(

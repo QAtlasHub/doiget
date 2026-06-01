@@ -11,6 +11,7 @@
 //!   chain on the provenance log and reports any mismatches.
 //! - [`batch`] — `doiget batch <path>` multi-ref orchestrator (rate-bounded).
 //! - [`bib`] — `doiget bib <ref>` BibTeX exporter (Phase 2 starter).
+//! - [`cite`] — `doiget cite <ref>` live-resolve BibTeX (doi2bib-style).
 //! - [`config`] — `doiget config show/path/doctor`.
 //! - [`csl`] — `doiget csl <ref>` exports a stored entry as CSL JSON 1.0.
 //! - [`fetch`] — `doiget fetch <ref>` orchestrator (arXiv E2E + DOI metadata-only).
@@ -24,6 +25,7 @@ pub mod audit_log;
 pub mod batch;
 pub mod bib;
 pub mod capabilities;
+pub mod cite;
 pub mod config;
 pub mod csl;
 pub mod fetch;
