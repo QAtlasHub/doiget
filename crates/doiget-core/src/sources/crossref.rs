@@ -3,6 +3,8 @@
 //! Spec: docs/SOURCES.md §4 (Crossref). No auth; polite-pool User-Agent
 //! contact email is REQUIRED — see [`CrossrefSource::new`].
 
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use serde::Deserialize;
 use url::Url;
@@ -14,6 +16,10 @@ use crate::{CapabilityProfile, Ref};
 /// Production Crossref REST API base URL. Hard-coded per `docs/SOURCES.md`
 /// §4; tests inject a wiremock origin via [`CrossrefSource::with_base`].
 const DEFAULT_BASE: &str = "https://api.crossref.org";
+
+/// Minimum token overlap similarity score to include a candidate in
+/// [`CrossrefSource::resolve_citation`] results.
+const MIN_CITATION_SCORE: f64 = 0.5;
 
 /// Crossref [`Source`] impl — DOI → metadata; OA URL via `message.link[]`.
 ///
@@ -163,8 +169,8 @@ impl CrossrefSource {
                 candidate_text.push(' ');
             }
 
-            // Simple tokenize of candidate
-            let candidate_tokens: Vec<String> = candidate_text
+            // Simple tokenize of candidate into a HashSet for O(1) lookup.
+            let candidate_tokens: HashSet<String> = candidate_text
                 .split(|c: char| !c.is_alphanumeric())
                 .map(|s| s.to_lowercase())
                 .filter(|s| !s.is_empty())
@@ -172,12 +178,12 @@ impl CrossrefSource {
 
             let matched = query_tokens
                 .iter()
-                .filter(|q| candidate_tokens.contains(q))
+                .filter(|q| candidate_tokens.contains(*q))
                 .count();
 
             let score = matched as f64 / query_tokens.len() as f64;
 
-            if score >= 0.5 {
+            if score >= MIN_CITATION_SCORE {
                 let first_author = fields.authors.first().cloned().unwrap_or_default();
                 candidates.push(crate::ResolvedCandidate {
                     doi,

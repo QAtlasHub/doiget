@@ -1553,23 +1553,14 @@ impl Server {
             }
         };
 
-        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL")
-            .unwrap_or_else(|_| "doiget@localhost".to_string());
-        let crossref_base = std::env::var("DOIGET_CROSSREF_BASE").ok();
-
-        let source = if let Some(base_str) = crossref_base {
-            let base = match url::Url::parse(&base_str) {
-                Ok(b) => b,
-                Err(e) => {
-                    return Ok(CallToolResult::structured(serde_json::json!({
-                        "ok": false,
-                        "error": format!("invalid DOIGET_CROSSREF_BASE: {e}"),
-                    })))
-                }
-            };
-            CrossrefSource::with_base(base, contact_email)
-        } else {
-            CrossrefSource::new(contact_email)
+        let source = match crossref_source_from_env() {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(serde_json::json!({
+                    "ok": false,
+                    "error": e,
+                })));
+            }
         };
 
         match source
@@ -1618,23 +1609,14 @@ impl Server {
             }
         };
 
-        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL")
-            .unwrap_or_else(|_| "doiget@localhost".to_string());
-        let crossref_base = std::env::var("DOIGET_CROSSREF_BASE").ok();
-
-        let source = if let Some(base_str) = crossref_base {
-            let base = match url::Url::parse(&base_str) {
-                Ok(b) => b,
-                Err(e) => {
-                    return Ok(CallToolResult::structured(serde_json::json!({
-                        "ok": false,
-                        "error": format!("invalid DOIGET_CROSSREF_BASE: {e}"),
-                    })))
-                }
-            };
-            CrossrefSource::with_base(base, contact_email)
-        } else {
-            CrossrefSource::new(contact_email)
+        let source = match crossref_source_from_env() {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(serde_json::json!({
+                    "ok": false,
+                    "error": e,
+                })));
+            }
         };
 
         let mut results = Vec::new();
@@ -2569,6 +2551,23 @@ fn build_fetch_context() -> anyhow::Result<FetchContext> {
         log,
         session_id,
     })
+}
+
+/// Build a [`CrossrefSource`] from environment variables
+/// (`DOIGET_CROSSREF_BASE`, `DOIGET_CONTACT_EMAIL`).
+///
+/// Returns `Err(String)` — callers convert it into a structured tool error.
+fn crossref_source_from_env() -> Result<CrossrefSource, String> {
+    let contact_email = std::env::var("DOIGET_CONTACT_EMAIL")
+        .unwrap_or_else(|_| "doiget@localhost".to_string());
+    match std::env::var("DOIGET_CROSSREF_BASE").ok() {
+        Some(base_str) => {
+            let base = url::Url::parse(&base_str)
+                .map_err(|e| format!("invalid DOIGET_CROSSREF_BASE: {e}"))?;
+            Ok(CrossrefSource::with_base(base, contact_email))
+        }
+        None => Ok(CrossrefSource::new(contact_email)),
+    }
 }
 
 /// HTTP client construction with the same `DOIGET_*_BASE` test-override
