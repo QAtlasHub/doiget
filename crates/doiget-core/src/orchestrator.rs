@@ -1337,18 +1337,18 @@ async fn try_fetch_oa_pdf(
 }
 
 /// Subset of Crossref `message` fields populated into the on-disk metadata.
-struct CrossrefFields {
-    title: Option<String>,
-    authors: Vec<String>,
-    year: Option<i32>,
-    venue: Option<String>,
-    type_: Option<String>,
+pub(crate) struct CrossrefFields {
+    pub(crate) title: Option<String>,
+    pub(crate) authors: Vec<String>,
+    pub(crate) year: Option<i32>,
+    pub(crate) venue: Option<String>,
+    pub(crate) type_: Option<String>,
 }
 
 /// Defensively pull bibliographic fields out of a Crossref envelope's
-/// `message` object. Every field is optional; malformed shapes degrade
-/// to `None` rather than panicking.
-fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
+/// message object. Every field is optional; malformed shapes degrade
+/// to None rather than panicking.
+pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
     let title = msg
         .get("title")
         .and_then(|v| v.as_array())

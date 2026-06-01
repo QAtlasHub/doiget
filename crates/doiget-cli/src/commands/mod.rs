@@ -31,6 +31,7 @@ pub mod info;
 pub mod list_recent;
 pub mod output;
 pub mod provenance;
+pub mod resolve_citation;
 pub mod search;
 
 // Phase 4 / Slice 16. Compile-gated by the `citation` Cargo feature
