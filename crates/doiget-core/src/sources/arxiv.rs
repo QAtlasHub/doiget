@@ -61,7 +61,7 @@ const PDF_BASE: &str = "https://arxiv.org";
 const META_BASE: &str = "https://export.arxiv.org";
 
 /// arXiv [`Source`] impl. PDFs are served from `arxiv.org`; Atom metadata
-/// from `export.arxiv.org` — see [`ArxivSource::metadata_url`].
+/// from `export.arxiv.org` (the `metadata_url` builder).
 #[derive(Clone, Debug)]
 pub struct ArxivSource {
     /// PDF endpoint base (`arxiv.org` in production).
