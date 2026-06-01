@@ -56,7 +56,7 @@ use doiget_core::store::FsStore;
 use doiget_core::{CapabilityProfile, DenialContext, DenialReason, ErrorCode, RateLimits, Ref};
 
 /// Defer to docs/PROVENANCE_LOG.md §3: 26-char ULID per process invocation.
-fn new_session_id() -> String {
+pub(crate) fn new_session_id() -> String {
     ulid::Ulid::new().to_string()
 }
 
@@ -98,7 +98,7 @@ pub fn emit_dry_run_plan_to_stdout(ref_: &Ref, plan: &FetchPlan) -> Result<()> {
 /// Resolve the provenance log path. `DOIGET_LOG_PATH` wins; otherwise
 /// fall back to `<config>/doiget/access.jsonl` per `docs/PROVENANCE_LOG.md`
 /// §1.
-fn resolve_log_path() -> Result<Utf8PathBuf> {
+pub(crate) fn resolve_log_path() -> Result<Utf8PathBuf> {
     if let Some(s) = read_env_utf8("DOIGET_LOG_PATH")? {
         return Ok(Utf8PathBuf::from(s));
     }
@@ -169,7 +169,7 @@ pub(crate) fn config_dir_utf8() -> Result<Utf8PathBuf> {
 /// when `DOIGET_OA_PUBLISHER_BASE` is set — this lets the integration tests
 /// under `tests/fetch_doi_oa_pdf_e2e.rs` exercise the full PDF leg without
 /// touching the real network.
-fn build_http_client() -> Result<HttpClient> {
+pub(crate) fn build_http_client() -> Result<HttpClient> {
     let arxiv = std::env::var("DOIGET_ARXIV_BASE").ok();
     let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
     let unpaywall = std::env::var("DOIGET_UNPAYWALL_BASE").ok();
@@ -499,11 +499,19 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
             code,
             message,
             denial,
+            suggested_arxiv_id,
         } => {
             // Same #145 reclassification as the primary interception in
             // `fetch_one`, so this fail-closed fallback stays consistent.
             let effective = effective_blocked_code(*code, denial.as_ref());
-            render_blocked_error(ref_, outcome, effective, message, denial.as_ref());
+            render_blocked_error(
+                ref_,
+                outcome,
+                effective,
+                message,
+                denial.as_ref(),
+                suggested_arxiv_id.as_deref(),
+            );
         }
         // `PdfLegStatus` is `#[non_exhaustive]`; a future variant
         // degrades to the size-based wording rather than failing the
@@ -624,10 +632,18 @@ pub async fn run_with_options(
                 code,
                 message,
                 denial,
+                suggested_arxiv_id,
             } = &outcome.pdf_leg
             {
                 let effective = effective_blocked_code(*code, denial.as_ref());
-                render_blocked_error(&ref_, &outcome, effective, message, denial.as_ref());
+                render_blocked_error(
+                    &ref_,
+                    &outcome,
+                    effective,
+                    message,
+                    denial.as_ref(),
+                    suggested_arxiv_id.as_deref(),
+                );
                 return Err(anyhow::Error::new(CliExit(cli_exit_code(effective))));
             }
             emit_success_line(&ref_, &outcome);
@@ -781,6 +797,7 @@ fn render_blocked_error(
     code: ErrorCode,
     message: &str,
     denial: Option<&DenialContext>,
+    suggested_arxiv_id: Option<&str>,
 ) {
     let label = match ref_ {
         Ref::Arxiv(id) => format!("arxiv:{}", id.as_str()),
@@ -831,6 +848,12 @@ fn render_blocked_error(
         "  = note: metadata-only record written to {}",
         outcome.path
     ));
+    if let Some(arxiv_id) = suggested_arxiv_id {
+        print_err(format_args!(
+            "  = suggest: Try fetching the arXiv version: doiget fetch arxiv:{}",
+            arxiv_id
+        ));
+    }
 }
 
 // ---------------------------------------------------------------------------

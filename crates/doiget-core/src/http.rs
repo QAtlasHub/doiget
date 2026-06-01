@@ -1053,6 +1053,15 @@ fn ensure_crypto_provider() {
     });
 }
 
+/// Public entry point for callers that build their own `reqwest::Client`
+/// outside of [`HttpClient`] and need the process-default TLS provider
+/// installed first (ADR-0020 Amendment 1).
+///
+/// Safe to call multiple times; the underlying `Once` makes it idempotent.
+pub fn init_tls() {
+    ensure_crypto_provider();
+}
+
 /// Upgrade an `http://` URL to `https://` for legacy publisher
 /// metadata. Loopback hosts (`localhost`, any RFC 6761 `.localhost`
 /// TLD subdomain, `127.0.0.0/8`, `::1`, IPv4-mapped IPv6 loopback)

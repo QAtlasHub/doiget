@@ -556,6 +556,9 @@ pub enum PdfLegStatus {
         /// Structured denial side-channel (ADR-0023) when the failure
         /// was an allowlist / scheme denial; `None` otherwise.
         denial: Option<crate::DenialContext>,
+        /// Actionable suggested arXiv ID for the same paper when Unpaywall
+        /// metadata includes an arXiv alternative but the PDF leg was blocked.
+        suggested_arxiv_id: Option<String>,
     },
 }
 
@@ -950,11 +953,13 @@ async fn fetch_paper_doi(
                 let denial: Option<crate::DenialContext> = (&fe).into();
                 let message = fe.to_string();
                 let code: crate::ErrorCode = fe.into();
+                let suggested_arxiv_id = oa_chain.iter().find_map(extract_arxiv_id_from_url);
                 (
                     PdfLegStatus::Blocked {
                         code,
                         message,
                         denial,
+                        suggested_arxiv_id,
                     },
                     None,
                 )
@@ -982,6 +987,7 @@ async fn fetch_paper_doi(
                              (orchestrator bug — please report)"
                                 .to_string(),
                         denial: None,
+                        suggested_arxiv_id: None,
                     },
                     None,
                 )
@@ -1331,18 +1337,18 @@ async fn try_fetch_oa_pdf(
 }
 
 /// Subset of Crossref `message` fields populated into the on-disk metadata.
-struct CrossrefFields {
-    title: Option<String>,
-    authors: Vec<String>,
-    year: Option<i32>,
-    venue: Option<String>,
-    type_: Option<String>,
+pub(crate) struct CrossrefFields {
+    pub(crate) title: Option<String>,
+    pub(crate) authors: Vec<String>,
+    pub(crate) year: Option<i32>,
+    pub(crate) venue: Option<String>,
+    pub(crate) type_: Option<String>,
 }
 
 /// Defensively pull bibliographic fields out of a Crossref envelope's
-/// `message` object. Every field is optional; malformed shapes degrade
-/// to `None` rather than panicking.
-fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
+/// message object. Every field is optional; malformed shapes degrade
+/// to None rather than panicking.
+pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
     let title = msg
         .get("title")
         .and_then(|v| v.as_array())
@@ -1461,6 +1467,51 @@ fn pull_oa_url_from_location(loc: &Value) -> Option<url::Url> {
     url::Url::parse(candidate).ok()
 }
 
+/// Helper to parse clean arXiv IDs from URLs like arxiv.org/pdf/1901.12345.pdf.
+///
+/// Strips the trailing `.pdf` extension and any version suffix (`v1`, `v2`, …)
+/// so the returned ID refers to the latest version rather than pinning a
+/// specific one. Returns `None` for non-arXiv hosts or unrecognised path shapes.
+fn extract_arxiv_id_from_url(url: &url::Url) -> Option<String> {
+    let host = url.host_str()?;
+    let is_arxiv = matches!(
+        host,
+        "arxiv.org" | "www.arxiv.org" | "export.arxiv.org" | "e-print.arxiv.org"
+    );
+    if !is_arxiv {
+        return None;
+    }
+    let path = url.path();
+    let raw = if path.starts_with("/pdf/") {
+        let s = path.strip_prefix("/pdf/")?;
+        s.strip_suffix(".pdf").unwrap_or(s)
+    } else if path.starts_with("/abs/") {
+        path.strip_prefix("/abs/")?
+    } else {
+        return None;
+    };
+    Some(strip_arxiv_version(raw).to_string())
+}
+
+/// Strip a trailing arXiv version suffix (`v1`, `v2`, …) from an ID string.
+///
+/// Recognises the suffix only when the `v` is **preceded by a digit** (ruling
+/// out category fragments like `quant-ph`) and followed by one or more ASCII
+/// digits. Leaves IDs without a recognisable version suffix unchanged.
+fn strip_arxiv_version(id: &str) -> &str {
+    if let Some(v_pos) = id.rfind('v') {
+        let before_v = id[..v_pos].chars().next_back();
+        let suffix = &id[v_pos + 1..];
+        if before_v.is_some_and(|c| c.is_ascii_digit())
+            && !suffix.is_empty()
+            && suffix.bytes().all(|b| b.is_ascii_digit())
+        {
+            return &id[..v_pos];
+        }
+    }
+    id
+}
+
 fn unpaywall_email_from_env(fallback_contact: &str) -> String {
     std::env::var("DOIGET_UNPAYWALL_EMAIL").unwrap_or_else(|_| fallback_contact.to_string())
 }
@@ -1571,6 +1622,60 @@ pub fn batch_fetch_plans(
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_extract_arxiv_id_from_url() {
+        let urls = [
+            // Basic new-style ID
+            ("https://arxiv.org/pdf/1901.12345.pdf", Some("1901.12345")),
+            ("https://arxiv.org/abs/1901.12345", Some("1901.12345")),
+            // Version suffix is stripped
+            ("https://arxiv.org/pdf/1901.12345v2.pdf", Some("1901.12345")),
+            ("https://arxiv.org/abs/1901.12345v3", Some("1901.12345")),
+            // Old-style category/ID
+            (
+                "https://www.arxiv.org/pdf/cond-mat/9501001.pdf",
+                Some("cond-mat/9501001"),
+            ),
+            (
+                "https://export.arxiv.org/abs/cond-mat/9501001",
+                Some("cond-mat/9501001"),
+            ),
+            // Old-style with version stripped
+            (
+                "https://arxiv.org/pdf/cond-mat/9501001v1.pdf",
+                Some("cond-mat/9501001"),
+            ),
+            // e-print subdomain
+            (
+                "https://e-print.arxiv.org/pdf/2401.12345.pdf",
+                Some("2401.12345"),
+            ),
+            // Non-arXiv host
+            ("https://example.org/pdf/1901.12345.pdf", None),
+        ];
+        for (url_str, expected) in urls {
+            let url = url::Url::parse(url_str).unwrap();
+            assert_eq!(
+                extract_arxiv_id_from_url(&url),
+                expected.map(String::from),
+                "url: {url_str}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_strip_arxiv_version() {
+        assert_eq!(strip_arxiv_version("2401.12345v2"), "2401.12345");
+        assert_eq!(strip_arxiv_version("2401.12345v10"), "2401.12345");
+        assert_eq!(strip_arxiv_version("2401.12345"), "2401.12345");
+        assert_eq!(
+            strip_arxiv_version("cond-mat/9501001v3"),
+            "cond-mat/9501001"
+        );
+        // "v" not followed by digits — unchanged
+        assert_eq!(strip_arxiv_version("quant-phv5"), "quant-phv5");
+    }
 
     #[test]
     fn extract_crossref_oa_url_finds_first_url() {

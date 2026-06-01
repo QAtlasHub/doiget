@@ -818,6 +818,36 @@ pub struct DenialContext {
 }
 
 // ---------------------------------------------------------------------------
+// ResolvedCandidate / ResolveResult (Issue #242)
+// ---------------------------------------------------------------------------
+
+/// A candidate paper resolved from a bibliographic citation string.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedCandidate {
+    /// Resolved DOI.
+    pub doi: String,
+    /// Title of the resolved candidate.
+    pub title: String,
+    /// First author or primary author representation.
+    pub author: String,
+    /// Publication year, if resolved.
+    pub year: Option<i32>,
+    /// Token similarity overlap score in `0.0..=1.0`.
+    pub score: f64,
+    /// Resolving metadata source (e.g. `"crossref"`).
+    pub source: String,
+}
+
+/// The result structure returned by bibliographic citation resolution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolveResult {
+    /// The original query bibliographic citation string.
+    pub query: String,
+    /// Ranked candidate list (highest score first, thresholded to >= 0.5).
+    pub candidates: Vec<ResolvedCandidate>,
+}
+
+// ---------------------------------------------------------------------------
 // CapabilityProfile (placeholder; full impl in Phase 1)
 // ---------------------------------------------------------------------------
 

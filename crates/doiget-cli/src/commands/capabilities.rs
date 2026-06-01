@@ -494,6 +494,15 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
             json_mode: JsonMode::Artifact,
             feature_gated: Some("citation"),
         },
+        "version" => SubcommandMeta {
+            examples: &[
+                "doiget version",
+                "doiget version --check",
+                "doiget version --check --mode json",
+            ],
+            json_mode: JsonMode::Supported,
+            feature_gated: None,
+        },
         "capabilities" => SubcommandMeta {
             examples: &["doiget capabilities | jq ."],
             // The whole point of capabilities IS JSON output.

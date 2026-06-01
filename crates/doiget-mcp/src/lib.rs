@@ -55,6 +55,7 @@ use doiget_core::orchestrator::{
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
 use doiget_core::source::{FetchContext, FetchError};
+use doiget_core::sources::crossref::CrossrefSource;
 use doiget_core::store::{EntryInfo, FsStore, Store};
 use doiget_core::{
     CapabilityProfile, DenialContext, ErrorCode, RateLimits, Ref, MAX_BATCH_REFS, SCHEMA_VERSION,
@@ -1528,6 +1529,119 @@ impl Server {
     ) -> Result<CallToolResult, ErrorData> {
         Ok(self.export_citations(&input.refs, CiteFmt::Csl))
     }
+
+    /// `doiget_resolve_citation` — resolve a free-form bibliographic citation string to ranked DOI candidates.
+    #[tool(
+        description = "WHEN TO USE: Resolve a free-form bibliographic citation string (e.g. 'Onsager 1944') to ranked DOI candidates.\n\
+                       INPUTS: query (bibliographic citation query string), limit (maximum number of candidates to return, default: 5).\n\
+                       OUTPUTS: { ok: true, query, candidates: [ { doi, title, author, year, score, source } ] } OR { ok: false, error }.\n\
+                       COSTS: 1-2 s round-trip.\n\
+                       SIDE EFFECTS: none.\n\
+                       LIMITS: Returns candidates with similarity score >= 0.5."
+    )]
+    async fn doiget_resolve_citation(
+        &self,
+        Parameters(input): Parameters<ResolveCitationInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(serde_json::json!({
+                    "ok": false,
+                    "error": format!("context initialization failed: {e}"),
+                })));
+            }
+        };
+
+        let source = match crossref_source_from_env() {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(serde_json::json!({
+                    "ok": false,
+                    "error": e,
+                })));
+            }
+        };
+
+        match source
+            .resolve_citation(&input.query, input.limit, &ctx)
+            .await
+        {
+            Ok(candidates) => Ok(CallToolResult::structured(serde_json::json!({
+                "ok": true,
+                "query": input.query,
+                "candidates": candidates,
+            }))),
+            Err(e) => Ok(CallToolResult::structured(serde_json::json!({
+                "ok": false,
+                "error": format!("resolve failed: {e}"),
+            }))),
+        }
+    }
+
+    /// `doiget_batch_resolve_citations` — resolve multiple free-form bibliographic citation strings to ranked DOI candidates.
+    #[tool(
+        description = "WHEN TO USE: Resolve multiple free-form bibliographic citation strings in batch.\n\
+                       INPUTS: queries (array of query strings), limit (maximum number of candidates per query, default: 5).\n\
+                       OUTPUTS: { ok: true, results: [ { query, candidates: [ { doi, title, author, year, score, source } ] } ] } OR { ok: false, error }.\n\
+                       COSTS: 1-2 s round-trip per query.\n\
+                       SIDE EFFECTS: none.\n\
+                       LIMITS: Returns candidates with similarity score >= 0.5. At most 50 queries per call."
+    )]
+    async fn doiget_batch_resolve_citations(
+        &self,
+        Parameters(input): Parameters<BatchResolveCitationsInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if input.queries.len() > 50 {
+            return Ok(CallToolResult::structured(serde_json::json!({
+                "ok": false,
+                "error": "At most 50 queries per call.",
+            })));
+        }
+
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(serde_json::json!({
+                    "ok": false,
+                    "error": format!("context initialization failed: {e}"),
+                })));
+            }
+        };
+
+        let source = match crossref_source_from_env() {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(serde_json::json!({
+                    "ok": false,
+                    "error": e,
+                })));
+            }
+        };
+
+        let mut results = Vec::new();
+        for query in &input.queries {
+            match source.resolve_citation(query, input.limit, &ctx).await {
+                Ok(candidates) => {
+                    results.push(serde_json::json!({
+                        "query": query,
+                        "candidates": candidates,
+                    }));
+                }
+                Err(e) => {
+                    results.push(serde_json::json!({
+                        "query": query,
+                        "error": format!("resolve failed: {e}"),
+                    }));
+                }
+            }
+        }
+
+        Ok(CallToolResult::structured(serde_json::json!({
+            "ok": true,
+            "results": results,
+        })))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1685,6 +1799,34 @@ pub struct CslExportInput {
     /// DOIs / arXiv ids to render. 1..=200; each validated via
     /// `Ref::parse` with per-ref error reporting.
     pub refs: Vec<String>,
+}
+
+/// JSON-schema-derived input for the `doiget_resolve_citation` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct ResolveCitationInput {
+    /// Bibliographic citation query string (e.g. "Onsager 1944").
+    pub query: String,
+    /// Maximum number of candidates to return (default: 5).
+    #[serde(default = "default_resolve_limit")]
+    pub limit: u8,
+}
+
+/// JSON-schema-derived input for the `doiget_batch_resolve_citations` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct BatchResolveCitationsInput {
+    /// Bibliographic citation query strings.
+    pub queries: Vec<String>,
+    /// Maximum number of candidates to return per query (default: 5).
+    #[serde(default = "default_resolve_limit")]
+    pub limit: u8,
+}
+
+fn default_resolve_limit() -> u8 {
+    5
 }
 
 /// Hard cap on refs accepted by a single `doiget_bibtex_export` /
@@ -2019,6 +2161,7 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             code,
             message,
             denial,
+            suggested_arxiv_id,
         } => {
             let mut o = serde_json::Map::new();
             o.insert("status".into(), json!("blocked"));
@@ -2037,6 +2180,9 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
                     "denial_context".into(),
                     denial_context_to_value(dc, "fetch_paper_pdf_leg"),
                 );
+            }
+            if let Some(arxiv_id) = suggested_arxiv_id {
+                o.insert("suggested_arxiv_id".into(), json!(arxiv_id));
             }
             Value::Object(o)
         }
@@ -2405,6 +2551,23 @@ fn build_fetch_context() -> anyhow::Result<FetchContext> {
         log,
         session_id,
     })
+}
+
+/// Build a [`CrossrefSource`] from environment variables
+/// (`DOIGET_CROSSREF_BASE`, `DOIGET_CONTACT_EMAIL`).
+///
+/// Returns `Err(String)` — callers convert it into a structured tool error.
+fn crossref_source_from_env() -> Result<CrossrefSource, String> {
+    let contact_email =
+        std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
+    match std::env::var("DOIGET_CROSSREF_BASE").ok() {
+        Some(base_str) => {
+            let base = url::Url::parse(&base_str)
+                .map_err(|e| format!("invalid DOIGET_CROSSREF_BASE: {e}"))?;
+            Ok(CrossrefSource::with_base(base, contact_email))
+        }
+        None => Ok(CrossrefSource::new(contact_email)),
+    }
 }
 
 /// HTTP client construction with the same `DOIGET_*_BASE` test-override

@@ -3,6 +3,8 @@
 //! Spec: docs/SOURCES.md §4 (Crossref). No auth; polite-pool User-Agent
 //! contact email is REQUIRED — see [`CrossrefSource::new`].
 
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use serde::Deserialize;
 use url::Url;
@@ -14,6 +16,10 @@ use crate::{CapabilityProfile, Ref};
 /// Production Crossref REST API base URL. Hard-coded per `docs/SOURCES.md`
 /// §4; tests inject a wiremock origin via [`CrossrefSource::with_base`].
 const DEFAULT_BASE: &str = "https://api.crossref.org";
+
+/// Minimum token overlap similarity score to include a candidate in
+/// [`CrossrefSource::resolve_citation`] results.
+const MIN_CITATION_SCORE: f64 = 0.5;
 
 /// Crossref [`Source`] impl — DOI → metadata; OA URL via `message.link[]`.
 ///
@@ -76,6 +82,128 @@ impl CrossrefSource {
         self.base.join(&path).map_err(|e| FetchError::SourceSchema {
             hint: format!("crossref URL construction failed: {e}"),
         })
+    }
+
+    /// Resolves a free-form bibliographic citation string to ranked DOI candidates.
+    pub async fn resolve_citation(
+        &self,
+        query: &str,
+        rows: u8,
+        ctx: &FetchContext,
+    ) -> Result<Vec<crate::ResolvedCandidate>, FetchError> {
+        // 1. Rate limiter
+        let _permit = ctx.rate_limiter.acquire(self.name()).await;
+
+        // 2. Build works query URL
+        // /works?query.bibliographic=<query>&rows=<rows>&mailto=<email>
+        let mut url = self
+            .base
+            .join("/works")
+            .map_err(|e| FetchError::SourceSchema {
+                hint: format!("crossref resolve_citation URL construction failed: {e}"),
+            })?;
+        url.query_pairs_mut()
+            .append_pair("query.bibliographic", query)
+            .append_pair("rows", &rows.to_string())
+            .append_pair("mailto", &self.contact_email);
+
+        // 3. HTTP fetch
+        let (body, _final_url) = ctx.http.fetch_bytes(self.name(), url).await?;
+
+        // 4. Parse JSON
+        let envelope: serde_json::Value =
+            serde_json::from_slice(&body).map_err(|e| FetchError::SourceSchema {
+                hint: format!("crossref returned non-JSON for search: {e}"),
+            })?;
+
+        let items = envelope
+            .get("message")
+            .and_then(|m| m.get("items"))
+            .and_then(|i| i.as_array())
+            .ok_or_else(|| FetchError::SourceSchema {
+                hint: "crossref response missing message.items".to_string(),
+            })?;
+
+        // 5. Tokenize query (unique tokens, sorted)
+        let query_tokens = {
+            let mut t: Vec<String> = query
+                .split(|c: char| !c.is_alphanumeric())
+                .map(|s| s.to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            t.sort();
+            t.dedup();
+            t
+        };
+
+        if query_tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut candidates = Vec::new();
+
+        for item in items {
+            let doi = match item.get("DOI").and_then(|v| v.as_str()) {
+                Some(d) => d.to_string(),
+                None => continue,
+            };
+
+            let fields = crate::orchestrator::extract_crossref_fields(item);
+
+            // Construct search text from candidate
+            let mut candidate_text = String::new();
+            if let Some(t) = &fields.title {
+                candidate_text.push_str(&t.to_lowercase());
+                candidate_text.push(' ');
+            }
+            if let Some(author) = fields.authors.first() {
+                candidate_text.push_str(&author.to_lowercase());
+                candidate_text.push(' ');
+            }
+            if let Some(v) = &fields.venue {
+                candidate_text.push_str(&v.to_lowercase());
+                candidate_text.push(' ');
+            }
+            if let Some(y) = fields.year {
+                candidate_text.push_str(&y.to_string());
+                candidate_text.push(' ');
+            }
+
+            // Simple tokenize of candidate into a HashSet for O(1) lookup.
+            let candidate_tokens: HashSet<String> = candidate_text
+                .split(|c: char| !c.is_alphanumeric())
+                .map(|s| s.to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            let matched = query_tokens
+                .iter()
+                .filter(|q| candidate_tokens.contains(*q))
+                .count();
+
+            let score = matched as f64 / query_tokens.len() as f64;
+
+            if score >= MIN_CITATION_SCORE {
+                let first_author = fields.authors.first().cloned().unwrap_or_default();
+                candidates.push(crate::ResolvedCandidate {
+                    doi,
+                    title: fields.title.unwrap_or_default(),
+                    author: first_author,
+                    year: fields.year,
+                    score,
+                    source: "crossref".to_string(),
+                });
+            }
+        }
+
+        // 6. Sort candidates by score descending
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(candidates)
     }
 }
 
@@ -390,5 +518,64 @@ mod tests {
             }
             other => panic!("expected SourceSchema, got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_citation_success() {
+        let server = MockServer::start().await;
+        let mock_body = serde_json::json!({
+            "status": "ok",
+            "message": {
+                "items": [
+                    {
+                        "DOI": "10.1000/xyz123",
+                        "title": ["Lars Onsager, Crystal Statistics. I. A Two-Dimensional Model with an Order-Disorder Transition"],
+                        "author": [
+                            {"family": "Onsager", "given": "Lars"}
+                        ],
+                        "issued": {
+                            "date-parts": [[1944, 2, 1]]
+                        },
+                        "container-title": ["Physical Review"]
+                    },
+                    {
+                        "DOI": "10.1000/unrelated",
+                        "title": ["Some Unrelated Paper"],
+                        "author": [
+                            {"family": "Smith", "given": "John"}
+                        ],
+                        "issued": {
+                            "date-parts": [[2020]]
+                        }
+                    }
+                ]
+            }
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_body))
+            .mount(&server)
+            .await;
+
+        let host = server_host(&server);
+        let s = crossref_for(&server);
+        let (_td, ctx) = build_test_context(&host);
+
+        let candidates = s
+            .resolve_citation("Onsager 1944", 2, &ctx)
+            .await
+            .expect("resolve ok");
+
+        // The query "Onsager 1944" has tokens ["onsager", "1944"].
+        // The first candidate has both "onsager" (author family) and "1944" (issued year). Score is 1.0.
+        // The second candidate has neither. Score is 0.0, filtered out.
+        assert_eq!(candidates.len(), 1);
+        let cand = &candidates[0];
+        assert_eq!(cand.doi, "10.1000/xyz123");
+        assert_eq!(cand.title, "Lars Onsager, Crystal Statistics. I. A Two-Dimensional Model with an Order-Disorder Transition");
+        assert_eq!(cand.author, "Onsager, Lars");
+        assert_eq!(cand.year, Some(1944));
+        assert_eq!(cand.score, 1.0);
     }
 }
