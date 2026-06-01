@@ -288,6 +288,13 @@ enum Command {
         #[command(subcommand)]
         action: ProvenanceAction,
     },
+    /// Print the current version. With `--check`, query GitHub Releases for
+    /// the latest stable tag and report whether an update is available.
+    Version {
+        /// Check GitHub Releases for a newer stable release.
+        #[arg(long)]
+        check: bool,
+    },
     /// Resolve a bibliographic citation string to ranked DOI candidates.
     #[command(name = "resolve-citation")]
     ResolveCitation {
@@ -504,6 +511,7 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Info { ref_ }) => doiget_cli::commands::info::run(ref_, mode),
         Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit, mode),
         Some(Command::Search { query }) => doiget_cli::commands::search::run(query, mode),
+        Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
         Some(Command::ResolveCitation { query, limit }) => {
             doiget_cli::commands::resolve_citation::run(query, limit, mode).await
         }
