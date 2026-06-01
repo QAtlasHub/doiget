@@ -152,6 +152,24 @@ pub(crate) fn config_dir_utf8() -> Result<Utf8PathBuf> {
     Ok(home.join(".config"))
 }
 
+/// Best-effort resolver-cache root (`docs/CACHE.md`). Honors
+/// `DOIGET_CACHE_ROOT` first, then `XDG_CACHE_HOME/doiget` (POSIX), then
+/// `LOCALAPPDATA\doiget\cache` (Windows), then `$HOME/.cache/doiget`.
+/// Crate-visible so the `verify` command can enable the resolve cache.
+pub(crate) fn cache_dir_utf8() -> Result<Utf8PathBuf> {
+    if let Some(s) = read_env_utf8("DOIGET_CACHE_ROOT")? {
+        return Ok(Utf8PathBuf::from(s));
+    }
+    if let Some(s) = read_env_utf8("XDG_CACHE_HOME")? {
+        return Ok(Utf8PathBuf::from(s).join("doiget"));
+    }
+    if let Some(s) = read_env_utf8("LOCALAPPDATA")? {
+        return Ok(Utf8PathBuf::from(s).join("doiget").join("cache"));
+    }
+    let home = home_dir_utf8()?;
+    Ok(home.join(".cache").join("doiget"))
+}
+
 /// Construct the workspace-wide [`HttpClient`].
 ///
 /// Production path: `HttpClient::new(tier_1_allowlist() ∪ oa_publisher_allowlist())` —
@@ -382,6 +400,7 @@ impl FetchHarness {
             rate_limiter: self.rate_limiter.clone(),
             log: self.log.clone(),
             session_id: self.session_id.clone(),
+            cache_root: None,
         }
     }
 

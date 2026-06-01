@@ -63,6 +63,7 @@ fn build_ctx(host: &str) -> (TempDir, FetchContext) {
             rate_limiter,
             log,
             session_id,
+            cache_root: None,
         },
     )
 }

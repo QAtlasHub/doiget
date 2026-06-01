@@ -22,6 +22,7 @@ pub mod orchestrator;
 pub mod provenance;
 pub mod rate_limiter;
 pub mod refs;
+pub mod resolver_cache;
 pub mod source;
 pub mod sources;
 pub mod store;
