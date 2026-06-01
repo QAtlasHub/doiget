@@ -2558,8 +2558,8 @@ fn build_fetch_context() -> anyhow::Result<FetchContext> {
 ///
 /// Returns `Err(String)` — callers convert it into a structured tool error.
 fn crossref_source_from_env() -> Result<CrossrefSource, String> {
-    let contact_email = std::env::var("DOIGET_CONTACT_EMAIL")
-        .unwrap_or_else(|_| "doiget@localhost".to_string());
+    let contact_email =
+        std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
     match std::env::var("DOIGET_CROSSREF_BASE").ok() {
         Some(base_str) => {
             let base = url::Url::parse(&base_str)

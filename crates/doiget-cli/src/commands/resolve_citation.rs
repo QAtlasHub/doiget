@@ -33,12 +33,11 @@ fn build_context() -> Result<FetchContext> {
 }
 
 fn build_crossref_source() -> Result<CrossrefSource> {
-    let contact_email = std::env::var("DOIGET_CONTACT_EMAIL")
-        .unwrap_or_else(|_| "doiget@localhost".to_string());
+    let contact_email =
+        std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
     match std::env::var("DOIGET_CROSSREF_BASE").ok() {
         Some(base_str) => {
-            let base =
-                url::Url::parse(&base_str).context("invalid DOIGET_CROSSREF_BASE")?;
+            let base = url::Url::parse(&base_str).context("invalid DOIGET_CROSSREF_BASE")?;
             Ok(CrossrefSource::with_base(base, contact_email))
         }
         None => Ok(CrossrefSource::new(contact_email)),
