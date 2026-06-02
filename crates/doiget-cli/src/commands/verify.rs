@@ -9,17 +9,27 @@
 //!   typo like `1O.1234`), or the whole file failed to parse. Always
 //!   counts toward the exit code: a malformed id is a definite source
 //!   error, independent of the network.
-//! - **unresolved** — a well-formed id that did not resolve (it does not
-//!   exist, OR a transient network failure). The current `ErrorCode` set
-//!   does not distinguish "404 absent" from "network blip", so this is a
-//!   warning by default and only fails the run under `--strict` (intended
-//!   for a network-stable CI lane).
+//! - **absent** — a well-formed id that the metadata source
+//!   authoritatively reports does not exist (HTTP 404 / 410, surfaced as
+//!   `ErrorCode::NotFound`). Network-independent and reproducible, so
+//!   it is a definite dead reference and **always** counts toward the
+//!   exit code — independent of `--strict`.
+//! - **unreachable** — a well-formed id whose resolution failed for any
+//!   transient reason (transport / DNS / TLS error, 429, 5xx, timeout).
+//!   This is tolerated by default (a flaky network must not fail a build
+//!   over a reference that is probably fine) and fails the run only under
+//!   `--strict` (the network-stable lane that demands every id resolve).
 //! - **unverifiable** — the entry carried no DOI / arXiv id at all.
-//!   Warning by default; fails under `--strict`.
+//!   Warning by default; fails under `--strict` / `on_missing_id="error"`.
+//!
+//! The split between **absent** and **unreachable** is the load-bearing
+//! distinction: it lets the default mode catch a genuinely dead DOI while
+//! still passing when the network merely hiccuped on a real id.
 //!
 //! Exit code = number of failing entries, capped at 255 (mirrors
-//! `doiget batch`). "Failing" = illegal, plus unresolved + unverifiable
-//! when `--strict` is set. JSON-Lines (one record per entry) is written
+//! `doiget batch`). "Failing" = illegal + absent always; plus unreachable
+//! when `--strict`; plus unverifiable when `--strict` **or**
+//! `on_missing_id = "error"`. JSON-Lines (one record per entry) is written
 //! to stdout regardless of mode; the summary goes to stderr unless
 //! `--quiet`.
 
@@ -65,6 +75,74 @@ fn parse_format(s: &str) -> Result<Format> {
     }
 }
 
+/// Outcome class for one bibliography entry.
+///
+/// Single source of truth for the JSON-Lines `status` string
+/// ([`Self::as_wire`]) and the exit-code policy ([`Self::is_failing`]),
+/// so the wire format and the fail rule cannot drift apart as the
+/// taxonomy evolves.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VerifyStatus {
+    /// Resolved to real metadata.
+    Valid,
+    /// Malformed id / unparsable input — a definite source error.
+    Illegal,
+    /// Authoritatively does not exist (`ErrorCode::NotFound`).
+    Absent,
+    /// Well-formed id, transient resolution failure.
+    Unreachable,
+    /// Entry carried no DOI / arXiv id.
+    Unverifiable,
+}
+
+impl VerifyStatus {
+    /// Every status, in summary-display order.
+    const ALL: [VerifyStatus; 5] = [
+        VerifyStatus::Valid,
+        VerifyStatus::Illegal,
+        VerifyStatus::Absent,
+        VerifyStatus::Unreachable,
+        VerifyStatus::Unverifiable,
+    ];
+
+    /// The public JSON-Lines `status` field value.
+    fn as_wire(self) -> &'static str {
+        match self {
+            VerifyStatus::Valid => "valid",
+            VerifyStatus::Illegal => "illegal",
+            VerifyStatus::Absent => "absent",
+            VerifyStatus::Unreachable => "unreachable",
+            VerifyStatus::Unverifiable => "unverifiable",
+        }
+    }
+
+    /// Stable index into a per-status counts array.
+    fn index(self) -> usize {
+        match self {
+            VerifyStatus::Valid => 0,
+            VerifyStatus::Illegal => 1,
+            VerifyStatus::Absent => 2,
+            VerifyStatus::Unreachable => 3,
+            VerifyStatus::Unverifiable => 4,
+        }
+    }
+
+    /// Does this outcome count toward the non-zero exit code?
+    ///
+    /// `illegal` + `absent` are definite, network-independent source
+    /// errors → always fail. `unreachable` is transient → fails only in
+    /// the network-stable `--strict` lane. `unverifiable` (no id) fails
+    /// only when the id-less policy is `Error` (which `--strict` forces).
+    fn is_failing(self, strict: bool, on_missing: OnMissingId) -> bool {
+        match self {
+            VerifyStatus::Valid => false,
+            VerifyStatus::Illegal | VerifyStatus::Absent => true,
+            VerifyStatus::Unreachable => strict,
+            VerifyStatus::Unverifiable => on_missing == OnMissingId::Error,
+        }
+    }
+}
+
 /// Entry point for `doiget verify <path> [--format] [--strict]`.
 pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMode) -> Result<()> {
     let fmt = parse_format(&format)?;
@@ -73,7 +151,7 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
     let entries = parse_input(&text, fmt, Some(Utf8Path::new(&path)));
 
     // Resolve effective policy: CLI `--strict` is the strictest setting,
-    // forcing both unresolved and id-less entries to fail and overriding
+    // forcing both unreachable and id-less entries to fail and overriding
     // the `[verify]` config.
     let config = load_verify_config();
     let strict = cli_strict || config.strict;
@@ -81,7 +159,7 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
         // CLI --strict is the strictest setting: id-less entries fail.
         OnMissingId::Error
     } else if strict {
-        // strict came from `[verify] strict = true`: unresolved ids fail.
+        // strict came from `[verify] strict = true`: unreachable ids fail.
         // Do not let `skip` silently drop id-less entries in a strict run —
         // surface them at least as a warning so the summary is honest.
         match config.on_missing_id {
@@ -95,10 +173,8 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
     let ctx = crate::commands::fetch::build_resolve_context()?;
     let profile = CapabilityProfile::from_env().context("resolving capability profile")?;
 
-    let mut valid = 0u32;
-    let mut illegal = 0u32;
-    let mut unresolved = 0u32;
-    let mut unverifiable = 0u32;
+    // One counter per VerifyStatus, indexed by `VerifyStatus::index`.
+    let mut counts = [0u32; VerifyStatus::ALL.len()];
 
     for entry in entries {
         // `on_missing_id = "skip"` drops id-less entries entirely —
@@ -107,40 +183,59 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
         {
             continue;
         }
-        let record = match entry {
+        let (status, record) = match entry {
             Ok(parsed) => {
                 let ref_ = parsed.ref_;
                 let entry_key = parsed.entry_key;
                 match resolve_only(&ref_, &profile, &ctx).await {
-                    Ok(_) => {
-                        valid += 1;
+                    Ok(_) => (
+                        VerifyStatus::Valid,
                         serde_json::json!({
                             "ok": true,
                             "ref": ref_.as_input_str(),
-                            "status": "valid",
+                            "status": VerifyStatus::Valid.as_wire(),
                             "entry_key": entry_key,
-                        })
-                    }
+                        }),
+                    ),
                     Err(e) => {
                         let code: doiget_core::ErrorCode = (&e).into();
                         // A provenance-log write failure is fail-closed
                         // (docs/SECURITY.md §1.8): it is an operator-side
                         // fault, NOT a "this reference doesn't resolve"
                         // signal, so it must abort the run rather than be
-                        // counted as a soft `unresolved` that CI passes.
+                        // counted as a soft outcome that CI passes.
                         if code == doiget_core::ErrorCode::LogError {
                             return Err(anyhow::anyhow!(
                                 "provenance log error during verify (aborting): {e}"
                             ));
                         }
-                        unresolved += 1;
-                        serde_json::json!({
-                            "ok": false,
-                            "ref": ref_.as_input_str(),
-                            "status": "unresolved",
-                            "entry_key": entry_key,
-                            "error": { "code": code.as_wire(), "message": e.to_string() },
-                        })
+                        // An InternalError is a bug, not a property of the
+                        // reference; aborting (rather than silently bucketing
+                        // it as a tolerable `unreachable`) surfaces it.
+                        if code == doiget_core::ErrorCode::InternalError {
+                            return Err(anyhow::anyhow!(
+                                "internal error during verify (aborting; please report): {e}"
+                            ));
+                        }
+                        // A NotFound (HTTP 404/410/451 or a source-specific
+                        // absence) is an authoritative dead reference. Every
+                        // other resolve error is transient (unreachable). See
+                        // the module-level taxonomy.
+                        let status = if code == doiget_core::ErrorCode::NotFound {
+                            VerifyStatus::Absent
+                        } else {
+                            VerifyStatus::Unreachable
+                        };
+                        (
+                            status,
+                            serde_json::json!({
+                                "ok": false,
+                                "ref": ref_.as_input_str(),
+                                "status": status.as_wire(),
+                                "entry_key": entry_key,
+                                "error": { "code": code.as_wire(), "message": e.to_string() },
+                            }),
+                        )
                     }
                 }
             }
@@ -148,37 +243,37 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                 raw,
                 entry_key,
                 source,
-            }) => {
-                illegal += 1;
+            }) => (
+                VerifyStatus::Illegal,
                 serde_json::json!({
                     "ok": false,
                     "ref": raw,
-                    "status": "illegal",
+                    "status": VerifyStatus::Illegal.as_wire(),
                     "entry_key": entry_key,
                     "error": { "code": "INVALID_REF", "message": source.to_string() },
-                })
-            }
-            Err(ParseError::NoIdentifier { entry_key }) => {
-                unverifiable += 1;
+                }),
+            ),
+            Err(ParseError::NoIdentifier { entry_key }) => (
+                VerifyStatus::Unverifiable,
                 serde_json::json!({
                     "ok": false,
                     "ref": serde_json::Value::Null,
-                    "status": "unverifiable",
+                    "status": VerifyStatus::Unverifiable.as_wire(),
                     "entry_key": entry_key,
                     "error": { "code": "INVALID_REF", "message": "entry has no DOI / arXiv id" },
-                })
-            }
-            Err(ParseError::Decode { format, message }) => {
-                illegal += 1;
+                }),
+            ),
+            Err(ParseError::Decode { format, message }) => (
+                VerifyStatus::Illegal,
                 serde_json::json!({
                     "ok": false,
-                    "status": "illegal",
+                    "status": VerifyStatus::Illegal.as_wire(),
                     "error": {
                         "code": "INVALID_REF",
                         "message": format!("input did not parse as {format}: {message}"),
                     },
-                })
-            }
+                }),
+            ),
             Err(ParseError::UnsupportedFormat { format }) => {
                 bail!("{format} parsing is not supported for verification");
             }
@@ -188,31 +283,36 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                 bail!("reference file could not be parsed");
             }
         };
+        counts[status.index()] += 1;
         #[allow(clippy::print_stdout)]
         {
             println!("{record}");
         }
     }
 
-    let total = valid + illegal + unresolved + unverifiable;
+    let total = counts.iter().copied().fold(0u32, u32::saturating_add);
     if mode != OutputMode::Quiet {
         #[allow(clippy::print_stderr)]
         {
             eprintln!(
-                "verify: {total} entries — {valid} valid, {illegal} illegal, \
-                 {unresolved} unresolved, {unverifiable} unverifiable{}",
+                "verify: {total} entries — {} valid, {} illegal, {} absent, \
+                 {} unreachable, {} unverifiable{}",
+                counts[VerifyStatus::Valid.index()],
+                counts[VerifyStatus::Illegal.index()],
+                counts[VerifyStatus::Absent.index()],
+                counts[VerifyStatus::Unreachable.index()],
+                counts[VerifyStatus::Unverifiable.index()],
                 if strict { " (strict)" } else { "" }
             );
         }
     }
 
-    let failing = illegal
-        + if strict { unresolved } else { 0 }
-        + if on_missing == OnMissingId::Error {
-            unverifiable
-        } else {
-            0
-        };
+    // Sum the counts of every status whose policy marks it failing.
+    let failing = VerifyStatus::ALL
+        .iter()
+        .filter(|s| s.is_failing(strict, on_missing))
+        .map(|s| counts[s.index()])
+        .fold(0u32, u32::saturating_add);
     if failing == 0 {
         Ok(())
     } else {
