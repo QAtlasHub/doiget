@@ -69,7 +69,7 @@ emoji = false
 
 [verify]                 # consumed by `doiget verify`
 on_missing_id = "warn"   # warn | error | skip — policy for id-less entries
-strict = false           # treat unresolved (well-formed, non-resolving) ids as failures
+strict = false           # also fail on unreachable (transient) ids; absent (404/410) ids fail regardless
 ```
 
 doiget reads only the keys it knows about. Unknown keys cause a startup warning but do

@@ -2,8 +2,9 @@ name: "doiget verify references"
 description: >-
   Check that every DOI / arXiv reference in a bibliography file
   (.bib / CSL-JSON / plain refs) resolves to real metadata via Crossref /
-  arXiv. Does not download PDFs. Fails the job on malformed ids, and —
-  with strict — on unresolved or id-less entries.
+  arXiv. Does not download PDFs. Fails the job on malformed ids and
+  definitely-absent ids (HTTP 404 / 410), and — with strict — on transient
+  (unreachable) or id-less entries.
 author: "sotashimozono"
 branding:
   icon: "check-circle"
@@ -19,9 +20,9 @@ inputs:
     default: "auto"
   strict:
     description: >-
-      Fail the job on unresolved (well-formed but non-resolving) and
-      id-less entries, not just malformed ones. Set to "true" in a
-      network-stable lane.
+      Also fail the job on unreachable (transient: network / 429 / 5xx /
+      timeout) and id-less entries — not just illegal and absent ones.
+      Set to "true" in a network-stable lane.
     required: false
     default: "false"
   contact-email:

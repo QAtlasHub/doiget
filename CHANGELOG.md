@@ -14,7 +14,14 @@ Opens the 0.4.2 beta development cycle on `next` after the 0.4.1 stable
 release.
 
 ### Added
+- **[core]** `ErrorCode::NotFound` (wire `"NOT_FOUND"`) — a metadata source authoritatively reported the identifier does not exist (HTTP 404 / 410 / 451, or a source-specific absence such as arXiv's empty `<feed>` for an unknown id), distinct from the transient `NETWORK_ERROR` / `RATE_LIMITED`. Additive variant on the `#[non_exhaustive]` enum. A matching `source::FetchError::NotFound` variant carries the non-HTTP absence signal.
 - **[cli]** `doiget lint <path>` — structural validation of a BibTeX bibliography, independent of DOI resolution (`doiget verify`'s job) and the network. Flags missing expected fields per entry type, blank fields, and `$$` display-math titles that break some downstream renderers (e.g. DocumenterCitations). **Read-only and math-aware**: inline `$...$` titles are never touched or flagged. Emits one JSON-Lines finding per issue; structural rules are warnings (exit 0) while an unparsable file is an error, and `--strict` promotes warnings so any finding fails the run.
+
+### Changed
+- **[cli]** `doiget verify` now classifies a non-resolving id by *why* it failed instead of a single `unresolved` bucket. **`absent`** (HTTP 404/410/451 or an empty arXiv feed → `NotFound`, a definite dead reference) **always** counts toward the exit code, independent of `--strict`; **`unreachable`** (transient transport / 429 / 5xx / timeout) is tolerated by default and fails only under `--strict`. This lets the default lane catch genuinely dead references — including unknown arXiv ids — while staying green through network blips. An `InternalError` from resolution now aborts the run (a bug signal, not a tolerable blip), alongside the existing `LogError` abort. The JSON-Lines `status` field gains `absent` / `unreachable` and no longer emits `unresolved`.
+
+### Fixed
+- **[core]** `doiget verify` no longer aborts when its provenance log's parent directory does not yet exist; the parent is created on open (#274).
 
 ## [0.4.1] - 2026-06-02
 
