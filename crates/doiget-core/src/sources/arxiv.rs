@@ -352,8 +352,9 @@ impl Source for ArxivSource {
 /// # Errors
 ///
 /// Returns [`FetchError::SourceSchema`] if the XML is malformed (parser
-/// reports a syntax error) or if no `<entry>` element is present (arXiv
-/// returns an empty `<feed>` on an unknown id).
+/// reports a syntax error), or [`FetchError::NotFound`] if no `<entry>`
+/// element is present (arXiv returns HTTP 200 with an empty `<feed>` on an
+/// unknown id — an authoritative absence, not a parse error).
 pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
     let mut reader = Reader::from_reader(xml);
     let config = reader.config_mut();
@@ -516,7 +517,11 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
     }
 
     if !saw_entry {
-        return Err(FetchError::SourceSchema {
+        // arXiv signals an unknown id with HTTP 200 + an empty `<feed>`
+        // (no `<entry>`), NOT a 404. Surface it as an authoritative
+        // absence so `doiget verify` classifies it `absent` (a dead
+        // reference) rather than a tolerable transport blip.
+        return Err(FetchError::NotFound {
             hint: "arxiv Atom feed had no <entry> element (unknown id?)".into(),
         });
     }
@@ -929,18 +934,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_atom_feed_empty_feed_errors_source_schema() {
+    fn parse_atom_feed_empty_feed_is_not_found() {
+        // An unknown arXiv id yields HTTP 200 + an empty `<feed>`. That is
+        // an authoritative absence (→ `FetchError::NotFound` →
+        // `ErrorCode::NotFound` → verify `absent`), NOT a schema error.
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom"></feed>"#;
         let err = parse_atom_feed(xml.as_bytes()).expect_err("empty feed must error");
         match err {
-            FetchError::SourceSchema { hint } => {
+            FetchError::NotFound { hint } => {
                 assert!(
                     hint.contains("entry"),
                     "expected mention of <entry>; got {hint}"
                 );
             }
-            other => panic!("expected SourceSchema, got {other:?}"),
+            other => panic!("expected NotFound, got {other:?}"),
         }
     }
 

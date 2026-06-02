@@ -426,6 +426,13 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
             json_mode: JsonMode::Artifact,
             feature_gated: None,
         },
+        "lint" => SubcommandMeta {
+            examples: &["doiget lint refs.bib", "doiget lint library.bib --strict"],
+            // Emits one JSON-Lines finding per issue; the JSONL stream is
+            // the product output (mirrors verify).
+            json_mode: JsonMode::Artifact,
+            feature_gated: None,
+        },
         "info" => SubcommandMeta {
             examples: &[
                 "doiget info 10.1234/foo",

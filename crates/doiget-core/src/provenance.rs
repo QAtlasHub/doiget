@@ -615,6 +615,19 @@ impl ProvenanceLog {
     ) -> Result<Self, LogError> {
         let path: Utf8PathBuf = path.into();
 
+        // Ensure the parent directory exists. The provenance log defaults to
+        // `<config>/doiget/access.jsonl`, and on a fresh machine (e.g. a CI
+        // runner where `~/.config/doiget` was never created) neither the
+        // recover-state read nor the first append can open the file — the
+        // append fails with ENOENT and `verify` fail-closes on the LogError.
+        // `create_dir_all` is idempotent; a genuine permission failure still
+        // surfaces as a `LogError` (the correct fail-closed signal).
+        if let Some(parent) = path.parent() {
+            if !parent.as_str().is_empty() {
+                std::fs::create_dir_all(parent.as_std_path())?;
+            }
+        }
+
         // Reject obvious non-files up front so later `OpenOptions::append`
         // doesn't produce a confusing platform-dependent error.
         if path.exists() {
@@ -1456,6 +1469,33 @@ mod tests {
 
     fn open_log(path: &Utf8Path) -> ProvenanceLog {
         ProvenanceLog::open(path, TEST_SESSION_ID.to_string()).expect("open")
+    }
+
+    #[test]
+    fn open_creates_missing_parent_dir() {
+        // Regression: opening a log whose parent dir does not yet exist must
+        // create the dir and succeed (then a row appends cleanly), not abort
+        // with ENOENT. This is the `doiget verify` failure on a fresh CI
+        // runner where `<config>/doiget/` was never created.
+        let dir = TempDir::new().expect("tempdir");
+        let path = tmp_dir_utf8(&dir)
+            .join("nested")
+            .join("doiget")
+            .join("access.jsonl");
+        assert!(
+            !path.parent().expect("has parent").exists(),
+            "parent dir must not pre-exist for this test to be meaningful"
+        );
+        let log = ProvenanceLog::open(&path, TEST_SESSION_ID.to_string())
+            .expect("open must create the parent dir and succeed");
+        log.append(empty_input())
+            .expect("append after auto-created dir");
+        assert!(path.exists(), "log file written under the auto-created dir");
+        // End-to-end: the row the verify path would write is actually
+        // readable back (exercises the full OpenOptions/flush/sync write,
+        // not just that the file exists).
+        let rows = read_rows(&path);
+        assert_eq!(rows.len(), 1, "exactly one row in the auto-created log");
     }
 
     fn empty_input() -> RowInput<'static> {

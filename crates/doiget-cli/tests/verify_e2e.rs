@@ -186,18 +186,86 @@ async fn verify_valid_arxiv_entry_passes() {
 }
 
 #[tokio::test]
-async fn verify_unresolved_arxiv_warns_by_default_fails_strict() {
+async fn verify_absent_arxiv_404_fails_by_default_and_under_strict() {
+    // An HTTP 404 from the metadata source is an authoritative "this id
+    // does not exist" → status "absent" + error code NOT_FOUND. Being
+    // network-independent, it fails the run with exit code 1 (one failing
+    // entry) WITHOUT --strict, and equally under --strict.
     let server = MockServer::start().await;
-    // 404 for every query → the well-formed id does not resolve.
     Mock::given(method("GET"))
         .and(path("/api/query"))
         .respond_with(ResponseTemplate::new(404))
         .mount(&server)
         .await;
 
+    let content = "@article{x, eprint = {2401.99999}, archivePrefix = {arXiv}}";
+
+    let dir = TempDir::new().expect("tempdir");
+    let bib = write_bib(&dir, "refs.bib", content);
+    doiget(&dir)
+        .args(["verify", &bib])
+        .env("DOIGET_ARXIV_BASE", server.uri())
+        .assert()
+        .code(1)
+        .stdout(contains("\"status\":\"absent\"").and(contains("\"code\":\"NOT_FOUND\"")));
+
+    // --strict must NOT downgrade or change the verdict: absent always fails.
+    let dir2 = TempDir::new().expect("tempdir");
+    let bib2 = write_bib(&dir2, "refs.bib", content);
+    doiget(&dir2)
+        .args(["verify", &bib2, "--strict"])
+        .env("DOIGET_ARXIV_BASE", server.uri())
+        .assert()
+        .code(1)
+        .stdout(contains("\"status\":\"absent\""));
+}
+
+#[tokio::test]
+async fn verify_absent_arxiv_empty_feed_fails_by_default() {
+    // The REALISTIC arXiv "unknown id" case: HTTP 200 with an empty
+    // `<feed>` (no `<entry>`), not a 404. This must still classify as
+    // `absent` (NOT_FOUND) and fail the default run — otherwise a dead
+    // arXiv reference would silently pass.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"></feed>"#,
+        ))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    let bib = write_bib(
+        &dir,
+        "refs.bib",
+        "@article{x, eprint = {2401.99999}, archivePrefix = {arXiv}}",
+    );
+    doiget(&dir)
+        .args(["verify", &bib])
+        .env("DOIGET_ARXIV_BASE", server.uri())
+        .assert()
+        .code(1)
+        .stdout(contains("\"status\":\"absent\"").and(contains("\"code\":\"NOT_FOUND\"")));
+}
+
+#[tokio::test]
+async fn verify_unreachable_arxiv_5xx_warns_by_default_fails_strict() {
+    // A transient upstream failure (503) is "unreachable": it does NOT
+    // prove the id is dead, so it is tolerated by default (a flaky
+    // network must not fail a build over a real id) and fails only under
+    // --strict (the network-stable lane).
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
     let bib_content = "@article{x, eprint = {2401.99999}, archivePrefix = {arXiv}}";
 
-    // Default: unresolved is a warning → exit 0.
+    // Default: unreachable is a warning → exit 0.
     let dir1 = TempDir::new().expect("tempdir");
     let bib1 = write_bib(&dir1, "refs.bib", bib_content);
     doiget(&dir1)
@@ -205,9 +273,9 @@ async fn verify_unresolved_arxiv_warns_by_default_fails_strict() {
         .env("DOIGET_ARXIV_BASE", server.uri())
         .assert()
         .success()
-        .stdout(contains("\"status\":\"unresolved\""));
+        .stdout(contains("\"status\":\"unreachable\"").and(contains("\"code\":\"NETWORK_ERROR\"")));
 
-    // Strict: unresolved fails the run.
+    // Strict: unreachable fails the run.
     let dir2 = TempDir::new().expect("tempdir");
     let bib2 = write_bib(&dir2, "refs.bib", bib_content);
     doiget(&dir2)
@@ -215,7 +283,7 @@ async fn verify_unresolved_arxiv_warns_by_default_fails_strict() {
         .env("DOIGET_ARXIV_BASE", server.uri())
         .assert()
         .failure()
-        .stdout(contains("\"status\":\"unresolved\""));
+        .stdout(contains("\"status\":\"unreachable\""));
 }
 
 #[tokio::test]
@@ -253,4 +321,31 @@ async fn verify_with_base_override_does_not_write_cache() {
         entries, 0,
         "base override must bypass the cache; found {entries} cache entries in {resolver_dir:?}"
     );
+}
+
+#[tokio::test]
+async fn verify_mixed_illegal_and_absent_emits_both_records_and_fails() {
+    // A two-entry file exercises the per-entry loop and counter
+    // accumulation: a malformed id (illegal, no network) plus a 404'd id
+    // (absent). Both must be emitted and the run must fail (exit 2).
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    let bib = write_bib(
+        &dir,
+        "refs.bib",
+        "@article{bad, doi = {1O.1234/typo}}\n\
+         @article{gone, eprint = {2401.99999}, archivePrefix = {arXiv}}",
+    );
+    doiget(&dir)
+        .args(["verify", &bib])
+        .env("DOIGET_ARXIV_BASE", server.uri())
+        .assert()
+        .code(2)
+        .stdout(contains("\"status\":\"illegal\"").and(contains("\"status\":\"absent\"")));
 }

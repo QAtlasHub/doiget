@@ -316,6 +316,17 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
+    /// Structurally validate a BibTeX bibliography (duplicate keys,
+    /// missing fields, blank entries, `$$` title math) WITHOUT resolving
+    /// DOIs or touching the network. Read-only; emits one JSON-Lines
+    /// finding per issue and exits non-zero on errors.
+    Lint {
+        /// Path to the BibTeX file to lint.
+        path: String,
+        /// Promote warnings to errors so any finding fails the run.
+        #[arg(long)]
+        strict: bool,
+    },
     /// Resolve a bibliographic citation string to ranked DOI candidates.
     #[command(name = "resolve-citation")]
     ResolveCitation {
@@ -538,6 +549,7 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             format,
             strict,
         }) => doiget_cli::commands::verify::run(path, format, strict, mode).await,
+        Some(Command::Lint { path, strict }) => doiget_cli::commands::lint::run(path, strict, mode),
         Some(Command::ResolveCitation { query, limit }) => {
             doiget_cli::commands::resolve_citation::run(query, limit, mode).await
         }
