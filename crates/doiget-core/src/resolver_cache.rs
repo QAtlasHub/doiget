@@ -53,7 +53,7 @@ pub fn cache_file(cache_root: &Utf8Path, ref_: &Ref) -> Utf8PathBuf {
 
 /// Read a cached outcome for `ref_` if present and still within its TTL.
 ///
-/// Returns `None` on any miss condition: file absent, unparseable,
+/// Returns `None` on any miss condition: file absent, unparsable,
 /// expired, or a `response` blob that no longer deserializes. `now` is
 /// injected so tests can pin expiry without touching the clock.
 #[must_use]
