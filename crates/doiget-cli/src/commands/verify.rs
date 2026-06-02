@@ -85,7 +85,7 @@ fn parse_format(s: &str) -> Result<Format> {
 enum VerifyStatus {
     /// Resolved to real metadata.
     Valid,
-    /// Malformed id / unparseable input — a definite source error.
+    /// Malformed id / unparsable input — a definite source error.
     Illegal,
     /// Authoritatively does not exist (`ErrorCode::NotFound`).
     Absent,
