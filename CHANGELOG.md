@@ -8,10 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `doiget-core` is the only crate with strict semver guarantees during the 0.x line; CLI
 flag changes and `doiget-mcp` tool spec changes will be called out explicitly here.
 
-## [0.4.2-beta.0] - 2026-06-02
+## [0.5.0] - 2026-06-02
 
-Opens the 0.4.2 beta development cycle on `next` after the 0.4.1 stable
-release.
+Promotion of the `next` integration line to a stable release. A **minor**
+bump (not patch) because it adds new public surface: the `doiget lint`
+subcommand and the `ErrorCode::NotFound` / `source::FetchError::NotFound`
+variants, on top of the `doiget verify` reference-classification work.
 
 ### Added
 - **[core]** `ErrorCode::NotFound` (wire `"NOT_FOUND"`) — a metadata source authoritatively reported the identifier does not exist (HTTP 404 / 410 / 451, or a source-specific absence such as arXiv's empty `<feed>` for an unknown id), distinct from the transient `NETWORK_ERROR` / `RATE_LIMITED`. Additive variant on the `#[non_exhaustive]` enum. A matching `source::FetchError::NotFound` variant carries the non-HTTP absence signal.
