@@ -12,6 +12,18 @@
 //! Rendering (field mapping, brace-stripping, HTML/MathML tag scrubbing)
 //! is shared with `doiget bib` via
 //! [`doiget_core::store::render::to_bibtex`].
+//!
+//! ## Relation to doi2bib
+//!
+//! This command is functionally comparable to the `doi2bib` tool, and the
+//! "doi2bib-style" / "doi2bib-quality" phrasing throughout doiget is a
+//! descriptive comparison only. `cite` is an **independent, clean-room
+//! implementation** built on doiget's own Crossref/arXiv resolver and
+//! `to_bibtex` renderer; it incorporates **no code** from any external
+//! doi2bib project. In particular it does not derive from the AGPL-3.0
+//! `doi2bib` at <https://github.com/vandroogenbroeckmarc/doi2bib> — none
+//! of that project's source, field-correction heuristics, or
+//! Unicode→ASCII tables are used here, so doiget remains MIT-licensed.
 
 use std::io::Write;
 

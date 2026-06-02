@@ -331,6 +331,9 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
         arxiv_id,
         abstract_: None,
         venue: None,
+        volume: None,
+        issue: None,
+        pages: None,
         publisher: None,
         issn: None,
         isbn: None,
@@ -379,6 +382,9 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
         }
         m.year = f.year;
         m.venue = f.venue;
+        m.volume = f.volume;
+        m.issue = f.issue;
+        m.pages = f.pages;
         m.type_ = f.type_;
         m.publisher = outcome
             .metadata
@@ -395,6 +401,18 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
             .map(str::to_string);
     }
     m
+}
+
+/// Convert a Crossref `page` value to BibTeX page-range form: a single
+/// inter-page hyphen (`477-528`) becomes an en-dash (`477--528`). A value
+/// that already uses `--`, or a single page with no hyphen, is returned
+/// unchanged. This is a generic BibTeX convention, not a port of any
+/// external tool's logic.
+fn normalize_page_range(page: &str) -> String {
+    if page.contains("--") || !page.contains('-') {
+        return page.to_string();
+    }
+    page.replace('-', "--")
 }
 
 /// `title` from a resolver payload: a bare string, or the first
@@ -862,6 +880,9 @@ async fn fetch_paper_arxiv(
         arxiv_id: Some(id.clone()),
         abstract_: None,
         venue: None,
+        volume: None,
+        issue: None,
+        pages: None,
         publisher: None,
         issn: None,
         isbn: None,
@@ -1114,6 +1135,9 @@ async fn fetch_paper_doi(
         arxiv_id: None,
         abstract_: None,
         venue: extracted.venue,
+        volume: extracted.volume,
+        issue: extracted.issue,
+        pages: extracted.pages,
         publisher: None,
         issn: None,
         isbn: None,
@@ -1429,6 +1453,9 @@ pub(crate) struct CrossrefFields {
     pub(crate) authors: Vec<String>,
     pub(crate) year: Option<i32>,
     pub(crate) venue: Option<String>,
+    pub(crate) volume: Option<String>,
+    pub(crate) issue: Option<String>,
+    pub(crate) pages: Option<String>,
     pub(crate) type_: Option<String>,
 }
 
@@ -1484,11 +1511,31 @@ pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    let volume = msg
+        .get("volume")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let issue = msg
+        .get("issue")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Crossref `page` uses a single hyphen for ranges (`477-528`); BibTeX
+    // convention is an en-dash (`477--528`). See `normalize_page_range`.
+    let pages = msg
+        .get("page")
+        .and_then(|v| v.as_str())
+        .map(normalize_page_range);
+
     CrossrefFields {
         title,
         authors,
         year,
         venue,
+        volume,
+        issue,
+        pages,
         type_,
     }
 }
@@ -1729,6 +1776,9 @@ mod tests {
                 "container-title": ["Physical Review Letters"],
                 "publisher": "American Physical Society",
                 "ISSN": ["0031-9007", "1079-7114"],
+                "volume": "59",
+                "issue": "7",
+                "page": "799-802",
                 "type": "journal-article",
             }),
         }
@@ -1745,6 +1795,10 @@ mod tests {
         assert_eq!(m.publisher.as_deref(), Some("American Physical Society"));
         // Crossref `ISSN` is an array; the first entry is taken.
         assert_eq!(m.issn.as_deref(), Some("0031-9007"));
+        assert_eq!(m.volume.as_deref(), Some("59"));
+        assert_eq!(m.issue.as_deref(), Some("7"));
+        // Single hyphen normalized to a BibTeX en-dash.
+        assert_eq!(m.pages.as_deref(), Some("799--802"));
         assert_eq!(m.type_.as_deref(), Some("journal-article"));
     }
 

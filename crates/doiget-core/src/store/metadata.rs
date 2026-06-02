@@ -43,6 +43,16 @@ pub struct Metadata {
     /// Venue (e.g. journal or conference).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub venue: Option<String>,
+    /// Volume (journal articles). Crossref `volume`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub volume: Option<String>,
+    /// Issue number (journal articles). Crossref `issue`; rendered as the
+    /// BibTeX `number` field and the CSL `issue` field.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub issue: Option<String>,
+    /// Page range (e.g. `477--528`). Crossref `page`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pages: Option<String>,
     /// Publisher.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub publisher: Option<String>,

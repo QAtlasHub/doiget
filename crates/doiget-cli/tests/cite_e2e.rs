@@ -38,6 +38,9 @@ fn crossref_body() -> serde_json::Value {
             "container-title": ["Synthetic Journal of Physics"],
             "publisher": "Synthetic Society",
             "ISSN": ["1234-5678"],
+            "volume": "42",
+            "issue": "7",
+            "page": "100-115",
             "type": "journal-article",
         }
     })
@@ -103,6 +106,10 @@ async fn cite_doi_emits_enriched_bibtex() {
         .stdout(contains("author     = {Doe, Jane and Roe, Richard},"))
         .stdout(contains("year       = {2026},"))
         .stdout(contains("journal    = {Synthetic Journal of Physics},"))
+        .stdout(contains("volume     = {42},"))
+        .stdout(contains("number     = {7},"))
+        // Crossref single hyphen normalized to a BibTeX en-dash.
+        .stdout(contains("pages      = {100--115},"))
         .stdout(contains("publisher  = {Synthetic Society},"))
         .stdout(contains("issn       = {1234-5678},"))
         .stdout(contains("doi        = {10.1234/cite.test},"));
