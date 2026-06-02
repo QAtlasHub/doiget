@@ -8,7 +8,15 @@ all-features = false
 [advisories]
 db-urls    = ["https://github.com/rustsec/advisory-db"]
 yanked     = "deny"
-ignore     = []
+ignore     = [
+    # paste — RUSTSEC-2024-0436: UNMAINTAINED (not a vulnerability). Pulled
+    # transitively by `biblatex` (the ADR-0030 D2 `.bib` parser, #258), a
+    # maintained, load-bearing dependency with no drop-in replacement.
+    # `paste` is a compile-time-only proc-macro (no runtime / network
+    # surface), so an unmaintained advisory carries no security exposure
+    # here. Revisit if biblatex drops it or adopts a maintained fork.
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 allow = [
