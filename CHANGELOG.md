@@ -8,7 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `doiget-core` is the only crate with strict semver guarantees during the 0.x line; CLI
 flag changes and `doiget-mcp` tool spec changes will be called out explicitly here.
 
-## [Unreleased]
+## [0.4.2-beta.0] - 2026-06-02
+
+Opens the 0.4.2 beta development cycle on `next` after the 0.4.1 stable
+release. No user-facing changes yet — new entries land here as work
+merges to `next`.
 
 ## [0.4.1] - 2026-06-02
 
