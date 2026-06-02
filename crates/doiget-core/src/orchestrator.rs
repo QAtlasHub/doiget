@@ -358,12 +358,12 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
 /// Build a doi2bib-quality [`Metadata`] for `doiget cite` from a
 /// resolver outcome — WITHOUT any store write.
 ///
-/// [`build_metadata_only_metadata`] deliberately persists only the
+/// `build_metadata_only_metadata` deliberately persists only the
 /// minimal "what the resolver returned" surface (title / authors /
 /// id), leaving `year` / `venue` / `publisher` / `type_` as `None`.
 /// `cite` needs a complete citation, so when the resolver hit Crossref
 /// this overlays the bibliographic fields from the Crossref `message`
-/// envelope ([`extract_crossref_fields`] plus `publisher` / `ISSN`).
+/// envelope (`extract_crossref_fields` plus `publisher` / `ISSN`).
 ///
 /// Non-Crossref payloads (arXiv Atom, Unpaywall) keep the metadata-only
 /// baseline: their envelopes don't carry these fields in the Crossref
