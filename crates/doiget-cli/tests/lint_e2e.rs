@@ -100,7 +100,7 @@ fn lint_flags_display_math_title_but_not_inline_math() {
 }
 
 #[test]
-fn lint_unparseable_file_is_a_parse_error() {
+fn lint_unparsable_file_is_a_parse_error() {
     // The biblatex parser rejects duplicate keys, which surfaces as a
     // `parse_error` (error severity) and fails the run.
     let dir = TempDir::new().expect("tempdir");

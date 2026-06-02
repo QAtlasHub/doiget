@@ -14,7 +14,7 @@ Opens the 0.4.2 beta development cycle on `next` after the 0.4.1 stable
 release.
 
 ### Added
-- **[cli]** `doiget lint <path>` — structural validation of a BibTeX bibliography, independent of DOI resolution (`doiget verify`'s job) and the network. Flags missing expected fields per entry type, blank fields, and `$$` display-math titles that break some downstream renderers (e.g. DocumenterCitations). **Read-only and math-aware**: inline `$...$` titles are never touched or flagged. Emits one JSON-Lines finding per issue; structural rules are warnings (exit 0) while an unparseable file is an error, and `--strict` promotes warnings so any finding fails the run.
+- **[cli]** `doiget lint <path>` — structural validation of a BibTeX bibliography, independent of DOI resolution (`doiget verify`'s job) and the network. Flags missing expected fields per entry type, blank fields, and `$$` display-math titles that break some downstream renderers (e.g. DocumenterCitations). **Read-only and math-aware**: inline `$...$` titles are never touched or flagged. Emits one JSON-Lines finding per issue; structural rules are warnings (exit 0) while an unparsable file is an error, and `--strict` promotes warnings so any finding fails the run.
 
 ## [0.4.1] - 2026-06-02
 
