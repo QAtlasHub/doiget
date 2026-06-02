@@ -103,6 +103,17 @@ pub enum FetchError {
     /// Tier 1 sources reported no OA URL for this ref.
     #[error("Tier 1 sources reported no OA URL for this ref")]
     NoOaAvailable,
+    /// A metadata source authoritatively reported that the identifier does
+    /// not exist — distinct from a transport failure. Surfaces as
+    /// [`crate::ErrorCode::NotFound`]. Used for sources whose
+    /// "absent" signal is NOT an HTTP 404/410 (e.g. the arXiv Atom API
+    /// returns HTTP 200 with an empty `<feed>` for an unknown id).
+    #[error("identifier not found: {hint}")]
+    NotFound {
+        /// Human-readable detail (which source, and how it signalled
+        /// absence); not parsed.
+        hint: String,
+    },
     /// Underlying HTTP / network failure. See [`HttpError`].
     #[error("network error: {0}")]
     Http(#[from] HttpError),
@@ -155,6 +166,14 @@ impl From<&FetchError> for crate::ErrorCode {
         match e {
             FetchError::NotEligible { .. } => crate::ErrorCode::CapabilityDenied,
             FetchError::NoOaAvailable => crate::ErrorCode::NoOaAvailable,
+            FetchError::NotFound { .. } => crate::ErrorCode::NotFound,
+            // 404 / 410 / 451 are authoritative, reproducible "this id is
+            // not (and will not be) here" signals → `NotFound`; see
+            // `ErrorCode::NotFound`. Everything else is transient.
+            FetchError::Http(HttpError::HttpStatus {
+                status: 404 | 410 | 451,
+                ..
+            }) => crate::ErrorCode::NotFound,
             FetchError::Http(_) => crate::ErrorCode::NetworkError,
             FetchError::Log(_) => crate::ErrorCode::LogError,
             FetchError::InvalidRef(_) => crate::ErrorCode::InvalidRef,
@@ -198,6 +217,7 @@ impl From<&FetchError> for Option<crate::DenialContext> {
             // `TooManyRefs` is a request-shape failure, not a denial —
             // adding it to the None arm keeps the mapping table consistent.)
             FetchError::NoOaAvailable
+            | FetchError::NotFound { .. }
             | FetchError::Log(_)
             | FetchError::InvalidRef(_)
             | FetchError::SourceSchema { .. }
@@ -367,6 +387,36 @@ mod tests {
 
         let e: ErrorCode = FetchError::Http(HttpError::UnknownSource {
             source_key: "mock".into(),
+        })
+        .into();
+        assert_eq!(e, ErrorCode::NetworkError);
+
+        // 404 / 410 / 451 from a metadata source are authoritative "id does
+        // not exist" → NotFound (network-independent), NOT NetworkError.
+        for status in [404u16, 410, 451] {
+            let e: ErrorCode = FetchError::Http(HttpError::HttpStatus {
+                status,
+                url: "https://api.crossref.org/works/10.5555/absent".into(),
+            })
+            .into();
+            assert_eq!(
+                e,
+                ErrorCode::NotFound,
+                "status {status} should map to NotFound"
+            );
+        }
+        // A non-HTTP authoritative absence (e.g. arXiv's empty Atom feed)
+        // also maps to NotFound.
+        let e: ErrorCode = FetchError::NotFound {
+            hint: "arxiv empty feed".into(),
+        }
+        .into();
+        assert_eq!(e, ErrorCode::NotFound);
+        // A transient upstream status (e.g. 503) stays NetworkError so
+        // `doiget verify` tolerates it rather than failing a live id.
+        let e: ErrorCode = FetchError::Http(HttpError::HttpStatus {
+            status: 503,
+            url: "https://api.crossref.org/works/10.5555/down".into(),
         })
         .into();
         assert_eq!(e, ErrorCode::NetworkError);

@@ -11,8 +11,16 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 ## [0.4.2-beta.0] - 2026-06-02
 
 Opens the 0.4.2 beta development cycle on `next` after the 0.4.1 stable
-release. No user-facing changes yet — new entries land here as work
-merges to `next`.
+release.
+
+### Added
+- **[core]** `ErrorCode::NotFound` (wire `"NOT_FOUND"`) — a metadata source authoritatively reported the identifier does not exist (HTTP 404 / 410 / 451, or a source-specific absence such as arXiv's empty `<feed>` for an unknown id), distinct from the transient `NETWORK_ERROR` / `RATE_LIMITED`. Additive variant on the `#[non_exhaustive]` enum. A matching `source::FetchError::NotFound` variant carries the non-HTTP absence signal.
+
+### Changed
+- **[cli]** `doiget verify` now classifies a non-resolving id by *why* it failed instead of a single `unresolved` bucket. **`absent`** (HTTP 404/410/451 or an empty arXiv feed → `NotFound`, a definite dead reference) **always** counts toward the exit code, independent of `--strict`; **`unreachable`** (transient transport / 429 / 5xx / timeout) is tolerated by default and fails only under `--strict`. This lets the default lane catch genuinely dead references — including unknown arXiv ids — while staying green through network blips. An `InternalError` from resolution now aborts the run (a bug signal, not a tolerable blip), alongside the existing `LogError` abort. The JSON-Lines `status` field gains `absent` / `unreachable` and no longer emits `unresolved`.
+
+### Fixed
+- **[core]** `doiget verify` no longer aborts when its provenance log's parent directory does not yet exist; the parent is created on open (#274).
 
 ## [0.4.1] - 2026-06-02
 
