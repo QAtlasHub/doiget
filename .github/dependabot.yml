@@ -10,6 +10,10 @@
 #     individual PRs (Dependabot's default for ungrouped updates).
 #   - GitHub Actions SHAs are bumped as a separate ecosystem; pinning by SHA
 #     is required by docs/SECURITY.md §1.9.
+#   - PRs target `next`, not `main`: `next` is the integration branch and
+#     `main` only advances via the next -> main promotion. Dependabot reads
+#     this file from the default branch (main), so the retarget takes effect
+#     once this change is promoted to main.
 
 version: 2
 
@@ -25,7 +29,7 @@ updates:
       time: "07:00"
       timezone: UTC
     open-pull-requests-limit: 5
-    target-branch: main
+    target-branch: next
     commit-message:
       prefix: "chore(deps)"
       include: scope
@@ -53,7 +57,7 @@ updates:
       time: "07:00"
       timezone: UTC
     open-pull-requests-limit: 3
-    target-branch: main
+    target-branch: next
     commit-message:
       prefix: "chore(ci)"
       include: scope

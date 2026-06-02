@@ -30,6 +30,8 @@ A value set higher in the chain overrides any value set lower.
 | `output.color` | `auto` (honors `NO_COLOR` env) |
 | `output.progress` | `false` |
 | `output.emoji` | `false` |
+| `verify.on_missing_id` | `warn` |
+| `verify.strict` | `false` |
 
 ## 3. config.toml schema
 
@@ -58,6 +60,10 @@ mode = "human"          # human | json | quiet | mcp
 color = "auto"          # auto | always | never
 progress = false
 emoji = false
+
+[verify]                 # consumed by `doiget verify`
+on_missing_id = "warn"   # warn | error | skip — policy for id-less entries
+strict = false           # treat unresolved (well-formed, non-resolving) ids as failures
 ```
 
 doiget reads only the keys it knows about. Unknown keys cause a startup warning but do

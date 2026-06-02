@@ -8,11 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `doiget-core` is the only crate with strict semver guarantees during the 0.x line; CLI
 flag changes and `doiget-mcp` tool spec changes will be called out explicitly here.
 
-## [Unreleased]
+## [0.4.1] - 2026-06-02
 
-## [0.4.1-beta.0] - 2026-05-31
+Promotion of the `0.4.1-beta.0` integration line on `next` to a stable
+release. Rolls up the never-tagged `0.4.1-beta.0` window plus the
+subsequent reference-tooling work (`.bib` input, `doiget verify`,
+`doiget cite`). SemVer **patch** bump within the additive 0.4.x line;
+all new surfaces are optional/additive.
 
 ### Added
+- **[core]** BibTeX / BibLaTeX (`.bib`) bibliography input via the `biblatex` crate, completing the ADR-0030 D2 parser slice. `doiget batch` and `doiget verify` now accept `.bib` files; identifier priority is `doi` > arXiv `eprint`.
+- **[cli]** `doiget verify <path>` — check that every DOI / arXiv reference in a `.bib` / CSL-JSON / plain-refs file resolves to real metadata, **without** downloading PDFs or writing to the store. Emits one JSON-Lines record per entry; exit code is the failing-entry count (capped at 255).
+- **[cli]** `[verify]` config section (`on_missing_id = "warn" | "error" | "skip"`, `strict`) controlling how id-less and unresolved entries affect the exit code. `--strict` overrides the config.
+- **[ci]** `doiget-verify` composite GitHub Action (`.github/actions/verify`) so other repositories can gate their bibliography references in CI.
+- **[cli]** `doiget cite <ref>` — resolve a DOI / arXiv reference live (cache-aware, **no** store write) and print a clean BibTeX entry on stdout, a `doi2bib`-style helper. The DOI path enriches the entry from the Crossref envelope (year / journal / volume / number / pages / publisher / ISSN), and HTML / MathML markup in titles (`<i>`, `<mml:math>`) is scrubbed via the shared `to_bibtex` renderer. `cite` is an independent, clean-room implementation — it uses no code from the AGPL-3.0 `doi2bib` project, so doiget stays MIT-licensed.
+- **[core]** `Metadata` gains optional `volume` / `issue` / `pages` reserved fields (STORE.md §2); `to_bibtex` renders them as `volume` / `number` / `pages` and `to_csl_array` as `volume` / `issue` / `page`. Crossref single-hyphen page ranges (`477-528`) are normalized to the BibTeX en-dash form (`477--528`).
 - **[core]** Support suggesting an arXiv version when a primary PDF fetch fails. The `PdfLegStatus::Blocked` variant now carries an optional `suggested_arxiv_id` field populated from Unpaywall metadata.
 - **[core]** Support resolving free-form bibliographic citation strings to ranked DOI candidates via Crossref Works query API. Compute a token-based overlap similarity score to filter (score >= 0.5) and rank candidates.
 - **[cli]** The `doiget fetch` command prints a suggested arXiv command when a primary PDF fetch is blocked but an arXiv alternative is available.
@@ -21,6 +31,8 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 - **[mcp]** The `doiget_fetch` MCP tool output includes the `suggested_arxiv_id` in the `pdf_leg` object when blocked.
 - **[mcp]** Add `doiget_resolve_citation` and `doiget_batch_resolve_citations` MCP tools to resolve bibliographic citation strings to ranked DOI candidates.
 
+### Fixed
+- **[core]** arXiv metadata (Atom) now queries `export.arxiv.org/api/query` instead of `arxiv.org/api/query`, which redirected and failed the resolve. PDFs still use `arxiv.org`; the two endpoints now use separate bases. Fixes arXiv `eprint` references resolving as `unresolved` in `doiget verify` / `doiget_metadata_only`.
 
 ## [0.4.0] - 2026-05-21
 
@@ -35,7 +47,6 @@ in the merge commits on `next` (see `git log --merges v0.3.0..HEAD`)
 and the ADR set under `docs/DECISIONS/`.
 
 ### Added
-
 - **[core] ADR-0028 user-extensible capability gate** — new
   `doiget_core::user_extension` module parses
   `<config_dir>/doiget/config.toml`'s `[[network.additional_hosts]]`

@@ -64,6 +64,13 @@ pub struct FetchContext {
     /// here so source impls can include it in their own structured logs
     /// without re-reading the env.
     pub session_id: String,
+    /// Resolver cache root (`<cache_root>/resolver/<safekey>.toml`, see
+    /// `docs/CACHE.md` and [`crate::resolver_cache`]). `Some` enables the
+    /// metadata-only resolve cache (repeat resolves served from disk,
+    /// avoiding upstream rate limits); `None` disables it (tests, or a
+    /// caller that opts out). Only `metadata_only` consults it — per-PDF
+    /// fetches are never cached.
+    pub cache_root: Option<camino::Utf8PathBuf>,
 }
 
 impl std::fmt::Debug for FetchContext {
@@ -309,6 +316,7 @@ mod tests {
                 rate_limiter,
                 log,
                 session_id,
+                cache_root: None,
             },
         )
     }

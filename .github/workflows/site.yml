@@ -73,16 +73,25 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
 
+      # ---- Staleness check: PR branch or main depending on trigger -----------
+      # On `push` to main (deploy path): verify origin/main is not stale.
+      # On `pull_request`: verify the PR's own branch is not stale.
+      # This allows next-branch PRs to pass even when main is temporarily
+      # stale between a docs update and its next→main promotion.
+      - name: Check site/content is in sync with docs
+        run: |
+          set -euo pipefail
+          bash scripts/sync_docs_to_site.sh
+          if ! git diff --exit-code site/content/; then
+            echo "::error::site/content/ is stale; run scripts/sync_docs_to_site.sh and commit." >&2
+            exit 1
+          fi
+
       # ---- Stable site, deterministically from origin/main -----------------
       - name: Build the Zola site from origin/main
         run: |
           set -euo pipefail
           git checkout --force origin/main
-          bash scripts/sync_docs_to_site.sh
-          if ! git diff --exit-code site/content/; then
-            echo "::error::site/content/ is stale on main; run scripts/sync_docs_to_site.sh and commit." >&2
-            exit 1
-          fi
           ( cd site && zola build --base-url "https://codes.sota-shimozono.com/doiget/" )
           # Stash the built site outside the worktree so the next checkout
           # (origin/next) does not clobber it.
