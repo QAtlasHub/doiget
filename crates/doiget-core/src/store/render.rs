@@ -24,9 +24,9 @@ use super::Metadata;
 ///
 /// `journal-article` → `@article`; everything else → `@misc` (Phase 2
 /// starter — `@inproceedings` / `@book` mapping is a follow-up). Field
-/// order: `title`, `author`, `year`, `doi`, `journal`, `publisher`,
-/// `issn`; any empty / `None` field is omitted. The returned string is a
-/// complete entry terminated by `}\n`.
+/// order: `title`, `author`, `year`, `doi`, `journal`, `volume`,
+/// `number`, `pages`, `publisher`, `issn`; any empty / `None` field is
+/// omitted. The returned string is a complete entry terminated by `}\n`.
 ///
 /// Literal `{` / `}` in a field value would unbalance the surrounding
 /// braces; they are stripped (with a `tracing::warn!`) rather than
@@ -52,6 +52,22 @@ pub fn to_bibtex(citation_key: &str, m: &Metadata) -> String {
     if let Some(venue) = m.venue.as_deref() {
         if !venue.is_empty() {
             push_field(&mut out, "journal", venue);
+        }
+    }
+    if let Some(volume) = m.volume.as_deref() {
+        if !volume.is_empty() {
+            push_field(&mut out, "volume", volume);
+        }
+    }
+    // BibTeX names the issue field `number`.
+    if let Some(issue) = m.issue.as_deref() {
+        if !issue.is_empty() {
+            push_field(&mut out, "number", issue);
+        }
+    }
+    if let Some(pages) = m.pages.as_deref() {
+        if !pages.is_empty() {
+            push_field(&mut out, "pages", pages);
         }
     }
     if let Some(publisher) = m.publisher.as_deref() {
@@ -90,15 +106,55 @@ fn push_field(out: &mut String, key: &str, value: &str) {
 
 /// Strip BibTeX-unsafe `{` / `}` from `value`, warning once per field so
 /// the dropped characters are visible in stderr / structured logs.
+///
+/// Crossref embeds HTML / MathML markup in titles and venues (`<i>`,
+/// `<sub>`, `<mml:math>…</mml:math>`); those `<…>` tags are removed first
+/// (their inner text is kept) so the rendered BibTeX is clean enough to
+/// paste into a `.bib`. This is the same pragmatic trade-off doi2bib
+/// makes — it is a tag scrubber, not a TeX-aware math translator, so a
+/// title's math markup collapses to its plain-text content rather than to
+/// `$…$`.
 fn strip_bibtex_unsafe(key: &str, value: &str) -> String {
-    if value.contains('{') || value.contains('}') {
+    let detagged = strip_markup_tags(value);
+    if detagged.contains('{') || detagged.contains('}') {
         tracing::warn!(
             field = key,
             "stripping literal '{{'/'}}' from BibTeX field value; \
              a TeX-aware escaper lands in a Phase 2 follow-up"
         );
     }
-    value.chars().filter(|c| !matches!(c, '{' | '}')).collect()
+    detagged
+        .chars()
+        .filter(|c| !matches!(c, '{' | '}'))
+        .collect()
+}
+
+/// Remove HTML / MathML markup tags (`<i>`, `<sub>`, `<mml:math>`, …),
+/// keeping the text between them. Equivalent to deleting every `<…>`
+/// run: a deliberately simple angle-bracket scanner, not an HTML parser.
+///
+/// A `<` with no matching `>` (e.g. genuine inline math `a < b` that
+/// Crossref left unescaped) leaves the remainder verbatim — only
+/// well-formed tag runs are dropped. Strings with no markup return
+/// unchanged without allocating a scan buffer.
+fn strip_markup_tags(value: &str) -> String {
+    if !(value.contains('<') && value.contains('>')) {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(lt) = rest.find('<') {
+        match rest[lt..].find('>') {
+            Some(gt_rel) => {
+                out.push_str(&rest[..lt]);
+                rest = &rest[lt + gt_rel + 1..];
+            }
+            // No closing '>' for this '<': keep the remainder as-is.
+            None => break,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +196,12 @@ struct CslItem<'a> {
     #[serde(rename = "container-title", skip_serializing_if = "Option::is_none")]
     container_title: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    volume: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issue: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     publisher: Option<&'a str>,
     #[serde(rename = "ISSN", skip_serializing_if = "Option::is_none")]
     issn: Option<&'a str>,
@@ -177,6 +239,9 @@ fn build_csl_item<'a>(citation_key: &'a str, m: &'a Metadata) -> CslItem<'a> {
         }),
         doi: m.doi.as_ref().map(|d| d.as_str()),
         container_title: m.venue.as_deref(),
+        volume: m.volume.as_deref(),
+        issue: m.issue.as_deref(),
+        page: m.pages.as_deref(),
         publisher: m.publisher.as_deref(),
         issn: m.issn.as_deref(),
     }
@@ -235,6 +300,9 @@ mod tests {
             arxiv_id: None,
             abstract_: None,
             venue: Some("Phys Rev X".to_string()),
+            volume: Some("12".to_string()),
+            issue: Some("3".to_string()),
+            pages: Some("031001".to_string()),
             publisher: Some("APS".to_string()),
             issn: Some("2160-3308".to_string()),
             isbn: None,
@@ -270,6 +338,9 @@ mod tests {
         assert!(s.contains("year       = {2026},"), "{s}");
         assert!(s.contains("doi        = {10.1234/example},"), "{s}");
         assert!(s.contains("journal    = {Phys Rev X},"), "{s}");
+        assert!(s.contains("volume     = {12},"), "{s}");
+        assert!(s.contains("number     = {3},"), "{s}");
+        assert!(s.contains("pages      = {031001},"), "{s}");
         assert!(s.contains("publisher  = {APS},"), "{s}");
         assert!(s.contains("issn       = {2160-3308},"), "{s}");
         assert!(s.ends_with("}\n"), "{s}");
@@ -285,10 +356,16 @@ mod tests {
     fn bibtex_empty_optionals_omitted() {
         let mut m = fixture(Some("journal-article"));
         m.venue = None;
+        m.volume = None;
+        m.issue = None;
+        m.pages = None;
         m.publisher = None;
         m.issn = None;
         let s = to_bibtex("k", &m);
         assert!(!s.contains("journal"), "{s}");
+        assert!(!s.contains("volume"), "{s}");
+        assert!(!s.contains("number"), "{s}");
+        assert!(!s.contains("pages"), "{s}");
         assert!(!s.contains("publisher"), "{s}");
         assert!(!s.contains("issn"), "{s}");
         assert!(s.contains("title") && s.contains("author") && s.contains("year"));
@@ -308,6 +385,29 @@ mod tests {
         assert!(to_bibtex("k", &m).contains("title      = {A curly Title},"));
     }
 
+    #[test]
+    fn bibtex_html_mathml_tags_stripped() {
+        let mut m = fixture(Some("journal-article"));
+        // A Crossref-style title with MathML + an inline italic tag.
+        m.title = "Spin-<i>S</i> chains with <mml:math><mml:mi>S</mml:mi>\
+                   </mml:math>=1 order"
+            .to_string();
+        let s = to_bibtex("k", &m);
+        assert!(
+            s.contains("title      = {Spin-S chains with S=1 order},"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn bibtex_unescaped_lt_without_close_is_preserved() {
+        // A bare `<` with no closing `>` is genuine math, not a tag:
+        // keep the remainder verbatim rather than swallowing it.
+        let mut m = fixture(Some("journal-article"));
+        m.title = "Regime a < b holds".to_string();
+        assert!(to_bibtex("k", &m).contains("title      = {Regime a < b holds},"));
+    }
+
     // ---- CSL ----
 
     #[test]
@@ -321,6 +421,9 @@ mod tests {
         assert_eq!(it["title"], "Quantum Stuff");
         assert_eq!(it["DOI"], "10.1234/example");
         assert_eq!(it["container-title"], "Phys Rev X");
+        assert_eq!(it["volume"], "12");
+        assert_eq!(it["issue"], "3");
+        assert_eq!(it["page"], "031001");
         assert_eq!(it["ISSN"], "2160-3308");
         assert_eq!(it["issued"]["date-parts"][0][0], 2026);
         assert_eq!(it["author"][0]["family"], "Researcher");

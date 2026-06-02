@@ -331,6 +331,9 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
         arxiv_id,
         abstract_: None,
         venue: None,
+        volume: None,
+        issue: None,
+        pages: None,
         publisher: None,
         issn: None,
         isbn: None,
@@ -350,6 +353,66 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
         }),
         other: BTreeMap::new(),
     }
+}
+
+/// Build a doi2bib-quality [`Metadata`] for `doiget cite` from a
+/// resolver outcome — WITHOUT any store write.
+///
+/// `build_metadata_only_metadata` deliberately persists only the
+/// minimal "what the resolver returned" surface (title / authors /
+/// id), leaving `year` / `venue` / `publisher` / `type_` as `None`.
+/// `cite` needs a complete citation, so when the resolver hit Crossref
+/// this overlays the bibliographic fields from the Crossref `message`
+/// envelope (`extract_crossref_fields` plus `publisher` / `ISSN`).
+///
+/// Non-Crossref payloads (arXiv Atom, Unpaywall) keep the metadata-only
+/// baseline: their envelopes don't carry these fields in the Crossref
+/// shape, and fabricating them would be worse than omitting them — the
+/// BibTeX entry is honest about what the source actually provided.
+#[must_use]
+pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
+    let mut m = build_metadata_only_metadata(ref_, outcome);
+    if outcome.source == "crossref" {
+        let f = extract_crossref_fields(&outcome.metadata);
+        if let Some(title) = f.title {
+            m.title = title;
+        }
+        if !f.authors.is_empty() {
+            m.authors = f.authors;
+        }
+        m.year = f.year;
+        m.venue = f.venue;
+        m.volume = f.volume;
+        m.issue = f.issue;
+        m.pages = f.pages;
+        m.type_ = f.type_;
+        m.publisher = outcome
+            .metadata
+            .get("publisher")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        // Crossref `ISSN` is an array; take the first entry.
+        m.issn = outcome
+            .metadata
+            .get("ISSN")
+            .and_then(Value::as_array)
+            .and_then(|a| a.first())
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
+    m
+}
+
+/// Convert a Crossref `page` value to BibTeX page-range form: a single
+/// inter-page hyphen (`477-528`) becomes an en-dash (`477--528`). A value
+/// that already uses `--`, or a single page with no hyphen, is returned
+/// unchanged. This is a generic BibTeX convention, not a port of any
+/// external tool's logic.
+fn normalize_page_range(page: &str) -> String {
+    if page.contains("--") || !page.contains('-') {
+        return page.to_string();
+    }
+    page.replace('-', "--")
 }
 
 /// `title` from a resolver payload: a bare string, or the first
@@ -817,6 +880,9 @@ async fn fetch_paper_arxiv(
         arxiv_id: Some(id.clone()),
         abstract_: None,
         venue: None,
+        volume: None,
+        issue: None,
+        pages: None,
         publisher: None,
         issn: None,
         isbn: None,
@@ -1069,6 +1135,9 @@ async fn fetch_paper_doi(
         arxiv_id: None,
         abstract_: None,
         venue: extracted.venue,
+        volume: extracted.volume,
+        issue: extracted.issue,
+        pages: extracted.pages,
         publisher: None,
         issn: None,
         isbn: None,
@@ -1384,6 +1453,9 @@ pub(crate) struct CrossrefFields {
     pub(crate) authors: Vec<String>,
     pub(crate) year: Option<i32>,
     pub(crate) venue: Option<String>,
+    pub(crate) volume: Option<String>,
+    pub(crate) issue: Option<String>,
+    pub(crate) pages: Option<String>,
     pub(crate) type_: Option<String>,
 }
 
@@ -1439,11 +1511,31 @@ pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    let volume = msg
+        .get("volume")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let issue = msg
+        .get("issue")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Crossref `page` uses a single hyphen for ranges (`477-528`); BibTeX
+    // convention is an en-dash (`477--528`). See `normalize_page_range`.
+    let pages = msg
+        .get("page")
+        .and_then(|v| v.as_str())
+        .map(normalize_page_range);
+
     CrossrefFields {
         title,
         authors,
         year,
         venue,
+        volume,
+        issue,
+        pages,
         type_,
     }
 }
@@ -1664,6 +1756,73 @@ pub fn batch_fetch_plans(
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// A Crossref `message` envelope (the shape `metadata_only_doi` stores
+    /// in `MetadataOnlyOutcome.metadata`: `CrossrefSource` returns
+    /// `envelope.message`, not the outer `{status, message}` wrapper).
+    fn crossref_outcome() -> MetadataOnlyOutcome {
+        MetadataOnlyOutcome {
+            source: "crossref".to_string(),
+            resolver_profile: "crossref".to_string(),
+            license: None,
+            oa_url: None,
+            metadata: serde_json::json!({
+                "title": ["Rigorous results on valence-bond ground states"],
+                "author": [
+                    { "family": "Affleck", "given": "Ian" },
+                    { "family": "Lieb", "given": "Elliott H." },
+                ],
+                "issued": { "date-parts": [[1988, 6, 1]] },
+                "container-title": ["Physical Review Letters"],
+                "publisher": "American Physical Society",
+                "ISSN": ["0031-9007", "1079-7114"],
+                "volume": "59",
+                "issue": "7",
+                "page": "799-802",
+                "type": "journal-article",
+            }),
+        }
+    }
+
+    #[test]
+    fn cite_metadata_enriches_from_crossref_envelope() {
+        let ref_ = Ref::parse("10.1103/PhysRevLett.59.799").unwrap();
+        let m = cite_metadata(&ref_, &crossref_outcome());
+        assert_eq!(m.title, "Rigorous results on valence-bond ground states");
+        assert_eq!(m.authors, vec!["Affleck, Ian", "Lieb, Elliott H."]);
+        assert_eq!(m.year, Some(1988));
+        assert_eq!(m.venue.as_deref(), Some("Physical Review Letters"));
+        assert_eq!(m.publisher.as_deref(), Some("American Physical Society"));
+        // Crossref `ISSN` is an array; the first entry is taken.
+        assert_eq!(m.issn.as_deref(), Some("0031-9007"));
+        assert_eq!(m.volume.as_deref(), Some("59"));
+        assert_eq!(m.issue.as_deref(), Some("7"));
+        // Single hyphen normalized to a BibTeX en-dash.
+        assert_eq!(m.pages.as_deref(), Some("799--802"));
+        assert_eq!(m.type_.as_deref(), Some("journal-article"));
+    }
+
+    #[test]
+    fn cite_metadata_non_crossref_keeps_minimal_baseline() {
+        // An arXiv outcome must NOT be mined with the Crossref extractor:
+        // its envelope shape differs, so year/venue/publisher stay None
+        // rather than being fabricated.
+        let ref_ = Ref::parse("arxiv:2401.12345").unwrap();
+        let outcome = MetadataOnlyOutcome {
+            source: "arxiv".to_string(),
+            resolver_profile: "arxiv".to_string(),
+            license: Some("arxiv-default".to_string()),
+            oa_url: None,
+            metadata: serde_json::json!({ "title": "An arXiv Preprint" }),
+        };
+        let m = cite_metadata(&ref_, &outcome);
+        assert_eq!(m.title, "An arXiv Preprint");
+        assert_eq!(m.year, None);
+        assert_eq!(m.venue, None);
+        assert_eq!(m.publisher, None);
+        assert_eq!(m.issn, None);
+        assert!(m.arxiv_id.is_some());
+    }
 
     #[test]
     fn test_extract_arxiv_id_from_url() {

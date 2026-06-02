@@ -37,6 +37,9 @@ doi         = "10.1234/example"
 arxiv_id    = "2401.12345"           # optional
 abstract    = "..."                   # optional
 venue       = "Phys. Rev. X"          # optional
+volume      = "12"                    # optional
+issue       = "3"                     # optional (BibTeX `number`)
+pages       = "031001"                # optional (e.g. "477--528")
 publisher   = "American Physical Society"   # optional
 issn        = "2160-3308"             # optional
 isbn        = ""                      # optional, for books
@@ -55,8 +58,8 @@ mcp_call_id = "01JCKZ7Q..."           # optional, ULID, present if fetched via M
 ### Reserved top-level field list
 
 ```
-schema_version, title, authors, year, doi, arxiv_id, abstract, venue, keywords,
-type, publisher, issn, isbn, url, pdf_path
+schema_version, title, authors, year, doi, arxiv_id, abstract, venue, volume,
+issue, pages, keywords, type, publisher, issn, isbn, url, pdf_path
 ```
 
 Both implementations MUST NOT write top-level fields outside this list. Tool-specific

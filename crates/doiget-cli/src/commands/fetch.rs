@@ -170,6 +170,34 @@ pub(crate) fn cache_dir_utf8() -> Result<Utf8PathBuf> {
     Ok(home.join(".cache").join("doiget"))
 }
 
+/// Build a metadata-resolution [`FetchContext`]: HTTP client, rate
+/// limiter, and provenance log resolved from the environment, with the
+/// resolver cache (`docs/CACHE.md`) enabled best-effort.
+///
+/// This is the shared context for the read-only resolve commands
+/// (`verify`, `cite`) — neither persists to the store, so no store
+/// handle is constructed. Enabling `cache_root` means repeat resolves of
+/// the same ref are served from disk, avoiding upstream rate limits; if
+/// the cache dir can't be resolved the run simply proceeds without it.
+pub(crate) fn build_resolve_context() -> Result<FetchContext> {
+    let session_id = new_session_id();
+    let log_path = resolve_log_path()?;
+    let http = Arc::new(build_http_client()?);
+    let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
+    let log = Arc::new(
+        ProvenanceLog::open(log_path, session_id.clone())
+            .context("failed to open provenance log")?,
+    );
+    let cache_root = cache_dir_utf8().ok();
+    Ok(FetchContext {
+        http,
+        rate_limiter,
+        log,
+        session_id,
+        cache_root,
+    })
+}
+
 /// Construct the workspace-wide [`HttpClient`].
 ///
 /// Production path: `HttpClient::new(tier_1_allowlist() ∪ oa_publisher_allowlist())` —

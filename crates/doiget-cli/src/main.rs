@@ -114,6 +114,7 @@ enum ProvenanceAction {
                   \x20 fetch        Fetch a single paper PDF by DOI or arXiv id\n\
                   \x20 batch        Fetch many refs from a newline-separated file\n\
                   \x20 bib          Export a stored entry as BibTeX\n\
+                  \x20 cite         Resolve a ref live and print clean BibTeX (doi2bib-style)\n\
                   \x20 csl          Export a stored entry as CSL JSON\n\
                   \x20 info         Show metadata for a stored entry\n\
                   \x20 search       Search the local store by title / authors / venue\n\
@@ -268,6 +269,11 @@ enum Command {
     },
     /// Export an entry as BibTeX.
     Bib {
+        /// DOI or arXiv id.
+        ref_: String,
+    },
+    /// Resolve a ref live and print a clean BibTeX entry (doi2bib-style).
+    Cite {
         /// DOI or arXiv id.
         ref_: String,
     },
@@ -545,6 +551,7 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             doiget_cli::commands::batch::run_with_options(path, dry_run, mode).await
         }
         Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_, mode),
+        Some(Command::Cite { ref_ }) => doiget_cli::commands::cite::run(ref_, mode).await,
         Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_, mode),
         // Phase 3 (MCP foundation). The MCP server runs on stdio per
         // ADR-0001. The `tracing_subscriber` installed at the top of
