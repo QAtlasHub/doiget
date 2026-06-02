@@ -449,6 +449,9 @@ fn merge_metadata(existing: Metadata, incoming: Metadata) -> Metadata {
     merge_opt!(arxiv_id);
     merge_opt!(abstract_);
     merge_opt!(venue);
+    merge_opt!(volume);
+    merge_opt!(issue);
+    merge_opt!(pages);
     merge_opt!(publisher);
     merge_opt!(issn);
     merge_opt!(isbn);
