@@ -449,6 +449,9 @@ fn merge_metadata(existing: Metadata, incoming: Metadata) -> Metadata {
     merge_opt!(arxiv_id);
     merge_opt!(abstract_);
     merge_opt!(venue);
+    merge_opt!(volume);
+    merge_opt!(issue);
+    merge_opt!(pages);
     merge_opt!(publisher);
     merge_opt!(issn);
     merge_opt!(isbn);
@@ -771,6 +774,9 @@ mod tests {
             arxiv_id: None,
             abstract_: Some("A short abstract.".to_string()),
             venue: Some("Phys. Rev. X".to_string()),
+            volume: Some("12".to_string()),
+            issue: Some("3".to_string()),
+            pages: Some("031001".to_string()),
             publisher: Some("American Physical Society".to_string()),
             issn: Some("2160-3308".to_string()),
             isbn: None,

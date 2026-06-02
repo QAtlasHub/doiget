@@ -114,6 +114,7 @@ enum ProvenanceAction {
                   \x20 fetch        Fetch a single paper PDF by DOI or arXiv id\n\
                   \x20 batch        Fetch many refs from a newline-separated file\n\
                   \x20 bib          Export a stored entry as BibTeX\n\
+                  \x20 cite         Resolve a ref live and print clean BibTeX (doi2bib-style)\n\
                   \x20 csl          Export a stored entry as CSL JSON\n\
                   \x20 info         Show metadata for a stored entry\n\
                   \x20 search       Search the local store by title / authors / venue\n\
@@ -271,6 +272,11 @@ enum Command {
         /// DOI or arXiv id.
         ref_: String,
     },
+    /// Resolve a ref live and print a clean BibTeX entry (doi2bib-style).
+    Cite {
+        /// DOI or arXiv id.
+        ref_: String,
+    },
     /// Export an entry as CSL JSON.
     Csl {
         /// DOI or arXiv id.
@@ -294,6 +300,21 @@ enum Command {
         /// Check GitHub Releases for a newer stable release.
         #[arg(long)]
         check: bool,
+    },
+    /// Verify that every DOI / arXiv reference in a bibliography file
+    /// (.bib / CSL-JSON / plain refs) resolves to real metadata. Does
+    /// not download PDFs or write to the store. Emits one JSON-Lines
+    /// record per entry; exits non-zero on failures.
+    Verify {
+        /// Path to the bibliography file to verify.
+        path: String,
+        /// Input format; auto-detected from extension / content by default.
+        #[arg(long, default_value = "auto")]
+        format: String,
+        /// Treat unresolved and id-less entries as failures (exit
+        /// non-zero), not just warnings. Use in a network-stable CI lane.
+        #[arg(long)]
+        strict: bool,
     },
     /// Resolve a bibliographic citation string to ranked DOI candidates.
     #[command(name = "resolve-citation")]
@@ -512,6 +533,11 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit, mode),
         Some(Command::Search { query }) => doiget_cli::commands::search::run(query, mode),
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
+        Some(Command::Verify {
+            path,
+            format,
+            strict,
+        }) => doiget_cli::commands::verify::run(path, format, strict, mode).await,
         Some(Command::ResolveCitation { query, limit }) => {
             doiget_cli::commands::resolve_citation::run(query, limit, mode).await
         }
@@ -525,6 +551,7 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             doiget_cli::commands::batch::run_with_options(path, dry_run, mode).await
         }
         Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_, mode),
+        Some(Command::Cite { ref_ }) => doiget_cli::commands::cite::run(ref_, mode).await,
         Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_, mode),
         // Phase 3 (MCP foundation). The MCP server runs on stdio per
         // ADR-0001. The `tracing_subscriber` installed at the top of

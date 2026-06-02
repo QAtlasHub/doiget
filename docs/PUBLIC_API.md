@@ -85,6 +85,9 @@ pub struct Metadata {
     pub arxiv_id: Option<ArxivId>,
     pub abstract_: Option<String>,
     pub venue:    Option<String>,
+    pub volume:   Option<String>,
+    pub issue:    Option<String>,   // BibTeX `number`
+    pub pages:    Option<String>,
     pub publisher: Option<String>,
     pub issn:     Option<String>,
     pub isbn:     Option<String>,

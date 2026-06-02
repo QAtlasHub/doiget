@@ -415,6 +415,17 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
             json_mode: JsonMode::Supported,
             feature_gated: None,
         },
+        "verify" => SubcommandMeta {
+            examples: &[
+                "doiget verify refs.bib",
+                "doiget verify library.bib --strict",
+                "doiget verify refs.txt --format refs",
+            ],
+            // Emits one JSON-Lines record per entry regardless of mode;
+            // the JSONL stream is the product output.
+            json_mode: JsonMode::Artifact,
+            feature_gated: None,
+        },
         "info" => SubcommandMeta {
             examples: &[
                 "doiget info 10.1234/foo",
@@ -443,6 +454,13 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
         "bib" => SubcommandMeta {
             examples: &["doiget bib 10.1234/foo", "doiget bib arxiv:2401.12345"],
             // BibTeX output is the product; `--mode` is informational.
+            json_mode: JsonMode::Artifact,
+            feature_gated: None,
+        },
+        "cite" => SubcommandMeta {
+            examples: &["doiget cite 10.1234/foo", "doiget cite arxiv:2401.12345"],
+            // BibTeX output is the product (resolved live); `--mode` is
+            // informational, mirroring `bib`.
             json_mode: JsonMode::Artifact,
             feature_gated: None,
         },
@@ -817,6 +835,11 @@ mod tests {
             .subcommand(
                 Command::new("bib")
                     .about("BibTeX export")
+                    .arg(Arg::new("ref").required(true)),
+            )
+            .subcommand(
+                Command::new("cite")
+                    .about("Live BibTeX")
                     .arg(Arg::new("ref").required(true)),
             )
             .subcommand(
