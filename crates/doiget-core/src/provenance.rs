@@ -1491,6 +1491,11 @@ mod tests {
         log.append(empty_input())
             .expect("append after auto-created dir");
         assert!(path.exists(), "log file written under the auto-created dir");
+        // End-to-end: the row the verify path would write is actually
+        // readable back (exercises the full OpenOptions/flush/sync write,
+        // not just that the file exists).
+        let rows = read_rows(&path);
+        assert_eq!(rows.len(), 1, "exactly one row in the auto-created log");
     }
 
     fn empty_input() -> RowInput<'static> {
