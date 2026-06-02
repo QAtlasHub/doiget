@@ -11,7 +11,7 @@
 //!   error, independent of the network.
 //! - **absent** — a well-formed id that the metadata source
 //!   authoritatively reports does not exist (HTTP 404 / 410, surfaced as
-//!   [`ErrorCode::NotFound`]). Network-independent and reproducible, so
+//!   `ErrorCode::NotFound`). Network-independent and reproducible, so
 //!   it is a definite dead reference and **always** counts toward the
 //!   exit code — independent of `--strict`.
 //! - **unreachable** — a well-formed id whose resolution failed for any
