@@ -11,8 +11,10 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 ## [0.4.2-beta.0] - 2026-06-02
 
 Opens the 0.4.2 beta development cycle on `next` after the 0.4.1 stable
-release. No user-facing changes yet — new entries land here as work
-merges to `next`.
+release.
+
+### Added
+- **[cli]** `doiget lint <path>` — structural validation of a BibTeX bibliography, independent of DOI resolution (`doiget verify`'s job) and the network. Flags missing expected fields per entry type, blank fields, and `$$` display-math titles that break some downstream renderers (e.g. DocumenterCitations). **Read-only and math-aware**: inline `$...$` titles are never touched or flagged. Emits one JSON-Lines finding per issue; structural rules are warnings (exit 0) while an unparseable file is an error, and `--strict` promotes warnings so any finding fails the run.
 
 ## [0.4.1] - 2026-06-02
 
