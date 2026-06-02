@@ -638,6 +638,13 @@ pub enum ErrorCode {
     RateLimited,
     /// Transport / DNS / TLS failure.
     NetworkError,
+    /// A metadata source authoritatively reported that the identifier
+    /// does not exist (HTTP 404 / 410). Distinct from
+    /// [`Self::NetworkError`] (a transient transport failure) and
+    /// [`Self::RateLimited`]: a `NotFound` is network-independent and
+    /// reproducible, so `doiget verify` treats it as a definite dead
+    /// reference (fails the run) rather than a tolerable blip.
+    NotFound,
     /// Filesystem write failed.
     StoreError,
     /// Provenance log write failed; the fetch was aborted.
@@ -677,6 +684,7 @@ impl ErrorCode {
             ErrorCode::NoOaAvailable => "NO_OA_AVAILABLE",
             ErrorCode::RateLimited => "RATE_LIMITED",
             ErrorCode::NetworkError => "NETWORK_ERROR",
+            ErrorCode::NotFound => "NOT_FOUND",
             ErrorCode::StoreError => "STORE_ERROR",
             ErrorCode::LogError => "LOG_ERROR",
             ErrorCode::CapabilityDenied => "CAPABILITY_DENIED",

@@ -9,19 +9,28 @@
 //!   typo like `1O.1234`), or the whole file failed to parse. Always
 //!   counts toward the exit code: a malformed id is a definite source
 //!   error, independent of the network.
-//! - **unresolved** — a well-formed id that did not resolve (it does not
-//!   exist, OR a transient network failure). The current `ErrorCode` set
-//!   does not distinguish "404 absent" from "network blip", so this is a
-//!   warning by default and only fails the run under `--strict` (intended
-//!   for a network-stable CI lane).
+//! - **absent** — a well-formed id that the metadata source
+//!   authoritatively reports does not exist (HTTP 404 / 410, surfaced as
+//!   [`ErrorCode::NotFound`]). Network-independent and reproducible, so
+//!   it is a definite dead reference and **always** counts toward the
+//!   exit code — independent of `--strict`.
+//! - **unreachable** — a well-formed id whose resolution failed for any
+//!   transient reason (transport / DNS / TLS error, 429, 5xx, timeout).
+//!   This is tolerated by default (a flaky network must not fail a build
+//!   over a reference that is probably fine) and fails the run only under
+//!   `--strict` (the network-stable lane that demands every id resolve).
 //! - **unverifiable** — the entry carried no DOI / arXiv id at all.
-//!   Warning by default; fails under `--strict`.
+//!   Warning by default; fails under `--strict` / `on_missing_id="error"`.
+//!
+//! The split between **absent** and **unreachable** is the load-bearing
+//! distinction: it lets the default mode catch a genuinely dead DOI while
+//! still passing when the network merely hiccuped on a real id.
 //!
 //! Exit code = number of failing entries, capped at 255 (mirrors
-//! `doiget batch`). "Failing" = illegal, plus unresolved + unverifiable
-//! when `--strict` is set. JSON-Lines (one record per entry) is written
-//! to stdout regardless of mode; the summary goes to stderr unless
-//! `--quiet`.
+//! `doiget batch`). "Failing" = illegal + absent, plus unreachable +
+//! unverifiable when `--strict` is set. JSON-Lines (one record per entry)
+//! is written to stdout regardless of mode; the summary goes to stderr
+//! unless `--quiet`.
 
 use anyhow::{bail, Context, Result};
 use camino::Utf8Path;
@@ -97,7 +106,8 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
 
     let mut valid = 0u32;
     let mut illegal = 0u32;
-    let mut unresolved = 0u32;
+    let mut absent = 0u32;
+    let mut unreachable = 0u32;
     let mut unverifiable = 0u32;
 
     for entry in entries {
@@ -133,11 +143,21 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                                 "provenance log error during verify (aborting): {e}"
                             ));
                         }
-                        unresolved += 1;
+                        // A 404 / 410 (NotFound) is an authoritative dead
+                        // reference — always counts. Every other resolve
+                        // error is transient (unreachable): tolerated
+                        // unless --strict. See the module-level taxonomy.
+                        let status = if code == doiget_core::ErrorCode::NotFound {
+                            absent += 1;
+                            "absent"
+                        } else {
+                            unreachable += 1;
+                            "unreachable"
+                        };
                         serde_json::json!({
                             "ok": false,
                             "ref": ref_.as_input_str(),
-                            "status": "unresolved",
+                            "status": status,
                             "entry_key": entry_key,
                             "error": { "code": code.as_wire(), "message": e.to_string() },
                         })
@@ -194,20 +214,24 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
         }
     }
 
-    let total = valid + illegal + unresolved + unverifiable;
+    let total = valid + illegal + absent + unreachable + unverifiable;
     if mode != OutputMode::Quiet {
         #[allow(clippy::print_stderr)]
         {
             eprintln!(
                 "verify: {total} entries — {valid} valid, {illegal} illegal, \
-                 {unresolved} unresolved, {unverifiable} unverifiable{}",
+                 {absent} absent, {unreachable} unreachable, {unverifiable} unverifiable{}",
                 if strict { " (strict)" } else { "" }
             );
         }
     }
 
+    // illegal + absent always fail (definite source errors, network-
+    // independent). unreachable (transient) and unverifiable (no id) fail
+    // only under the stricter policies.
     let failing = illegal
-        + if strict { unresolved } else { 0 }
+        + absent
+        + if strict { unreachable } else { 0 }
         + if on_missing == OnMissingId::Error {
             unverifiable
         } else {

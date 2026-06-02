@@ -155,6 +155,15 @@ impl From<&FetchError> for crate::ErrorCode {
         match e {
             FetchError::NotEligible { .. } => crate::ErrorCode::CapabilityDenied,
             FetchError::NoOaAvailable => crate::ErrorCode::NoOaAvailable,
+            // A 404 / 410 from a metadata source is an authoritative
+            // "this id does not exist" — network-independent and
+            // reproducible — so it maps to `NotFound`, distinct from a
+            // transient transport failure. This is what lets `doiget
+            // verify` fail a genuinely dead reference while still
+            // tolerating a network blip on a real-but-unreachable id.
+            FetchError::Http(HttpError::HttpStatus {
+                status: 404 | 410, ..
+            }) => crate::ErrorCode::NotFound,
             FetchError::Http(_) => crate::ErrorCode::NetworkError,
             FetchError::Log(_) => crate::ErrorCode::LogError,
             FetchError::InvalidRef(_) => crate::ErrorCode::InvalidRef,
@@ -367,6 +376,29 @@ mod tests {
 
         let e: ErrorCode = FetchError::Http(HttpError::UnknownSource {
             source_key: "mock".into(),
+        })
+        .into();
+        assert_eq!(e, ErrorCode::NetworkError);
+
+        // 404 / 410 from a metadata source is an authoritative "id does
+        // not exist" → NotFound (network-independent), NOT NetworkError.
+        for status in [404u16, 410] {
+            let e: ErrorCode = FetchError::Http(HttpError::HttpStatus {
+                status,
+                url: "https://api.crossref.org/works/10.5555/absent".into(),
+            })
+            .into();
+            assert_eq!(
+                e,
+                ErrorCode::NotFound,
+                "status {status} should map to NotFound"
+            );
+        }
+        // A transient upstream status (e.g. 503) stays NetworkError so
+        // `doiget verify` tolerates it rather than failing a live id.
+        let e: ErrorCode = FetchError::Http(HttpError::HttpStatus {
+            status: 503,
+            url: "https://api.crossref.org/works/10.5555/down".into(),
         })
         .into();
         assert_eq!(e, ErrorCode::NetworkError);

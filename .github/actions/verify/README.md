@@ -22,7 +22,7 @@ store.
 |---|---|---|---|
 | `path` | yes | — | Bibliography file to verify (`.bib` / CSL-JSON / plain refs). |
 | `format` | no | `auto` | `auto` \| `refs` \| `csl-json` \| `bibtex`. Auto-detected from extension / content. |
-| `strict` | no | `"false"` | Fail on unresolved and id-less entries, not just malformed ones. |
+| `strict` | no | `"false"` | Also fail on `unreachable` (transient) and id-less entries, not just definite errors. |
 | `contact-email` | no | a no-reply address | Polite-pool `mailto` sent to Crossref / Unpaywall. Set your project's address. |
 
 ## What fails the job
@@ -30,14 +30,17 @@ store.
 | Entry status | Default | `strict: "true"` |
 |---|---|---|
 | `illegal` (malformed id, e.g. typo `1O.1234`, or unparseable file) | ❌ fails | ❌ fails |
-| `unresolved` (well-formed id that does not resolve) | ⚠️ warns | ❌ fails |
+| `absent` (well-formed id the source reports does not exist — HTTP 404 / 410) | ❌ fails | ❌ fails |
+| `unreachable` (well-formed id, transient failure — network / 429 / 5xx / timeout) | ⚠️ warns | ❌ fails |
 | `unverifiable` (entry has no DOI / arXiv id) | ⚠️ warns | ❌ fails |
 | `valid` | ✅ | ✅ |
 
-`illegal` always fails because a malformed id is a definite source error,
-independent of the network. `unresolved` is lenient by default so a
-transient network blip does not turn CI red; enable `strict` in a
-network-stable lane.
+`illegal` and `absent` always fail because they are definite, reproducible
+source errors independent of the network — a malformed id, or one the
+metadata source authoritatively reports does not exist (404 / 410).
+`unreachable` is lenient by default so a transient network blip does not
+turn CI red over a reference that is probably fine; enable `strict` in a
+network-stable lane to demand that every id resolve.
 
 A `[verify]` section in the repo's `config.toml` can set
 `on_missing_id = "error"` to fail id-less entries without `strict`, or

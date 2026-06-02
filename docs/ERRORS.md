@@ -37,6 +37,7 @@ Wire form (JSON / MCP): `"INVALID_REF"`, `"NO_OA_AVAILABLE"`, etc.
 | `NO_OA_AVAILABLE` | Tier 1 sources reported no OA URL. | Try later, or enable opt-in source. |
 | `RATE_LIMITED` | Internal rate cap hit, OR 429 from source. | Retry after `Retry-After` (or 1 s). |
 | `NETWORK_ERROR` | Transport / DNS / TLS failure. **Does NOT cover a deliberate supply-chain policy block** — see §6.1: an off-allowlist / redirect-denied / insecure-scheme OA-PDF leg is `CAPABILITY_DENIED`, not `NETWORK_ERROR`. | Retry usually fine. |
+| `NOT_FOUND` | Metadata source authoritatively reported the id does not exist (HTTP 404 / 410). Network-independent and reproducible — distinct from the transient `NETWORK_ERROR` / `RATE_LIMITED`. `doiget verify` treats it as a definite dead reference (`absent`). | No (the id is wrong or retracted). |
 | `STORE_ERROR` | Filesystem write failed (disk, permission, etc.). | Depends on cause. |
 | `LOG_ERROR` | Provenance log write failed. **Fetch is aborted.** | Free disk / fix perms. |
 | `CAPABILITY_DENIED` | Source not in `CapabilityProfile`. | User opts in, or pick different source. |
