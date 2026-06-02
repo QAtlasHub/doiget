@@ -30,14 +30,15 @@ store.
 | Entry status | Default | `strict: "true"` |
 |---|---|---|
 | `illegal` (malformed id, e.g. typo `1O.1234`, or unparseable file) | ❌ fails | ❌ fails |
-| `absent` (well-formed id the source reports does not exist — HTTP 404 / 410) | ❌ fails | ❌ fails |
+| `absent` (well-formed id the source reports does not exist — HTTP 404 / 410 / 451, or an empty arXiv feed) | ❌ fails | ❌ fails |
 | `unreachable` (well-formed id, transient failure — network / 429 / 5xx / timeout) | ⚠️ warns | ❌ fails |
 | `unverifiable` (entry has no DOI / arXiv id) | ⚠️ warns | ❌ fails |
 | `valid` | ✅ | ✅ |
 
 `illegal` and `absent` always fail because they are definite, reproducible
 source errors independent of the network — a malformed id, or one the
-metadata source authoritatively reports does not exist (404 / 410).
+metadata source authoritatively reports does not exist (404 / 410 / 451,
+or an empty arXiv feed).
 `unreachable` is lenient by default so a transient network blip does not
 turn CI red over a reference that is probably fine; enable `strict` in a
 network-stable lane to demand that every id resolve.

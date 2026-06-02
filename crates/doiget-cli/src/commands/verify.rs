@@ -27,10 +27,11 @@
 //! still passing when the network merely hiccuped on a real id.
 //!
 //! Exit code = number of failing entries, capped at 255 (mirrors
-//! `doiget batch`). "Failing" = illegal + absent, plus unreachable +
-//! unverifiable when `--strict` is set. JSON-Lines (one record per entry)
-//! is written to stdout regardless of mode; the summary goes to stderr
-//! unless `--quiet`.
+//! `doiget batch`). "Failing" = illegal + absent always; plus unreachable
+//! when `--strict`; plus unverifiable when `--strict` **or**
+//! `on_missing_id = "error"`. JSON-Lines (one record per entry) is written
+//! to stdout regardless of mode; the summary goes to stderr unless
+//! `--quiet`.
 
 use anyhow::{bail, Context, Result};
 use camino::Utf8Path;
@@ -82,7 +83,7 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
     let entries = parse_input(&text, fmt, Some(Utf8Path::new(&path)));
 
     // Resolve effective policy: CLI `--strict` is the strictest setting,
-    // forcing both unresolved and id-less entries to fail and overriding
+    // forcing both unreachable and id-less entries to fail and overriding
     // the `[verify]` config.
     let config = load_verify_config();
     let strict = cli_strict || config.strict;
@@ -90,7 +91,7 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
         // CLI --strict is the strictest setting: id-less entries fail.
         OnMissingId::Error
     } else if strict {
-        // strict came from `[verify] strict = true`: unresolved ids fail.
+        // strict came from `[verify] strict = true`: unreachable ids fail.
         // Do not let `skip` silently drop id-less entries in a strict run —
         // surface them at least as a warning so the summary is honest.
         match config.on_missing_id {
@@ -143,10 +144,19 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                                 "provenance log error during verify (aborting): {e}"
                             ));
                         }
-                        // A 404 / 410 (NotFound) is an authoritative dead
-                        // reference — always counts. Every other resolve
-                        // error is transient (unreachable): tolerated
-                        // unless --strict. See the module-level taxonomy.
+                        // An InternalError is a bug, not a property of the
+                        // reference; aborting (rather than silently bucketing
+                        // it as a tolerable `unreachable`) surfaces it.
+                        if code == doiget_core::ErrorCode::InternalError {
+                            return Err(anyhow::anyhow!(
+                                "internal error during verify (aborting; please report): {e}"
+                            ));
+                        }
+                        // A NotFound (HTTP 404/410/451 or a source-specific
+                        // absence) is an authoritative dead reference — always
+                        // counts. Every other resolve error is transient
+                        // (unreachable): tolerated unless --strict. See the
+                        // module-level taxonomy.
                         let status = if code == doiget_core::ErrorCode::NotFound {
                             absent += 1;
                             "absent"
@@ -214,7 +224,11 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
         }
     }
 
-    let total = valid + illegal + absent + unreachable + unverifiable;
+    let total = valid
+        .saturating_add(illegal)
+        .saturating_add(absent)
+        .saturating_add(unreachable)
+        .saturating_add(unverifiable);
     if mode != OutputMode::Quiet {
         #[allow(clippy::print_stderr)]
         {
@@ -227,16 +241,13 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
     }
 
     // illegal + absent always fail (definite source errors, network-
-    // independent). unreachable (transient) and unverifiable (no id) fail
-    // only under the stricter policies.
+    // independent). unreachable (transient) fails only under --strict;
+    // unverifiable (no id) fails only when the on_missing policy is Error
+    // (which --strict forces).
     let failing = illegal
-        + absent
-        + if strict { unreachable } else { 0 }
-        + if on_missing == OnMissingId::Error {
-            unverifiable
-        } else {
-            0
-        };
+        .saturating_add(absent)
+        .saturating_add(unreachable * u32::from(strict))
+        .saturating_add(unverifiable * u32::from(on_missing == OnMissingId::Error));
     if failing == 0 {
         Ok(())
     } else {

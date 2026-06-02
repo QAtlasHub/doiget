@@ -639,11 +639,22 @@ pub enum ErrorCode {
     /// Transport / DNS / TLS failure.
     NetworkError,
     /// A metadata source authoritatively reported that the identifier
-    /// does not exist (HTTP 404 / 410). Distinct from
-    /// [`Self::NetworkError`] (a transient transport failure) and
-    /// [`Self::RateLimited`]: a `NotFound` is network-independent and
-    /// reproducible, so `doiget verify` treats it as a definite dead
-    /// reference (fails the run) rather than a tolerable blip.
+    /// does not exist. Network-independent and reproducible, so `doiget
+    /// verify` treats it as a definite dead reference (fails the run even
+    /// without `--strict`) rather than a tolerable blip — distinct from
+    /// the transient [`Self::NetworkError`], [`Self::RateLimited`], and
+    /// [`Self::FetchTimeout`].
+    ///
+    /// Sources: an HTTP `404` / `410` / `451` from a metadata API, or a
+    /// source-specific absence signal (e.g. arXiv returns HTTP 200 with an
+    /// empty `<feed>` for an unknown id, surfaced via `FetchError::NotFound`).
+    ///
+    /// Caveat (DOI fan-out): for a DOI this is emitted only when the
+    /// configured metadata sources (Crossref, then Unpaywall) all fail to
+    /// resolve it and at least one authoritatively 404s. A DOI registered
+    /// only outside that set (e.g. a DataCite-only dataset DOI) can
+    /// therefore be reported `NotFound` even though it exists in a
+    /// registry doiget does not query.
     NotFound,
     /// Filesystem write failed.
     StoreError,
