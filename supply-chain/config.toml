@@ -539,7 +539,7 @@ version = "0.8.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.reqwest]]
-version = "0.13.3"
+version = "0.13.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.ring]]
@@ -659,11 +659,11 @@ version = "1.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.serial_test]]
-version = "3.4.0"
+version = "3.5.0"
 criteria = "safe-to-run"
 
 [[exemptions.serial_test_derive]]
-version = "3.4.0"
+version = "3.5.0"
 criteria = "safe-to-run"
 
 [[exemptions.sha2]]
@@ -775,7 +775,7 @@ version = "1.1.1+spec-1.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.toml_edit]]
-version = "0.25.11+spec-1.1.0"
+version = "0.25.12+spec-1.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.toml_parser]]
@@ -851,7 +851,7 @@ version = "2.5.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.uuid]]
-version = "1.23.1"
+version = "1.23.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.walkdir]]

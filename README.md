@@ -79,6 +79,10 @@ doiget batch refs.txt
 # Verify a bibliography's references resolve (no PDF download) — CI gate
 doiget verify docs/references.bib --strict
 
+# Lint a .bib for structural issues (no network): missing fields,
+# blank fields, $$-display-math titles. Read-only and math-aware.
+doiget lint docs/references.bib
+
 # Inspect what was fetched
 doiget info 10.1103/PhysRevLett.130.200601
 
