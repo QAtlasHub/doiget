@@ -118,8 +118,10 @@ pub struct PaperSearchQuery {
     /// glasses"). Must be non-empty; the caller is expected to reject
     /// empty input.
     pub query: String,
-    /// Maximum number of results to return. Clamped to `1..=200`
-    /// (OpenAlex `per-page` ceiling).
+    /// Maximum number of results to return, bounded to `1..=200` (OpenAlex
+    /// `per-page` ceiling). [`validate`](Self::validate) **rejects** an
+    /// out-of-range value; `paper_search` itself only clamps it as
+    /// defense-in-depth (see the function's caller-side-validation note).
     pub limit: usize,
     /// Inclusive lower bound on publication year (maps to OpenAlex
     /// `from_publication_date:<year>-01-01`).

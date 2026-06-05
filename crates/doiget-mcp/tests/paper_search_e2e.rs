@@ -11,7 +11,7 @@
 use doiget_core::CapabilityProfile;
 use doiget_mcp::Server;
 use rmcp::{model::CallToolRequestParams, ServiceExt};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 struct EnvGuard {
@@ -84,6 +84,8 @@ async fn paper_search_returns_external_envelope() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/works"))
+        // Omitting `limit` must apply the default of 25 (per-page=25).
+        .and(query_param("per-page", "25"))
         .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_SEARCH))
         .mount(&server)
         .await;
@@ -181,6 +183,88 @@ async fn paper_search_ambiguous_author_maps_to_ambiguous_wire_code() -> anyhow::
             .contains("John Smith"),
         "ambiguity message should list candidates: {s:?}"
     );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn paper_search_rejects_out_of_range_limit() -> anyhow::Result<()> {
+    // `validate()` fires before any network/context init, so no wiremock
+    // is needed; the tool must surface a structured INVALID_REF envelope.
+    let env = EnvGuard::new(ENV_KEYS);
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("query".to_string(), serde_json::json!("x"));
+    args.insert("limit".to_string(), serde_json::json!(0));
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_paper_search").with_arguments(args))
+        .await?;
+    let s = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_paper_search uses CallToolResult::structured");
+
+    assert_eq!(s["ok"], serde_json::json!(false), "envelope: {s:?}");
+    assert_eq!(s["error"]["code"], serde_json::json!("INVALID_REF"));
+    assert!(
+        s["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("limit"),
+        "message names the offending field: {s:?}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn paper_search_unresolvable_author_maps_to_not_found() -> anyhow::Result<()> {
+    // An author name matching nothing → FetchError::NotFound → the MCP
+    // envelope must carry the NOT_FOUND wire code (distinct from AMBIGUOUS).
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/authors"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{ "results": [] }"#))
+        .mount(&server)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let log_path = camino::Utf8Path::from_path(td.path())
+        .expect("utf-8 tempdir")
+        .join("mcp-search-nf.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_OPENALEX_BASE", &server.uri());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("query".to_string(), serde_json::json!("x"));
+    args.insert("author".to_string(), serde_json::json!("No Such Person"));
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_paper_search").with_arguments(args))
+        .await?;
+    let s = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_paper_search uses CallToolResult::structured");
+
+    assert_eq!(s["ok"], serde_json::json!(false), "envelope: {s:?}");
+    assert_eq!(s["error"]["code"], serde_json::json!("NOT_FOUND"));
 
     client.cancel().await?;
     server_handle.await??;

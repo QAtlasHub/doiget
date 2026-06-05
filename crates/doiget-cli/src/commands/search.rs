@@ -73,7 +73,9 @@ impl From<SortArg> for SearchSort {
 /// Bundled so the `main.rs` dispatch arm and [`run`] stay readable.
 #[derive(Debug, Clone)]
 pub struct ExternalArgs {
-    /// Max results (clamped to OpenAlex's 1..=200 `per-page` ceiling).
+    /// Max results; validated to `1..=200` (OpenAlex `per-page` ceiling) by
+    /// `PaperSearchQuery::validate` — an out-of-range value is rejected,
+    /// not silently clamped.
     pub limit: usize,
     /// Inclusive lower publication-year bound.
     pub from_year: Option<i32>,

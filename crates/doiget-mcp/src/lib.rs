@@ -19,10 +19,10 @@
 //!   contract is enforced by the orchestrator and the posture-lint
 //!   workflow.
 //!
-//! The remaining tools named in `docs/MCP_TOOLS.md` (`doiget_fetch_paper`,
+//! The other tools named in `docs/MCP_TOOLS.md` (`doiget_fetch_paper`,
 //! `doiget_batch_fetch`, `doiget_info`, `doiget_search_local`,
-//! `doiget_paper_search`, `doiget_list_recent`, `doiget_paper_pdf_path`)
-//! land in follow-up PRs. The exact count is intentionally left unstated
+//! `doiget_paper_search`, `doiget_list_recent`, `doiget_paper_pdf_path`, …)
+//! are implemented below. The exact count is intentionally left unstated
 //! in this docstring so it does not rot as tools land.
 //!
 //! # Stdout safety
@@ -1207,19 +1207,13 @@ impl Server {
         &self,
         Parameters(input): Parameters<PaperSearchInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        // Map the `sort` string to the core enum (default: relevance).
-        let sort = match input.sort.as_deref() {
-            None | Some("relevance") => doiget_core::discovery::SearchSort::Relevance,
-            Some("cited") => doiget_core::discovery::SearchSort::Cited,
-            Some("recent") => doiget_core::discovery::SearchSort::Recent,
-            Some(other) => {
-                return Ok(CallToolResult::structured(read_path_error_envelope(
-                    None,
-                    ErrorCode::InvalidRef,
-                    &format!("unknown sort '{other}' (expected relevance|cited|recent)"),
-                )));
-            }
-        };
+        // `sort` is a JsonSchema enum, so an unknown value is rejected at
+        // deserialization (the schema advertises the choices to agents);
+        // here it only needs lowering to the core enum (default: relevance).
+        let sort = input
+            .sort
+            .map(doiget_core::discovery::SearchSort::from)
+            .unwrap_or(doiget_core::discovery::SearchSort::Relevance);
 
         let q = doiget_core::discovery::PaperSearchQuery {
             query: input.query.clone(),
@@ -1866,6 +1860,32 @@ pub struct SearchLocalInput {
     pub limit: Option<u32>,
 }
 
+/// `sort` choices for `doiget_paper_search`. Modelled as a JsonSchema enum
+/// (not a free string) so the valid values appear in the tool's input
+/// schema — an agent picks a valid one rather than guessing a token, and
+/// an unknown value is rejected at deserialization (ADR-0031 D5).
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[schemars(rename_all = "lowercase")]
+pub enum SortInput {
+    /// Best textual match first (`relevance_score:desc`). The default.
+    Relevance,
+    /// Most-cited first (`cited_by_count:desc`).
+    Cited,
+    /// Newest first (`publication_date:desc`).
+    Recent,
+}
+
+impl From<SortInput> for doiget_core::discovery::SearchSort {
+    fn from(s: SortInput) -> Self {
+        match s {
+            SortInput::Relevance => Self::Relevance,
+            SortInput::Cited => Self::Cited,
+            SortInput::Recent => Self::Recent,
+        }
+    }
+}
+
 /// JSON-schema-derived input for the `doiget_paper_search` MCP tool
 /// (external OpenAlex discovery; ADR-0031).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -1900,7 +1920,7 @@ pub struct PaperSearchInput {
     pub publisher: Option<String>,
     /// Result ordering: `relevance` (default) | `cited` | `recent`.
     #[serde(default)]
-    pub sort: Option<String>,
+    pub sort: Option<SortInput>,
 }
 
 /// JSON-schema-derived input for the `doiget_list_recent` MCP tool.
@@ -2260,11 +2280,6 @@ fn denial_context_to_value(dc: &DenialContext, surface: &str) -> Value {
 /// structured `denial_context` channel via
 /// `From<&FetchError> for Option<DenialContext>` (ADR-0023 §4).
 fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value {
-    // `FetchError` is not `Clone`; we can't move out of `&err`. Use
-    // the existing `From` boundary indirectly by re-mapping via a
-    // match on `&FetchError`. This duplicates a few lines of the
-    // `From<FetchError> for ErrorCode` impl but avoids cloning the
-    // underlying transport error.
     // Use the canonical `From<&FetchError> for ErrorCode` (borrow form, so
     // no clone of the non-`Clone` transport error). This keeps the MCP
     // surface in lock-step with the core mapping — notably `NotFound` and
