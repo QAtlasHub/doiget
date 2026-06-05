@@ -1120,6 +1120,13 @@ host = "*.uj.edu.pl"
         let _ = std::any::type_name::<doiget_core::orchestrator::FetchPaperOutcome>();
     }
 
+    #[test]
+    fn ambiguous_maps_to_exit_code_2() {
+        // ADR-0031 D5: a name-filter ambiguity is user-fixable → exit 2,
+        // distinct from the generic exit 1.
+        assert_eq!(cli_exit_code(ErrorCode::Ambiguous), 2);
+    }
+
     /// Minimal `DenialContext` carrying only `reason`; every other field
     /// is optional (ADR-0023 §3) so `None`/empty is a valid producer
     /// shape for the reclassification decision under test.

@@ -276,8 +276,8 @@ enum Command {
         /// exclusive with `--local`).
         #[arg(long, conflicts_with = "local")]
         external: bool,
-        /// External: maximum results (clamped to OpenAlex's 1..=200
-        /// per-page cap).
+        /// External: maximum results. Must be 1..=200 (OpenAlex's per-page
+        /// cap); an out-of-range value is rejected, not clamped.
         #[arg(long, default_value_t = 25)]
         limit: usize,
         /// External: only works published in or after this year.

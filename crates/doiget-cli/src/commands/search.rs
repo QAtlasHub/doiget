@@ -27,7 +27,7 @@ use anyhow::{Context, Result};
 use doiget_core::discovery::{
     paper_search, PaperSearchQuery, PaperSearchResults, SearchSort, MAX_PER_PAGE,
 };
-use doiget_core::store::{FsStore, Store};
+use doiget_core::store::{EntryInfo, FsStore, Store};
 use doiget_core::ErrorCode;
 
 use super::fetch::{cli_exit_code, CliExit, FetchHarness};
@@ -140,16 +140,7 @@ fn run_local(query: &str, mode: OutputMode) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     if mode == OutputMode::Json {
-        // ADR-0031 D5: wrap in the shared `{scope, query, results}`
-        // envelope. The local `results[]` element is the legacy
-        // `EntryInfo` shape, unchanged.
-        let envelope = serde_json::json!({
-            "scope": "local",
-            "query": query,
-            "count": entries.len(),
-            "results": entries,
-        });
-        write_json(&mut out, &envelope)?;
+        write_json(&mut out, &local_envelope(query, &entries))?;
         return Ok(());
     }
     writeln!(out, "safekey\tyear\ttitle\tfetched_at")
@@ -265,6 +256,18 @@ fn resolve_openalex_base() -> Result<url::Url> {
     url::Url::parse(&raw).with_context(|| format!("DOIGET_OPENALEX_BASE is not a URL: {raw}"))
 }
 
+/// Build the local-scan `--mode json` envelope (ADR-0031 D5):
+/// `{ scope: "local", query, count, results }`. The `results[]` element is
+/// the legacy `EntryInfo` shape, unchanged.
+fn local_envelope(query: &str, entries: &[EntryInfo]) -> serde_json::Value {
+    serde_json::json!({
+        "scope": "local",
+        "query": query,
+        "count": entries.len(),
+        "results": entries,
+    })
+}
+
 /// Build the external-discovery `--mode json` envelope (ADR-0031 D5):
 /// `{ scope, query, total_results, count, results }`. Extracted as a pure
 /// function so the wire shape is unit-testable without capturing stdout.
@@ -332,5 +335,63 @@ mod tests {
         assert_eq!(SearchSort::from(SortArg::Relevance), SearchSort::Relevance);
         assert_eq!(SearchSort::from(SortArg::Cited), SearchSort::Cited);
         assert_eq!(SearchSort::from(SortArg::Recent), SearchSort::Recent);
+    }
+
+    #[test]
+    fn local_envelope_has_local_scope_and_count() {
+        let v = local_envelope("quantum", &[]);
+        assert_eq!(v["scope"], "local");
+        assert_eq!(v["query"], "quantum");
+        assert_eq!(v["count"], 0);
+        assert!(v["results"].as_array().expect("results array").is_empty());
+        // The local envelope must NOT carry the external-only field.
+        assert!(v.get("total_results").is_none());
+    }
+
+    /// `ExternalArgs` with defaults; override per test.
+    fn ext(limit: usize, from_year: Option<i32>, to_year: Option<i32>) -> ExternalArgs {
+        ExternalArgs {
+            limit,
+            from_year,
+            to_year,
+            oa_only: false,
+            min_citations: None,
+            author: None,
+            venue: None,
+            publisher: None,
+            sort: SortArg::Relevance,
+        }
+    }
+
+    // These validations fire BEFORE any network / harness construction, so
+    // the calls error without touching the filesystem or OpenAlex.
+
+    #[tokio::test]
+    async fn external_rejects_limit_below_1() {
+        let err = run("q".into(), false, ext(0, None, None), OutputMode::Quiet)
+            .await
+            .expect_err("--limit 0 must be rejected");
+        assert!(err.to_string().contains("--limit"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn external_rejects_limit_above_200() {
+        let err = run("q".into(), false, ext(201, None, None), OutputMode::Quiet)
+            .await
+            .expect_err("--limit 201 must be rejected");
+        assert!(err.to_string().contains("--limit"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn external_rejects_inverted_year_range() {
+        let err = run(
+            "q".into(),
+            false,
+            ext(25, Some(2025), Some(2010)),
+            OutputMode::Quiet,
+        )
+        .await
+        .expect_err("from_year > to_year must be rejected");
+        assert!(err.to_string().contains("is after"), "got: {err}");
     }
 }

@@ -22,7 +22,7 @@ a literature **discovery** tool, not just a local-store re-finder. See
 
 ### Changed
 - **[cli] [BREAKING]** `doiget search <query>` default scope changed from the **local-store substring scan** to **external OpenAlex discovery**. The local scan is now `doiget search --local <query>` (behaviour otherwise unchanged). Scripts relying on the old default must add `--local`.
-- **[cli] [BREAKING]** `doiget search --mode json` now emits a `{ "scope": "external" | "local", "query": "...", "count": N, "results": [...] }` envelope (the `results[]` element schema is scope-dependent; the local element is the unchanged `EntryInfo` shape). Previously it emitted a bare `EntryInfo` array.
+- **[cli] [BREAKING]** `doiget search --mode json` now emits a `{ "scope": "external" | "local", "query": "...", "count": N, "results": [...] }` envelope (the external scope additionally carries `"total_results"`, the upstream OpenAlex match count which may exceed `count`; the `results[]` element schema is scope-dependent — the local element is the unchanged `EntryInfo` shape). Previously it emitted a bare `EntryInfo` array.
 
 ## [0.5.0] - 2026-06-02
 

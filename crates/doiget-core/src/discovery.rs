@@ -194,6 +194,9 @@ pub struct PaperHit {
     /// `None` when the record has no DOI.
     pub doi: Option<String>,
     /// OpenAlex Work ID (`W…`, `https://openalex.org/` prefix stripped).
+    /// An empty string signals a malformed upstream record (the `id` field
+    /// was absent) that was kept rather than dropped so one bad record does
+    /// not sink the page — do NOT use `""` as a fetchable id.
     pub openalex_id: String,
     /// arXiv id, best-effort extracted from a `locations[].*url`
     /// containing `arxiv.org/abs/<id>`; `None` if no arXiv location.
@@ -258,6 +261,15 @@ struct ResolvedIds {
 /// `Metadata`/`Fetch` provenance row per request). Never fetches a PDF
 /// (ADR-0031 D3).
 ///
+/// ## Caller-side validation
+///
+/// This is permissive on the `query` shape — boundary validation is the
+/// caller's job (the CLI does it; an MCP tool should too). Specifically:
+/// `query.limit` is **clamped** to `1..=200` (not rejected), and an
+/// inverted year range (`from_year > to_year`) is passed through and
+/// yields an **empty** result set rather than an error. Direct callers
+/// that want a typed error for those should pre-validate.
+///
 /// # Errors
 ///
 /// Returns [`FetchError::Http`] for transport / allowlist failures,
@@ -287,13 +299,7 @@ pub async fn paper_search(
     let results_array = value
         .get("results")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| FetchError::SourceSchema {
-            hint: format!(
-                "openalex search response missing `results` array — likely an \
-                 error payload (got: {})",
-                truncate_for_hint(value.to_string().as_bytes())
-            ),
-        })?;
+        .ok_or_else(|| missing_results_array("search", &value))?;
 
     let results: Vec<PaperHit> = results_array.iter().map(work_to_hit).collect();
     let total_results = value
@@ -408,13 +414,7 @@ async fn resolve_entity_id(
     let results_arr = value
         .get("results")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| FetchError::SourceSchema {
-            hint: format!(
-                "openalex /{entity_path} response missing `results` array — likely an \
-                 error payload (got: {})",
-                truncate_for_hint(value.to_string().as_bytes())
-            ),
-        })?;
+        .ok_or_else(|| missing_results_array(&format!("/{entity_path}"), &value))?;
     let mut candidates: Vec<Candidate> = results_arr
         .iter()
         .filter_map(Candidate::from_value)
@@ -780,6 +780,21 @@ fn truncate_for_hint(body: &[u8]) -> String {
     }
 }
 
+/// Build the `SourceSchema` error for an OpenAlex response that is valid
+/// JSON but carries no `results` array (e.g. an error envelope). Shared by
+/// the `/works` search path and the entity-resolution path so the
+/// "do NOT collapse to an empty Vec" contract lives in one place.
+/// `context` names the endpoint for the hint (`"search"` or `"/authors"`).
+fn missing_results_array(context: &str, value: &serde_json::Value) -> FetchError {
+    FetchError::SourceSchema {
+        hint: format!(
+            "openalex {context} response missing `results` array — likely an \
+             error payload (got: {})",
+            truncate_for_hint(value.to_string().as_bytes())
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -996,6 +1011,12 @@ mod tests {
             filter.contains("primary_location.source.publisher_lineage:P3"),
             "got {filter}"
         );
+        // An empty contact email must omit the `mailto` parameter entirely
+        // (never send a placeholder).
+        assert!(
+            param(&url, "mailto").is_none(),
+            "empty contact email must omit mailto"
+        );
     }
 
     #[tokio::test]
@@ -1051,6 +1072,34 @@ mod tests {
             .await
             .expect_err("an unresolvable venue name must error, not silently drop the filter");
         assert!(matches!(err, FetchError::NotFound { .. }), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn entity_error_envelope_is_source_schema_not_not_found() {
+        let server = MockServer::start().await;
+        // A valid JSON object with NO `results` key (an OpenAlex error
+        // envelope, e.g. a rate limit) must surface as SourceSchema, NOT a
+        // misleading "no author matched" NotFound that drops the filter.
+        Mock::given(method("GET"))
+            .and(path("/authors"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"error":"rate limit exceeded"}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = build_test_context(&server.uri());
+        let base = Url::parse(&server.uri()).expect("wiremock URI parses");
+        let mut q = PaperSearchQuery::new("x");
+        q.author = Some("Parisi".to_string());
+
+        let err = paper_search(&base, "", &q, &ctx)
+            .await
+            .expect_err("an entity error envelope must be SourceSchema, not NotFound");
+        assert!(
+            matches!(err, FetchError::SourceSchema { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
