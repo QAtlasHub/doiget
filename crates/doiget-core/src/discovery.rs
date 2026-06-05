@@ -30,12 +30,16 @@
 //! OpenAlex filters authors / sources (venues) / publishers by **entity
 //! ID**, not free text. So `paper_search` first resolves a supplied
 //! `--author` / `--venue` / `--publisher` *name* to its OpenAlex ID via a
-//! `?search=` lookup against `/authors`, `/sources`, `/publishers`
-//! (taking the top hit), then filters `/works` by
-//! `authorships.author.id` / `primary_location.source.id` /
-//! `primary_location.source.publisher_lineage`. A name that resolves to
-//! nothing is a typed [`FetchError::NotFound`] (never a silent
-//! drop-the-filter).
+//! `?search=` lookup against `/authors`, `/sources`, `/publishers`, then
+//! filters `/works` by `authorships.author.id` /
+//! `primary_location.source.id` /
+//! `primary_location.source.publisher_lineage`. The top hit is NOT taken
+//! blindly: [`select_entity`] resolves only an unambiguous name (a single
+//! hit, an exact case-insensitive name match, or a top hit that clearly
+//! out-scores the runner-up); a name matching several entities with no
+//! clear winner is a typed [`FetchError::Ambiguous`] listing the
+//! candidates, and a name matching nothing is [`FetchError::NotFound`].
+//! The filter is never silently dropped.
 //!
 //! ## Metadata-only contract (ADR-0031 D3)
 //!
@@ -55,8 +59,9 @@ use crate::source::{FetchContext, FetchError};
 /// Source key used for the per-source HTTP client + redirect allowlist.
 ///
 /// Shares the `"openalex"` key with `crate::sources::openalex` so that
-/// `crate::http::discovery_allowlist` (always compiled) and the
-/// `#[cfg(feature = "citation")]` `tier_2_allowlist` register the same
+/// `crate::http::discovery_allowlist` (always compiled) and
+/// `tier_2_allowlist` (always compiled, but only *called* by the CLI
+/// under `#[cfg(feature = "citation")]`) register the same
 /// `api.openalex.org` host under one key (an idempotent overwrite — see
 /// ADR-0031 D2).
 const SOURCE_KEY: &str = "openalex";
@@ -239,9 +244,11 @@ struct ResolvedIds {
 ///
 /// Returns [`FetchError::Http`] for transport / allowlist failures,
 /// [`FetchError::NotFound`] when an author/venue/publisher name resolves
-/// to nothing, [`FetchError::SourceSchema`] when a response is not a JSON
-/// object carrying a `results` array, and propagates a provenance-log
-/// append failure (fail-closed).
+/// to nothing, [`FetchError::Ambiguous`] when such a name matches several
+/// entities with no clear winner (carries a candidate listing),
+/// [`FetchError::SourceSchema`] when a response is not a JSON object
+/// carrying a `results` array, and propagates a provenance-log append
+/// failure (fail-closed).
 pub async fn paper_search(
     base: &Url,
     contact_email: &str,
@@ -375,11 +382,25 @@ async fn resolve_entity_id(
     }
 
     let (value, _len) = openalex_get(&url, ctx).await?;
-    let mut candidates: Vec<Candidate> = value
+    // A valid JSON object with no `results` array is a schema failure
+    // (e.g. an OpenAlex error envelope: rate limit / bad filter), NOT an
+    // empty match set — mirror the `/works` path. Collapsing it to an
+    // empty Vec here would surface a misleading "no <entity> matched"
+    // NotFound and silently drop the user's filter.
+    let results_arr = value
         .get("results")
         .and_then(serde_json::Value::as_array)
-        .map(|arr| arr.iter().filter_map(Candidate::from_value).collect())
-        .unwrap_or_default();
+        .ok_or_else(|| FetchError::SourceSchema {
+            hint: format!(
+                "openalex /{entity_path} response missing `results` array — likely an \
+                 error payload (got: {})",
+                truncate_for_hint(value.to_string().as_bytes())
+            ),
+        })?;
+    let mut candidates: Vec<Candidate> = results_arr
+        .iter()
+        .filter_map(Candidate::from_value)
+        .collect();
     // OpenAlex returns search hits relevance-sorted, but make the
     // dominance check order-independent.
     candidates.sort_by(|a, b| {
@@ -467,7 +488,15 @@ fn select_entity(
     if exact.is_empty() {
         let top = &candidates[0];
         let second = &candidates[1];
-        if top.relevance > 0.0 && top.relevance >= DOMINANCE_RATIO * second.relevance {
+        // Both scores must be present (> 0.0): a runner-up with an absent
+        // `relevance_score` (defaulted to 0.0) would otherwise make
+        // `top >= RATIO * 0.0` trivially true and silently auto-select the
+        // top hit, defeating the ambiguity guard. When the runner-up has
+        // no score we cannot judge dominance — treat the name as ambiguous.
+        if top.relevance > 0.0
+            && second.relevance > 0.0
+            && top.relevance >= DOMINANCE_RATIO * second.relevance
+        {
             return Ok(top.id.clone());
         }
     }
@@ -718,13 +747,18 @@ fn strip_doi_prefix(doi_url: &str) -> String {
 
 /// Truncate a response body to a short prefix for error hints, so a
 /// multi-KB malformed payload does not flood a single log line.
+///
+/// Truncation is by `char` (not byte) so a multi-byte UTF-8 character
+/// straddling the cap — common in OpenAlex error payloads, which embed
+/// `…`/curly quotes — never panics on a non-char-boundary byte slice.
 fn truncate_for_hint(body: &[u8]) -> String {
     const MAX: usize = 200;
     let s = String::from_utf8_lossy(body);
-    if s.len() <= MAX {
+    if s.chars().count() <= MAX {
         s.into_owned()
     } else {
-        format!("{}…", &s[..MAX])
+        let head: String = s.chars().take(MAX).collect();
+        format!("{head}…")
     }
 }
 
@@ -1126,5 +1160,123 @@ mod tests {
             "10.1234/abc"
         );
         assert_eq!(strip_openalex_prefix("https://openalex.org/W999"), "W999");
+    }
+
+    // ---- build_search_url branch coverage --------------------------------
+
+    fn param(u: &Url, key: &str) -> Option<String> {
+        u.query_pairs()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.into_owned())
+    }
+
+    #[test]
+    fn per_page_clamps_to_floor_and_ceiling() {
+        let base = Url::parse("https://api.openalex.org").expect("base");
+        let mut q = PaperSearchQuery::new("x");
+        q.limit = 0;
+        let u = build_search_url(&base, "", &q, &ResolvedIds::default()).expect("url");
+        assert_eq!(param(&u, "per-page").as_deref(), Some("1"), "limit 0 -> 1");
+        q.limit = 201;
+        let u = build_search_url(&base, "", &q, &ResolvedIds::default()).expect("url");
+        assert_eq!(
+            param(&u, "per-page").as_deref(),
+            Some("200"),
+            "limit 201 -> 200"
+        );
+    }
+
+    #[test]
+    fn to_year_and_recent_sort_land_on_url() {
+        let base = Url::parse("https://api.openalex.org").expect("base");
+        let mut q = PaperSearchQuery::new("x");
+        q.to_year = Some(2023);
+        q.sort = SearchSort::Recent;
+        let u = build_search_url(&base, "", &q, &ResolvedIds::default()).expect("url");
+        assert_eq!(param(&u, "sort").as_deref(), Some("publication_date:desc"));
+        assert!(
+            param(&u, "filter")
+                .unwrap_or_default()
+                .contains("to_publication_date:2023-12-31"),
+            "to_year must map to to_publication_date:<y>-12-31"
+        );
+    }
+
+    // ---- select_entity disambiguation boundaries -------------------------
+
+    fn cand(id: &str, name: &str, works: u64, rel: f64) -> Candidate {
+        Candidate {
+            id: id.to_string(),
+            display_name: name.to_string(),
+            works_count: works,
+            relevance: rel,
+        }
+    }
+
+    #[test]
+    fn dominance_at_exactly_2x_resolves_top() {
+        let c = vec![cand("A1", "x", 1, 2.0), cand("A2", "y", 1, 1.0)];
+        assert_eq!(select_entity("authors", "q", &c).expect("resolves"), "A1");
+    }
+
+    #[test]
+    fn dominance_just_below_2x_is_ambiguous() {
+        let c = vec![cand("A1", "x", 1, 1.9), cand("A2", "y", 1, 1.0)];
+        assert!(matches!(
+            select_entity("authors", "q", &c),
+            Err(FetchError::Ambiguous { .. })
+        ));
+    }
+
+    #[test]
+    fn zero_relevance_runner_up_is_ambiguous_not_auto_top() {
+        // Runner-up with an absent (0.0) relevance must NOT let the top
+        // win by default — the dominance guard requires second > 0.0.
+        let c = vec![cand("A1", "x", 1, 5.0), cand("A2", "y", 1, 0.0)];
+        assert!(matches!(
+            select_entity("authors", "q", &c),
+            Err(FetchError::Ambiguous { .. })
+        ));
+    }
+
+    #[test]
+    fn multiple_exact_name_matches_are_ambiguous() {
+        // Two entities share the exact display name -> ambiguous, even
+        // though the first would otherwise dominate on relevance.
+        let c = vec![cand("S1", "Dup", 9, 5.0), cand("S2", "Dup", 1, 1.0)];
+        assert!(matches!(
+            select_entity("sources", "Dup", &c),
+            Err(FetchError::Ambiguous { .. })
+        ));
+    }
+
+    // ---- extract_arxiv_from_location edge cases --------------------------
+
+    #[test]
+    fn arxiv_extracted_from_pdf_url_when_landing_absent() {
+        let loc = serde_json::json!({ "pdf_url": "https://arxiv.org/abs/2302.00001v3" });
+        assert_eq!(
+            extract_arxiv_from_location(&loc).as_deref(),
+            Some("2302.00001v3")
+        );
+    }
+
+    #[test]
+    fn arxiv_id_stops_at_query_string() {
+        let loc =
+            serde_json::json!({ "landing_page_url": "https://arxiv.org/abs/2101.12345?utm=x" });
+        assert_eq!(
+            extract_arxiv_from_location(&loc).as_deref(),
+            Some("2101.12345")
+        );
+    }
+
+    #[test]
+    fn truncate_for_hint_is_char_boundary_safe() {
+        // 300 multi-byte chars: must not panic on a byte-slice boundary.
+        let body = "あ".repeat(300);
+        let out = truncate_for_hint(body.as_bytes());
+        assert!(out.ends_with('…'));
+        assert_eq!(out.chars().filter(|&c| c == 'あ').count(), 200);
     }
 }

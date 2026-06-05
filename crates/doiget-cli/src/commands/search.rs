@@ -15,14 +15,16 @@
 //!
 //! `--local` and `--external` are mutually exclusive; omitting both means
 //! external. Both scopes share one `--mode json` envelope —
-//! `{ "scope": "external" | "local", "query": "...", "results": [...] }`
-//! — with a scope-dependent `results[]` element schema.
+//! `{ "scope": "external" | "local", "query": "...", "count": N,
+//! "results": [...] }` — with a scope-dependent `results[]` element
+//! schema. The external scope additionally carries `"total_results"` (the
+//! upstream OpenAlex match count, which may exceed `count`).
 
 use std::io::Write;
 
 use anyhow::{Context, Result};
 
-use doiget_core::discovery::{paper_search, PaperSearchQuery, SearchSort};
+use doiget_core::discovery::{paper_search, PaperSearchQuery, PaperSearchResults, SearchSort};
 use doiget_core::store::{FsStore, Store};
 use doiget_core::ErrorCode;
 
@@ -57,10 +59,9 @@ pub enum SortArg {
     Recent,
 }
 
-impl SortArg {
-    /// Lower to the `doiget-core` ordering enum.
-    fn to_core(&self) -> SearchSort {
-        match self {
+impl From<SortArg> for SearchSort {
+    fn from(s: SortArg) -> Self {
+        match s {
             SortArg::Relevance => SearchSort::Relevance,
             SortArg::Cited => SearchSort::Cited,
             SortArg::Recent => SearchSort::Recent,
@@ -146,9 +147,7 @@ fn run_local(query: &str, mode: OutputMode) -> Result<()> {
             "count": entries.len(),
             "results": entries,
         });
-        let s = serde_json::to_string_pretty(&envelope)
-            .context("failed to serialize local search envelope to JSON")?;
-        writeln!(out, "{s}").context("failed to write search JSON to stdout")?;
+        write_json(&mut out, &envelope)?;
         return Ok(());
     }
     writeln!(out, "safekey\tyear\ttitle\tfetched_at")
@@ -174,6 +173,14 @@ fn run_local(query: &str, mode: OutputMode) -> Result<()> {
 
 /// External OpenAlex discovery search (the default scope).
 async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Result<()> {
+    // Reject an inverted year range up front: OpenAlex would accept it and
+    // return zero results, which reads as "nothing found" rather than the
+    // user error it is.
+    if let (Some(from), Some(to)) = (ext.from_year, ext.to_year) {
+        if from > to {
+            anyhow::bail!("--from-year ({from}) is after --to-year ({to})");
+        }
+    }
     let base = resolve_openalex_base()?;
     let contact_email =
         std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
@@ -188,7 +195,7 @@ async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Resul
         author: ext.author,
         venue: ext.venue,
         publisher: ext.publisher,
-        sort: ext.sort.to_core(),
+        sort: ext.sort.into(),
     };
 
     let harness = FetchHarness::from_env().context("building fetch harness")?;
@@ -216,16 +223,7 @@ async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Resul
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     if mode == OutputMode::Json {
-        let envelope = serde_json::json!({
-            "scope": "external",
-            "query": query,
-            "total_results": results.total_results,
-            "count": results.results.len(),
-            "results": results.results,
-        });
-        let s = serde_json::to_string_pretty(&envelope)
-            .context("failed to serialize external search envelope to JSON")?;
-        writeln!(out, "{s}").context("failed to write search JSON to stdout")?;
+        write_json(&mut out, &external_envelope(query, &results))?;
         return Ok(());
     }
 
@@ -256,4 +254,69 @@ fn resolve_openalex_base() -> Result<url::Url> {
     let raw =
         std::env::var("DOIGET_OPENALEX_BASE").unwrap_or_else(|_| OPENALEX_DEFAULT_BASE.to_string());
     url::Url::parse(&raw).with_context(|| format!("DOIGET_OPENALEX_BASE is not a URL: {raw}"))
+}
+
+/// Build the external-discovery `--mode json` envelope (ADR-0031 D5):
+/// `{ scope, query, total_results, count, results }`. Extracted as a pure
+/// function so the wire shape is unit-testable without capturing stdout.
+fn external_envelope(query: &str, results: &PaperSearchResults) -> serde_json::Value {
+    serde_json::json!({
+        "scope": "external",
+        "query": query,
+        "total_results": results.total_results,
+        "count": results.results.len(),
+        "results": results.results,
+    })
+}
+
+/// Pretty-serialize a JSON value and write it as one line to `out`. Shared
+/// by the local and external `--mode json` paths.
+fn write_json(out: &mut impl Write, value: &serde_json::Value) -> Result<()> {
+    let s = serde_json::to_string_pretty(value).context("failed to serialize search JSON")?;
+    writeln!(out, "{s}").context("failed to write search JSON to stdout")
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use doiget_core::discovery::PaperHit;
+
+    fn hit() -> PaperHit {
+        PaperHit {
+            doi: Some("10.1234/x".to_string()),
+            openalex_id: "W1".to_string(),
+            arxiv: None,
+            title: "T".to_string(),
+            authors: vec!["A".to_string()],
+            year: Some(2024),
+            venue: Some("V".to_string()),
+            abstract_: Some("abs".to_string()),
+            cited_by_count: 3,
+            oa_status: Some("gold".to_string()),
+            source: "openalex",
+        }
+    }
+
+    #[test]
+    fn external_envelope_has_scope_total_and_results() {
+        let results = PaperSearchResults {
+            results: vec![hit()],
+            total_results: Some(4012),
+        };
+        let v = external_envelope("spin glass", &results);
+        assert_eq!(v["scope"], "external");
+        assert_eq!(v["query"], "spin glass");
+        assert_eq!(v["total_results"], 4012);
+        assert_eq!(v["count"], 1);
+        assert_eq!(v["results"][0]["openalex_id"], "W1");
+        assert_eq!(v["results"][0]["abstract"], "abs");
+    }
+
+    #[test]
+    fn sort_arg_lowers_to_core() {
+        assert_eq!(SearchSort::from(SortArg::Relevance), SearchSort::Relevance);
+        assert_eq!(SearchSort::from(SortArg::Cited), SearchSort::Cited);
+        assert_eq!(SearchSort::from(SortArg::Recent), SearchSort::Recent);
+    }
 }

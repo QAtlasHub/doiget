@@ -274,7 +274,7 @@ enum Command {
         local: bool,
         /// Explicit form of the default external discovery (mutually
         /// exclusive with `--local`).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "local")]
         external: bool,
         /// External: maximum results (clamped to OpenAlex's 1..=200
         /// per-page cap).
@@ -677,6 +677,21 @@ mod tests {
     use super::*;
     use clap::Parser;
     use serial_test::serial;
+
+    /// `--local` and `--external` are mutually exclusive (ADR-0031 D5).
+    /// `--external`'s `conflicts_with = "local"` makes the conflict
+    /// symmetric so the parse fails regardless of flag order.
+    #[test]
+    fn search_local_and_external_conflict() {
+        assert!(
+            Cli::try_parse_from(["doiget", "search", "--local", "--external", "q"]).is_err(),
+            "`search --local --external` must be a parse error"
+        );
+        assert!(
+            Cli::try_parse_from(["doiget", "search", "--external", "--local", "q"]).is_err(),
+            "conflict must hold regardless of flag order"
+        );
+    }
 
     /// RAII guard restoring a single env var to its pre-test value (or
     /// removing it if previously unset). The `apply_global_overrides`
