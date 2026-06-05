@@ -34,7 +34,7 @@
 //! filters `/works` by `authorships.author.id` /
 //! `primary_location.source.id` /
 //! `primary_location.source.publisher_lineage`. The top hit is NOT taken
-//! blindly: [`select_entity`] resolves only an unambiguous name (a single
+//! blindly: `select_entity` resolves only an unambiguous name (a single
 //! hit, an exact case-insensitive name match, or a top hit that clearly
 //! out-scores the runner-up); a name matching several entities with no
 //! clear winner is a typed [`FetchError::Ambiguous`] listing the
@@ -73,8 +73,11 @@ const SELECT_FIELDS: &str = "id,doi,title,display_name,publication_year,\
 cited_by_count,abstract_inverted_index,authorships,primary_location,\
 open_access,locations";
 
-/// OpenAlex caps `per-page` at 200; requests above that are rejected.
-const MAX_PER_PAGE: usize = 200;
+/// OpenAlex caps `per-page` at 200; requests above that are rejected by
+/// the API. `build_search_url` clamps to this as defense-in-depth, but
+/// the CLI rejects an out-of-range `--limit` up front (so the user is not
+/// silently given fewer results than asked).
+pub const MAX_PER_PAGE: usize = 200;
 
 /// Default page size when the caller does not specify `--limit`.
 pub const DEFAULT_LIMIT: usize = 25;
@@ -164,6 +167,20 @@ impl PaperSearchQuery {
     }
 }
 
+/// Discovery backend that produced a [`PaperHit`].
+///
+/// PR1 has a single source; `#[non_exhaustive]` reserves room for future
+/// Tier-1 discovery backends (e.g. Semantic Scholar) without a breaking
+/// change, while the wire form stays the lowercase source name (so the
+/// JSON shape is unchanged from the previous `&'static str` field).
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum DiscoverySource {
+    /// OpenAlex `/works?search=`. Serializes to `"openalex"`.
+    OpenAlex,
+}
+
 /// One candidate paper returned by discovery search.
 ///
 /// All fields except `openalex_id` / `title` / `cited_by_count` /
@@ -198,8 +215,9 @@ pub struct PaperHit {
     /// OpenAlex open-access status (`gold` / `green` / `hybrid` /
     /// `bronze` / `closed`), or `None`.
     pub oa_status: Option<String>,
-    /// Provenance of the record. Always `"openalex"` in PR1.
-    pub source: &'static str,
+    /// Discovery backend that produced this hit (PR1: always
+    /// [`DiscoverySource::OpenAlex`]). Serializes to `"openalex"`.
+    pub source: DiscoverySource,
 }
 
 /// The result of a discovery search: the hits plus the upstream total.
@@ -675,7 +693,7 @@ fn work_to_hit(work: &serde_json::Value) -> PaperHit {
         abstract_,
         cited_by_count,
         oa_status,
-        source: SOURCE_KEY,
+        source: DiscoverySource::OpenAlex,
     }
 }
 
@@ -879,7 +897,7 @@ mod tests {
         assert_eq!(first.venue.as_deref(), Some("Phys. Rev. B"));
         assert_eq!(first.oa_status.as_deref(), Some("green"));
         assert_eq!(first.arxiv.as_deref(), Some("2101.12345v2"));
-        assert_eq!(first.source, "openalex");
+        assert_eq!(first.source, DiscoverySource::OpenAlex);
 
         let second = &out.results[1];
         assert_eq!(second.openalex_id, "W456");
@@ -1278,5 +1296,13 @@ mod tests {
         let out = truncate_for_hint(body.as_bytes());
         assert!(out.ends_with('…'));
         assert_eq!(out.chars().filter(|&c| c == 'あ').count(), 200);
+    }
+
+    #[test]
+    fn ambiguous_has_its_own_wire_code() {
+        // Distinct from NOT_FOUND so agents can branch (ADR-0031 D5).
+        let e = FetchError::Ambiguous { hint: "x".into() };
+        assert_eq!(crate::ErrorCode::from(&e), crate::ErrorCode::Ambiguous);
+        assert_eq!(crate::ErrorCode::Ambiguous.as_wire(), "AMBIGUOUS");
     }
 }

@@ -24,7 +24,9 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 
-use doiget_core::discovery::{paper_search, PaperSearchQuery, PaperSearchResults, SearchSort};
+use doiget_core::discovery::{
+    paper_search, PaperSearchQuery, PaperSearchResults, SearchSort, MAX_PER_PAGE,
+};
 use doiget_core::store::{FsStore, Store};
 use doiget_core::ErrorCode;
 
@@ -153,7 +155,7 @@ fn run_local(query: &str, mode: OutputMode) -> Result<()> {
     writeln!(out, "safekey\tyear\ttitle\tfetched_at")
         .context("failed to write search header to stdout")?;
     for e in entries {
-        let year = e.year.map(|y| y.to_string()).unwrap_or_else(|| "-".into());
+        let year = dash_or(e.year);
         let fetched = e
             .fetched_at
             .map(|t| t.format(FETCHED_AT_FMT).to_string())
@@ -181,9 +183,19 @@ async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Resul
             anyhow::bail!("--from-year ({from}) is after --to-year ({to})");
         }
     }
+    // Reject an out-of-range limit rather than silently clamping it (the
+    // user would otherwise get fewer results than requested with no signal).
+    if !(1..=MAX_PER_PAGE).contains(&ext.limit) {
+        anyhow::bail!(
+            "--limit must be between 1 and {MAX_PER_PAGE} (got {})",
+            ext.limit
+        );
+    }
     let base = resolve_openalex_base()?;
-    let contact_email =
-        std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
+    // Leave `mailto` unset when no contact email is configured: send a real
+    // address (polite pool) or none, never a non-routable placeholder. The
+    // empty string is skipped by `build_search_url` / `resolve_entity_id`.
+    let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
 
     let q = PaperSearchQuery {
         query: query.to_string(),
@@ -232,10 +244,7 @@ async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Resul
     writeln!(out, "cited_by\tyear\toa\tdoi\ttitle")
         .context("failed to write search header to stdout")?;
     for hit in &results.results {
-        let year = hit
-            .year
-            .map(|y| y.to_string())
-            .unwrap_or_else(|| "-".into());
+        let year = dash_or(hit.year);
         let oa = hit.oa_status.as_deref().unwrap_or("-");
         let doi = hit.doi.as_deref().unwrap_or("-");
         writeln!(
@@ -276,11 +285,16 @@ fn write_json(out: &mut impl Write, value: &serde_json::Value) -> Result<()> {
     writeln!(out, "{s}").context("failed to write search JSON to stdout")
 }
 
+/// Render an optional value for a human-table cell: its `Display`, or `-`.
+fn dash_or<T: std::fmt::Display>(v: Option<T>) -> String {
+    v.map(|x| x.to_string()).unwrap_or_else(|| "-".into())
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
-    use doiget_core::discovery::PaperHit;
+    use doiget_core::discovery::{DiscoverySource, PaperHit};
 
     fn hit() -> PaperHit {
         PaperHit {
@@ -294,7 +308,7 @@ mod tests {
             abstract_: Some("abs".to_string()),
             cited_by_count: 3,
             oa_status: Some("gold".to_string()),
-            source: "openalex",
+            source: DiscoverySource::OpenAlex,
         }
     }
 

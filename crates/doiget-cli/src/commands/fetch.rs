@@ -812,6 +812,9 @@ pub(crate) fn cli_exit_code(code: ErrorCode) -> i32 {
         ErrorCode::CapabilityDenied => 3,
         ErrorCode::StoreError | ErrorCode::LogError => 4,
         ErrorCode::FetchTimeout => 124,
+        // A name filter that matched several entities is user-fixable by
+        // narrowing the query → `docs/ERRORS.md` §4 exit 2 ("misuse").
+        ErrorCode::Ambiguous => 2,
         _ => 1,
     }
 }
