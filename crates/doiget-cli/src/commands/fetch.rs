@@ -47,7 +47,9 @@ use camino::Utf8PathBuf;
 
 #[cfg(feature = "citation")]
 use doiget_core::http::tier_2_allowlist;
-use doiget_core::http::{discovery_allowlist, oa_publisher_allowlist, tier_1_allowlist, HttpClient};
+use doiget_core::http::{
+    discovery_allowlist, oa_publisher_allowlist, tier_1_allowlist, HttpClient,
+};
 use doiget_core::orchestrator::{fetch_paper as core_fetch_paper, FetchPaperOutcome, PdfLegStatus};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;

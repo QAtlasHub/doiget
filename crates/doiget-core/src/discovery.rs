@@ -1,7 +1,7 @@
 //! External literature **discovery search** over OpenAlex `/works?search=`.
 //!
 //! This is the front half of the #281 research loop (`search → triage →
-//! expand → fetch → read → map`). Unlike [`crate::store::FsStore::search`]
+//! expand → fetch → read → map`). Unlike [`FsStore::search`](crate::store::FsStore)
 //! (which re-finds papers already in the local store) and unlike the
 //! citation `graph` walker, this module turns a free-text *topic* into a
 //! ranked list of candidate papers — each carrying enough metadata
@@ -17,7 +17,7 @@
 //! Crossref / Unpaywall calls Tier 1 already makes on every fetch:
 //! read-only OA metadata, never paywalled, never a PDF.
 //!
-//! This is deliberately **distinct** from [`crate::sources::openalex`]
+//! This is deliberately **distinct** from `crate::sources::openalex`
 //! (the `#[cfg(feature = "metadata")]` enrichment / `referenced_works[]`
 //! source used by `graph`, which stays Tier 2 behind
 //! `DOIGET_ENABLE_OPENALEX`). The `Source` trait is `ref → FetchResult`;
@@ -54,7 +54,7 @@ use crate::source::{FetchContext, FetchError};
 
 /// Source key used for the per-source HTTP client + redirect allowlist.
 ///
-/// Shares the `"openalex"` key with [`crate::sources::openalex`] so that
+/// Shares the `"openalex"` key with `crate::sources::openalex` so that
 /// `crate::http::discovery_allowlist` (always compiled) and the
 /// `#[cfg(feature = "citation")]` `tier_2_allowlist` register the same
 /// `api.openalex.org` host under one key (an idempotent overwrite — see
@@ -286,7 +286,10 @@ pub async fn paper_search(
 /// append the `Metadata`/`Fetch` provenance row. Returns the parsed value
 /// plus the byte length (the caller needs neither beyond the value, but
 /// the length keeps the provenance accounting in one place).
-async fn openalex_get(url: &Url, ctx: &FetchContext) -> Result<(serde_json::Value, usize), FetchError> {
+async fn openalex_get(
+    url: &Url,
+    ctx: &FetchContext,
+) -> Result<(serde_json::Value, usize), FetchError> {
     // Step 1: rate limiter (politeness — same channel every source uses).
     let _permit = ctx.rate_limiter.acquire(SOURCE_KEY).await;
 
@@ -328,9 +331,9 @@ async fn resolve_optional(
     ctx: &FetchContext,
 ) -> Result<Option<String>, FetchError> {
     match name {
-        Some(n) if !n.trim().is_empty() => {
-            Ok(Some(resolve_entity_id(base, contact_email, entity_path, n, ctx).await?))
-        }
+        Some(n) if !n.trim().is_empty() => Ok(Some(
+            resolve_entity_id(base, contact_email, entity_path, n, ctx).await?,
+        )),
         _ => Ok(None),
     }
 }
@@ -539,7 +542,9 @@ fn build_search_url(
         filters.push(format!("primary_location.source.id:{source_id}"));
     }
     if let Some(publisher_id) = &ids.publisher {
-        filters.push(format!("primary_location.source.publisher_lineage:{publisher_id}"));
+        filters.push(format!(
+            "primary_location.source.publisher_lineage:{publisher_id}"
+        ));
     }
 
     {
@@ -899,7 +904,8 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/works"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_string(r#"{"error":"Invalid query parameters"}"#),
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"error":"Invalid query parameters"}"#),
             )
             .mount(&server)
             .await;

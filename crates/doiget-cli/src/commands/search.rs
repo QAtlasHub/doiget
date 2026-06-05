@@ -159,8 +159,15 @@ fn run_local(query: &str, mode: OutputMode) -> Result<()> {
             .fetched_at
             .map(|t| t.format(FETCHED_AT_FMT).to_string())
             .unwrap_or_else(|| "-".into());
-        writeln!(out, "{}\t{}\t{}\t{}", e.safekey.as_str(), year, e.title, fetched)
-            .context("failed to write search row to stdout")?;
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}",
+            e.safekey.as_str(),
+            year,
+            e.title,
+            fetched
+        )
+        .context("failed to write search row to stdout")?;
     }
     Ok(())
 }
@@ -227,7 +234,10 @@ async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Resul
     writeln!(out, "cited_by\tyear\toa\tdoi\ttitle")
         .context("failed to write search header to stdout")?;
     for hit in &results.results {
-        let year = hit.year.map(|y| y.to_string()).unwrap_or_else(|| "-".into());
+        let year = hit
+            .year
+            .map(|y| y.to_string())
+            .unwrap_or_else(|| "-".into());
         let oa = hit.oa_status.as_deref().unwrap_or("-");
         let doi = hit.doi.as_deref().unwrap_or("-");
         writeln!(
