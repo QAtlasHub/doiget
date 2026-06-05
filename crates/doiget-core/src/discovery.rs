@@ -335,12 +335,17 @@ async fn resolve_optional(
     }
 }
 
-/// Resolve a name to the top-hit OpenAlex entity ID for `entity_path`
+/// Resolve a name to a single OpenAlex entity ID for `entity_path`
 /// (`authors` / `sources` / `publishers`) via `?search=`.
 ///
-/// Returns the bare ID (`A…` / `S…` / `P…`). A name that matches nothing
-/// is a typed [`FetchError::NotFound`] — the filter is never silently
-/// dropped.
+/// OpenAlex `?search=` is partial / fuzzy and relevance-ranked, so a
+/// vague name still matches. To avoid silently filtering by the wrong
+/// entity, this fetches the top few candidates and applies
+/// [`select_entity`]: an unambiguous name (single hit, an exact-name
+/// match, or a clearly-dominant top hit) resolves; an ambiguous one is a
+/// typed [`FetchError::Ambiguous`] that lists the candidates so the
+/// caller can narrow the name. A name that matches nothing is
+/// [`FetchError::NotFound`]. The filter is never silently dropped.
 async fn resolve_entity_id(
     base: &Url,
     contact_email: &str,
@@ -356,27 +361,144 @@ async fn resolve_entity_id(
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("search", name);
-        qp.append_pair("per-page", "1");
-        qp.append_pair("select", "id,display_name");
+        // Top few candidates so an ambiguous name can be reported with
+        // alternatives instead of silently resolving to the first hit.
+        // No `select=` so OpenAlex returns `relevance_score` (only present
+        // on search responses) alongside `display_name` / `works_count`.
+        qp.append_pair("per-page", "5");
         if !contact_email.is_empty() {
             qp.append_pair("mailto", contact_email);
         }
     }
 
     let (value, _len) = openalex_get(&url, ctx).await?;
-    let id_url = value
+    let mut candidates: Vec<Candidate> = value
         .get("results")
         .and_then(serde_json::Value::as_array)
-        .and_then(|arr| arr.first())
-        .and_then(|first| first.get("id"))
-        .and_then(serde_json::Value::as_str);
+        .map(|arr| arr.iter().filter_map(Candidate::from_value).collect())
+        .unwrap_or_default();
+    // OpenAlex returns search hits relevance-sorted, but make the
+    // dominance check order-independent.
+    candidates.sort_by(|a, b| {
+        b.relevance
+            .partial_cmp(&a.relevance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    match id_url {
-        Some(u) => Ok(strip_openalex_prefix(u)),
-        None => Err(FetchError::NotFound {
-            hint: format!("no OpenAlex {entity_path} matched '{name}'"),
-        }),
+    select_entity(entity_path, name, &candidates)
+}
+
+/// One OpenAlex entity-search candidate (author / source / publisher).
+struct Candidate {
+    /// Bare OpenAlex ID (`A…` / `S…` / `P…`).
+    id: String,
+    /// Entity display name (used for the exact-match check + listings).
+    display_name: String,
+    /// Number of works attributed to the entity (shown in the ambiguity
+    /// listing so the caller can spot the prolific / canonical match).
+    works_count: u64,
+    /// OpenAlex `relevance_score` for the search query (0.0 if absent).
+    relevance: f64,
+}
+
+impl Candidate {
+    fn from_value(v: &serde_json::Value) -> Option<Self> {
+        let id = v
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(strip_openalex_prefix)?;
+        Some(Self {
+            id,
+            display_name: v
+                .get("display_name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            works_count: v
+                .get("works_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            relevance: v
+                .get("relevance_score")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0),
+        })
     }
+}
+
+/// Relevance-dominance ratio: with no exact-name match, the top hit must
+/// out-score the runner-up by at least this factor to be auto-selected;
+/// otherwise the name is treated as ambiguous.
+const DOMINANCE_RATIO: f64 = 2.0;
+
+/// Pick a single entity from relevance-sorted search `candidates`, or
+/// report ambiguity.
+///
+/// Resolution order: empty → [`FetchError::NotFound`]; single candidate →
+/// it; exactly one case-insensitive exact display-name match → it; else
+/// the top hit when it out-scores the runner-up by [`DOMINANCE_RATIO`];
+/// otherwise [`FetchError::Ambiguous`] listing the candidates.
+fn select_entity(
+    entity_path: &str,
+    name: &str,
+    candidates: &[Candidate],
+) -> Result<String, FetchError> {
+    let label = entity_label(entity_path);
+    if candidates.is_empty() {
+        return Err(FetchError::NotFound {
+            hint: format!("no OpenAlex {label} matched '{name}'"),
+        });
+    }
+    if candidates.len() == 1 {
+        return Ok(candidates[0].id.clone());
+    }
+
+    let exact: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| c.display_name.trim().eq_ignore_ascii_case(name.trim()))
+        .collect();
+    if exact.len() == 1 {
+        return Ok(exact[0].id.clone());
+    }
+
+    if exact.is_empty() {
+        let top = &candidates[0];
+        let second = &candidates[1];
+        if top.relevance > 0.0 && top.relevance >= DOMINANCE_RATIO * second.relevance {
+            return Ok(top.id.clone());
+        }
+    }
+
+    Err(FetchError::Ambiguous {
+        hint: format_ambiguous(label, name, candidates),
+    })
+}
+
+/// Singular human label for an OpenAlex entity path.
+fn entity_label(entity_path: &str) -> &str {
+    match entity_path {
+        "authors" => "author",
+        "sources" => "venue",
+        "publishers" => "publisher",
+        other => other,
+    }
+}
+
+/// Render the ambiguity error: the query plus the candidate listing
+/// (display name, id, works count) so the caller can narrow the name.
+fn format_ambiguous(label: &str, name: &str, candidates: &[Candidate]) -> String {
+    let mut s = format!(
+        "ambiguous {label} '{name}' — {} candidates; narrow the name \
+         (add a first name / fuller title) and retry:",
+        candidates.len()
+    );
+    for c in candidates.iter().take(5) {
+        s.push_str(&format!(
+            "\n  {} ({}, {} works)",
+            c.display_name, c.id, c.works_count
+        ));
+    }
+    s
 }
 
 /// Build the `/works?search=&filter=&sort=&select=&per-page=&mailto=` URL.
@@ -871,6 +993,107 @@ mod tests {
             .await
             .expect_err("an unresolvable venue name must error, not silently drop the filter");
         assert!(matches!(err, FetchError::NotFound { .. }), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn exact_name_match_resolves_amid_namesakes() {
+        let server = MockServer::start().await;
+        // Three sources match the search; only one is an exact name match.
+        Mock::given(method("GET"))
+            .and(path("/sources"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{ "results": [
+                    { "id": "https://openalex.org/S1", "display_name": "Physical Review B", "works_count": 50000, "relevance_score": 80.0 },
+                    { "id": "https://openalex.org/S2", "display_name": "Physical Review B: Condensed Matter", "works_count": 1000, "relevance_score": 78.0 },
+                    { "id": "https://openalex.org/S3", "display_name": "Reviews of Physics", "works_count": 200, "relevance_score": 70.0 }
+                ] }"#,
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .and(query_param("filter", "primary_location.source.id:S1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{ "meta": { "count": 1 }, "results": [ { "id": "https://openalex.org/W1", "title": "x" } ] }"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = build_test_context(&server.uri());
+        let base = Url::parse(&server.uri()).expect("wiremock URI parses");
+        let mut q = PaperSearchQuery::new("spin glass");
+        q.venue = Some("Physical Review B".to_string());
+
+        let out = paper_search(&base, "", &q, &ctx)
+            .await
+            .expect("exact venue name must resolve to S1 amid namesakes");
+        assert_eq!(out.results[0].openalex_id, "W1");
+    }
+
+    #[tokio::test]
+    async fn dominant_top_hit_resolves_for_vague_name() {
+        let server = MockServer::start().await;
+        // No exact match for "parisi", but the top hit dominates (>=2x).
+        Mock::given(method("GET"))
+            .and(path("/authors"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{ "results": [
+                    { "id": "https://openalex.org/A1", "display_name": "Giorgio Parisi", "works_count": 400, "relevance_score": 100.0 },
+                    { "id": "https://openalex.org/A2", "display_name": "M. Parisi", "works_count": 10, "relevance_score": 20.0 }
+                ] }"#,
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .and(query_param("filter", "authorships.author.id:A1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{ "meta": { "count": 1 }, "results": [ { "id": "https://openalex.org/W9", "title": "y" } ] }"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = build_test_context(&server.uri());
+        let base = Url::parse(&server.uri()).expect("wiremock URI parses");
+        let mut q = PaperSearchQuery::new("replica symmetry breaking");
+        q.author = Some("parisi".to_string());
+
+        let out = paper_search(&base, "", &q, &ctx)
+            .await
+            .expect("a dominant top hit must resolve a vague name");
+        assert_eq!(out.results[0].openalex_id, "W9");
+    }
+
+    #[tokio::test]
+    async fn ambiguous_name_errors_with_candidate_listing() {
+        let server = MockServer::start().await;
+        // Two close, non-exact matches → ambiguous; no /works call.
+        Mock::given(method("GET"))
+            .and(path("/authors"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{ "results": [
+                    { "id": "https://openalex.org/A1", "display_name": "John Smith", "works_count": 300, "relevance_score": 50.0 },
+                    { "id": "https://openalex.org/A2", "display_name": "Jane Smith", "works_count": 280, "relevance_score": 45.0 }
+                ] }"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = build_test_context(&server.uri());
+        let base = Url::parse(&server.uri()).expect("wiremock URI parses");
+        let mut q = PaperSearchQuery::new("electrons");
+        q.author = Some("Smith".to_string());
+
+        let err = paper_search(&base, "", &q, &ctx)
+            .await
+            .expect_err("a close, non-exact multi-match must be reported as ambiguous");
+        match err {
+            FetchError::Ambiguous { hint } => {
+                assert!(hint.contains("John Smith"), "hint lists candidates: {hint}");
+                assert!(hint.contains("Jane Smith"), "hint lists candidates: {hint}");
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
     }
 
     #[test]
