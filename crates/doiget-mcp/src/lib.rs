@@ -2283,8 +2283,8 @@ fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value 
     // Use the canonical `From<&FetchError> for ErrorCode` (borrow form, so
     // no clone of the non-`Clone` transport error). This keeps the MCP
     // surface in lock-step with the core mapping — notably `NotFound` and
-    // `Ambiguous`, which a hand-rolled wildcard here would mis-map to
-    // `INTERNAL_ERROR`.
+    // `Ambiguous`, which a hand-rolled wildcard here would incorrectly map
+    // to `INTERNAL_ERROR`.
     let code: ErrorCode = ErrorCode::from(err);
     let denial: Option<DenialContext> = err.into();
     let message = err.to_string();
