@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `doiget-core` is the only crate with strict semver guarantees during the 0.x line; CLI
 flag changes and `doiget-mcp` tool spec changes will be called out explicitly here.
 
+## [Unreleased]
+
+Discovery — the front half of the agent research loop (#281). `doiget search` becomes
+a literature **discovery** tool, not just a local-store re-finder. See
+[ADR-0031](docs/DECISIONS/0031-discovery-search-tier1.md).
+
+### Added
+- **[core]** `doiget_core::discovery` module — `paper_search(base, contact_email, query, ctx)` runs an external OpenAlex `/works?search=` query and returns ranked `PaperHit` candidates (DOI / OpenAlex id / arXiv id / title / authors / year / venue / **abstract** (reconstructed from `abstract_inverted_index`) / `cited_by_count` / `oa_status`). New public types `PaperSearchQuery`, `PaperHit`, `PaperSearchResults`, `SearchSort`. **Metadata-only** — never fetches a PDF (ADR-0031 D3).
+- **[cli]** `doiget search <topic>` now performs external discovery by default, with `--limit`, `--from-year`, `--to-year`, `--oa-only`, `--min-citations`, and `--sort relevance|cited|recent`. Tier-1 OA metadata, **always-on** — no `DOIGET_ENABLE_OPENALEX` gate and shipped in the default `oa-only` binary (ADR-0031 D1/D2).
+- **[core]** `http::discovery_allowlist()` — always-compiled `api.openalex.org` allowlist entry so discovery search reaches OpenAlex in `oa-only` builds (the Tier-2 `tier_2_allowlist()` wiring stays `#[cfg(feature = "citation")]`).
+
+### Changed
+- **[cli] [BREAKING]** `doiget search <query>` default scope changed from the **local-store substring scan** to **external OpenAlex discovery**. The local scan is now `doiget search --local <query>` (behaviour otherwise unchanged). Scripts relying on the old default must add `--local`.
+- **[cli] [BREAKING]** `doiget search --mode json` now emits a `{ "scope": "external" | "local", "query": "...", "count": N, "results": [...] }` envelope (the `results[]` element schema is scope-dependent; the local element is the unchanged `EntryInfo` shape). Previously it emitted a bare `EntryInfo` array.
+
 ## [0.5.0] - 2026-06-02
 
 Promotion of the `next` integration line to a stable release. A **minor**

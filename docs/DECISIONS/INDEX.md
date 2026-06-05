@@ -47,6 +47,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0028 | User-extensible capability gate (ToS+verified-curation posture; impersonation out-of-scope) | Accepted (design; slice TBD) | TBD | #220 / #223 |
 | 0029 | Fetch chain: per-Ref multi-attempt resolution with attempt-level provenance | Accepted (design; slice TBD) | TBD | #222 / dogfood 2026-05-20 |
 | 0030 | Bibliography input adapters (.bib / CSL-JSON) in `doiget-core`; new MCP tool `doiget_batch_from_bibliography` | Accepted (design; slice TBD) | TBD | #222 / Zotero distribution review 2026-05-20 |
+| 0031 | Discovery search is Tier-1 OA metadata (always-on); `doiget search` defaults to external discovery | Accepted (design; PR1 slice) | PR1 (`feat/paper-search`) | #281 / feasibility read 2026-06-04 |
 
 ## Conventions
 

@@ -78,6 +78,14 @@ There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
 
 - Metadata enrichment only. doiget does not fetch PDFs from these unless the response
   includes an OA URL whose host is on the per-source allowlist.
+- **OpenAlex has two distinct call paths with two tiers** (ADR-0031 D4):
+  the matrix row above (Tier 2) covers the *enrichment* / citation-`graph`
+  source (`/works/doi:…`, `referenced_works[]`), gated by `--features
+  citation` + `DOIGET_ENABLE_OPENALEX`. The separate **discovery search**
+  path (`doiget search`, `/works?search=`, `doiget_core::discovery`) is
+  **Tier 1 OA metadata, always-on**: it ships in the default `oa-only`
+  binary and needs **no** env-var gate. It is read-only, metadata-only,
+  never paywalled, and never fetches a PDF.
 
 ### TDM sources
 

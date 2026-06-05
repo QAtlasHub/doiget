@@ -262,10 +262,39 @@ enum Command {
         #[arg(default_value_t = 10)]
         limit: usize,
     },
-    /// Search the local store by title / authors / venue.
+    /// Search for papers. Default: external discovery over OpenAlex
+    /// (`/works?search=`, ADR-0031) — turn a topic into ranked candidate
+    /// papers with abstracts. Use `--local` to scan the local store
+    /// (title / authors / venue) instead.
     Search {
-        /// Query string.
+        /// Query string (a topic for discovery, or a substring for `--local`).
         query: String,
+        /// Scan the local store instead of external discovery.
+        #[arg(long, conflicts_with = "external")]
+        local: bool,
+        /// Explicit form of the default external discovery (mutually
+        /// exclusive with `--local`).
+        #[arg(long)]
+        external: bool,
+        /// External: maximum results (clamped to OpenAlex's 1..=200
+        /// per-page cap).
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+        /// External: only works published in or after this year.
+        #[arg(long)]
+        from_year: Option<i32>,
+        /// External: only works published in or before this year.
+        #[arg(long)]
+        to_year: Option<i32>,
+        /// External: restrict to open-access works.
+        #[arg(long)]
+        oa_only: bool,
+        /// External: only works cited strictly more than this many times.
+        #[arg(long)]
+        min_citations: Option<u64>,
+        /// External: result ordering.
+        #[arg(long, value_enum, default_value = "relevance")]
+        sort: doiget_cli::commands::search::SortArg,
     },
     /// Export an entry as BibTeX.
     Bib {
@@ -542,7 +571,27 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Config { action }) => doiget_cli::commands::config::run(action, mode),
         Some(Command::Info { ref_ }) => doiget_cli::commands::info::run(ref_, mode),
         Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit, mode),
-        Some(Command::Search { query }) => doiget_cli::commands::search::run(query, mode),
+        Some(Command::Search {
+            query,
+            local,
+            external: _,
+            limit,
+            from_year,
+            to_year,
+            oa_only,
+            min_citations,
+            sort,
+        }) => {
+            let ext = doiget_cli::commands::search::ExternalArgs {
+                limit,
+                from_year,
+                to_year,
+                oa_only,
+                min_citations,
+                sort,
+            };
+            doiget_cli::commands::search::run(query, local, ext, mode).await
+        }
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
         Some(Command::Verify {
             path,
