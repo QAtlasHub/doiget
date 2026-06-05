@@ -16,6 +16,7 @@ speaks **stdio only** ([ADR-0001](DECISIONS/), [`SCOPE.md`](SCOPE.md) §non-goal
 | `doiget_batch_fetch` | Up to 100 refs in one call. Accepts `dry_run`. |
 | `doiget_info` | Retrieve a store entry's metadata. |
 | `doiget_search_local` | Search store metadata (title / authors / venue). |
+| `doiget_paper_search` | External literature discovery over OpenAlex (`/works?search=`); abstract-bearing candidates for triage. Tier-1 OA metadata, always-on; **never fetches a PDF** (ADR-0031). |
 | `doiget_list_recent` | Last N fetched entries. |
 | `doiget_paper_pdf_path` | Return the local path of a cached PDF. **Does not read, parse, or transmit content.** |
 | `doiget_capability_profile` | Report which sources this instance is allowed to use. |
@@ -258,8 +259,8 @@ an optional `dry_run: boolean` input field, defaulting to `false`. When
 ```
 
 Tools where `dry_run` does not apply (`doiget_info`, `doiget_search_local`,
-`doiget_list_recent`, `doiget_paper_pdf_path`, `doiget_capability_profile`,
-`doiget_health`, `doiget_resolve_paper`) reject the field as
+`doiget_paper_search`, `doiget_list_recent`, `doiget_paper_pdf_path`,
+`doiget_capability_profile`, `doiget_health`, `doiget_resolve_paper`) reject the field as
 `INVALID_REF`-class — i.e. surface as
 `{ok:false, error:{code:"INVALID_REF", ...}}`.
 

@@ -20,8 +20,8 @@
 //!   workflow.
 //!
 //! The remaining tools named in `docs/MCP_TOOLS.md` (`doiget_fetch_paper`,
-//! `doiget_batch_fetch`, `doiget_info`,
-//! `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`)
+//! `doiget_batch_fetch`, `doiget_info`, `doiget_search_local`,
+//! `doiget_paper_search`, `doiget_list_recent`, `doiget_paper_pdf_path`)
 //! land in follow-up PRs. The exact count is intentionally left unstated
 //! in this docstring so it does not rot as tools land.
 //!
@@ -1185,6 +1185,148 @@ impl Server {
         }
     }
 
+    /// `doiget_paper_search` — external literature discovery over OpenAlex
+    /// (`/works?search=`). The MCP surface for the #281 discovery loop:
+    /// turn a topic into ranked, abstract-bearing candidate papers for
+    /// triage before any PDF fetch. Tier-1 OA metadata, always-on
+    /// (ADR-0031 D1); metadata-only, never fetches a PDF.
+    ///
+    /// A supplied `author` / `venue` / `publisher` *name* is resolved to an
+    /// OpenAlex id first; an ambiguous name returns `AMBIGUOUS` (with
+    /// candidates in the message), a name matching nothing returns
+    /// `NOT_FOUND`.
+    #[tool(
+        description = "WHEN TO USE: Discover papers on a topic via external OpenAlex search, abstract-first, before fetching any PDF.\n\
+                       INPUTS: query (string); optional limit (1-200, default 25), from_year, to_year, oa_only (bool), min_citations, author, venue, publisher (names — resolved to OpenAlex ids), sort (relevance|cited|recent, default relevance).\n\
+                       OUTPUTS: { ok: true, scope: \"external\", query, total_results, count, results: [{ doi, openalex_id, arxiv, title, authors, year, venue, abstract, cited_by_count, oa_status, source }] } OR { ok:false, error }.\n\
+                       COSTS: 1 OpenAlex request, plus 1 per supplied author/venue/publisher name to resolve.\n\
+                       SIDE EFFECTS: Emits Metadata provenance rows. NEVER writes the store. NEVER fetches a PDF.\n\
+                       LIMITS: Tier-1, always-on (no DOIGET_ENABLE_OPENALEX gate). An ambiguous author/venue/publisher name → AMBIGUOUS (candidates listed); no match → NOT_FOUND."
+    )]
+    async fn doiget_paper_search(
+        &self,
+        Parameters(input): Parameters<PaperSearchInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Map the `sort` string to the core enum (default: relevance).
+        let sort = match input.sort.as_deref() {
+            None | Some("relevance") => doiget_core::discovery::SearchSort::Relevance,
+            Some("cited") => doiget_core::discovery::SearchSort::Cited,
+            Some("recent") => doiget_core::discovery::SearchSort::Recent,
+            Some(other) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    None,
+                    ErrorCode::InvalidRef,
+                    &format!("unknown sort '{other}' (expected relevance|cited|recent)"),
+                )));
+            }
+        };
+
+        let q = doiget_core::discovery::PaperSearchQuery {
+            query: input.query.clone(),
+            limit: input
+                .limit
+                .map(|l| l as usize)
+                .unwrap_or(doiget_core::discovery::DEFAULT_LIMIT),
+            from_year: input.from_year,
+            to_year: input.to_year,
+            oa_only: input.oa_only.unwrap_or(false),
+            min_citations: input.min_citations,
+            author: input.author.clone(),
+            venue: input.venue.clone(),
+            publisher: input.publisher.clone(),
+            sort,
+        };
+        // Boundary validation shared with the CLI (ADR-0031 D5).
+        if let Err(msg) = q.validate() {
+            return Ok(CallToolResult::structured(read_path_error_envelope(
+                None,
+                ErrorCode::InvalidRef,
+                &msg,
+            )));
+        }
+
+        let base = match openalex_base() {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    None,
+                    ErrorCode::InternalError,
+                    &e,
+                )));
+            }
+        };
+        // Omit `mailto` when no contact email is configured (never a
+        // placeholder); the empty string is skipped downstream.
+        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
+
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    None,
+                    ErrorCode::InternalError,
+                    &format!("paper-search context init failed: {e}"),
+                )));
+            }
+        };
+
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Metadata,
+            ref_: None,
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        }) {
+            return Ok(CallToolResult::structured(read_path_error_envelope(
+                None,
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        let outcome = doiget_core::discovery::paper_search(&base, &contact_email, &q, &ctx).await;
+        let session_ok = outcome.is_ok();
+        let _ = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if session_ok {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Metadata,
+            ref_: None,
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        });
+
+        match outcome {
+            Ok(results) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "scope": "external",
+                "query": input.query,
+                "total_results": results.total_results,
+                "count": results.results.len(),
+                "results": results.results,
+            }))),
+            // Canonical FetchError -> ErrorCode (AMBIGUOUS / NOT_FOUND /
+            // NETWORK_ERROR / …) so an agent can branch on the code.
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                None,
+                ErrorCode::from(&e),
+                &e.to_string(),
+            ))),
+        }
+    }
+
     /// `doiget_list_recent` — most-recent stored entries by
     /// `[doiget].fetched_at`. Read-only.
     ///
@@ -1724,6 +1866,43 @@ pub struct SearchLocalInput {
     pub limit: Option<u32>,
 }
 
+/// JSON-schema-derived input for the `doiget_paper_search` MCP tool
+/// (external OpenAlex discovery; ADR-0031).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PaperSearchInput {
+    /// Free-text topic query (e.g. "tropical tensor networks for spin glasses").
+    pub query: String,
+    /// Maximum results (1..=200; default 25). Out-of-range is rejected.
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Inclusive lower publication-year bound.
+    #[serde(default)]
+    pub from_year: Option<i32>,
+    /// Inclusive upper publication-year bound.
+    #[serde(default)]
+    pub to_year: Option<i32>,
+    /// Restrict to open-access works.
+    #[serde(default)]
+    pub oa_only: Option<bool>,
+    /// Only works cited strictly more than this many times.
+    #[serde(default)]
+    pub min_citations: Option<u64>,
+    /// Author name (resolved to an OpenAlex author id).
+    #[serde(default)]
+    pub author: Option<String>,
+    /// Venue / journal name (resolved to an OpenAlex source id).
+    #[serde(default)]
+    pub venue: Option<String>,
+    /// Publisher name (resolved to an OpenAlex publisher id).
+    #[serde(default)]
+    pub publisher: Option<String>,
+    /// Result ordering: `relevance` (default) | `cited` | `recent`.
+    #[serde(default)]
+    pub sort: Option<String>,
+}
+
 /// JSON-schema-derived input for the `doiget_list_recent` MCP tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -2086,19 +2265,12 @@ fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value 
     // match on `&FetchError`. This duplicates a few lines of the
     // `From<FetchError> for ErrorCode` impl but avoids cloning the
     // underlying transport error.
-    let code: ErrorCode = match err {
-        FetchError::NotEligible { .. } => ErrorCode::CapabilityDenied,
-        FetchError::NoOaAvailable => ErrorCode::NoOaAvailable,
-        FetchError::Http(_) => ErrorCode::NetworkError,
-        FetchError::Log(_) => ErrorCode::LogError,
-        FetchError::InvalidRef(_) => ErrorCode::InvalidRef,
-        FetchError::SourceSchema { .. } => ErrorCode::InternalError,
-        // `FetchError` is `#[non_exhaustive]`; this wildcard pins
-        // future variants to `INTERNAL_ERROR` until they get an
-        // explicit mapping. Mirrors the conservative default in
-        // `doiget-core`'s `From<FetchError> for ErrorCode` impl.
-        _ => ErrorCode::InternalError,
-    };
+    // Use the canonical `From<&FetchError> for ErrorCode` (borrow form, so
+    // no clone of the non-`Clone` transport error). This keeps the MCP
+    // surface in lock-step with the core mapping — notably `NotFound` and
+    // `Ambiguous`, which a hand-rolled wildcard here would mis-map to
+    // `INTERNAL_ERROR`.
+    let code: ErrorCode = ErrorCode::from(err);
     let denial: Option<DenialContext> = err.into();
     let message = err.to_string();
 
@@ -2509,6 +2681,14 @@ fn batch_fetch_error_envelope(code: ErrorCode, message: &str) -> Value {
             "message": message,
         },
     })
+}
+
+/// Resolve the OpenAlex base URL for `doiget_paper_search`: the
+/// `DOIGET_OPENALEX_BASE` override (tests) or the production default.
+fn openalex_base() -> Result<url::Url, String> {
+    let raw = std::env::var("DOIGET_OPENALEX_BASE")
+        .unwrap_or_else(|_| "https://api.openalex.org".to_string());
+    url::Url::parse(&raw).map_err(|e| format!("DOIGET_OPENALEX_BASE is not a URL: {e}"))
 }
 
 /// Build a [`FetchContext`] for the non-dry-run `doiget_metadata_only`

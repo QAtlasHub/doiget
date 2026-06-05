@@ -24,9 +24,7 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 
-use doiget_core::discovery::{
-    paper_search, PaperSearchQuery, PaperSearchResults, SearchSort, MAX_PER_PAGE,
-};
+use doiget_core::discovery::{paper_search, PaperSearchQuery, PaperSearchResults, SearchSort};
 use doiget_core::store::{EntryInfo, FsStore, Store};
 use doiget_core::ErrorCode;
 
@@ -166,28 +164,6 @@ fn run_local(query: &str, mode: OutputMode) -> Result<()> {
 
 /// External OpenAlex discovery search (the default scope).
 async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Result<()> {
-    // Reject an inverted year range up front: OpenAlex would accept it and
-    // return zero results, which reads as "nothing found" rather than the
-    // user error it is.
-    if let (Some(from), Some(to)) = (ext.from_year, ext.to_year) {
-        if from > to {
-            anyhow::bail!("--from-year ({from}) is after --to-year ({to})");
-        }
-    }
-    // Reject an out-of-range limit rather than silently clamping it (the
-    // user would otherwise get fewer results than requested with no signal).
-    if !(1..=MAX_PER_PAGE).contains(&ext.limit) {
-        anyhow::bail!(
-            "--limit must be between 1 and {MAX_PER_PAGE} (got {})",
-            ext.limit
-        );
-    }
-    let base = resolve_openalex_base()?;
-    // Leave `mailto` unset when no contact email is configured: send a real
-    // address (polite pool) or none, never a non-routable placeholder. The
-    // empty string is skipped by `build_search_url` / `resolve_entity_id`.
-    let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
-
     let q = PaperSearchQuery {
         query: query.to_string(),
         limit: ext.limit,
@@ -200,6 +176,15 @@ async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Resul
         publisher: ext.publisher,
         sort: ext.sort.into(),
     };
+    // Boundary validation (limit range, inverted year range) lives in
+    // `PaperSearchQuery::validate` so the CLI and the MCP tool cannot drift.
+    q.validate().map_err(|m| anyhow::anyhow!("{m}"))?;
+
+    let base = resolve_openalex_base()?;
+    // Leave `mailto` unset when no contact email is configured: send a real
+    // address (polite pool) or none, never a non-routable placeholder. The
+    // empty string is skipped by `build_search_url` / `resolve_entity_id`.
+    let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
 
     let harness = FetchHarness::from_env().context("building fetch harness")?;
     harness
@@ -370,16 +355,16 @@ mod tests {
     async fn external_rejects_limit_below_1() {
         let err = run("q".into(), false, ext(0, None, None), OutputMode::Quiet)
             .await
-            .expect_err("--limit 0 must be rejected");
-        assert!(err.to_string().contains("--limit"), "got: {err}");
+            .expect_err("limit 0 must be rejected");
+        assert!(err.to_string().contains("limit"), "got: {err}");
     }
 
     #[tokio::test]
     async fn external_rejects_limit_above_200() {
         let err = run("q".into(), false, ext(201, None, None), OutputMode::Quiet)
             .await
-            .expect_err("--limit 201 must be rejected");
-        assert!(err.to_string().contains("--limit"), "got: {err}");
+            .expect_err("limit 201 must be rejected");
+        assert!(err.to_string().contains("limit"), "got: {err}");
     }
 
     #[tokio::test]
