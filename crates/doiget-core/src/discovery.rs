@@ -13,10 +13,9 @@
 //! Discovery search is **Tier 1 OA metadata, always-on**: there is no
 //! `DOIGET_ENABLE_OPENALEX` gate and no Cargo-feature gate. It ships in
 //! the default `oa-only` binary. The justification (ADR-0031 D1) is that
-//! a single bounded OpenAlex `/works?search=` request is the same
-//! network-surface risk class as the Crossref / Unpaywall calls Tier 1
-//! already makes on every fetch: read-only OA metadata, never paywalled,
-//! never a PDF.
+//! a bounded OpenAlex query is the same network-surface risk class as the
+//! Crossref / Unpaywall calls Tier 1 already makes on every fetch:
+//! read-only OA metadata, never paywalled, never a PDF.
 //!
 //! This is deliberately **distinct** from [`crate::sources::openalex`]
 //! (the `#[cfg(feature = "metadata")]` enrichment / `referenced_works[]`
@@ -26,9 +25,21 @@
 //! as a free function reusing only the shared [`HttpClient`], rate
 //! limiter, and provenance log via [`FetchContext`].
 //!
+//! ## Author / venue / publisher filters (ADR-0031 D5)
+//!
+//! OpenAlex filters authors / sources (venues) / publishers by **entity
+//! ID**, not free text. So `paper_search` first resolves a supplied
+//! `--author` / `--venue` / `--publisher` *name* to its OpenAlex ID via a
+//! `?search=` lookup against `/authors`, `/sources`, `/publishers`
+//! (taking the top hit), then filters `/works` by
+//! `authorships.author.id` / `primary_location.source.id` /
+//! `primary_location.source.publisher_lineage`. A name that resolves to
+//! nothing is a typed [`FetchError::NotFound`] (never a silent
+//! drop-the-filter).
+//!
 //! ## Metadata-only contract (ADR-0031 D3)
 //!
-//! [`paper_search`] calls [`HttpClient::fetch_bytes`] (a JSON body),
+//! Every call here uses [`HttpClient::fetch_bytes`] (a JSON body),
 //! **never** `fetch_pdf`, and never follows an OA URL. The abstract is
 //! reconstructed from OpenAlex's `abstract_inverted_index`.
 //!
@@ -92,8 +103,7 @@ impl SearchSort {
 /// A discovery-search request: the free-text query plus triage filters.
 ///
 /// Construct directly (all fields are public); the CLI maps its flags
-/// onto this. PR1 ships the high-value filter set; venue / concept
-/// filters are a deliberate follow-up (ADR-0031 D5).
+/// onto this.
 #[derive(Debug, Clone)]
 pub struct PaperSearchQuery {
     /// Free-text topic query (e.g. "tropical tensor networks for spin
@@ -115,6 +125,17 @@ pub struct PaperSearchQuery {
     /// ("more than n"); the off-by-one versus "at least n" is documented
     /// on the CLI flag.
     pub min_citations: Option<u64>,
+    /// Author name to filter by. Resolved to an OpenAlex author ID via
+    /// `/authors?search=` then applied as `authorships.author.id`.
+    pub author: Option<String>,
+    /// Venue / journal name to filter by. Resolved to an OpenAlex source
+    /// ID via `/sources?search=` then applied as
+    /// `primary_location.source.id`.
+    pub venue: Option<String>,
+    /// Publisher name to filter by. Resolved to an OpenAlex publisher ID
+    /// via `/publishers?search=` then applied as
+    /// `primary_location.source.publisher_lineage`.
+    pub publisher: Option<String>,
     /// Result ordering.
     pub sort: SearchSort,
 }
@@ -130,6 +151,9 @@ impl PaperSearchQuery {
             to_year: None,
             oa_only: false,
             min_citations: None,
+            author: None,
+            venue: None,
+            publisher: None,
             sort: SearchSort::Relevance,
         }
     }
@@ -184,6 +208,18 @@ pub struct PaperSearchResults {
     pub total_results: Option<u64>,
 }
 
+/// OpenAlex entity IDs resolved from the `--author` / `--venue` /
+/// `--publisher` name filters (each `None` when the filter is unset).
+#[derive(Debug, Default)]
+struct ResolvedIds {
+    /// Author ID (`A…`) for `authorships.author.id`.
+    author: Option<String>,
+    /// Source ID (`S…`) for `primary_location.source.id`.
+    source: Option<String>,
+    /// Publisher ID (`P…`) for `primary_location.source.publisher_lineage`.
+    publisher: Option<String>,
+}
+
 /// Run a discovery search against OpenAlex and return ranked candidates.
 ///
 /// `base` is the OpenAlex API base URL (production
@@ -191,37 +227,37 @@ pub struct PaperSearchResults {
 /// the `DOIGET_OPENALEX_BASE` override the CLI honors). `contact_email`
 /// opts into the polite pool via `?mailto=` when non-empty.
 ///
-/// Reuses `ctx.http` (allowlisted, HTTPS-only in production),
-/// `ctx.rate_limiter` (politeness), and `ctx.log` (a single
-/// `Metadata`/`Fetch` provenance row). Never fetches a PDF (ADR-0031 D3).
+/// When `query.author` / `query.venue` / `query.publisher` are set, this
+/// first issues one `?search=` lookup each against `/authors` /
+/// `/sources` / `/publishers` to resolve the name to an OpenAlex ID, then
+/// filters `/works` by that ID. Every call reuses `ctx.http` (allowlisted,
+/// HTTPS-only in production), `ctx.rate_limiter`, and `ctx.log` (one
+/// `Metadata`/`Fetch` provenance row per request). Never fetches a PDF
+/// (ADR-0031 D3).
 ///
 /// # Errors
 ///
 /// Returns [`FetchError::Http`] for transport / allowlist failures,
-/// [`FetchError::SourceSchema`] when the response is not a JSON object
-/// carrying a `results` array (e.g. an OpenAlex error payload), and
-/// propagates a provenance-log append failure (fail-closed).
+/// [`FetchError::NotFound`] when an author/venue/publisher name resolves
+/// to nothing, [`FetchError::SourceSchema`] when a response is not a JSON
+/// object carrying a `results` array, and propagates a provenance-log
+/// append failure (fail-closed).
 pub async fn paper_search(
     base: &Url,
     contact_email: &str,
     query: &PaperSearchQuery,
     ctx: &FetchContext,
 ) -> Result<PaperSearchResults, FetchError> {
-    let url = build_search_url(base, contact_email, query)?;
+    // Resolve the name → ID filters first (one OpenAlex lookup each).
+    let ids = ResolvedIds {
+        author: resolve_optional(base, contact_email, "authors", &query.author, ctx).await?,
+        source: resolve_optional(base, contact_email, "sources", &query.venue, ctx).await?,
+        publisher: resolve_optional(base, contact_email, "publishers", &query.publisher, ctx)
+            .await?,
+    };
 
-    // Step 1: rate limiter (politeness — same channel every source uses).
-    let _permit = ctx.rate_limiter.acquire(SOURCE_KEY).await;
-
-    // Step 2: HTTP fetch. The body is the OpenAlex `/works` search page
-    // (JSON); `select=` keeps it small.
-    let (body, _final_url) = ctx.http.fetch_bytes(SOURCE_KEY, url).await?;
-
-    // Step 3: parse. The search endpoint wraps the hits in
-    // `{ "meta": {...}, "results": [ <work>, ... ] }`.
-    let value: serde_json::Value =
-        serde_json::from_slice(&body).map_err(|e| FetchError::SourceSchema {
-            hint: format!("openalex search returned non-JSON: {e}"),
-        })?;
+    let url = build_search_url(base, contact_email, query, &ids)?;
+    let (value, _bytes) = openalex_get(&url, ctx).await?;
 
     let results_array = value
         .get("results")
@@ -230,7 +266,7 @@ pub async fn paper_search(
             hint: format!(
                 "openalex search response missing `results` array — likely an \
                  error payload (got: {})",
-                truncate_for_hint(&body)
+                truncate_for_hint(value.to_string().as_bytes())
             ),
         })?;
 
@@ -240,9 +276,32 @@ pub async fn paper_search(
         .and_then(|m| m.get("count"))
         .and_then(serde_json::Value::as_u64);
 
-    // Step 4: provenance. Discovery is a Tier-1 metadata read; emit one
-    // `Metadata`/`Fetch` row. There is no single ref (it is a query), so
-    // `ref_` / `canonical_digest` are left null per docs/PROVENANCE_LOG.md.
+    Ok(PaperSearchResults {
+        results,
+        total_results,
+    })
+}
+
+/// Issue one OpenAlex GET: rate-limit, fetch the JSON body, parse it, and
+/// append the `Metadata`/`Fetch` provenance row. Returns the parsed value
+/// plus the byte length (the caller needs neither beyond the value, but
+/// the length keeps the provenance accounting in one place).
+async fn openalex_get(url: &Url, ctx: &FetchContext) -> Result<(serde_json::Value, usize), FetchError> {
+    // Step 1: rate limiter (politeness — same channel every source uses).
+    let _permit = ctx.rate_limiter.acquire(SOURCE_KEY).await;
+
+    // Step 2: HTTP fetch (JSON; `select=`/`per-page=` keep it small).
+    let (body, _final_url) = ctx.http.fetch_bytes(SOURCE_KEY, url.clone()).await?;
+
+    // Step 3: parse.
+    let value: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| FetchError::SourceSchema {
+            hint: format!("openalex returned non-JSON: {e}"),
+        })?;
+
+    // Step 4: provenance. Tier-1 metadata read; no single ref (it is a
+    // query), so `ref_` / `canonical_digest` are null per
+    // docs/PROVENANCE_LOG.md.
     ctx.log.append(RowInput {
         event: LogEvent::Fetch,
         result: LogResult::Ok,
@@ -256,10 +315,68 @@ pub async fn paper_search(
         canonical_digest: None,
     })?;
 
-    Ok(PaperSearchResults {
-        results,
-        total_results,
-    })
+    Ok((value, body.len()))
+}
+
+/// Resolve an optional name filter to an OpenAlex entity ID, or `None`
+/// when the name is unset / blank.
+async fn resolve_optional(
+    base: &Url,
+    contact_email: &str,
+    entity_path: &str,
+    name: &Option<String>,
+    ctx: &FetchContext,
+) -> Result<Option<String>, FetchError> {
+    match name {
+        Some(n) if !n.trim().is_empty() => {
+            Ok(Some(resolve_entity_id(base, contact_email, entity_path, n, ctx).await?))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Resolve a name to the top-hit OpenAlex entity ID for `entity_path`
+/// (`authors` / `sources` / `publishers`) via `?search=`.
+///
+/// Returns the bare ID (`A…` / `S…` / `P…`). A name that matches nothing
+/// is a typed [`FetchError::NotFound`] — the filter is never silently
+/// dropped.
+async fn resolve_entity_id(
+    base: &Url,
+    contact_email: &str,
+    entity_path: &str,
+    name: &str,
+    ctx: &FetchContext,
+) -> Result<String, FetchError> {
+    let mut url = base
+        .join(&format!("/{entity_path}"))
+        .map_err(|e| FetchError::SourceSchema {
+            hint: format!("openalex {entity_path} URL construction failed: {e}"),
+        })?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("search", name);
+        qp.append_pair("per-page", "1");
+        qp.append_pair("select", "id,display_name");
+        if !contact_email.is_empty() {
+            qp.append_pair("mailto", contact_email);
+        }
+    }
+
+    let (value, _len) = openalex_get(&url, ctx).await?;
+    let id_url = value
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|arr| arr.first())
+        .and_then(|first| first.get("id"))
+        .and_then(serde_json::Value::as_str);
+
+    match id_url {
+        Some(u) => Ok(strip_openalex_prefix(u)),
+        None => Err(FetchError::NotFound {
+            hint: format!("no OpenAlex {entity_path} matched '{name}'"),
+        }),
+    }
 }
 
 /// Build the `/works?search=&filter=&sort=&select=&per-page=&mailto=` URL.
@@ -267,6 +384,7 @@ fn build_search_url(
     base: &Url,
     contact_email: &str,
     query: &PaperSearchQuery,
+    ids: &ResolvedIds,
 ) -> Result<Url, FetchError> {
     let mut url = base.join("/works").map_err(|e| FetchError::SourceSchema {
         hint: format!("openalex search URL construction failed: {e}"),
@@ -291,6 +409,15 @@ fn build_search_url(
         // `n` times. The off-by-one versus "at least n" is documented on
         // the CLI flag.
         filters.push(format!("cited_by_count:>{min}"));
+    }
+    if let Some(author_id) = &ids.author {
+        filters.push(format!("authorships.author.id:{author_id}"));
+    }
+    if let Some(source_id) = &ids.source {
+        filters.push(format!("primary_location.source.id:{source_id}"));
+    }
+    if let Some(publisher_id) = &ids.publisher {
+        filters.push(format!("primary_location.source.publisher_lineage:{publisher_id}"));
     }
 
     {
@@ -444,8 +571,8 @@ fn extract_arxiv_from_location(loc: &serde_json::Value) -> Option<String> {
     None
 }
 
-/// Strip the `https://openalex.org/` prefix from a Work id, yielding the
-/// bare `W…` form.
+/// Strip the `https://openalex.org/` prefix from an entity id, yielding
+/// the bare `W…` / `A…` / `S…` / `P…` form.
 fn strip_openalex_prefix(id: &str) -> String {
     id.rsplit('/').next().unwrap_or(id).to_string()
 }
@@ -631,6 +758,9 @@ mod tests {
             to_year: None,
             oa_only: true,
             min_citations: Some(10),
+            author: None,
+            venue: None,
+            publisher: None,
             sort: SearchSort::Cited,
         };
 
@@ -660,6 +790,87 @@ mod tests {
             .await
             .expect_err("missing `results` must surface as SourceSchema");
         assert!(matches!(err, FetchError::SourceSchema { .. }));
+    }
+
+    #[test]
+    fn name_filters_compose_into_resolved_ids() {
+        let base = Url::parse("https://api.openalex.org").expect("base parses");
+        let q = PaperSearchQuery::new("topic");
+        let ids = ResolvedIds {
+            author: Some("A1".to_string()),
+            source: Some("S2".to_string()),
+            publisher: Some("P3".to_string()),
+        };
+        let url = build_search_url(&base, "", &q, &ids).expect("url builds");
+        let filter = url
+            .query_pairs()
+            .find(|(k, _)| k == "filter")
+            .map(|(_, v)| v.into_owned())
+            .expect("filter param present");
+        assert!(filter.contains("authorships.author.id:A1"), "got {filter}");
+        assert!(
+            filter.contains("primary_location.source.id:S2"),
+            "got {filter}"
+        );
+        assert!(
+            filter.contains("primary_location.source.publisher_lineage:P3"),
+            "got {filter}"
+        );
+    }
+
+    #[tokio::test]
+    async fn venue_name_resolves_to_source_id_then_filters_works() {
+        let server = MockServer::start().await;
+        // First leg: /sources?search=... → top hit S99.
+        Mock::given(method("GET"))
+            .and(path("/sources"))
+            .and(query_param("search", "Physical Review B"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{ "results": [ { "id": "https://openalex.org/S99", "display_name": "Physical Review B" } ] }"#,
+            ))
+            .mount(&server)
+            .await;
+        // Second leg: /works filtered by the resolved source id.
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .and(query_param("filter", "primary_location.source.id:S99"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{ "meta": { "count": 1 }, "results": [ { "id": "https://openalex.org/W1", "title": "In PRB" } ] }"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = build_test_context(&server.uri());
+        let base = Url::parse(&server.uri()).expect("wiremock URI parses");
+        let mut q = PaperSearchQuery::new("spin glass");
+        q.venue = Some("Physical Review B".to_string());
+
+        let out = paper_search(&base, "", &q, &ctx)
+            .await
+            .expect("venue-filtered search ok");
+        assert_eq!(out.total_results, Some(1));
+        assert_eq!(out.results.len(), 1);
+        assert_eq!(out.results[0].openalex_id, "W1");
+    }
+
+    #[tokio::test]
+    async fn unresolvable_venue_name_is_not_found() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/sources"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{ "results": [] }"#))
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = build_test_context(&server.uri());
+        let base = Url::parse(&server.uri()).expect("wiremock URI parses");
+        let mut q = PaperSearchQuery::new("spin glass");
+        q.venue = Some("No Such Journal".to_string());
+
+        let err = paper_search(&base, "", &q, &ctx)
+            .await
+            .expect_err("an unresolvable venue name must error, not silently drop the filter");
+        assert!(matches!(err, FetchError::NotFound { .. }), "got {err:?}");
     }
 
     #[test]

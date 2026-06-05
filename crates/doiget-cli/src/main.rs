@@ -292,6 +292,18 @@ enum Command {
         /// External: only works cited strictly more than this many times.
         #[arg(long)]
         min_citations: Option<u64>,
+        /// External: filter to an author by name (resolved to an OpenAlex
+        /// author ID via `/authors?search=`).
+        #[arg(long)]
+        author: Option<String>,
+        /// External: filter to a venue / journal by name (resolved to an
+        /// OpenAlex source ID via `/sources?search=`).
+        #[arg(long)]
+        venue: Option<String>,
+        /// External: filter to a publisher by name (resolved to an
+        /// OpenAlex publisher ID via `/publishers?search=`).
+        #[arg(long)]
+        publisher: Option<String>,
         /// External: result ordering.
         #[arg(long, value_enum, default_value = "relevance")]
         sort: doiget_cli::commands::search::SortArg,
@@ -580,6 +592,9 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             to_year,
             oa_only,
             min_citations,
+            author,
+            venue,
+            publisher,
             sort,
         }) => {
             let ext = doiget_cli::commands::search::ExternalArgs {
@@ -588,6 +603,9 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 to_year,
                 oa_only,
                 min_citations,
+                author,
+                venue,
+                publisher,
                 sort,
             };
             doiget_cli::commands::search::run(query, local, ext, mode).await

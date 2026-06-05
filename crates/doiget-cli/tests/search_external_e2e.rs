@@ -98,6 +98,9 @@ async fn external_search_runs_and_logs_openalex_fetch() {
         to_year: None,
         oa_only: false,
         min_citations: None,
+        author: None,
+        venue: None,
+        publisher: None,
         sort: SortArg::Relevance,
     };
 

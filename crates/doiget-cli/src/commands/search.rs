@@ -82,6 +82,12 @@ pub struct ExternalArgs {
     pub oa_only: bool,
     /// Only works cited strictly more than this many times.
     pub min_citations: Option<u64>,
+    /// Author name to filter by (resolved to an OpenAlex author ID).
+    pub author: Option<String>,
+    /// Venue / journal name to filter by (resolved to an OpenAlex source ID).
+    pub venue: Option<String>,
+    /// Publisher name to filter by (resolved to an OpenAlex publisher ID).
+    pub publisher: Option<String>,
     /// Result ordering.
     pub sort: SortArg,
 }
@@ -172,6 +178,9 @@ async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Resul
         to_year: ext.to_year,
         oa_only: ext.oa_only,
         min_citations: ext.min_citations,
+        author: ext.author,
+        venue: ext.venue,
+        publisher: ext.publisher,
         sort: ext.sort.to_core(),
     };
 

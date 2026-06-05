@@ -149,11 +149,18 @@ where the `results[]` element schema is scope-dependent (documented
 alongside the change). Distinguishing the two by `scope` keeps an
 agent from having to guess which shape it received.
 
-PR1 ships the high-value filter set — `--from-year` / `--to-year`,
-`--oa-only`, `--min-citations`, and `--sort relevance|cited|recent`
-— plus `--limit`. Venue/field filters and the `survey` macro are
-deliberately out of PR1 scope (the maintainer feasibility read
-warns against a mega-command; thin primitives first).
+PR1 ships the filter set `--limit`, `--from-year` / `--to-year`,
+`--oa-only`, `--min-citations`, `--sort relevance|cited|recent`, and the
+**name-resolved** entity filters `--author` / `--venue` / `--publisher`.
+OpenAlex filters authors / sources / publishers by entity ID, not free
+text, so each name is first resolved to its OpenAlex ID via a
+`?search=` lookup (`/authors`, `/sources`, `/publishers`; top hit) and
+then applied as `authorships.author.id` /
+`primary_location.source.id` / `primary_location.source.publisher_lineage`.
+A name that resolves to nothing is a typed `FetchError::NotFound` — the
+filter is never silently dropped. The `survey` macro stays out of scope
+(the maintainer feasibility read warns against a mega-command; thin
+primitives first).
 
 ### D6 — MCP exposure is a separate slice
 
