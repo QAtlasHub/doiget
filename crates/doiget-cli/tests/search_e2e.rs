@@ -1,4 +1,10 @@
-//! End-to-end tests for `doiget search <query>`.
+//! End-to-end tests for `doiget search --local <query>` (the local-store
+//! scan scope).
+//!
+//! Since ADR-0031, `doiget search <query>` defaults to **external**
+//! OpenAlex discovery; the local substring scan exercised here is reached
+//! via `--local`. The external scope is covered (with wiremock) by
+//! `tests/search_external_e2e.rs`.
 //!
 //! Strategy mirrors `tests/info_list_recent_e2e.rs`: seed a `FsStore`
 //! rooted at a per-test `tempfile::TempDir`, then invoke the freshly-built
@@ -14,6 +20,7 @@
 //! 2. Authors-substring hit (`search_finds_by_authors_substring`).
 //! 3. No-match → header-only stdout (`search_returns_no_match_for_unknown_query`).
 //! 4. Empty query → non-zero exit (`search_rejects_empty_query`).
+//! 5. `--mode json` → `{scope:"local", results:[EntryInfo]}` envelope.
 //!
 //! No assertion is made on the exact byte-for-byte stdout layout beyond
 //! the header line; the underlying serializer is free to evolve without
@@ -125,7 +132,7 @@ fn search_finds_by_title_substring() {
     let (_dir_guard, root) = seeded_store();
 
     doiget(&root)
-        .args(["search", "quantum"])
+        .args(["search", "--local", "quantum"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Quantum Stuff"))
@@ -137,7 +144,7 @@ fn search_finds_by_authors_substring() {
     let (_dir_guard, root) = seeded_store();
 
     doiget(&root)
-        .args(["search", "Researcher"])
+        .args(["search", "--local", "Researcher"])
         .assert()
         .success()
         .stdout(predicate::str::contains("An Unrelated Title"))
@@ -149,7 +156,7 @@ fn search_returns_no_match_for_unknown_query() {
     let (_dir_guard, root) = seeded_store();
 
     let assert = doiget(&root)
-        .args(["search", "ZZZ-no-such-token"])
+        .args(["search", "--local", "ZZZ-no-such-token"])
         .assert()
         .success();
 
@@ -166,23 +173,26 @@ fn search_returns_no_match_for_unknown_query() {
 fn search_rejects_empty_query() {
     let (_dir_guard, root) = seeded_store();
 
+    // The empty-query guard fires before the scope branch, so this holds
+    // for both the default (external) and `--local` paths; assert it via
+    // `--local` so the test never touches the network.
     doiget(&root)
-        .args(["search", ""])
+        .args(["search", "--local", ""])
         .assert()
         .failure()
         .stderr(predicate::str::contains("search query is empty"));
 }
 
-// ---- #204 JSON-mode coverage --------------------------------------------
+// ---- JSON-mode coverage (ADR-0031 D5 envelope) --------------------------
 
 #[test]
-fn search_json_emits_array_of_entries() {
+fn search_local_json_emits_scope_envelope() {
     let (_dir_guard, root) = seeded_store();
 
     let out = doiget(&root)
         // The #203 helper pins DOIGET_MODE=human; override per-test.
         .env("DOIGET_MODE", "json")
-        .args(["search", "quantum"])
+        .args(["search", "--local", "quantum"])
         .assert()
         .success()
         .get_output()
@@ -190,10 +200,14 @@ fn search_json_emits_array_of_entries() {
         .clone();
     let s = String::from_utf8(out).expect("search JSON stdout utf-8");
     let v: serde_json::Value = serde_json::from_str(&s).expect("search JSON parses");
-    let arr = v.as_array().expect("search JSON is an array");
+
+    // ADR-0031 D5: `{scope, query, count, results}` envelope.
+    assert_eq!(v["scope"], "local", "local scope tag");
+    assert_eq!(v["query"], "quantum");
+    let arr = v["results"].as_array().expect("results is an array");
     assert!(!arr.is_empty(), "seeded query should match >=1 entry");
     for entry in arr {
-        // EntryInfo schema (#204): {safekey, title, year, fetched_at}.
+        // EntryInfo schema (unchanged): {safekey, title, year, fetched_at}.
         assert!(entry["safekey"].is_string(), "safekey is a string");
         assert!(entry["title"].is_string(), "title is a string");
     }

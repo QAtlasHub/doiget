@@ -16,6 +16,7 @@ use sha2::Digest;
 
 // --- Modules ---
 pub mod canonical;
+pub mod discovery;
 pub mod dry_run;
 pub mod http;
 pub mod orchestrator;
@@ -656,6 +657,14 @@ pub enum ErrorCode {
     /// therefore be reported `NotFound` even though it exists in a
     /// registry doiget does not query.
     NotFound,
+    /// A name filter (author / venue / publisher) matched MORE than one
+    /// entity with no clear winner, so it could not be resolved to a single
+    /// id. Distinct from [`Self::NotFound`] ("matched nothing"): an agent
+    /// should *narrow* the name (add a first name / fuller title) rather
+    /// than conclude the entity does not exist. The accompanying error
+    /// message lists the candidate matches. Wire form: `"AMBIGUOUS"`.
+    /// Raised by `doiget search`'s name-filter resolution (ADR-0031 D5).
+    Ambiguous,
     /// Filesystem write failed.
     StoreError,
     /// Provenance log write failed; the fetch was aborted.
@@ -696,6 +705,7 @@ impl ErrorCode {
             ErrorCode::RateLimited => "RATE_LIMITED",
             ErrorCode::NetworkError => "NETWORK_ERROR",
             ErrorCode::NotFound => "NOT_FOUND",
+            ErrorCode::Ambiguous => "AMBIGUOUS",
             ErrorCode::StoreError => "STORE_ERROR",
             ErrorCode::LogError => "LOG_ERROR",
             ErrorCode::CapabilityDenied => "CAPABILITY_DENIED",

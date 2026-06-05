@@ -114,6 +114,17 @@ pub enum FetchError {
         /// absence); not parsed.
         hint: String,
     },
+    /// A name filter (author / venue / publisher) matched MORE than one
+    /// OpenAlex entity with no clear winner. Carries a candidate listing
+    /// so the caller can narrow the name (or pass an explicit id).
+    /// Collapses to [`crate::ErrorCode::Ambiguous`] (wire `"AMBIGUOUS"`) —
+    /// distinct from `NotFound` so an agent narrows rather than gives up.
+    /// Used by [`crate::discovery`].
+    #[error("{hint}")]
+    Ambiguous {
+        /// Human-readable candidate listing; not parsed.
+        hint: String,
+    },
     /// Underlying HTTP / network failure. See [`HttpError`].
     #[error("network error: {0}")]
     Http(#[from] HttpError),
@@ -167,6 +178,10 @@ impl From<&FetchError> for crate::ErrorCode {
             FetchError::NotEligible { .. } => crate::ErrorCode::CapabilityDenied,
             FetchError::NoOaAvailable => crate::ErrorCode::NoOaAvailable,
             FetchError::NotFound { .. } => crate::ErrorCode::NotFound,
+            // A name filter that matched several entities is its own wire
+            // code so agents can distinguish "narrow the name" from
+            // "does not exist" (ADR-0031 D5).
+            FetchError::Ambiguous { .. } => crate::ErrorCode::Ambiguous,
             // 404 / 410 / 451 are authoritative, reproducible "this id is
             // not (and will not be) here" signals → `NotFound`; see
             // `ErrorCode::NotFound`. Everything else is transient.
@@ -218,6 +233,7 @@ impl From<&FetchError> for Option<crate::DenialContext> {
             // adding it to the None arm keeps the mapping table consistent.)
             FetchError::NoOaAvailable
             | FetchError::NotFound { .. }
+            | FetchError::Ambiguous { .. }
             | FetchError::Log(_)
             | FetchError::InvalidRef(_)
             | FetchError::SourceSchema { .. }

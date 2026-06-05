@@ -47,7 +47,9 @@ use camino::Utf8PathBuf;
 
 #[cfg(feature = "citation")]
 use doiget_core::http::tier_2_allowlist;
-use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, HttpClient};
+use doiget_core::http::{
+    discovery_allowlist, oa_publisher_allowlist, tier_1_allowlist, HttpClient,
+};
 use doiget_core::orchestrator::{fetch_paper as core_fetch_paper, FetchPaperOutcome, PdfLegStatus};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
@@ -234,6 +236,14 @@ pub(crate) fn build_http_client() -> Result<HttpClient> {
     {
         let mut allowlists = tier_1_allowlist();
         allowlists.extend(oa_publisher_allowlist());
+        // ADR-0031: discovery search (`doiget search`) is Tier-1 OA
+        // metadata, always-on, and ships in the default `oa-only` binary.
+        // Register `api.openalex.org` under the `"openalex"` source key
+        // UNCONDITIONALLY so `discovery::paper_search` can reach the
+        // `/works?search=` endpoint without `--features citation`. In
+        // citation builds the Tier-2 extend below re-registers the same
+        // host under the same key (idempotent HashMap overwrite).
+        allowlists.extend(discovery_allowlist());
         // Slice 16: when the `citation` feature is compiled in, the
         // graph subcommand walks OpenAlex Work IDs via
         // `ctx.http.fetch_bytes("openalex", ...)`. The Tier 2
@@ -802,6 +812,9 @@ pub(crate) fn cli_exit_code(code: ErrorCode) -> i32 {
         ErrorCode::CapabilityDenied => 3,
         ErrorCode::StoreError | ErrorCode::LogError => 4,
         ErrorCode::FetchTimeout => 124,
+        // A name filter that matched several entities is user-fixable by
+        // narrowing the query → `docs/ERRORS.md` §4 exit 2 ("misuse").
+        ErrorCode::Ambiguous => 2,
         _ => 1,
     }
 }
@@ -1030,6 +1043,71 @@ host = "*.uj.edu.pl"
         );
     }
 
+    /// ADR-0031 D2: discovery search (`doiget search`) ships in the default
+    /// `oa-only` binary, so `api.openalex.org` MUST be on the production
+    /// allowlist under the `"openalex"` source key WITHOUT `--features
+    /// citation`. The Tier-2 `tier_2_allowlist()` extend is
+    /// `#[cfg(feature = "citation")]`; this test proves
+    /// `discovery_allowlist()` covers that gap in the shipped build.
+    #[test]
+    #[serial]
+    fn build_http_client_registers_openalex_for_discovery() {
+        struct EnvGuard {
+            key: &'static str,
+            prev: Option<String>,
+        }
+        impl EnvGuard {
+            fn save(key: &'static str) -> Self {
+                Self {
+                    key,
+                    prev: std::env::var(key).ok(),
+                }
+            }
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.prev {
+                    Some(v) => std::env::set_var(self.key, v),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+
+        // Point config resolution at an empty tempdir and clear every
+        // `DOIGET_*_BASE` so `build_http_client` takes the PRODUCTION
+        // branch (not the test-base builder, which would register
+        // "openalex" itself and mask the gap this test guards).
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let _g0 = EnvGuard::save("XDG_CONFIG_HOME");
+        let _g1 = EnvGuard::save("APPDATA");
+        let _g2 = EnvGuard::save("HOME");
+        let _g3 = EnvGuard::save("USERPROFILE");
+        let _g4 = EnvGuard::save("DOIGET_ARXIV_BASE");
+        let _g5 = EnvGuard::save("DOIGET_CROSSREF_BASE");
+        let _g6 = EnvGuard::save("DOIGET_UNPAYWALL_BASE");
+        let _g7 = EnvGuard::save("DOIGET_OA_PUBLISHER_BASE");
+        let _g8 = EnvGuard::save("DOIGET_OPENALEX_BASE");
+        std::env::set_var("XDG_CONFIG_HOME", td.path());
+        std::env::set_var("APPDATA", td.path());
+        std::env::set_var("HOME", td.path());
+        std::env::set_var("USERPROFILE", td.path());
+        std::env::remove_var("DOIGET_ARXIV_BASE");
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+        std::env::remove_var("DOIGET_UNPAYWALL_BASE");
+        std::env::remove_var("DOIGET_OA_PUBLISHER_BASE");
+        std::env::remove_var("DOIGET_OPENALEX_BASE");
+
+        let client = build_http_client().expect("HttpClient builds");
+        let oa = client
+            .source_allowlist("openalex")
+            .expect("openalex source registered for discovery (ADR-0031 D2)");
+        assert!(
+            oa.matches("api.openalex.org"),
+            "api.openalex.org MUST be on the discovery allowlist; got {:?}",
+            oa.redirect_hosts
+        );
+    }
+
     // Slice 2: the `extract_crossref_fields_*` unit tests moved to
     // `doiget_core::orchestrator::tests` along with the function they
     // covered. The CLI no longer owns those helpers; the marker test
@@ -1040,6 +1118,13 @@ host = "*.uj.edu.pl"
     #[test]
     fn fetch_paper_outcome_is_reachable_from_cli() {
         let _ = std::any::type_name::<doiget_core::orchestrator::FetchPaperOutcome>();
+    }
+
+    #[test]
+    fn ambiguous_maps_to_exit_code_2() {
+        // ADR-0031 D5: a name-filter ambiguity is user-fixable → exit 2,
+        // distinct from the generic exit 1.
+        assert_eq!(cli_exit_code(ErrorCode::Ambiguous), 2);
     }
 
     /// Minimal `DenialContext` carrying only `reason`; every other field

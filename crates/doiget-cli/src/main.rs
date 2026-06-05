@@ -262,10 +262,51 @@ enum Command {
         #[arg(default_value_t = 10)]
         limit: usize,
     },
-    /// Search the local store by title / authors / venue.
+    /// Search for papers. Default: external discovery over OpenAlex
+    /// (`/works?search=`, ADR-0031) — turn a topic into ranked candidate
+    /// papers with abstracts. Use `--local` to scan the local store
+    /// (title / authors / venue) instead.
     Search {
-        /// Query string.
+        /// Query string (a topic for discovery, or a substring for `--local`).
         query: String,
+        /// Scan the local store instead of external discovery.
+        #[arg(long, conflicts_with = "external")]
+        local: bool,
+        /// Explicit form of the default external discovery (mutually
+        /// exclusive with `--local`).
+        #[arg(long, conflicts_with = "local")]
+        external: bool,
+        /// External: maximum results. Must be 1..=200 (OpenAlex's per-page
+        /// cap); an out-of-range value is rejected, not clamped.
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+        /// External: only works published in or after this year.
+        #[arg(long)]
+        from_year: Option<i32>,
+        /// External: only works published in or before this year.
+        #[arg(long)]
+        to_year: Option<i32>,
+        /// External: restrict to open-access works.
+        #[arg(long)]
+        oa_only: bool,
+        /// External: only works cited strictly more than this many times.
+        #[arg(long)]
+        min_citations: Option<u64>,
+        /// External: filter to an author by name (resolved to an OpenAlex
+        /// author ID via `/authors?search=`).
+        #[arg(long)]
+        author: Option<String>,
+        /// External: filter to a venue / journal by name (resolved to an
+        /// OpenAlex source ID via `/sources?search=`).
+        #[arg(long)]
+        venue: Option<String>,
+        /// External: filter to a publisher by name (resolved to an
+        /// OpenAlex publisher ID via `/publishers?search=`).
+        #[arg(long)]
+        publisher: Option<String>,
+        /// External: result ordering.
+        #[arg(long, value_enum, default_value = "relevance")]
+        sort: doiget_cli::commands::search::SortArg,
     },
     /// Export an entry as BibTeX.
     Bib {
@@ -542,7 +583,33 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Config { action }) => doiget_cli::commands::config::run(action, mode),
         Some(Command::Info { ref_ }) => doiget_cli::commands::info::run(ref_, mode),
         Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit, mode),
-        Some(Command::Search { query }) => doiget_cli::commands::search::run(query, mode),
+        Some(Command::Search {
+            query,
+            local,
+            external: _,
+            limit,
+            from_year,
+            to_year,
+            oa_only,
+            min_citations,
+            author,
+            venue,
+            publisher,
+            sort,
+        }) => {
+            let ext = doiget_cli::commands::search::ExternalArgs {
+                limit,
+                from_year,
+                to_year,
+                oa_only,
+                min_citations,
+                author,
+                venue,
+                publisher,
+                sort,
+            };
+            doiget_cli::commands::search::run(query, local, ext, mode).await
+        }
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
         Some(Command::Verify {
             path,
@@ -610,6 +677,21 @@ mod tests {
     use super::*;
     use clap::Parser;
     use serial_test::serial;
+
+    /// `--local` and `--external` are mutually exclusive (ADR-0031 D5).
+    /// `--external`'s `conflicts_with = "local"` makes the conflict
+    /// symmetric so the parse fails regardless of flag order.
+    #[test]
+    fn search_local_and_external_conflict() {
+        assert!(
+            Cli::try_parse_from(["doiget", "search", "--local", "--external", "q"]).is_err(),
+            "`search --local --external` must be a parse error"
+        );
+        assert!(
+            Cli::try_parse_from(["doiget", "search", "--external", "--local", "q"]).is_err(),
+            "conflict must hold regardless of flag order"
+        );
+    }
 
     /// RAII guard restoring a single env var to its pre-test value (or
     /// removing it if previously unset). The `apply_global_overrides`
