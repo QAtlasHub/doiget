@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `doiget-core` is the only crate with strict semver guarantees during the 0.x line; CLI
 flag changes and `doiget-mcp` tool spec changes will be called out explicitly here.
 
-## [Unreleased]
+## [0.6.0-beta.1] - 2026-06-05
 
 Discovery — the front half of the agent research loop (#281). `doiget search` becomes
 a literature **discovery** tool, not just a local-store re-finder. See
