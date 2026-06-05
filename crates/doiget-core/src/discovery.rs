@@ -118,8 +118,10 @@ pub struct PaperSearchQuery {
     /// glasses"). Must be non-empty; the caller is expected to reject
     /// empty input.
     pub query: String,
-    /// Maximum number of results to return. Clamped to `1..=200`
-    /// (OpenAlex `per-page` ceiling).
+    /// Maximum number of results to return, bounded to `1..=200` (OpenAlex
+    /// `per-page` ceiling). [`validate`](Self::validate) **rejects** an
+    /// out-of-range value; `paper_search` itself only clamps it as
+    /// defense-in-depth (see the function's caller-side-validation note).
     pub limit: usize,
     /// Inclusive lower bound on publication year (maps to OpenAlex
     /// `from_publication_date:<year>-01-01`).
@@ -164,6 +166,37 @@ impl PaperSearchQuery {
             publisher: None,
             sort: SearchSort::Relevance,
         }
+    }
+
+    /// Validate the request shape, returning a human-readable message on
+    /// the first problem. This is the single source of truth for the
+    /// boundary validation that both the CLI and the MCP tool apply
+    /// (`paper_search` itself stays permissive — see its docs); keeping it
+    /// here prevents the two surfaces from drifting.
+    ///
+    /// Checks: non-empty `query`, `limit` in `1..=`[`MAX_PER_PAGE`], and a
+    /// non-inverted `from_year`/`to_year` range.
+    ///
+    /// # Errors
+    ///
+    /// `Err(msg)` describing the first invalid field; `msg` is suitable for
+    /// surfacing directly to a user / agent.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.query.trim().is_empty() {
+            return Err("search query is empty".to_string());
+        }
+        if !(1..=MAX_PER_PAGE).contains(&self.limit) {
+            return Err(format!(
+                "limit must be between 1 and {MAX_PER_PAGE} (got {})",
+                self.limit
+            ));
+        }
+        if let (Some(from), Some(to)) = (self.from_year, self.to_year) {
+            if from > to {
+                return Err(format!("from_year ({from}) is after to_year ({to})"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1353,5 +1386,28 @@ mod tests {
         let e = FetchError::Ambiguous { hint: "x".into() };
         assert_eq!(crate::ErrorCode::from(&e), crate::ErrorCode::Ambiguous);
         assert_eq!(crate::ErrorCode::Ambiguous.as_wire(), "AMBIGUOUS");
+    }
+
+    #[test]
+    fn validate_rejects_bad_shape_and_accepts_good() {
+        let mut q = PaperSearchQuery::new("topic");
+        assert!(q.validate().is_ok());
+
+        q.query = "  ".to_string();
+        assert!(q.validate().unwrap_err().contains("empty"));
+
+        let mut q = PaperSearchQuery::new("topic");
+        q.limit = 0;
+        assert!(q.validate().unwrap_err().contains("limit"));
+        q.limit = MAX_PER_PAGE + 1;
+        assert!(q.validate().unwrap_err().contains("limit"));
+
+        let mut q = PaperSearchQuery::new("topic");
+        q.from_year = Some(2025);
+        q.to_year = Some(2010);
+        assert!(q.validate().unwrap_err().contains("after"));
+        // Equal bounds are valid (inclusive range).
+        q.to_year = Some(2025);
+        assert!(q.validate().is_ok());
     }
 }
