@@ -98,6 +98,11 @@ type FetchResult =
       resolver_profile: string,
       path: string,
       license: string,
+      // OA transparency (#281 item 4): "gold"|"green"|"hybrid"|"bronze"|
+      // "closed" (Unpaywall) or "green" (arXiv); null when not determined.
+      // With `pdf.status` an agent tells "paywalled" (closed + no_oa_url)
+      // from "couldn't reach it". Also on doiget_metadata_only + batch JSON.
+      oa_status: string | null,
       size_bytes: number,
       schema_version: string,
       // Issue #118 / #243: PDF leg status. Always present on ok:true responses.

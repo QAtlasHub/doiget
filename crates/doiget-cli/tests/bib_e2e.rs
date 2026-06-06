@@ -70,6 +70,7 @@ fn fixture(type_: Option<&str>) -> Metadata {
                 .expect("valid timestamp"),
             source: "unpaywall".to_string(),
             license: "CC-BY-4.0".to_string(),
+            oa_status: None,
             size_bytes: 1234,
             mcp_call_id: None,
         }),

@@ -2242,6 +2242,9 @@ fn metadata_only_success_envelope(outcome: &MetadataOnlyOutcome, ref_str: &str) 
         "resolver_profile": outcome.resolver_profile,
         "license": outcome.license,
         "oa_url": outcome.oa_url,
+        // OA transparency (#281 item 4): gold/green/hybrid/bronze/closed,
+        // or null when not determined (e.g. the Crossref-first path).
+        "oa_status": outcome.oa_status,
         "metadata": outcome.metadata,
         "schema_version": SCHEMA_VERSION,
     })
@@ -2389,6 +2392,11 @@ fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> V
         // which the canonical-digest for this fetch was minted.
         "resolver_profile": outcome.resolver_profile,
         "license": outcome.license,
+        // OA transparency (#281 item 4): gold/green/hybrid/bronze/closed,
+        // or null when not determined. Combined with `pdf.status`, lets an
+        // agent tell a paywalled work (`closed` + `no_oa_url`) from one it
+        // simply could not reach.
+        "oa_status": outcome.oa_status,
         "path": outcome.path,
         "size_bytes": outcome.size_bytes,
         "schema_version": outcome.schema_version,

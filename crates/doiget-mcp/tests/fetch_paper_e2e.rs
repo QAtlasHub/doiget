@@ -188,6 +188,8 @@ async fn fetch_paper_arxiv_happy_path_writes_pdf_and_returns_envelope() -> anyho
     assert_eq!(structured["source"], serde_json::json!("arxiv"));
     assert_eq!(structured["ref"], serde_json::json!("2401.12345"));
     assert_eq!(structured["license"], serde_json::json!("arxiv-default"));
+    // OA transparency (#281 item 4): arXiv is green OA.
+    assert_eq!(structured["oa_status"], serde_json::json!("green"));
     assert_eq!(
         structured["size_bytes"],
         serde_json::json!(SAMPLE_PDF_BODY.len())

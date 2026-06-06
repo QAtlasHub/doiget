@@ -62,6 +62,16 @@ pub struct MetadataOnlyOutcome {
     /// `message.link[]` array is mined first; the Unpaywall fallback
     /// path uses `best_oa_location.url_for_pdf` (or `url`).
     pub oa_url: Option<String>,
+    /// Open-access status for the ref, when known (#281 item 4): the
+    /// Unpaywall classification `gold` / `green` / `hybrid` / `bronze` /
+    /// `closed`, or `"green"` for an arXiv ref. `None` when the resolver
+    /// that answered did not surface it — notably the Crossref-first
+    /// metadata path, which does NOT consult Unpaywall unless Crossref
+    /// fails, so a `None` here means "not determined", not "no OA".
+    /// `#[serde(default)]` keeps older `resolver_cache` entries (written
+    /// before this field existed) readable.
+    #[serde(default)]
+    pub oa_status: Option<String>,
     /// Source's native metadata payload. For Crossref this is the
     /// `message` object; for Unpaywall the work record; for arXiv the
     /// parsed Atom-feed JSON (see
@@ -165,6 +175,8 @@ pub async fn metadata_only(
                 resolver_profile: arxiv.name().to_string(),
                 license: Some("arxiv-default".to_string()),
                 oa_url: None,
+                // arXiv preprints are green OA by definition.
+                oa_status: Some("green".to_string()),
                 metadata,
             }
         }
@@ -348,6 +360,7 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
                 .license
                 .clone()
                 .unwrap_or_else(|| "unknown".to_string()),
+            oa_status: outcome.oa_status.clone(),
             size_bytes: 0,
             mcp_call_id: None,
         }),
@@ -554,6 +567,10 @@ async fn metadata_only_doi(
                 // chained orchestrator) if it needs a license string.
                 license: None,
                 oa_url,
+                // Crossref does not report OA status; "not determined".
+                // (The metadata path is Crossref-first and only consults
+                // Unpaywall on a Crossref failure — see the fallback arm.)
+                oa_status: None,
                 metadata,
             })
         }
@@ -565,6 +582,7 @@ async fn metadata_only_doi(
                 Ok(res) => {
                     let metadata = res.metadata_json.unwrap_or(Value::Null);
                     let oa_url = extract_unpaywall_oa_url(&metadata);
+                    let oa_status = extract_unpaywall_oa_status(&metadata);
                     let license = if res.license == "unknown" {
                         None
                     } else {
@@ -575,6 +593,7 @@ async fn metadata_only_doi(
                         resolver_profile: unpaywall.name().to_string(),
                         license,
                         oa_url,
+                        oa_status,
                         metadata,
                     })
                 }
@@ -613,6 +632,15 @@ fn extract_unpaywall_oa_url(meta: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .or_else(|| loc.get("url").and_then(Value::as_str))
         .map(|s| s.to_string())
+}
+
+/// Pull Unpaywall's `oa_status` (`gold` / `green` / `hybrid` / `bronze` /
+/// `closed`) out of a metadata payload, for OA transparency (#281 item 4).
+/// Returns `None` when the field is absent.
+fn extract_unpaywall_oa_status(meta: &Value) -> Option<String> {
+    meta.get("oa_status")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 // ---------------------------------------------------------------------------
@@ -697,6 +725,12 @@ pub struct FetchPaperOutcome {
     /// OA license string (`"CC-BY-4.0"`, `"cc-by"`, `"arxiv-default"`,
     /// `"unknown"`). Mirrors `[doiget].license`.
     pub license: String,
+    /// Open-access status (#281 item 4): Unpaywall's `gold` / `green` /
+    /// `hybrid` / `bronze` / `closed` for a DOI, or `"green"` for an arXiv
+    /// ref. `None` when not determined. Mirrors `[doiget].oa_status`. Lets
+    /// a caller distinguish a paywalled work (`closed` + `pdf_leg: NoOaUrl`)
+    /// from one that is openly available.
+    pub oa_status: Option<String>,
     /// Absolute path of the artifact actually written
     /// (`<root>/<safekey>.pdf` on success, `<root>/.metadata/<safekey>.toml`
     /// on metadata-only fallback).
@@ -750,6 +784,7 @@ impl FetchPaperOutcome {
             source: source.clone(),
             resolver_profile: source.clone(),
             license: "unknown".to_string(),
+            oa_status: None,
             path: Utf8PathBuf::from(format!("/tmp/{safekey}.pdf")),
             size_bytes: 0,
             schema_version: SCHEMA_VERSION.to_string(),
@@ -894,6 +929,8 @@ async fn fetch_paper_arxiv(
             fetched_at: Utc::now(),
             source: "arxiv".to_string(),
             license: license.clone(),
+            // arXiv preprints are green OA by definition.
+            oa_status: Some("green".to_string()),
             size_bytes,
             mcp_call_id: None,
         }),
@@ -916,6 +953,7 @@ async fn fetch_paper_arxiv(
         source: "arxiv".to_string(),
         resolver_profile: "arxiv".to_string(),
         license,
+        oa_status: Some("green".to_string()),
         path,
         size_bytes,
         schema_version: SCHEMA_VERSION.to_string(),
@@ -968,15 +1006,23 @@ async fn fetch_paper_doi(
     // derived metadata.
     let unpaywall = unpaywall_source_from_env(&unpaywall_contact);
     let upw_result = unpaywall.fetch(ref_, profile, ctx).await;
-    let (license, source_label, oa_chain) = match upw_result {
+    let (license, source_label, oa_chain, oa_status) = match upw_result {
         Ok(r) => {
             let chain = extract_oa_url_chain(r.metadata_json.as_ref());
+            // OA status describes the WORK (gold/green/closed/…), not the
+            // fetch — surfaced even when the PDF leg is later blocked, so an
+            // agent can tell "paywalled" from "we couldn't reach it" (#281
+            // item 4).
+            let oa_status = r
+                .metadata_json
+                .as_ref()
+                .and_then(extract_unpaywall_oa_status);
             let label = if r.license != "unknown" {
                 "unpaywall".to_string()
             } else {
                 "crossref".to_string()
             };
-            (r.license, label, chain)
+            (r.license, label, chain, oa_status)
         }
         Err(e) => {
             // Unpaywall unreachable / errored. We continue with the
@@ -998,7 +1044,12 @@ async fn fetch_paper_doi(
                 "unpaywall fetch failed; OA chain will be empty (downstream PdfLegStatus::NoOaUrl \
                  is conservative — Unpaywall was unreachable, not authoritatively oa-free)"
             );
-            ("unknown".to_string(), "crossref".to_string(), Vec::new())
+            (
+                "unknown".to_string(),
+                "crossref".to_string(),
+                Vec::new(),
+                None,
+            )
         }
     };
 
@@ -1152,6 +1203,7 @@ async fn fetch_paper_doi(
             fetched_at: Utc::now(),
             source: final_source_label.clone(),
             license: license.clone(),
+            oa_status: oa_status.clone(),
             size_bytes,
             mcp_call_id: None,
         }),
@@ -1182,6 +1234,7 @@ async fn fetch_paper_doi(
         source: final_source_label.clone(),
         resolver_profile: final_source_label,
         license,
+        oa_status,
         path,
         size_bytes,
         schema_version: SCHEMA_VERSION.to_string(),
@@ -1766,6 +1819,7 @@ mod tests {
             resolver_profile: "crossref".to_string(),
             license: None,
             oa_url: None,
+            oa_status: None,
             metadata: serde_json::json!({
                 "title": ["Rigorous results on valence-bond ground states"],
                 "author": [
@@ -1813,6 +1867,7 @@ mod tests {
             resolver_profile: "arxiv".to_string(),
             license: Some("arxiv-default".to_string()),
             oa_url: None,
+            oa_status: Some("green".to_string()),
             metadata: serde_json::json!({ "title": "An arXiv Preprint" }),
         };
         let m = cite_metadata(&ref_, &outcome);

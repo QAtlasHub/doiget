@@ -788,6 +788,7 @@ mod tests {
                 fetched_at: chrono::Utc.with_ymd_and_hms(2026, 5, 6, 12, 0, 0).unwrap(),
                 source: "unpaywall".to_string(),
                 license: "CC-BY-4.0".to_string(),
+                oa_status: Some("gold".to_string()),
                 size_bytes: 1234567,
                 mcp_call_id: Some("01JCKZ7Q0000000000000000AB".to_string()),
             }),
