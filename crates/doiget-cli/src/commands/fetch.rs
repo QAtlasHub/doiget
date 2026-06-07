@@ -835,7 +835,12 @@ pub(crate) fn cli_exit_code(code: ErrorCode) -> i32 {
 /// plus an actionable `= note:` line carrying the ADR-0023
 /// `denial_context` (attempted / expected hosts) when the failure was
 /// a denial class. stdout stays clean (ADR-0001).
-fn render_fetch_error(e: &FetchError) {
+///
+/// `pub(crate)` so sibling resolve commands (`commands::link`, …) render
+/// typed failures — including the actionable denial note — through the
+/// SAME path instead of open-coding `error[CODE]: msg` and dropping the
+/// `denial_context` note (review #287).
+pub(crate) fn render_fetch_error(e: &FetchError) {
     let code: ErrorCode = e.into();
     print_err(format_args!("error[{}]: {}", code.as_wire(), e));
     if let Some(dc) = Option::<DenialContext>::from(e) {

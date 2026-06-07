@@ -18,18 +18,12 @@ use anyhow::{Context, Result};
 use doiget_core::discovery::{resolve_links_for_doi, PaperLinks};
 use doiget_core::{ErrorCode, Ref};
 
-use super::fetch::{build_resolve_context, cli_exit_code, CliExit};
+use super::fetch::{build_resolve_context, cli_exit_code, render_fetch_error, CliExit};
 use super::output::OutputMode;
 
 /// Production OpenAlex API base. Overridable via `DOIGET_OPENALEX_BASE`
 /// (test wiremock origin), mirroring the `search` subcommand.
 const OPENALEX_DEFAULT_BASE: &str = "https://api.openalex.org";
-
-/// Stderr sink for `docs/ERRORS.md` §3 human-error lines.
-#[allow(clippy::print_stderr)]
-fn print_err(args: std::fmt::Arguments<'_>) {
-    eprintln!("{args}");
-}
 
 /// Run the `link` subcommand.
 ///
@@ -59,9 +53,13 @@ pub async fn run(ref_: String, mode: OutputMode) -> Result<()> {
     let links = match resolve_links_for_doi(&base, &contact_email, doi.as_str(), &ctx).await {
         Ok(l) => l,
         Err(e) => {
-            let code = ErrorCode::from(&e);
-            print_err(format_args!("error[{}]: {e}", code.as_wire()));
-            return Err(anyhow::Error::new(CliExit(cli_exit_code(code))));
+            // Route through the shared renderer so a denial-class failure
+            // (e.g. an off-allowlist OpenAlex redirect) carries its ADR-0023
+            // `= note:` line, single-sourced with the other commands (#287).
+            render_fetch_error(&e);
+            return Err(anyhow::Error::new(CliExit(cli_exit_code(ErrorCode::from(
+                &e,
+            )))));
         }
     };
 

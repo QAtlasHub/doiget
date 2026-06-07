@@ -888,7 +888,16 @@ pub async fn resolve_links_for_doi(
         hint: format!("no OpenAlex work matched doi '{doi}'"),
     })?;
 
-    Ok(work_to_links(work))
+    let links = work_to_links(work);
+    // A matched work always carries an `id`; an empty one means the record
+    // was malformed. Surface it as a schema error rather than returning a
+    // cluster with a blank `openalex_id` (review #287).
+    if links.openalex_id.is_empty() {
+        return Err(FetchError::SourceSchema {
+            hint: format!("openalex work for doi '{doi}' has no id"),
+        });
+    }
+    Ok(links)
 }
 
 /// Build the `/works?filter=doi:<doi>&select=&per-page=1&mailto=` URL for
@@ -1468,6 +1477,20 @@ mod tests {
             .await
             .expect_err("an unmatched doi must be NotFound");
         assert!(matches!(err, FetchError::NotFound { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn doi_lookup_url_preserves_input_doi_case() {
+        // The correctness of `link` rests on "Doi::parse does not lower-case,
+        // OpenAlex is case-insensitive": a real `doiget link 10.1103/PhysRevB.1`
+        // must send the DOI verbatim in the filter (review #287). Pin it.
+        let base = Url::parse("https://api.openalex.org").expect("base");
+        let u = build_doi_lookup_url(&base, "", "10.1103/PhysRevB.1").expect("url");
+        assert_eq!(
+            param(&u, "filter").as_deref(),
+            Some("doi:10.1103/PhysRevB.1"),
+            "the input DOI case must be carried through verbatim"
+        );
     }
 
     #[test]
