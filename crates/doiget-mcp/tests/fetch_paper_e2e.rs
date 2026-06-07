@@ -514,6 +514,10 @@ async fn fetch_paper_doi_blocked_pdf_includes_suggested_arxiv_id() -> anyhow::Re
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "doi": "10.1234/suggest-test",
             "is_oa": true,
+            // `is_oa:true` + `oa_status:"closed"` is deliberately
+            // contradictory (real Unpaywall never pairs these); the
+            // orchestrator does not cross-validate the two, so this isolates
+            // pure oa_status passthrough onto the fetch envelope.
             "oa_status": "closed",
             "best_oa_location": {
                 "url_for_pdf": "https://arxiv.org/pdf/2401.99999v2.pdf",
