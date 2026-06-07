@@ -46,7 +46,9 @@ use camino::Utf8PathBuf;
 use doiget_core::dry_run::{
     build_dry_run_envelope, build_fetch_plan, rate_limit_budget as core_rate_limit_budget,
 };
-use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, tier_2_allowlist, HttpClient};
+use doiget_core::http::{
+    fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist, tier_2_allowlist, HttpClient,
+};
 use doiget_core::orchestrator::{
     batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
     metadata_only_to_store, resolve_only as core_resolve_only, FetchPaperOutcome,
@@ -1321,6 +1323,119 @@ impl Server {
         }
     }
 
+    /// `doiget_paper_text` — extract a paper's full text from ar5iv (the
+    /// #281 "read" step; ADR-0032). Fetches the ar5iv LaTeXML-XHTML
+    /// rendering of an **arXiv** paper and returns it as sectioned plain
+    /// text. The PDF blob is never opened (ADR-0032 D1). Tier-1 OA,
+    /// always-on. A bare DOI returns `NO_OA_AVAILABLE` (DOI→arXiv linking
+    /// is #281 item 5).
+    #[tool(
+        description = "WHEN TO USE: Read a paper's full text (arXiv only) without an external pdf-to-text tool — the 'read' step after discovery/fetch.\n\
+                       INPUTS: ref (arXiv id, e.g. \"arxiv:2401.12345\"); optional max_chars (cap; omit for full text).\n\
+                       OUTPUTS: { ok: true, arxiv_id, source: \"ar5iv\", title, sections: [{ heading, text }], char_count, truncated, retrieved_from } OR { ok:false, error }.\n\
+                       COSTS: 1 ar5iv HTTP request (HTML), then parse; large papers can be sizeable — use max_chars to bound.\n\
+                       SIDE EFFECTS: Emits an OA provenance row. NEVER opens the PDF blob; NEVER writes the store.\n\
+                       LIMITS: arXiv only (a DOI → NO_OA_AVAILABLE; pass the arXiv id). A paper not converted by ar5iv → NOT_FOUND. Best-effort extraction (truncation flagged on `truncated`)."
+    )]
+    async fn doiget_paper_text(
+        &self,
+        Parameters(input): Parameters<PaperTextInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Validate the ref. A DOI has no full-text source in this slice;
+        // report NO_OA_AVAILABLE rather than silently failing (ADR-0032 D5).
+        let id = match doiget_core::Ref::parse(&input.ref_) {
+            Ok(doiget_core::Ref::Arxiv(a)) => a,
+            Ok(doiget_core::Ref::Doi(_)) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::NoOaAvailable,
+                    "no full-text source for a DOI — pass the arXiv id if a preprint exists \
+                     (DOI→arXiv linking is #281 item 5)",
+                )));
+            }
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &e.to_string(),
+                )));
+            }
+        };
+
+        let base = match ar5iv_base() {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(id.as_str()),
+                    ErrorCode::InternalError,
+                    &e,
+                )));
+            }
+        };
+
+        // The text cache (docs/CACHE.md) is left disabled on the MCP path
+        // for now, mirroring `build_fetch_context`'s resolver-cache note;
+        // enabling it here is a follow-up. Correctness is unaffected — a
+        // cache miss just re-fetches.
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(id.as_str()),
+                    ErrorCode::InternalError,
+                    &format!("paper-text context init failed: {e}"),
+                )));
+            }
+        };
+
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Oa,
+            ref_: Some(id.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        }) {
+            return Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(id.as_str()),
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        let max_chars = input.max_chars.map(|m| m as usize);
+        let outcome = doiget_core::paper_text::paper_text(&base, &id, max_chars, &ctx).await;
+        let _ = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if outcome.is_ok() {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Oa,
+            ref_: Some(id.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        });
+
+        match outcome {
+            Ok(t) => Ok(CallToolResult::structured(paper_text_success_envelope(&t))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(id.as_str()),
+                ErrorCode::from(&e),
+                &e.to_string(),
+            ))),
+        }
+    }
+
     /// `doiget_list_recent` — most-recent stored entries by
     /// `[doiget].fetched_at`. Read-only.
     ///
@@ -1921,6 +2036,24 @@ pub struct PaperSearchInput {
     /// Result ordering: `relevance` (default) | `cited` | `recent`.
     #[serde(default)]
     pub sort: Option<SortInput>,
+}
+
+/// JSON-schema-derived input for the `doiget_paper_text` MCP tool
+/// (full-text extraction from ar5iv; ADR-0032).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PaperTextInput {
+    /// arXiv id (e.g. "arxiv:2401.12345"), validated via `Ref::parse`. A
+    /// bare DOI returns `NO_OA_AVAILABLE` (pass the arXiv id;
+    /// DOI→arXiv linking is #281 item 5).
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+    /// Cap the returned text to this many characters (truncation is
+    /// flagged on `truncated`). Omit for the full text.
+    #[serde(default)]
+    pub max_chars: Option<u32>,
 }
 
 /// JSON-schema-derived input for the `doiget_list_recent` MCP tool.
@@ -2714,6 +2847,31 @@ fn openalex_base() -> Result<url::Url, String> {
     url::Url::parse(&raw).map_err(|e| format!("DOIGET_OPENALEX_BASE is not a URL: {e}"))
 }
 
+/// Resolve the ar5iv base URL for `doiget_paper_text`: the
+/// `DOIGET_AR5IV_BASE` override (tests) or the production default
+/// (ADR-0032 D3).
+fn ar5iv_base() -> Result<url::Url, String> {
+    let raw = std::env::var("DOIGET_AR5IV_BASE")
+        .unwrap_or_else(|_| doiget_core::paper_text::AR5IV_DEFAULT_BASE.to_string());
+    url::Url::parse(&raw).map_err(|e| format!("DOIGET_AR5IV_BASE is not a URL: {e}"))
+}
+
+/// Build the `{ ok:true, arxiv_id, source, title, sections, char_count,
+/// truncated, retrieved_from }` success envelope for `doiget_paper_text`
+/// (the `PaperText` shape plus the `ok` discriminant).
+fn paper_text_success_envelope(t: &doiget_core::paper_text::PaperText) -> Value {
+    json!({
+        "ok": true,
+        "arxiv_id": t.arxiv_id,
+        "source": t.source,
+        "title": t.title,
+        "sections": t.sections,
+        "char_count": t.char_count,
+        "truncated": t.truncated,
+        "retrieved_from": t.retrieved_from,
+    })
+}
+
 /// Build a [`FetchContext`] for the non-dry-run `doiget_metadata_only`
 /// path.
 ///
@@ -2723,9 +2881,9 @@ fn openalex_base() -> Result<url::Url, String> {
 /// passed explicitly to `orchestrator::metadata_only_to_store` (the §11
 /// store-write entry point), keeping the context store-agnostic:
 ///
-/// - `HttpClient` — production allowlist (Tier 1 ∪ OA publisher), or
-///   the test-mode multi-source allowlist when any `DOIGET_*_BASE` env
-///   var is set.
+/// - `HttpClient` — production allowlist (Tier 1 ∪ OA publisher ∪ Tier 2 ∪
+///   full-text (ar5iv)), or the test-mode multi-source allowlist when any
+///   `DOIGET_*_BASE` env var is set.
 /// - `RateLimiter` — process-wide hard-coded politeness
 ///   ([`RateLimits::HARD_CODED`]).
 /// - `ProvenanceLog` — opened at `$DOIGET_LOG_PATH` or
@@ -2780,7 +2938,8 @@ fn crossref_source_from_env() -> Result<CrossrefSource, String> {
 /// HTTP client construction with the same `DOIGET_*_BASE` test-override
 /// surface that `doiget-cli` honors (`build_http_client` in
 /// `crates/doiget-cli/src/commands/fetch.rs`). When no overrides are
-/// set, returns the production allowlist (Tier 1 ∪ OA publisher).
+/// set, returns the production allowlist (Tier 1 ∪ OA publisher ∪ Tier 2 ∪
+/// full-text (ar5iv)).
 fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     let arxiv = std::env::var("DOIGET_ARXIV_BASE").ok();
     let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
@@ -2788,12 +2947,15 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     let oa_publisher = std::env::var("DOIGET_OA_PUBLISHER_BASE").ok();
 
     let openalex_base = std::env::var("DOIGET_OPENALEX_BASE").ok();
+    // ADR-0032: ar5iv full-text base override (test wiremock origin).
+    let ar5iv_base = std::env::var("DOIGET_AR5IV_BASE").ok();
 
     if arxiv.is_none()
         && crossref.is_none()
         && unpaywall.is_none()
         && oa_publisher.is_none()
         && openalex_base.is_none()
+        && ar5iv_base.is_none()
     {
         let mut allowlists = tier_1_allowlist();
         allowlists.extend(oa_publisher_allowlist());
@@ -2804,6 +2966,10 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
         // including the hosts here cannot widen the network surface
         // beyond what the CapabilityProfile already permits.
         allowlists.extend(tier_2_allowlist());
+        // ADR-0032: full-text extraction (`doiget_paper_text`) is Tier-1
+        // OA, always-on. Register `ar5iv.labs.arxiv.org` under the
+        // `"ar5iv"` source key so `paper_text::paper_text` can reach it.
+        allowlists.extend(fulltext_allowlist());
 
         // ADR-0028 D2: merge user-extension hosts from
         // `<config_dir>/doiget/config.toml`. Mirrors the CLI path in
@@ -2860,6 +3026,7 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
         ("unpaywall", unpaywall.as_deref()),
         ("oa-publisher", oa_publisher.as_deref()),
         ("openalex", openalex_base.as_deref()),
+        ("ar5iv", ar5iv_base.as_deref()),
     ] {
         if let Some(b) = base {
             let url = url::Url::parse(b)
