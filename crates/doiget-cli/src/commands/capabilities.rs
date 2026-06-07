@@ -495,6 +495,16 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
             json_mode: JsonMode::Supported,
             feature_gated: None,
         },
+        "link" => SubcommandMeta {
+            examples: &[
+                "doiget link 10.1103/PhysRevB.1",
+                "doiget link 10.1103/PhysRevB.1 --json",
+            ],
+            // The identity cluster (human lines or `PaperLinks` JSON) is the
+            // product output; `--mode json` switches its shape.
+            json_mode: JsonMode::Supported,
+            feature_gated: None,
+        },
         "audit-log" => SubcommandMeta {
             examples: &[
                 "doiget audit-log --verify",

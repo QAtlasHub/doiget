@@ -117,6 +117,7 @@ enum ProvenanceAction {
                   \x20 cite         Resolve a ref live and print clean BibTeX (doi2bib-style)\n\
                   \x20 csl          Export a stored entry as CSL JSON\n\
                   \x20 text         Extract a paper's full text from ar5iv (arXiv id)\n\
+                  \x20 link         Resolve a DOI to its arXiv preprint (OpenAlex)\n\
                   \x20 info         Show metadata for a stored entry\n\
                   \x20 search       Search the local store by title / authors / venue\n\
                   \x20 list-recent  List the most recently fetched entries\n\
@@ -340,6 +341,13 @@ enum Command {
         /// Bypass the on-disk text cache (always re-fetch from ar5iv).
         #[arg(long)]
         no_cache: bool,
+    },
+    /// Resolve a DOI to its arXiv preprint + identity cluster (OpenAlex;
+    /// #281 item 5). Reports whether the same work has a free arXiv
+    /// preprint, for reading or dedup. arXiv → DOI is a follow-up.
+    Link {
+        /// DOI (e.g. "10.1103/PhysRevB.1"). A non-DOI ref is rejected.
+        ref_: String,
     },
     /// Inspect or verify the provenance log.
     AuditLog {
@@ -655,6 +663,7 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             max_chars,
             no_cache,
         }) => doiget_cli::commands::text::run(ref_, max_chars, no_cache, mode).await,
+        Some(Command::Link { ref_ }) => doiget_cli::commands::link::run(ref_, mode).await,
         // Phase 3 (MCP foundation). The MCP server runs on stdio per
         // ADR-0001. The `tracing_subscriber` installed at the top of
         // `main` is already redirected to stderr, so any rmcp / tool

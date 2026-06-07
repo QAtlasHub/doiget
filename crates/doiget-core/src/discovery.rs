@@ -829,6 +829,146 @@ fn missing_results_array(context: &str, value: &serde_json::Value) -> FetchError
 }
 
 // ---------------------------------------------------------------------------
+// DOI ↔ arXiv linking (#281 item 5)
+// ---------------------------------------------------------------------------
+
+/// The cross-identifier "identity cluster" for a single work: its DOI, its
+/// arXiv preprint id (when one exists), the OpenAlex Work id, and the
+/// title.
+///
+/// This is the primitive behind #281 item 5 (arXiv ↔ published-DOI
+/// linking & dedup): given a published DOI, an agent can discover whether a
+/// free arXiv preprint of the **same work** exists (to read its full text,
+/// or to avoid fetching the preprint and the journal version twice).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PaperLinks {
+    /// Bare DOI (lower-cased), or `None` if OpenAlex has none for the work.
+    pub doi: Option<String>,
+    /// arXiv id of the preprint of this work, or `None` when no arXiv
+    /// location is recorded. A trailing version (`v2`) is kept.
+    pub arxiv: Option<String>,
+    /// OpenAlex Work id (`W…`).
+    pub openalex_id: String,
+    /// Work title.
+    pub title: String,
+}
+
+/// Resolve the [`PaperLinks`] identity cluster for a **DOI** via OpenAlex
+/// (`/works?filter=doi:<doi>`), in particular whether the work has an arXiv
+/// preprint.
+///
+/// `base` / `contact_email` / `ctx` are used exactly as in
+/// [`paper_search`] (Tier-1 OA metadata, always-on; a single bounded
+/// `/works` query; `HttpClient::fetch_bytes`, never a PDF). The arXiv id
+/// is extracted from the work's `locations[]` / `primary_location` /
+/// `best_oa_location` URLs (`arxiv.org/abs/<id>`), reusing the same logic
+/// as discovery search.
+///
+/// # Errors
+///
+/// [`FetchError::NotFound`] when no OpenAlex work matches the DOI,
+/// [`FetchError::SourceSchema`] when the response is not a JSON object with
+/// a `results` array — or when the matched work carries no `id`,
+/// [`FetchError::Http`] for transport failures, and propagates a
+/// provenance-log append failure (fail-closed).
+pub async fn resolve_links_for_doi(
+    base: &Url,
+    contact_email: &str,
+    doi: &str,
+    ctx: &FetchContext,
+) -> Result<PaperLinks, FetchError> {
+    let url = build_doi_lookup_url(base, contact_email, doi)?;
+    let (value, _bytes) = openalex_get(&url, ctx).await?;
+
+    let results = value
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| missing_results_array("doi-lookup", &value))?;
+
+    let work = results.first().ok_or_else(|| FetchError::NotFound {
+        hint: format!("no OpenAlex work matched doi '{doi}'"),
+    })?;
+
+    let links = work_to_links(work);
+    // A matched work always carries an `id`; an empty one means the record
+    // was malformed. Surface it as a schema error rather than returning a
+    // cluster with a blank `openalex_id` (review #287).
+    if links.openalex_id.is_empty() {
+        return Err(FetchError::SourceSchema {
+            hint: format!("openalex work for doi '{doi}' has no id"),
+        });
+    }
+    Ok(links)
+}
+
+/// Build the `/works?filter=doi:<doi>&select=&per-page=1&mailto=` URL for
+/// the single-work DOI lookup. The `filter` value is URL-encoded by
+/// `query_pairs_mut`, so a DOI's `/` and `:` are carried safely (unlike a
+/// `/works/doi:<doi>` path form, where the suffix `/` would split the
+/// path).
+fn build_doi_lookup_url(base: &Url, contact_email: &str, doi: &str) -> Result<Url, FetchError> {
+    let mut url = base.join("/works").map_err(|e| FetchError::SourceSchema {
+        hint: format!("openalex doi-lookup URL construction failed: {e}"),
+    })?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("filter", &format!("doi:{doi}"));
+        qp.append_pair("per-page", "1");
+        qp.append_pair(
+            "select",
+            "id,doi,title,display_name,locations,primary_location,best_oa_location",
+        );
+        if !contact_email.is_empty() {
+            qp.append_pair("mailto", contact_email);
+        }
+    }
+    Ok(url)
+}
+
+/// Map one OpenAlex Work JSON object to a [`PaperLinks`]. Scans
+/// `locations[]`, then `primary_location` / `best_oa_location`, for an
+/// arXiv URL.
+fn work_to_links(work: &serde_json::Value) -> PaperLinks {
+    let openalex_id = work
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(strip_openalex_prefix)
+        .unwrap_or_default();
+
+    let doi = work
+        .get("doi")
+        .and_then(serde_json::Value::as_str)
+        .map(strip_doi_prefix);
+
+    let title = work
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| work.get("display_name").and_then(serde_json::Value::as_str))
+        .unwrap_or("")
+        .to_string();
+
+    let arxiv = work
+        .get("locations")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|locs| locs.iter().find_map(extract_arxiv_from_location))
+        .or_else(|| {
+            work.get("primary_location")
+                .and_then(extract_arxiv_from_location)
+        })
+        .or_else(|| {
+            work.get("best_oa_location")
+                .and_then(extract_arxiv_from_location)
+        });
+
+    PaperLinks {
+        doi,
+        arxiv,
+        openalex_id,
+        title,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1260,6 +1400,113 @@ mod tests {
             "10.1234/abc"
         );
         assert_eq!(strip_openalex_prefix("https://openalex.org/W999"), "W999");
+    }
+
+    // ---- resolve_links_for_doi (#281 item 5) -----------------------------
+
+    #[tokio::test]
+    async fn doi_lookup_extracts_arxiv_preprint() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .and(query_param("filter", "doi:10.1103/physrevb.1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{ "meta": { "count": 1 }, "results": [ {
+                    "id": "https://openalex.org/W55",
+                    "doi": "https://doi.org/10.1103/PhysRevB.1",
+                    "title": "Published Version",
+                    "locations": [
+                        { "landing_page_url": "https://journals.aps.org/prb/abstract/x" },
+                        { "pdf_url": "https://arxiv.org/abs/2101.54321v2" }
+                    ]
+                } ] }"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = build_test_context(&server.uri());
+        let base = Url::parse(&server.uri()).expect("wiremock URI parses");
+        let links = resolve_links_for_doi(&base, "", "10.1103/physrevb.1", &ctx)
+            .await
+            .expect("doi lookup ok");
+        assert_eq!(links.openalex_id, "W55");
+        assert_eq!(links.doi.as_deref(), Some("10.1103/physrevb.1")); // lower-cased
+        assert_eq!(links.arxiv.as_deref(), Some("2101.54321v2"));
+        assert_eq!(links.title, "Published Version");
+    }
+
+    #[tokio::test]
+    async fn doi_lookup_without_arxiv_location_is_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{ "meta": { "count": 1 }, "results": [ {
+                    "id": "https://openalex.org/W7",
+                    "doi": "https://doi.org/10.1234/closed",
+                    "title": "No Preprint",
+                    "locations": [ { "landing_page_url": "https://example.com/x" } ]
+                } ] }"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = build_test_context(&server.uri());
+        let base = Url::parse(&server.uri()).expect("uri");
+        let links = resolve_links_for_doi(&base, "", "10.1234/closed", &ctx)
+            .await
+            .expect("ok");
+        assert_eq!(links.arxiv, None);
+        assert_eq!(links.openalex_id, "W7");
+    }
+
+    #[tokio::test]
+    async fn doi_lookup_unknown_doi_is_not_found() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{ "meta": { "count": 0 }, "results": [] }"#),
+            )
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = build_test_context(&server.uri());
+        let base = Url::parse(&server.uri()).expect("uri");
+        let err = resolve_links_for_doi(&base, "", "10.0000/nope", &ctx)
+            .await
+            .expect_err("an unmatched doi must be NotFound");
+        assert!(matches!(err, FetchError::NotFound { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn doi_lookup_url_preserves_input_doi_case() {
+        // The correctness of `link` rests on "Doi::parse does not lower-case,
+        // OpenAlex is case-insensitive": a real `doiget link 10.1103/PhysRevB.1`
+        // must send the DOI verbatim in the filter (review #287). Pin it.
+        let base = Url::parse("https://api.openalex.org").expect("base");
+        let u = build_doi_lookup_url(&base, "", "10.1103/PhysRevB.1").expect("url");
+        assert_eq!(
+            param(&u, "filter").as_deref(),
+            Some("doi:10.1103/PhysRevB.1"),
+            "the input DOI case must be carried through verbatim"
+        );
+    }
+
+    #[test]
+    fn doi_lookup_url_carries_filter_and_select() {
+        let base = Url::parse("https://api.openalex.org").expect("base");
+        let u = build_doi_lookup_url(&base, "", "10.1/x").expect("url");
+        assert_eq!(
+            param(&u, "filter").as_deref(),
+            Some("doi:10.1/x"),
+            "doi filter must be url-encoded into the query"
+        );
+        assert!(param(&u, "select")
+            .unwrap_or_default()
+            .contains("locations"));
+        assert_eq!(param(&u, "per-page").as_deref(), Some("1"));
     }
 
     // ---- build_search_url branch coverage --------------------------------
