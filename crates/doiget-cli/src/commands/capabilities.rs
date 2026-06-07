@@ -327,6 +327,10 @@ const MCP_TOOLS: &[McpTool] = &[
         schema_ref: "docs/MCP_TOOLS.md#1-tool-list",
     },
     McpTool {
+        name: "doiget_paper_text",
+        schema_ref: "docs/MCP_TOOLS.md#1-tool-list",
+    },
+    McpTool {
         name: "doiget_list_recent",
         schema_ref: "docs/MCP_TOOLS.md#1-tool-list",
     },
@@ -1015,6 +1019,7 @@ mod tests {
             "doiget_info",
             "doiget_search_local",
             "doiget_paper_search",
+            "doiget_paper_text",
             "doiget_list_recent",
             "doiget_paper_pdf_path",
             "doiget_capability_profile",
