@@ -237,6 +237,7 @@ fn has_prerelease_suffix(version: &str) -> bool {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn is_newer_detects_upgrade() {
@@ -269,6 +270,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn releases_url_rejects_invalid_base() {
         std::env::set_var("DOIGET_GITHUB_BASE", "not a url !!!");
         let result = releases_url();
@@ -277,6 +279,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn releases_url_falls_back_to_production_when_unset() {
         std::env::remove_var("DOIGET_GITHUB_BASE");
         let url = releases_url().expect("fallback must succeed");
