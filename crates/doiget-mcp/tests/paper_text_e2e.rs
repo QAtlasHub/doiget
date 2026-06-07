@@ -84,9 +84,10 @@ async fn paper_text_returns_sectioned_envelope() -> anyhow::Result<()> {
         .await;
 
     let td = tempfile::TempDir::new().expect("tempdir");
+    let log = log_path(&td, "mcp-text.jsonl");
     let env = EnvGuard::new(ENV_KEYS);
     env.set("DOIGET_AR5IV_BASE", &server.uri());
-    env.set("DOIGET_LOG_PATH", log_path(&td, "mcp-text.jsonl").as_str());
+    env.set("DOIGET_LOG_PATH", log.as_str());
 
     let (client, server_handle) = boot_in_memory_server().await?;
 
@@ -111,6 +112,23 @@ async fn paper_text_returns_sectioned_envelope() -> anyhow::Result<()> {
     assert_eq!(
         s["sections"][1]["heading"],
         serde_json::json!("1 Introduction")
+    );
+
+    // Provenance bookends: SessionStart, one ar5iv Fetch row, SessionEnd —
+    // the reason the tool builds a FetchContext at all (a stated deliverable).
+    // `LogEvent` serializes snake_case.
+    let prov = std::fs::read_to_string(log.as_std_path()).expect("read provenance log");
+    assert!(
+        prov.contains("\"event\":\"session_start\""),
+        "missing session_start in:\n{prov}"
+    );
+    assert!(
+        prov.contains("\"event\":\"fetch\"") && prov.contains("\"source\":\"ar5iv\""),
+        "missing ar5iv fetch row in:\n{prov}"
+    );
+    assert!(
+        prov.contains("\"event\":\"session_end\""),
+        "missing session_end in:\n{prov}"
     );
 
     client.cancel().await?;
@@ -179,6 +197,8 @@ async fn paper_text_doi_maps_to_no_oa_available() -> anyhow::Result<()> {
 
     assert_eq!(s["ok"], serde_json::json!(false), "envelope: {s:?}");
     assert_eq!(s["error"]["code"], serde_json::json!("NO_OA_AVAILABLE"));
+    // MCP_TOOLS.md §5: an ok:false envelope echoes the input `ref`.
+    assert_eq!(s["ref"], serde_json::json!("10.1234/example"));
 
     client.cancel().await?;
     server_handle.await??;

@@ -2881,9 +2881,9 @@ fn paper_text_success_envelope(t: &doiget_core::paper_text::PaperText) -> Value 
 /// passed explicitly to `orchestrator::metadata_only_to_store` (the §11
 /// store-write entry point), keeping the context store-agnostic:
 ///
-/// - `HttpClient` — production allowlist (Tier 1 ∪ OA publisher), or
-///   the test-mode multi-source allowlist when any `DOIGET_*_BASE` env
-///   var is set.
+/// - `HttpClient` — production allowlist (Tier 1 ∪ OA publisher ∪ Tier 2 ∪
+///   full-text (ar5iv)), or the test-mode multi-source allowlist when any
+///   `DOIGET_*_BASE` env var is set.
 /// - `RateLimiter` — process-wide hard-coded politeness
 ///   ([`RateLimits::HARD_CODED`]).
 /// - `ProvenanceLog` — opened at `$DOIGET_LOG_PATH` or
@@ -2938,7 +2938,8 @@ fn crossref_source_from_env() -> Result<CrossrefSource, String> {
 /// HTTP client construction with the same `DOIGET_*_BASE` test-override
 /// surface that `doiget-cli` honors (`build_http_client` in
 /// `crates/doiget-cli/src/commands/fetch.rs`). When no overrides are
-/// set, returns the production allowlist (Tier 1 ∪ OA publisher).
+/// set, returns the production allowlist (Tier 1 ∪ OA publisher ∪ Tier 2 ∪
+/// full-text (ar5iv)).
 fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     let arxiv = std::env::var("DOIGET_ARXIV_BASE").ok();
     let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
