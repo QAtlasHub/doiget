@@ -116,6 +116,7 @@ enum ProvenanceAction {
                   \x20 bib          Export a stored entry as BibTeX\n\
                   \x20 cite         Resolve a ref live and print clean BibTeX (doi2bib-style)\n\
                   \x20 csl          Export a stored entry as CSL JSON\n\
+                  \x20 text         Extract a paper's full text from ar5iv (arXiv id)\n\
                   \x20 info         Show metadata for a stored entry\n\
                   \x20 search       Search the local store by title / authors / venue\n\
                   \x20 list-recent  List the most recently fetched entries\n\
@@ -322,6 +323,23 @@ enum Command {
     Csl {
         /// DOI or arXiv id.
         ref_: String,
+    },
+    /// Extract a paper's full text from ar5iv as sectioned plain text
+    /// (the #281 "read" step; ADR-0032). Takes an arXiv id; the PDF blob
+    /// is never opened. A bare DOI reports `NO_OA_AVAILABLE` (pass the
+    /// arXiv id). Tier-1 OA, always-on.
+    Text {
+        /// arXiv id (e.g. "arxiv:2401.12345"). A DOI is reported as
+        /// having no full-text source yet (#281 item 5).
+        ref_: String,
+        /// Cap the section body text to this many characters (the title and
+        /// section headings are not counted; truncation is flagged on
+        /// `truncated`). Omit for the full text.
+        #[arg(long)]
+        max_chars: Option<usize>,
+        /// Bypass the on-disk text cache (always re-fetch from ar5iv).
+        #[arg(long)]
+        no_cache: bool,
     },
     /// Inspect or verify the provenance log.
     AuditLog {
@@ -632,6 +650,11 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_, mode),
         Some(Command::Cite { ref_ }) => doiget_cli::commands::cite::run(ref_, mode).await,
         Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_, mode),
+        Some(Command::Text {
+            ref_,
+            max_chars,
+            no_cache,
+        }) => doiget_cli::commands::text::run(ref_, max_chars, no_cache, mode).await,
         // Phase 3 (MCP foundation). The MCP server runs on stdio per
         // ADR-0001. The `tracing_subscriber` installed at the top of
         // `main` is already redirected to stderr, so any rmcp / tool

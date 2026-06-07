@@ -255,6 +255,31 @@ pub fn discovery_allowlist() -> Vec<SourceAllowlist> {
     )]
 }
 
+/// Always-compiled allowlist for the **full-text extraction** call path
+/// (ADR-0032).
+///
+/// Registers `ar5iv.labs.arxiv.org` under a dedicated `"ar5iv"` source key
+/// so [`crate::paper_text::paper_text`] (`GET /html/<arxiv-id>`) can reach
+/// the ar5iv LaTeXML-XHTML renderer in the **default `oa-only` binary** —
+/// the same always-on posture as [`discovery_allowlist`].
+///
+/// The host is an arXiv subdomain (`*.arxiv.org` already matches it under
+/// the [`tier_1_allowlist`] `"arxiv"` key), so this adds no new
+/// registrable domain to the network surface — it only registers the host
+/// under a **distinct source key** so the provenance trail records that
+/// extracted text came from the ar5iv HTML renderer, not the arXiv
+/// PDF/Atom API (ADR-0032 D3). Full-text extraction is classified Tier-1
+/// OA metadata (read-only, OA, never a PDF reinterpretation), so its
+/// transport allowlist must exist regardless of any feature gate
+/// (ADR-0032 D2). The CLI's `build_http_client` extends the production
+/// allowlist with this **unconditionally**.
+pub fn fulltext_allowlist() -> Vec<SourceAllowlist> {
+    vec![SourceAllowlist::new(
+        "ar5iv",
+        vec!["ar5iv.labs.arxiv.org".to_string()],
+    )]
+}
+
 /// Hard-coded Phase 5a allowlist for the Springer Nature OA TDM
 /// source. Compile-gated by the `tdm-springer` Cargo feature so
 /// default release binaries never include the host pattern (per
@@ -1466,6 +1491,28 @@ mod tests {
         let lists = tier_1_allowlist();
         assert!(lists.iter().any(|a| a.source == "unpaywall"));
         assert!(lists.iter().any(|a| a.source == "arxiv"));
+    }
+
+    #[test]
+    fn fulltext_allowlist_registers_ar5iv_host_under_distinct_key() {
+        // ADR-0032 D3: the ar5iv renderer is registered under its own
+        // `"ar5iv"` source key (not `"arxiv"`) so provenance distinguishes
+        // full-text HTML from the arXiv PDF/Atom API.
+        let lists = fulltext_allowlist();
+        assert_eq!(lists.len(), 1, "exactly one full-text source entry");
+        let ar5iv = &lists[0];
+        assert_eq!(ar5iv.source, "ar5iv");
+        assert!(ar5iv.matches("ar5iv.labs.arxiv.org"));
+        // It is also an arXiv subdomain — the existing `*.arxiv.org` glob
+        // already covers the host, so no new registrable domain is added.
+        let arxiv = tier_1_allowlist()
+            .into_iter()
+            .find(|a| a.source == "arxiv")
+            .expect("arxiv entry");
+        assert!(
+            arxiv.matches("ar5iv.labs.arxiv.org"),
+            "ar5iv host must fall under the existing *.arxiv.org surface"
+        );
     }
 
     #[test]

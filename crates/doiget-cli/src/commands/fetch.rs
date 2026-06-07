@@ -48,7 +48,7 @@ use camino::Utf8PathBuf;
 #[cfg(feature = "citation")]
 use doiget_core::http::tier_2_allowlist;
 use doiget_core::http::{
-    discovery_allowlist, oa_publisher_allowlist, tier_1_allowlist, HttpClient,
+    discovery_allowlist, fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist, HttpClient,
 };
 use doiget_core::orchestrator::{fetch_paper as core_fetch_paper, FetchPaperOutcome, PdfLegStatus};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
@@ -227,12 +227,17 @@ pub(crate) fn build_http_client() -> Result<HttpClient> {
     // but reading the env unconditionally keeps the branch logic
     // simple and is harmless for default builds.
     let openalex_base = std::env::var("DOIGET_OPENALEX_BASE").ok();
+    // ADR-0032: `DOIGET_AR5IV_BASE` selects a wiremock host for the
+    // full-text extraction path (`doiget text`). Test-only override,
+    // mirroring `DOIGET_ARXIV_BASE`.
+    let ar5iv_base = std::env::var("DOIGET_AR5IV_BASE").ok();
 
     if arxiv.is_none()
         && crossref.is_none()
         && unpaywall.is_none()
         && oa_publisher.is_none()
         && openalex_base.is_none()
+        && ar5iv_base.is_none()
     {
         let mut allowlists = tier_1_allowlist();
         allowlists.extend(oa_publisher_allowlist());
@@ -244,6 +249,11 @@ pub(crate) fn build_http_client() -> Result<HttpClient> {
         // citation builds the Tier-2 extend below re-registers the same
         // host under the same key (idempotent HashMap overwrite).
         allowlists.extend(discovery_allowlist());
+        // ADR-0032: full-text extraction (`doiget text`) is Tier-1 OA
+        // metadata, always-on. Register `ar5iv.labs.arxiv.org` under the
+        // `"ar5iv"` source key unconditionally so `paper_text::paper_text`
+        // can reach ar5iv in `oa-only` builds.
+        allowlists.extend(fulltext_allowlist());
         // Slice 16: when the `citation` feature is compiled in, the
         // graph subcommand walks OpenAlex Work IDs via
         // `ctx.http.fetch_bytes("openalex", ...)`. The Tier 2
@@ -311,6 +321,7 @@ pub(crate) fn build_http_client() -> Result<HttpClient> {
         ("unpaywall", unpaywall.as_deref()),
         ("oa-publisher", oa_publisher.as_deref()),
         ("openalex", openalex_base.as_deref()),
+        ("ar5iv", ar5iv_base.as_deref()),
     ] {
         if let Some(b) = base {
             let url = url::Url::parse(b)

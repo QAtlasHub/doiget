@@ -174,6 +174,13 @@ fn read_tdm_grant(agree_var: &str, key_var: &str) -> Result<Option<TdmGrant>, Ca
 > OA metadata, **always-on** — it needs no env var and ships in the
 > default `oa-only` binary.
 
+> **Note (ADR-0032):** full-text extraction (`doiget text`,
+> `doiget_core::paper_text`) over **ar5iv** is likewise classified Tier-1
+> OA metadata, **always-on** — no env var, ships in the `oa-only` binary.
+> It reads the ar5iv HTML rendering, never the PDF blob (permanent
+> non-goal #1 / ADR-0003 stays intact, narrowed by ADR-0032 to PDF-blob
+> processing).
+
 Setting `DOIGET_AGREE_TDM_*` only makes the relevant source eligible. The corresponding
 TDM-specific Cargo feature must also have been compiled in (`cargo build --features
 tdm-elsevier` etc.). Default release binaries do not contain TDM source code at all.
