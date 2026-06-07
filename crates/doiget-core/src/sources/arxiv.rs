@@ -340,7 +340,9 @@ impl Source for ArxivSource {
 ///   "authors": ["Family, Given", ...],
 ///   "published": "YYYY-MM-DDTHH:MM:SSZ",  // RFC3339 UTC, passed through verbatim
 ///   "updated":   "YYYY-MM-DDTHH:MM:SSZ",
-///   "categories": ["cs.LG", "stat.ML"]
+///   "categories": ["cs.LG", "stat.ML"],
+///   "doi": "10.1103/...",          // PUBLISHED (journal) DOI cross-ref, NOT this entry's id; omit-when-absent (#281 item 5)
+///   "journal_ref": "Phys. Rev. ..."  // omit-when-absent
 /// }
 /// ```
 ///
