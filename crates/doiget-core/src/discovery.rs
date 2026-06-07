@@ -868,8 +868,9 @@ pub struct PaperLinks {
 ///
 /// [`FetchError::NotFound`] when no OpenAlex work matches the DOI,
 /// [`FetchError::SourceSchema`] when the response is not a JSON object with
-/// a `results` array, [`FetchError::Http`] for transport failures, and
-/// propagates a provenance-log append failure (fail-closed).
+/// a `results` array — or when the matched work carries no `id`,
+/// [`FetchError::Http`] for transport failures, and propagates a
+/// provenance-log append failure (fail-closed).
 pub async fn resolve_links_for_doi(
     base: &Url,
     contact_email: &str,
