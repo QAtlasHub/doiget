@@ -141,7 +141,9 @@ pub struct PaperText {
 ///   boundary).
 /// - [`FetchError::NotFound`] when ar5iv returns a body with no extractable
 ///   text (an authoritative "nothing to read here").
-/// - [`FetchError::SourceSchema`] when the HTML cannot be parsed.
+/// - [`FetchError::SourceSchema`] if the ar5iv URL cannot be constructed
+///   from `base` + the id. (HTML parsing itself is best-effort and
+///   infallible on content — see [`parse_ar5iv`].)
 /// - [`FetchError::Log`] if the provenance write fails (fail-closed).
 pub async fn paper_text(
     base: &Url,
