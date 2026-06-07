@@ -76,8 +76,12 @@ There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
 - doiget uses arXiv for: arXiv id → PDF + metadata. The parsed metadata
   also carries the **published DOI** and **journal reference** when the
   submitter supplied them (`<arxiv:doi>` / `<arxiv:journal_ref>`) — the
-  arXiv → published-DOI link (#281 item 5), surfaced via the existing
-  metadata path (`doiget_metadata_only` / `info`). Omitted when absent.
+  arXiv → published-DOI link (#281 item 5). These ride the **raw metadata
+  payload**, so they surface via **`doiget_metadata_only`** (which returns
+  that payload verbatim). They are NOT written to the shared store, so
+  `doiget info` (which reads the stored `Metadata`) does not show them: the
+  store write forces the arXiv entry's own `doi` to `None` and has no
+  `journal_ref` field. Omitted when absent.
 
 ### ar5iv (full-text extraction)
 

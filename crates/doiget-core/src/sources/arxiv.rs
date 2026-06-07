@@ -578,6 +578,14 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
     }
     // arXiv → published-DOI link (#281 item 5): omitted when the submitter
     // did not supply a DOI / journal reference.
+    //
+    // HAZARD: this `doi` is the PUBLISHED (journal) DOI, NOT this arXiv
+    // record's own identifier. It must NOT be promoted to the reserved
+    // top-level `doi` of the store `Metadata` (STORE.md) — that field is the
+    // entry's own identity. `orchestrator::build_metadata_only_metadata`
+    // correctly forces an arXiv entry's `doi` to `None`; any future consumer
+    // mapping `metadata_json["doi"]` into `Metadata.doi` would write the
+    // wrong identity. Treat this strictly as a cross-reference.
     if let Some(d) = doi {
         let trimmed = d.trim().to_string();
         if !trimmed.is_empty() {
@@ -1019,6 +1027,46 @@ mod tests {
         assert!(
             !obj.contains_key("journal_ref"),
             "journal_ref must be omitted: {obj:?}"
+        );
+    }
+
+    #[test]
+    fn parse_atom_feed_journal_ref_only_without_doi() {
+        // A real, common state: a journal_ref but no DOI. The `doi` key must
+        // be absent while `journal_ref` is present (independent extraction).
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2101.00001v1</id>
+    <title>Journal Ref Only</title>
+    <arxiv:journal_ref>J. Stat. Mech. (2021) 013203</arxiv:journal_ref>
+  </entry>
+</feed>"#;
+        let v = parse_atom_feed(xml.as_bytes()).expect("parses");
+        let obj = v.as_object().expect("object");
+        assert!(!obj.contains_key("doi"), "doi must be omitted: {obj:?}");
+        assert_eq!(
+            obj.get("journal_ref").and_then(Value::as_str),
+            Some("J. Stat. Mech. (2021) 013203")
+        );
+    }
+
+    #[test]
+    fn parse_atom_feed_whitespace_doi_is_omitted() {
+        // A whitespace-only `<arxiv:doi>` trims to empty and must be omitted,
+        // not emitted as `""` (exercises the trim→empty omit branch).
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2101.00002v1</id>
+    <title>Blank DOI</title>
+    <arxiv:doi>   </arxiv:doi>
+  </entry>
+</feed>"#;
+        let v = parse_atom_feed(xml.as_bytes()).expect("parses");
+        assert!(
+            !v.as_object().expect("object").contains_key("doi"),
+            "whitespace-only doi must be omitted: {v:?}"
         );
     }
 
