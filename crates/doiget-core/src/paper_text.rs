@@ -124,7 +124,9 @@ pub struct PaperText {
 ///
 /// `base` is the ar5iv base URL (production [`AR5IV_DEFAULT_BASE`]; tests
 /// inject a wiremock origin via `DOIGET_AR5IV_BASE`). `max_chars` caps the
-/// returned text (`None` = no cap); truncation is flagged on
+/// returned **section body text** (`char_count`; the `title` and section
+/// `heading`s are not counted against it) (`None` = no cap); truncation is
+/// flagged on
 /// [`PaperText::truncated`], never silent. When `ctx.cache_root` is `Some`,
 /// a fresh cache entry is served from disk; otherwise the text is fetched,
 /// parsed, cached (best-effort), and one `Fetch` provenance row is emitted.
@@ -335,13 +337,21 @@ fn normalize(s: &str) -> String {
 /// inline `\(…\)`); normalizes whitespace. Sections with empty text but a
 /// heading are kept (a heading with no body still maps the document).
 ///
-/// # Errors
-///
-/// [`FetchError::SourceSchema`] if the XML reader reports a syntax error.
+/// Best-effort and **infallible** on content: a malformed/non-well-formed
+/// document is recovered (the reader runs with `check_end_names = false`,
+/// and a hard syntax error stops the walk while keeping the partial
+/// result rather than discarding it — ADR-0032 D3). An empty result is
+/// handled by the caller (→ `NotFound`). Returns `Result` only to keep the
+/// call-site uniform; it does not currently produce an `Err`.
 fn parse_ar5iv(html: &[u8]) -> Result<(Option<String>, Vec<TextSection>), FetchError> {
     let mut reader = Reader::from_reader(html);
     let config = reader.config_mut();
     config.trim_text(true);
+    // Best-effort (ADR-0032 D3): ar5iv LaTeXML output is normally
+    // well-formed XHTML, but real renderings can carry mismatched/void
+    // tags. Don't reject the whole document over an end-name mismatch —
+    // recover and keep extracting.
+    config.check_end_names = false;
 
     let mut sections: Vec<TextSection> = Vec::new();
     let mut cur_heading: Option<String> = None;
@@ -412,22 +422,33 @@ fn parse_ar5iv(html: &[u8]) -> Result<(Option<String>, Vec<TextSection>), FetchE
                 buf.clear();
             }
             Ok(Event::Text(t)) => {
-                if let Some(s) = t.decode().ok().and_then(|raw| {
+                match t.decode().ok().and_then(|raw| {
                     quick_xml::escape::unescape(&raw)
                         .ok()
                         .map(|c| c.into_owned())
                 }) {
-                    if !s.is_empty() && skip == 0 {
-                        let mut frag = s;
-                        frag.push(' ');
-                        push_target(
-                            in_title,
-                            in_heading,
-                            &mut title_buf,
-                            &mut heading_buf,
-                            &mut cur_text,
-                            &frag,
-                        );
+                    Some(s) => {
+                        if !s.is_empty() && skip == 0 {
+                            let mut frag = s;
+                            frag.push(' ');
+                            push_target(
+                                in_title,
+                                in_heading,
+                                &mut title_buf,
+                                &mut heading_buf,
+                                &mut cur_text,
+                                &frag,
+                            );
+                        }
+                    }
+                    // A text fragment that fails to decode/unescape is
+                    // dropped (best-effort), but log it: a *systematic*
+                    // decode failure would otherwise vanish silently while
+                    // the extraction still "succeeds" (review #285).
+                    None => {
+                        tracing::debug!(
+                            "ar5iv: skipped a text fragment that failed to decode/unescape"
+                        )
                     }
                 }
                 buf.clear();
@@ -460,9 +481,13 @@ fn parse_ar5iv(html: &[u8]) -> Result<(Option<String>, Vec<TextSection>), FetchE
             }
             Ok(Event::Eof) => break,
             Err(e) => {
-                return Err(FetchError::SourceSchema {
-                    hint: format!("ar5iv HTML parse error: {e}"),
-                });
+                // Best-effort (ADR-0032 D3): a syntax error deep in the
+                // document must not discard everything already collected.
+                // Stop here and return the partial result — an empty result
+                // still maps to NotFound upstream. The error is observable
+                // on stderr, never on the stdout JSON-RPC channel.
+                tracing::debug!(error = %e, "ar5iv HTML parse error; returning best-effort partial text");
+                break;
             }
             _ => {
                 buf.clear();
@@ -742,6 +767,47 @@ mod tests {
         assert!(sections.is_empty());
     }
 
+    #[test]
+    fn parse_mismatched_tags_recovers_full_document() {
+        // Mismatched/unclosed tags (a `<b>` closed by `</p>`, an unclosed
+        // `<body>`) must NOT discard the document: `check_end_names = false`
+        // recovers and keeps extracting past them (ADR-0032 D3).
+        let xml = r#"<html><body><p>Alpha beta <b>bold</p><h2>Sec</h2><p>Body text</body>"#;
+        let res = parse_ar5iv(xml.as_bytes());
+        assert!(res.is_ok(), "best-effort parse must not error: {res:?}");
+        let (_title, sections) = res.expect("ok");
+        let joined: String = sections
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            joined.contains("Body text") && joined.contains("bold"),
+            "recovered text past the mismatched tags: {joined:?}"
+        );
+    }
+
+    #[test]
+    fn parse_hard_syntax_error_degrades_to_partial_not_error() {
+        // A bare `&` (invalid entity) is a hard reader error; best-effort
+        // (ADR-0032 D3) returns the partial text collected before it rather
+        // than erroring — a single defect never collapses the whole call to
+        // INTERNAL_ERROR.
+        let xml = r#"<html><body><p>Prefix kept here</p><p>Bad & entity halts</body>"#;
+        let res = parse_ar5iv(xml.as_bytes());
+        assert!(res.is_ok(), "hard syntax error must NOT error: {res:?}");
+        let (_title, sections) = res.expect("ok");
+        let joined: String = sections
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            joined.contains("Prefix kept here"),
+            "the prefix before the hard error is retained: {joined:?}"
+        );
+    }
+
     // ---- apply_max_chars -------------------------------------------------
 
     fn full_fixture() -> PaperText {
@@ -806,6 +872,28 @@ mod tests {
         assert!(out.truncated);
         assert_eq!(out.char_count, 0);
         assert!(out.sections.is_empty());
+    }
+
+    #[test]
+    fn max_chars_truncation_is_char_boundary_safe_for_multibyte() {
+        // Truncation must cut on `char` boundaries — a naive byte slice of a
+        // multibyte string (CJK / emoji) would panic. 7 chars, multi-byte.
+        let full = PaperText {
+            arxiv_id: "2401.12345".into(),
+            source: TextSource::Ar5iv,
+            title: None,
+            sections: vec![TextSection {
+                heading: None,
+                text: "あいうえお漢字".into(),
+            }],
+            char_count: 7,
+            truncated: false,
+            retrieved_from: "u".into(),
+        };
+        let out = apply_max_chars(full, Some(3));
+        assert!(out.truncated);
+        assert_eq!(out.char_count, 3);
+        assert_eq!(out.sections[0].text, "あいう");
     }
 
     // ---- url builder -----------------------------------------------------

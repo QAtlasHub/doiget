@@ -332,8 +332,9 @@ enum Command {
         /// arXiv id (e.g. "arxiv:2401.12345"). A DOI is reported as
         /// having no full-text source yet (#281 item 5).
         ref_: String,
-        /// Cap the returned text to this many characters (truncation is
-        /// flagged on `truncated`). Omit for the full text.
+        /// Cap the section body text to this many characters (the title and
+        /// section headings are not counted; truncation is flagged on
+        /// `truncated`). Omit for the full text.
         #[arg(long)]
         max_chars: Option<usize>,
         /// Bypass the on-disk text cache (always re-fetch from ar5iv).
