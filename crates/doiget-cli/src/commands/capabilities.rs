@@ -480,6 +480,17 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
             json_mode: JsonMode::Artifact,
             feature_gated: None,
         },
+        "text" => SubcommandMeta {
+            examples: &[
+                "doiget text arxiv:2401.12345",
+                "doiget text arxiv:2401.12345 --max-chars 8000",
+                "doiget text arxiv:2401.12345 --json",
+            ],
+            // The extracted text (human layout or `PaperText` JSON) is the
+            // product output; `--mode json` switches its shape.
+            json_mode: JsonMode::Supported,
+            feature_gated: None,
+        },
         "audit-log" => SubcommandMeta {
             examples: &[
                 "doiget audit-log --verify",

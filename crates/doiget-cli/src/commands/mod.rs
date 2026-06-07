@@ -36,6 +36,7 @@ pub mod output;
 pub mod provenance;
 pub mod resolve_citation;
 pub mod search;
+pub mod text;
 pub mod verify;
 pub mod version;
 

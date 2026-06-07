@@ -14,6 +14,7 @@
 | Crossref | 1 (OA) | 1 | none | <https://www.crossref.org/services/metadata-retrieval/rest-api/> | always-on |
 | Unpaywall | 1 (OA) | 1 | email (polite pool) | <https://unpaywall.org/products/api> | always-on |
 | arXiv | 1 (OA) | 1 | none | <https://info.arxiv.org/help/api/index.html> | always-on |
+| ar5iv (full text) | 1 (OA) | 4 (PR4) | none | <https://ar5iv.labs.arxiv.org/> | always-on |
 | OpenAlex | 2 (metadata) | 4 | none | <https://docs.openalex.org/how-to-use-the-api/api-overview> | `--features metadata` + `DOIGET_ENABLE_OPENALEX` |
 | Semantic Scholar | 2 (metadata) | 4 | API key (optional) | <https://www.semanticscholar.org/product/api> | `--features metadata` + `DOIGET_ENABLE_S2` |
 | DOAJ | 2 (metadata) | 4 | none | <https://www.doaj.org/api> | `--features metadata` + `DOIGET_ENABLE_DOAJ` |
@@ -73,6 +74,23 @@ There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
 - Public, no-auth API, but the API has a 3-second-per-request rate guideline. doiget's
   global 5/sec cap respects this.
 - doiget uses arXiv for: arXiv id → PDF + metadata.
+
+### ar5iv (full-text extraction)
+
+- ar5iv (`ar5iv.labs.arxiv.org`) renders arXiv papers as LaTeXML XHTML.
+  doiget's `paper_text` / `doiget text` extracts sectioned plain text from
+  it (the #281 "read" step; ADR-0032). **Tier 1 OA, always-on** — ships in
+  the default `oa-only` binary, no env gate.
+- It is registered under a **distinct `"ar5iv"` source key** (not
+  `"arxiv"`) so provenance distinguishes full-text HTML from the arXiv
+  PDF/Atom API. The host is a `*.arxiv.org` subdomain, so it adds no new
+  registrable domain to the network surface
+  (`http::fulltext_allowlist()`).
+- **Never opens the PDF blob** (ADR-0032 D1): this is a *separate* fetch of
+  the publisher's HTML rendering, not PDF content processing (permanent
+  non-goal #1 stays intact). Extracted text is cached at
+  `<cache_root>/text/<safekey>.json` (`docs/CACHE.md`), not the shared
+  store.
 
 ### OpenAlex / Semantic Scholar / DOAJ
 
