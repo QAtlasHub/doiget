@@ -636,10 +636,12 @@ fn extract_unpaywall_oa_url(meta: &Value) -> Option<String> {
 
 /// Pull Unpaywall's `oa_status` (`gold` / `green` / `hybrid` / `bronze` /
 /// `closed`) out of a metadata payload, for OA transparency (#281 item 4).
-/// Returns `None` when the field is absent.
+/// Returns `None` when the field is absent — or an empty string, which is
+/// "not determined", never a meaningful status (review #284 advisory).
 fn extract_unpaywall_oa_status(meta: &Value) -> Option<String> {
     meta.get("oa_status")
         .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
         .map(str::to_string)
 }
 

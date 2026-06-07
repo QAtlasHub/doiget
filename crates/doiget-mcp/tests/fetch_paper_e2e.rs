@@ -514,6 +514,7 @@ async fn fetch_paper_doi_blocked_pdf_includes_suggested_arxiv_id() -> anyhow::Re
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "doi": "10.1234/suggest-test",
             "is_oa": true,
+            "oa_status": "closed",
             "best_oa_location": {
                 "url_for_pdf": "https://arxiv.org/pdf/2401.99999v2.pdf",
                 "url": "https://arxiv.org/abs/2401.99999v2",
@@ -577,6 +578,15 @@ async fn fetch_paper_doi_blocked_pdf_includes_suggested_arxiv_id() -> anyhow::Re
         serde_json::json!("2401.99999"),
         "suggested_arxiv_id must be present and version-stripped; got: {:?}",
         structured["pdf"]["suggested_arxiv_id"]
+    );
+    // OA transparency (#281 item 4): the work's oa_status (from Unpaywall)
+    // is surfaced even though the PDF leg was blocked — `closed` + a
+    // blocked/no-OA leg reads as "paywalled", distinct from a transient
+    // failure. This is the headline DOI oa_status path (review #284).
+    assert_eq!(
+        structured["oa_status"],
+        serde_json::json!("closed"),
+        "oa_status must surface on the DOI fetch envelope; got: {structured:?}"
     );
 
     client.cancel().await?;

@@ -844,6 +844,9 @@ mod tests {
         assert_eq!(d.license, want.license);
         assert_eq!(d.size_bytes, want.size_bytes);
         assert_eq!(d.mcp_call_id, want.mcp_call_id);
+        // OA transparency (#281 item 4): oa_status must survive the
+        // write→read round-trip, not just sit in the fixture.
+        assert_eq!(d.oa_status, want.oa_status);
     }
 
     #[test]
