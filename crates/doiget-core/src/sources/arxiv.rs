@@ -374,6 +374,12 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
     let mut updated: Option<String> = None;
     let mut authors: Vec<String> = Vec::new();
     let mut categories: Vec<String> = Vec::new();
+    // arXiv-namespaced elements (`<arxiv:doi>`, `<arxiv:journal_ref>`):
+    // present only when the submitter supplied a published DOI / journal
+    // reference. They are the canonical arXiv → published-DOI link source
+    // (#281 item 5), surfaced here so the metadata path carries them.
+    let mut doi: Option<String> = None;
+    let mut journal_ref: Option<String> = None;
 
     // Current text-collection target — None when we are not inside a
     // leaf element whose text we want.
@@ -384,6 +390,8 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
         Published,
         Updated,
         AuthorName,
+        Doi,
+        JournalRef,
     }
     let mut target: Option<Target> = None;
     let mut in_author = false;
@@ -411,6 +419,11 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
                         b"summary" => target = Some(Target::Summary),
                         b"published" => target = Some(Target::Published),
                         b"updated" => target = Some(Target::Updated),
+                        // arXiv namespace; `local_name` strips the `arxiv:`
+                        // prefix, so these match `<arxiv:doi>` /
+                        // `<arxiv:journal_ref>`.
+                        b"doi" => target = Some(Target::Doi),
+                        b"journal_ref" => target = Some(Target::JournalRef),
                         b"author" => {
                             in_author = true;
                             authors.push(String::new());
@@ -463,6 +476,10 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
                                 published.get_or_insert_with(String::new).push_str(&s)
                             }
                             Target::Updated => updated.get_or_insert_with(String::new).push_str(&s),
+                            Target::Doi => doi.get_or_insert_with(String::new).push_str(&s),
+                            Target::JournalRef => {
+                                journal_ref.get_or_insert_with(String::new).push_str(&s)
+                            }
                             Target::AuthorName => {
                                 if let Some(last) = authors.last_mut() {
                                     last.push_str(&s);
@@ -557,6 +574,20 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
         let trimmed = u.trim().to_string();
         if !trimmed.is_empty() {
             obj.insert("updated".into(), Value::String(trimmed));
+        }
+    }
+    // arXiv → published-DOI link (#281 item 5): omitted when the submitter
+    // did not supply a DOI / journal reference.
+    if let Some(d) = doi {
+        let trimmed = d.trim().to_string();
+        if !trimmed.is_empty() {
+            obj.insert("doi".into(), Value::String(trimmed));
+        }
+    }
+    if let Some(j) = journal_ref {
+        let trimmed = j.trim().to_string();
+        if !trimmed.is_empty() {
+            obj.insert("journal_ref".into(), Value::String(trimmed));
         }
     }
     if !categories.is_empty() {
@@ -950,6 +981,45 @@ mod tests {
             }
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_atom_feed_captures_published_doi_and_journal_ref() {
+        // When the submitter supplied a published DOI / journal reference,
+        // arXiv emits `<arxiv:doi>` / `<arxiv:journal_ref>` (the arXiv
+        // namespace). They are the arXiv → published-DOI link (#281 item 5)
+        // and must surface in the metadata JSON. Absent on most entries.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2101.54321v2</id>
+    <title>Published Later</title>
+    <arxiv:doi>10.1103/PhysRevLett.130.200601</arxiv:doi>
+    <arxiv:journal_ref>Phys. Rev. Lett. 130, 200601 (2023)</arxiv:journal_ref>
+  </entry>
+</feed>"#;
+        let v = parse_atom_feed(xml.as_bytes()).expect("parses");
+        assert_eq!(
+            v["doi"],
+            serde_json::json!("10.1103/PhysRevLett.130.200601")
+        );
+        assert_eq!(
+            v["journal_ref"],
+            serde_json::json!("Phys. Rev. Lett. 130, 200601 (2023)")
+        );
+    }
+
+    #[test]
+    fn parse_atom_feed_omits_doi_when_absent() {
+        // The common case: no published DOI yet → no `doi` / `journal_ref`
+        // key (omitted, not null).
+        let v = parse_atom_feed(SAMPLE_ATOM_FEED.as_bytes()).expect("parses");
+        let obj = v.as_object().expect("object");
+        assert!(!obj.contains_key("doi"), "doi must be omitted: {obj:?}");
+        assert!(
+            !obj.contains_key("journal_ref"),
+            "journal_ref must be omitted: {obj:?}"
+        );
     }
 
     #[test]

@@ -79,7 +79,11 @@ There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
 
 - Public, no-auth API, but the API has a 3-second-per-request rate guideline. doiget's
   global 5/sec cap respects this.
-- doiget uses arXiv for: arXiv id → PDF + metadata.
+- doiget uses arXiv for: arXiv id → PDF + metadata. The parsed metadata
+  also carries the **published DOI** and **journal reference** when the
+  submitter supplied them (`<arxiv:doi>` / `<arxiv:journal_ref>`) — the
+  arXiv → published-DOI link (#281 item 5), surfaced via the existing
+  metadata path (`doiget_metadata_only` / `info`). Omitted when absent.
 
 ### ar5iv (full-text extraction)
 
