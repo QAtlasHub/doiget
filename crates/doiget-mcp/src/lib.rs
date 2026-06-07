@@ -1436,6 +1436,127 @@ impl Server {
         }
     }
 
+    /// `doiget_link` — resolve a **DOI** to its arXiv preprint + identity
+    /// cluster over OpenAlex (#281 item 5). Reports whether the same work
+    /// has a free arXiv preprint so an agent can read the free full text or
+    /// dedup a preprint against its journal version. Tier-1 OA, always-on;
+    /// never fetches a PDF. arXiv → DOI (reverse) is a follow-up.
+    #[tool(
+        description = "WHEN TO USE: Given a published DOI, find whether the same work has a free arXiv preprint (to read it, or to dedup a preprint vs the journal version).\n\
+                       INPUTS: ref (a DOI, e.g. \"10.1103/PhysRevB.1\").\n\
+                       OUTPUTS: { ok: true, doi, arxiv, openalex_id, title } (arxiv is null when no preprint) OR { ok:false, error }.\n\
+                       COSTS: 1 OpenAlex request.\n\
+                       SIDE EFFECTS: Emits a Metadata provenance row. NEVER writes the store; NEVER fetches a PDF.\n\
+                       LIMITS: DOI input only (arXiv → DOI is a follow-up; an arXiv/invalid ref → INVALID_REF). A DOI with no OpenAlex work → NOT_FOUND."
+    )]
+    async fn doiget_link(
+        &self,
+        Parameters(input): Parameters<LinkInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // DOI input only this slice (arXiv → DOI is a follow-up). An arXiv
+        // id parses fine but is the wrong direction; an unparsable ref is
+        // malformed — both surface as INVALID_REF for this tool.
+        let doi = match doiget_core::Ref::parse(&input.ref_) {
+            Ok(doiget_core::Ref::Doi(d)) => d,
+            Ok(doiget_core::Ref::Arxiv(_)) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    "doiget_link resolves a DOI to its arXiv preprint; pass a DOI \
+                     (arXiv → DOI linking is #281 follow-up)",
+                )));
+            }
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &e.to_string(),
+                )));
+            }
+        };
+
+        let base = match openalex_base() {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(doi.as_str()),
+                    ErrorCode::InternalError,
+                    &e,
+                )));
+            }
+        };
+        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
+
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(doi.as_str()),
+                    ErrorCode::InternalError,
+                    &format!("link context init failed: {e}"),
+                )));
+            }
+        };
+
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Metadata,
+            ref_: Some(doi.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        }) {
+            return Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(doi.as_str()),
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        let outcome = doiget_core::discovery::resolve_links_for_doi(
+            &base,
+            &contact_email,
+            doi.as_str(),
+            &ctx,
+        )
+        .await;
+        let _ = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if outcome.is_ok() {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Metadata,
+            ref_: Some(doi.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        });
+
+        match outcome {
+            Ok(links) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "doi": links.doi,
+                "arxiv": links.arxiv,
+                "openalex_id": links.openalex_id,
+                "title": links.title,
+            }))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(doi.as_str()),
+                ErrorCode::from(&e),
+                &e.to_string(),
+            ))),
+        }
+    }
+
     /// `doiget_list_recent` — most-recent stored entries by
     /// `[doiget].fetched_at`. Read-only.
     ///
@@ -2054,6 +2175,20 @@ pub struct PaperTextInput {
     /// flagged on `truncated`). Omit for the full text.
     #[serde(default)]
     pub max_chars: Option<u32>,
+}
+
+/// JSON-schema-derived input for the `doiget_link` MCP tool (DOI → arXiv
+/// preprint linking; #281 item 5).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct LinkInput {
+    /// A **DOI** (e.g. "10.1103/PhysRevB.1"), validated via `Ref::parse`.
+    /// An arXiv id or unparsable ref returns `INVALID_REF` (arXiv → DOI is
+    /// a follow-up).
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
 }
 
 /// JSON-schema-derived input for the `doiget_list_recent` MCP tool.
