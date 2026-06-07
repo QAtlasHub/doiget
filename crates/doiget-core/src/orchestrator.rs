@@ -2002,6 +2002,18 @@ mod tests {
         assert!(extract_unpaywall_oa_url(&meta).is_none());
     }
 
+    #[test]
+    fn extract_unpaywall_oa_status_present_absent_and_empty() {
+        // Present → Some; absent → None; empty string → None ("not
+        // determined", never a meaningful status — review #284).
+        assert_eq!(
+            extract_unpaywall_oa_status(&serde_json::json!({"oa_status": "gold"})).as_deref(),
+            Some("gold")
+        );
+        assert!(extract_unpaywall_oa_status(&serde_json::json!({})).is_none());
+        assert!(extract_unpaywall_oa_status(&serde_json::json!({"oa_status": ""})).is_none());
+    }
+
     // ---------------------------------------------------------------
     // Slice 2: fetch_paper / batch_fetch coverage. The wiremock-driven
     // happy-path tests live in `crates/doiget-mcp/tests/...` (they need
