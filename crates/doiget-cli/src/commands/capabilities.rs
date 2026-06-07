@@ -323,6 +323,18 @@ const MCP_TOOLS: &[McpTool] = &[
         schema_ref: "docs/MCP_TOOLS.md#1-tool-list",
     },
     McpTool {
+        name: "doiget_paper_search",
+        schema_ref: "docs/MCP_TOOLS.md#1-tool-list",
+    },
+    McpTool {
+        name: "doiget_paper_text",
+        schema_ref: "docs/MCP_TOOLS.md#1-tool-list",
+    },
+    McpTool {
+        name: "doiget_link",
+        schema_ref: "docs/MCP_TOOLS.md#1-tool-list",
+    },
+    McpTool {
         name: "doiget_list_recent",
         schema_ref: "docs/MCP_TOOLS.md#1-tool-list",
     },
@@ -474,6 +486,27 @@ fn metadata_for(subcommand: &str) -> Option<SubcommandMeta> {
         "csl" => SubcommandMeta {
             examples: &["doiget csl 10.1234/foo"],
             json_mode: JsonMode::Artifact,
+            feature_gated: None,
+        },
+        "text" => SubcommandMeta {
+            examples: &[
+                "doiget text arxiv:2401.12345",
+                "doiget text arxiv:2401.12345 --max-chars 8000",
+                "doiget text arxiv:2401.12345 --json",
+            ],
+            // The extracted text (human layout or `PaperText` JSON) is the
+            // product output; `--mode json` switches its shape.
+            json_mode: JsonMode::Supported,
+            feature_gated: None,
+        },
+        "link" => SubcommandMeta {
+            examples: &[
+                "doiget link 10.1103/PhysRevB.1",
+                "doiget link 10.1103/PhysRevB.1 --json",
+            ],
+            // The identity cluster (human lines or `PaperLinks` JSON) is the
+            // product output; `--mode json` switches its shape.
+            json_mode: JsonMode::Supported,
             feature_gated: None,
         },
         "audit-log" => SubcommandMeta {
@@ -999,6 +1032,9 @@ mod tests {
             "doiget_batch_fetch",
             "doiget_info",
             "doiget_search_local",
+            "doiget_paper_search",
+            "doiget_paper_text",
+            "doiget_link",
             "doiget_list_recent",
             "doiget_paper_pdf_path",
             "doiget_capability_profile",

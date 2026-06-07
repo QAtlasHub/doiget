@@ -497,6 +497,9 @@ fn outcome_to_result_value(outcome: &FetchPaperOutcome) -> Option<serde_json::Va
         "safekey":          outcome.safekey,
         "store_path":       outcome.path.as_str(),
         "canonical_digest": outcome.canonical_digest,
+        // OA transparency (#281 item 4): gold/green/hybrid/bronze/closed,
+        // or null when not determined.
+        "oa_status":        outcome.oa_status,
     }))
 }
 

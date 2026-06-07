@@ -19,7 +19,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 |---|---|---|---|---|
 | 0001 | MCP transport is stdio only | Accepted | posture-lint + Slice 9 stdout-purity | #4 |
 | 0002 | TDM sources are compile-time feature-gated | Accepted | Slices 17/18/19 | #5 |
-| 0003 | PDF content processing is permanently out of scope | Accepted | standing policy (SCOPE.md #1 + posture-lint) | #9 |
+| 0003 | PDF content processing is permanently out of scope | Accepted (Amended by 0032: narrowed to PDF-*blob* processing; structured HTML/XML full-text is in scope) | standing policy (SCOPE.md #1 + posture-lint) | #9 |
 | 0004 | BiblioFetch.jl coexistence — shared store contract | Accepted | Phase 1 store + #121 (`0.1.2`) | #1 / #2 |
 | 0005 | CapabilityProfile gates source invocation at the type level | Accepted | PR #64/#65 (Phase 1) | #16 / #17 |
 | 0006 | Provenance log is JSON Lines + SHA-256 hash chain (fail-closed) | Accepted | PR #61 + Slice 4 | #12 / #17 |
@@ -47,6 +47,8 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0028 | User-extensible capability gate (ToS+verified-curation posture; impersonation out-of-scope) | Accepted (design; slice TBD) | TBD | #220 / #223 |
 | 0029 | Fetch chain: per-Ref multi-attempt resolution with attempt-level provenance | Accepted (design; slice TBD) | TBD | #222 / dogfood 2026-05-20 |
 | 0030 | Bibliography input adapters (.bib / CSL-JSON) in `doiget-core`; new MCP tool `doiget_batch_from_bibliography` | Accepted (design; slice TBD) | TBD | #222 / Zotero distribution review 2026-05-20 |
+| 0031 | Discovery search is Tier-1 OA metadata (always-on); `doiget search` defaults to external discovery | Accepted (design; PR1 slice) | PR1 (`feat/paper-search`) | #281 / feasibility read 2026-06-04 |
+| 0032 | Structured full-text (HTML/XML) extraction in scope; PDF-blob processing stays out of scope | Accepted (design; PR4 ships ar5iv leg) | PR4 (`feat/paper-text`) | #281 item 3 / scope decision 2026-06-06 |
 
 ## Conventions
 

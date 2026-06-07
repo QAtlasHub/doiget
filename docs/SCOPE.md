@@ -53,13 +53,22 @@ Removed) requires the full meta-rule.
 
 ### Content / processing
 
-1. **PDF content processing.** doiget does not extract text, perform OCR,
-   summarize, parse citations from PDF text, extract annotations, or read
-   bibliographic data from PDF metadata streams. PDFs are treated as opaque
-   blobs. (ADR-0003; see also [`MCP_TOOLS.md`](MCP_TOOLS.md): `paper_pdf_path`
-   returns only a path.) Bibliographic indexing from publisher API responses
+1. **PDF-blob content processing.** doiget does not extract text from the
+   PDF blob (parse its content streams), perform OCR, summarize, parse
+   citations from PDF text, extract annotations, or read bibliographic data
+   from PDF metadata streams. PDFs are treated as opaque blobs. (ADR-0003,
+   narrowed by [ADR-0032](DECISIONS/0032-fulltext-html-extraction.md); see
+   also [`MCP_TOOLS.md`](MCP_TOOLS.md): `paper_pdf_path` returns only a
+   path.) Bibliographic indexing from publisher API responses
    (title / authors / venue / abstract for `search_local`) is in scope and
    distinct from PDF content interpretation; see [`LEGAL.md`](LEGAL.md) §3.
+   Likewise, extracting **full text from already-structured HTML/XML
+   sources** (ar5iv's LaTeXML XHTML for arXiv, PMC / Europe PMC JATS) for
+   the `paper_text` capability is **in scope and distinct from PDF-content
+   interpretation** (ADR-0032 D1): that text is fetched as a separate
+   structured artifact and the PDF blob is never read. What this item
+   forbids is the PDF-blob/OCR processing enumerated above, not reading
+   open structured full text.
 
 ### Distribution / hosting
 
@@ -162,7 +171,7 @@ simplicity intact. Each non-goal corresponds to a specific risk:
 
 | Non-goal | Primary risk if added |
 |---|---|
-| PDF content processing | Derivative-work copyright posture; tool-neutrality framing weakens. |
+| PDF-blob content processing / OCR | Derivative-work copyright posture; tool-neutrality framing weakens. (Structured HTML/XML full text is in scope — ADR-0032.) |
 | MCP HTTP transport | Multi-tenant operational status; user is no longer the contract party. |
 | Bundled API keys | Direct ToS violation; doiget becomes the contracting party. |
 | `fetch_url(...)` tool | Generic SSRF surface; bypasses source-list discipline. |

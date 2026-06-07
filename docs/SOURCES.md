@@ -14,6 +14,7 @@
 | Crossref | 1 (OA) | 1 | none | <https://www.crossref.org/services/metadata-retrieval/rest-api/> | always-on |
 | Unpaywall | 1 (OA) | 1 | email (polite pool) | <https://unpaywall.org/products/api> | always-on |
 | arXiv | 1 (OA) | 1 | none | <https://info.arxiv.org/help/api/index.html> | always-on |
+| ar5iv (full text) | 1 (OA) | 4 (PR4) | none | <https://ar5iv.labs.arxiv.org/> | always-on |
 | OpenAlex | 2 (metadata) | 4 | none | <https://docs.openalex.org/how-to-use-the-api/api-overview> | `--features metadata` + `DOIGET_ENABLE_OPENALEX` |
 | Semantic Scholar | 2 (metadata) | 4 | API key (optional) | <https://www.semanticscholar.org/product/api> | `--features metadata` + `DOIGET_ENABLE_S2` |
 | DOAJ | 2 (metadata) | 4 | none | <https://www.doaj.org/api> | `--features metadata` + `DOIGET_ENABLE_DOAJ` |
@@ -72,12 +73,46 @@ There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
 
 - Public, no-auth API, but the API has a 3-second-per-request rate guideline. doiget's
   global 5/sec cap respects this.
-- doiget uses arXiv for: arXiv id → PDF + metadata.
+- doiget uses arXiv for: arXiv id → PDF + metadata. The parsed metadata
+  also carries the **published DOI** and **journal reference** when the
+  submitter supplied them (`<arxiv:doi>` / `<arxiv:journal_ref>`) — the
+  arXiv → published-DOI link (#281 item 5). These ride the **raw metadata
+  payload**, so they surface via the MCP tools **`doiget_metadata_only`** /
+  **`doiget_resolve_paper`** (which return that payload verbatim). They are
+  NOT written to the shared store, so
+  `doiget info` (which reads the stored `Metadata`) does not show them: the
+  store write forces the arXiv entry's own `doi` to `None` and has no
+  `journal_ref` field. Omitted when absent.
+
+### ar5iv (full-text extraction)
+
+- ar5iv (`ar5iv.labs.arxiv.org`) renders arXiv papers as LaTeXML XHTML.
+  doiget's `paper_text` / `doiget text` extracts sectioned plain text from
+  it (the #281 "read" step; ADR-0032). **Tier 1 OA, always-on** — ships in
+  the default `oa-only` binary, no env gate.
+- It is registered under a **distinct `"ar5iv"` source key** (not
+  `"arxiv"`) so provenance distinguishes full-text HTML from the arXiv
+  PDF/Atom API. The host is a `*.arxiv.org` subdomain, so it adds no new
+  registrable domain to the network surface
+  (`http::fulltext_allowlist()`).
+- **Never opens the PDF blob** (ADR-0032 D1): this is a *separate* fetch of
+  the publisher's HTML rendering, not PDF content processing (permanent
+  non-goal #1 stays intact). Extracted text is cached at
+  `<cache_root>/text/<safekey>.json` (`docs/CACHE.md`), not the shared
+  store.
 
 ### OpenAlex / Semantic Scholar / DOAJ
 
 - Metadata enrichment only. doiget does not fetch PDFs from these unless the response
   includes an OA URL whose host is on the per-source allowlist.
+- **OpenAlex has two distinct call paths with two tiers** (ADR-0031 D4):
+  the matrix row above (Tier 2) covers the *enrichment* / citation-`graph`
+  source (`/works/doi:…`, `referenced_works[]`), gated by `--features
+  citation` + `DOIGET_ENABLE_OPENALEX`. The separate **discovery search**
+  path (`doiget search`, `/works?search=`, `doiget_core::discovery`) is
+  **Tier 1 OA metadata, always-on**: it ships in the default `oa-only`
+  binary and needs **no** env-var gate. It is read-only, metadata-only,
+  never paywalled, and never fetches a PDF.
 
 ### TDM sources
 

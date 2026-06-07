@@ -116,6 +116,8 @@ enum ProvenanceAction {
                   \x20 bib          Export a stored entry as BibTeX\n\
                   \x20 cite         Resolve a ref live and print clean BibTeX (doi2bib-style)\n\
                   \x20 csl          Export a stored entry as CSL JSON\n\
+                  \x20 text         Extract a paper's full text from ar5iv (arXiv id)\n\
+                  \x20 link         Resolve a DOI to its arXiv preprint (OpenAlex)\n\
                   \x20 info         Show metadata for a stored entry\n\
                   \x20 search       Search the local store by title / authors / venue\n\
                   \x20 list-recent  List the most recently fetched entries\n\
@@ -262,10 +264,51 @@ enum Command {
         #[arg(default_value_t = 10)]
         limit: usize,
     },
-    /// Search the local store by title / authors / venue.
+    /// Search for papers. Default: external discovery over OpenAlex
+    /// (`/works?search=`, ADR-0031) — turn a topic into ranked candidate
+    /// papers with abstracts. Use `--local` to scan the local store
+    /// (title / authors / venue) instead.
     Search {
-        /// Query string.
+        /// Query string (a topic for discovery, or a substring for `--local`).
         query: String,
+        /// Scan the local store instead of external discovery.
+        #[arg(long, conflicts_with = "external")]
+        local: bool,
+        /// Explicit form of the default external discovery (mutually
+        /// exclusive with `--local`).
+        #[arg(long, conflicts_with = "local")]
+        external: bool,
+        /// External: maximum results. Must be 1..=200 (OpenAlex's per-page
+        /// cap); an out-of-range value is rejected, not clamped.
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+        /// External: only works published in or after this year.
+        #[arg(long)]
+        from_year: Option<i32>,
+        /// External: only works published in or before this year.
+        #[arg(long)]
+        to_year: Option<i32>,
+        /// External: restrict to open-access works.
+        #[arg(long)]
+        oa_only: bool,
+        /// External: only works cited strictly more than this many times.
+        #[arg(long)]
+        min_citations: Option<u64>,
+        /// External: filter to an author by name (resolved to an OpenAlex
+        /// author ID via `/authors?search=`).
+        #[arg(long)]
+        author: Option<String>,
+        /// External: filter to a venue / journal by name (resolved to an
+        /// OpenAlex source ID via `/sources?search=`).
+        #[arg(long)]
+        venue: Option<String>,
+        /// External: filter to a publisher by name (resolved to an
+        /// OpenAlex publisher ID via `/publishers?search=`).
+        #[arg(long)]
+        publisher: Option<String>,
+        /// External: result ordering.
+        #[arg(long, value_enum, default_value = "relevance")]
+        sort: doiget_cli::commands::search::SortArg,
     },
     /// Export an entry as BibTeX.
     Bib {
@@ -280,6 +323,30 @@ enum Command {
     /// Export an entry as CSL JSON.
     Csl {
         /// DOI or arXiv id.
+        ref_: String,
+    },
+    /// Extract a paper's full text from ar5iv as sectioned plain text
+    /// (the #281 "read" step; ADR-0032). Takes an arXiv id; the PDF blob
+    /// is never opened. A bare DOI reports `NO_OA_AVAILABLE` (pass the
+    /// arXiv id). Tier-1 OA, always-on.
+    Text {
+        /// arXiv id (e.g. "arxiv:2401.12345"). A DOI is reported as
+        /// having no full-text source yet (#281 item 5).
+        ref_: String,
+        /// Cap the section body text to this many characters (the title and
+        /// section headings are not counted; truncation is flagged on
+        /// `truncated`). Omit for the full text.
+        #[arg(long)]
+        max_chars: Option<usize>,
+        /// Bypass the on-disk text cache (always re-fetch from ar5iv).
+        #[arg(long)]
+        no_cache: bool,
+    },
+    /// Resolve a DOI to its arXiv preprint + identity cluster (OpenAlex;
+    /// #281 item 5). Reports whether the same work has a free arXiv
+    /// preprint, for reading or dedup. arXiv → DOI is a follow-up.
+    Link {
+        /// DOI (e.g. "10.1103/PhysRevB.1"). A non-DOI ref is rejected.
         ref_: String,
     },
     /// Inspect or verify the provenance log.
@@ -542,7 +609,33 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Config { action }) => doiget_cli::commands::config::run(action, mode),
         Some(Command::Info { ref_ }) => doiget_cli::commands::info::run(ref_, mode),
         Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit, mode),
-        Some(Command::Search { query }) => doiget_cli::commands::search::run(query, mode),
+        Some(Command::Search {
+            query,
+            local,
+            external: _,
+            limit,
+            from_year,
+            to_year,
+            oa_only,
+            min_citations,
+            author,
+            venue,
+            publisher,
+            sort,
+        }) => {
+            let ext = doiget_cli::commands::search::ExternalArgs {
+                limit,
+                from_year,
+                to_year,
+                oa_only,
+                min_citations,
+                author,
+                venue,
+                publisher,
+                sort,
+            };
+            doiget_cli::commands::search::run(query, local, ext, mode).await
+        }
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
         Some(Command::Verify {
             path,
@@ -565,6 +658,12 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_, mode),
         Some(Command::Cite { ref_ }) => doiget_cli::commands::cite::run(ref_, mode).await,
         Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_, mode),
+        Some(Command::Text {
+            ref_,
+            max_chars,
+            no_cache,
+        }) => doiget_cli::commands::text::run(ref_, max_chars, no_cache, mode).await,
+        Some(Command::Link { ref_ }) => doiget_cli::commands::link::run(ref_, mode).await,
         // Phase 3 (MCP foundation). The MCP server runs on stdio per
         // ADR-0001. The `tracing_subscriber` installed at the top of
         // `main` is already redirected to stderr, so any rmcp / tool
@@ -610,6 +709,21 @@ mod tests {
     use super::*;
     use clap::Parser;
     use serial_test::serial;
+
+    /// `--local` and `--external` are mutually exclusive (ADR-0031 D5).
+    /// `--external`'s `conflicts_with = "local"` makes the conflict
+    /// symmetric so the parse fails regardless of flag order.
+    #[test]
+    fn search_local_and_external_conflict() {
+        assert!(
+            Cli::try_parse_from(["doiget", "search", "--local", "--external", "q"]).is_err(),
+            "`search --local --external` must be a parse error"
+        );
+        assert!(
+            Cli::try_parse_from(["doiget", "search", "--external", "--local", "q"]).is_err(),
+            "conflict must hold regardless of flag order"
+        );
+    }
 
     /// RAII guard restoring a single env var to its pre-test value (or
     /// removing it if previously unset). The `apply_global_overrides`

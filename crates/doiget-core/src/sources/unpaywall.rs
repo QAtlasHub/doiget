@@ -153,6 +153,13 @@ impl Source for UnpaywallSource {
 struct UnpaywallWork {
     doi: String,
     is_oa: bool,
+    /// Unpaywall's OA classification: `gold` / `green` / `hybrid` /
+    /// `bronze` / `closed`. Surfaced to the caller as `oa_status` for OA
+    /// transparency (#281 item 4) so an agent can tell a paywalled
+    /// (`closed`) work from an openly-available one. Captured into
+    /// `metadata_json` (the orchestrator reads it from there).
+    #[serde(default)]
+    oa_status: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
@@ -314,6 +321,35 @@ mod tests {
 
         let res = s.fetch(&r, &profile, &ctx).await.expect("fetch ok");
         assert_eq!(res.license, "cc-by");
+    }
+
+    #[tokio::test]
+    async fn unpaywall_surfaces_oa_status_in_metadata() {
+        // OA transparency (#281 item 4): the work's `oa_status` must round
+        // -trip into `metadata_json` so the orchestrator can surface it.
+        let body = serde_json::json!({
+            "doi": TEST_DOI,
+            "is_oa": true,
+            "oa_status": "gold",
+            "best_oa_location": { "url": "https://example.org/free.pdf", "license": "cc-by" }
+        });
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v2/{}", TEST_DOI_ENCODED)))
+            .and(query_param("email", TEST_EMAIL))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let host = host_of(&server.uri());
+        let (_td, ctx) = build_test_context(&host);
+        let s = UnpaywallSource::with_base(base_of(&server.uri()), TEST_EMAIL.to_string());
+        let profile = CapabilityProfile::from_env().expect("profile");
+        let r = Ref::Doi(Doi(TEST_DOI.to_string()));
+
+        let res = s.fetch(&r, &profile, &ctx).await.expect("fetch ok");
+        let meta = res.metadata_json.expect("metadata present");
+        assert_eq!(meta.get("oa_status").and_then(|v| v.as_str()), Some("gold"));
     }
 
     #[tokio::test]

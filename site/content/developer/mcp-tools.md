@@ -22,6 +22,9 @@ speaks **stdio only** ([ADR-0001](DECISIONS/), [`SCOPE.md`](SCOPE.md) §non-goal
 | `doiget_batch_fetch` | Up to 100 refs in one call. Accepts `dry_run`. |
 | `doiget_info` | Retrieve a store entry's metadata. |
 | `doiget_search_local` | Search store metadata (title / authors / venue). |
+| `doiget_paper_search` | External literature discovery over OpenAlex (`/works?search=`); abstract-bearing candidates for triage. Tier-1 OA metadata, always-on; **never fetches a PDF** (ADR-0031). |
+| `doiget_paper_text` | Extract an **arXiv** paper's full text from ar5iv as sectioned plain text (`ref`, optional `max_chars`). Tier-1 OA, always-on; **never opens the PDF blob** (ADR-0032). A DOI → `NO_OA_AVAILABLE`. |
+| `doiget_link` | Resolve a **DOI** to its arXiv preprint + identity cluster (`{ doi, arxiv, openalex_id, title }`) over OpenAlex, for reading or dedup (#281 item 5). Tier-1 OA, always-on; **never fetches a PDF**. arXiv → DOI is a follow-up; a non-DOI ref → `INVALID_REF`. |
 | `doiget_list_recent` | Last N fetched entries. |
 | `doiget_paper_pdf_path` | Return the local path of a cached PDF. **Does not read, parse, or transmit content.** |
 | `doiget_capability_profile` | Report which sources this instance is allowed to use. |
@@ -97,6 +100,11 @@ type FetchResult =
       resolver_profile: string,
       path: string,
       license: string,
+      // OA transparency (#281 item 4): "gold"|"green"|"hybrid"|"bronze"|
+      // "closed" (Unpaywall) or "green" (arXiv); null when not determined.
+      // With `pdf.status` an agent tells "paywalled" (closed + no_oa_url)
+      // from "couldn't reach it". Also on doiget_metadata_only + batch JSON.
+      oa_status: string | null,
       size_bytes: number,
       schema_version: string,
       // Issue #118 / #243: PDF leg status. Always present on ok:true responses.
@@ -264,8 +272,8 @@ an optional `dry_run: boolean` input field, defaulting to `false`. When
 ```
 
 Tools where `dry_run` does not apply (`doiget_info`, `doiget_search_local`,
-`doiget_list_recent`, `doiget_paper_pdf_path`, `doiget_capability_profile`,
-`doiget_health`, `doiget_resolve_paper`) reject the field as
+`doiget_paper_search`, `doiget_paper_text`, `doiget_link`, `doiget_list_recent`, `doiget_paper_pdf_path`,
+`doiget_capability_profile`, `doiget_health`, `doiget_resolve_paper`) reject the field as
 `INVALID_REF`-class — i.e. surface as
 `{ok:false, error:{code:"INVALID_REF", ...}}`.
 

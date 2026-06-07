@@ -167,6 +167,20 @@ fn read_tdm_grant(agree_var: &str, key_var: &str) -> Result<Option<TdmGrant>, Ca
 | `DOIGET_AGREE_TDM_SPRINGER` | `=1` | Acknowledges Springer Nature OA ToS. |
 | `DOIGET_KEY_SPRINGER` | secret string | Springer API key. |
 
+> **Note (ADR-0031):** `DOIGET_ENABLE_OPENALEX` gates the OpenAlex
+> *enrichment* / citation-graph source only (`/works/doi:…`,
+> `referenced_works[]`). The `doiget search` **discovery** path
+> (`/works?search=`, `doiget_core::discovery`) is classified as Tier-1
+> OA metadata, **always-on** — it needs no env var and ships in the
+> default `oa-only` binary.
+
+> **Note (ADR-0032):** full-text extraction (`doiget text`,
+> `doiget_core::paper_text`) over **ar5iv** is likewise classified Tier-1
+> OA metadata, **always-on** — no env var, ships in the `oa-only` binary.
+> It reads the ar5iv HTML rendering, never the PDF blob (permanent
+> non-goal #1 / ADR-0003 stays intact, narrowed by ADR-0032 to PDF-blob
+> processing).
+
 Setting `DOIGET_AGREE_TDM_*` only makes the relevant source eligible. The corresponding
 TDM-specific Cargo feature must also have been compiled in (`cargo build --features
 tdm-elsevier` etc.). Default release binaries do not contain TDM source code at all.

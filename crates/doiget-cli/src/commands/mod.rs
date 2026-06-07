@@ -30,12 +30,14 @@ pub mod config;
 pub mod csl;
 pub mod fetch;
 pub mod info;
+pub mod link;
 pub mod lint;
 pub mod list_recent;
 pub mod output;
 pub mod provenance;
 pub mod resolve_citation;
 pub mod search;
+pub mod text;
 pub mod verify;
 pub mod version;
 

@@ -19,10 +19,10 @@
 //!   contract is enforced by the orchestrator and the posture-lint
 //!   workflow.
 //!
-//! The remaining tools named in `docs/MCP_TOOLS.md` (`doiget_fetch_paper`,
-//! `doiget_batch_fetch`, `doiget_info`,
-//! `doiget_search_local`, `doiget_list_recent`, `doiget_paper_pdf_path`)
-//! land in follow-up PRs. The exact count is intentionally left unstated
+//! The other tools named in `docs/MCP_TOOLS.md` (`doiget_fetch_paper`,
+//! `doiget_batch_fetch`, `doiget_info`, `doiget_search_local`,
+//! `doiget_paper_search`, `doiget_list_recent`, `doiget_paper_pdf_path`, …)
+//! are implemented below. The exact count is intentionally left unstated
 //! in this docstring so it does not rot as tools land.
 //!
 //! # Stdout safety
@@ -46,7 +46,9 @@ use camino::Utf8PathBuf;
 use doiget_core::dry_run::{
     build_dry_run_envelope, build_fetch_plan, rate_limit_budget as core_rate_limit_budget,
 };
-use doiget_core::http::{oa_publisher_allowlist, tier_1_allowlist, tier_2_allowlist, HttpClient};
+use doiget_core::http::{
+    fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist, tier_2_allowlist, HttpClient,
+};
 use doiget_core::orchestrator::{
     batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
     metadata_only_to_store, resolve_only as core_resolve_only, FetchPaperOutcome,
@@ -1185,6 +1187,376 @@ impl Server {
         }
     }
 
+    /// `doiget_paper_search` — external literature discovery over OpenAlex
+    /// (`/works?search=`). The MCP surface for the #281 discovery loop:
+    /// turn a topic into ranked, abstract-bearing candidate papers for
+    /// triage before any PDF fetch. Tier-1 OA metadata, always-on
+    /// (ADR-0031 D1); metadata-only, never fetches a PDF.
+    ///
+    /// A supplied `author` / `venue` / `publisher` *name* is resolved to an
+    /// OpenAlex id first; an ambiguous name returns `AMBIGUOUS` (with
+    /// candidates in the message), a name matching nothing returns
+    /// `NOT_FOUND`.
+    #[tool(
+        description = "WHEN TO USE: Discover papers on a topic via external OpenAlex search, abstract-first, before fetching any PDF.\n\
+                       INPUTS: query (string); optional limit (1-200, default 25), from_year, to_year, oa_only (bool), min_citations, author, venue, publisher (names — resolved to OpenAlex ids), sort (relevance|cited|recent, default relevance).\n\
+                       OUTPUTS: { ok: true, scope: \"external\", query, total_results, count, results: [{ doi, openalex_id, arxiv, title, authors, year, venue, abstract, cited_by_count, oa_status, source }] } OR { ok:false, error }.\n\
+                       COSTS: 1 OpenAlex request, plus 1 per supplied author/venue/publisher name to resolve.\n\
+                       SIDE EFFECTS: Emits Metadata provenance rows. NEVER writes the store. NEVER fetches a PDF.\n\
+                       LIMITS: Tier-1, always-on (no DOIGET_ENABLE_OPENALEX gate). An ambiguous author/venue/publisher name → AMBIGUOUS (candidates listed); no match → NOT_FOUND."
+    )]
+    async fn doiget_paper_search(
+        &self,
+        Parameters(input): Parameters<PaperSearchInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // `sort` is a JsonSchema enum, so an unknown value is rejected at
+        // deserialization (the schema advertises the choices to agents);
+        // here it only needs lowering to the core enum (default: relevance).
+        let sort = input
+            .sort
+            .map(doiget_core::discovery::SearchSort::from)
+            .unwrap_or(doiget_core::discovery::SearchSort::Relevance);
+
+        let q = doiget_core::discovery::PaperSearchQuery {
+            query: input.query.clone(),
+            limit: input
+                .limit
+                .map(|l| l as usize)
+                .unwrap_or(doiget_core::discovery::DEFAULT_LIMIT),
+            from_year: input.from_year,
+            to_year: input.to_year,
+            oa_only: input.oa_only.unwrap_or(false),
+            min_citations: input.min_citations,
+            author: input.author.clone(),
+            venue: input.venue.clone(),
+            publisher: input.publisher.clone(),
+            sort,
+        };
+        // Boundary validation shared with the CLI (ADR-0031 D5).
+        if let Err(msg) = q.validate() {
+            return Ok(CallToolResult::structured(read_path_error_envelope(
+                None,
+                ErrorCode::InvalidRef,
+                &msg,
+            )));
+        }
+
+        let base = match openalex_base() {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    None,
+                    ErrorCode::InternalError,
+                    &e,
+                )));
+            }
+        };
+        // Omit `mailto` when no contact email is configured (never a
+        // placeholder); the empty string is skipped downstream.
+        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
+
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    None,
+                    ErrorCode::InternalError,
+                    &format!("paper-search context init failed: {e}"),
+                )));
+            }
+        };
+
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Metadata,
+            ref_: None,
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        }) {
+            return Ok(CallToolResult::structured(read_path_error_envelope(
+                None,
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        let outcome = doiget_core::discovery::paper_search(&base, &contact_email, &q, &ctx).await;
+        let session_ok = outcome.is_ok();
+        let _ = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if session_ok {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Metadata,
+            ref_: None,
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        });
+
+        match outcome {
+            Ok(results) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "scope": "external",
+                "query": input.query,
+                "total_results": results.total_results,
+                "count": results.results.len(),
+                "results": results.results,
+            }))),
+            // Canonical FetchError -> ErrorCode (AMBIGUOUS / NOT_FOUND /
+            // NETWORK_ERROR / …) so an agent can branch on the code.
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                None,
+                ErrorCode::from(&e),
+                &e.to_string(),
+            ))),
+        }
+    }
+
+    /// `doiget_paper_text` — extract a paper's full text from ar5iv (the
+    /// #281 "read" step; ADR-0032). Fetches the ar5iv LaTeXML-XHTML
+    /// rendering of an **arXiv** paper and returns it as sectioned plain
+    /// text. The PDF blob is never opened (ADR-0032 D1). Tier-1 OA,
+    /// always-on. A bare DOI returns `NO_OA_AVAILABLE` (DOI→arXiv linking
+    /// is #281 item 5).
+    #[tool(
+        description = "WHEN TO USE: Read a paper's full text (arXiv only) without an external pdf-to-text tool — the 'read' step after discovery/fetch.\n\
+                       INPUTS: ref (arXiv id, e.g. \"arxiv:2401.12345\"); optional max_chars (cap; omit for full text).\n\
+                       OUTPUTS: { ok: true, arxiv_id, source: \"ar5iv\", title, sections: [{ heading, text }], char_count, truncated, retrieved_from } OR { ok:false, error }.\n\
+                       COSTS: 1 ar5iv HTTP request (HTML), then parse; large papers can be sizeable — use max_chars to bound.\n\
+                       SIDE EFFECTS: Emits an OA provenance row. NEVER opens the PDF blob; NEVER writes the store.\n\
+                       LIMITS: arXiv only (a DOI → NO_OA_AVAILABLE; pass the arXiv id). A paper not converted by ar5iv → NOT_FOUND. Best-effort extraction (truncation flagged on `truncated`)."
+    )]
+    async fn doiget_paper_text(
+        &self,
+        Parameters(input): Parameters<PaperTextInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Validate the ref. A DOI has no full-text source in this slice;
+        // report NO_OA_AVAILABLE rather than silently failing (ADR-0032 D5).
+        let id = match doiget_core::Ref::parse(&input.ref_) {
+            Ok(doiget_core::Ref::Arxiv(a)) => a,
+            Ok(doiget_core::Ref::Doi(_)) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::NoOaAvailable,
+                    "no full-text source for a DOI — pass the arXiv id if a preprint exists \
+                     (DOI→arXiv linking is #281 item 5)",
+                )));
+            }
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &e.to_string(),
+                )));
+            }
+        };
+
+        let base = match ar5iv_base() {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(id.as_str()),
+                    ErrorCode::InternalError,
+                    &e,
+                )));
+            }
+        };
+
+        // The text cache (docs/CACHE.md) is left disabled on the MCP path
+        // for now, mirroring `build_fetch_context`'s resolver-cache note;
+        // enabling it here is a follow-up. Correctness is unaffected — a
+        // cache miss just re-fetches.
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(id.as_str()),
+                    ErrorCode::InternalError,
+                    &format!("paper-text context init failed: {e}"),
+                )));
+            }
+        };
+
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Oa,
+            ref_: Some(id.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        }) {
+            return Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(id.as_str()),
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        let max_chars = input.max_chars.map(|m| m as usize);
+        let outcome = doiget_core::paper_text::paper_text(&base, &id, max_chars, &ctx).await;
+        let _ = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if outcome.is_ok() {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Oa,
+            ref_: Some(id.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        });
+
+        match outcome {
+            Ok(t) => Ok(CallToolResult::structured(paper_text_success_envelope(&t))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(id.as_str()),
+                ErrorCode::from(&e),
+                &e.to_string(),
+            ))),
+        }
+    }
+
+    /// `doiget_link` — resolve a **DOI** to its arXiv preprint + identity
+    /// cluster over OpenAlex (#281 item 5). Reports whether the same work
+    /// has a free arXiv preprint so an agent can read the free full text or
+    /// dedup a preprint against its journal version. Tier-1 OA, always-on;
+    /// never fetches a PDF. arXiv → DOI (reverse) is a follow-up.
+    #[tool(
+        description = "WHEN TO USE: Given a published DOI, find whether the same work has a free arXiv preprint (to read it, or to dedup a preprint vs the journal version).\n\
+                       INPUTS: ref (a DOI, e.g. \"10.1103/PhysRevB.1\").\n\
+                       OUTPUTS: { ok: true, doi, arxiv, openalex_id, title } (arxiv is null when no preprint) OR { ok:false, error }.\n\
+                       COSTS: 1 OpenAlex request.\n\
+                       SIDE EFFECTS: Emits a Metadata provenance row. NEVER writes the store; NEVER fetches a PDF.\n\
+                       LIMITS: DOI input only (arXiv → DOI is a follow-up; an arXiv/invalid ref → INVALID_REF). A DOI with no OpenAlex work → NOT_FOUND."
+    )]
+    async fn doiget_link(
+        &self,
+        Parameters(input): Parameters<LinkInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // DOI input only this slice (arXiv → DOI is a follow-up). An arXiv
+        // id parses fine but is the wrong direction; an unparsable ref is
+        // malformed — both surface as INVALID_REF for this tool.
+        let doi = match doiget_core::Ref::parse(&input.ref_) {
+            Ok(doiget_core::Ref::Doi(d)) => d,
+            Ok(doiget_core::Ref::Arxiv(_)) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    "doiget_link resolves a DOI to its arXiv preprint; pass a DOI \
+                     (arXiv → DOI linking is #281 follow-up)",
+                )));
+            }
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &e.to_string(),
+                )));
+            }
+        };
+
+        let base = match openalex_base() {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(doi.as_str()),
+                    ErrorCode::InternalError,
+                    &e,
+                )));
+            }
+        };
+        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
+
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(doi.as_str()),
+                    ErrorCode::InternalError,
+                    &format!("link context init failed: {e}"),
+                )));
+            }
+        };
+
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Metadata,
+            ref_: Some(doi.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        }) {
+            return Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(doi.as_str()),
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        let outcome = doiget_core::discovery::resolve_links_for_doi(
+            &base,
+            &contact_email,
+            doi.as_str(),
+            &ctx,
+        )
+        .await;
+        let _ = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if outcome.is_ok() {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Metadata,
+            ref_: Some(doi.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        });
+
+        match outcome {
+            Ok(links) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "doi": links.doi,
+                "arxiv": links.arxiv,
+                "openalex_id": links.openalex_id,
+                "title": links.title,
+            }))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(doi.as_str()),
+                ErrorCode::from(&e),
+                &e.to_string(),
+            ))),
+        }
+    }
+
     /// `doiget_list_recent` — most-recent stored entries by
     /// `[doiget].fetched_at`. Read-only.
     ///
@@ -1724,6 +2096,101 @@ pub struct SearchLocalInput {
     pub limit: Option<u32>,
 }
 
+/// `sort` choices for `doiget_paper_search`. Modelled as a JsonSchema enum
+/// (not a free string) so the valid values appear in the tool's input
+/// schema — an agent picks a valid one rather than guessing a token, and
+/// an unknown value is rejected at deserialization (ADR-0031 D5).
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[schemars(rename_all = "lowercase")]
+pub enum SortInput {
+    /// Best textual match first (`relevance_score:desc`). The default.
+    Relevance,
+    /// Most-cited first (`cited_by_count:desc`).
+    Cited,
+    /// Newest first (`publication_date:desc`).
+    Recent,
+}
+
+impl From<SortInput> for doiget_core::discovery::SearchSort {
+    fn from(s: SortInput) -> Self {
+        match s {
+            SortInput::Relevance => Self::Relevance,
+            SortInput::Cited => Self::Cited,
+            SortInput::Recent => Self::Recent,
+        }
+    }
+}
+
+/// JSON-schema-derived input for the `doiget_paper_search` MCP tool
+/// (external OpenAlex discovery; ADR-0031).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PaperSearchInput {
+    /// Free-text topic query (e.g. "tropical tensor networks for spin glasses").
+    pub query: String,
+    /// Maximum results (1..=200; default 25). Out-of-range is rejected.
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Inclusive lower publication-year bound.
+    #[serde(default)]
+    pub from_year: Option<i32>,
+    /// Inclusive upper publication-year bound.
+    #[serde(default)]
+    pub to_year: Option<i32>,
+    /// Restrict to open-access works.
+    #[serde(default)]
+    pub oa_only: Option<bool>,
+    /// Only works cited strictly more than this many times.
+    #[serde(default)]
+    pub min_citations: Option<u64>,
+    /// Author name (resolved to an OpenAlex author id).
+    #[serde(default)]
+    pub author: Option<String>,
+    /// Venue / journal name (resolved to an OpenAlex source id).
+    #[serde(default)]
+    pub venue: Option<String>,
+    /// Publisher name (resolved to an OpenAlex publisher id).
+    #[serde(default)]
+    pub publisher: Option<String>,
+    /// Result ordering: `relevance` (default) | `cited` | `recent`.
+    #[serde(default)]
+    pub sort: Option<SortInput>,
+}
+
+/// JSON-schema-derived input for the `doiget_paper_text` MCP tool
+/// (full-text extraction from ar5iv; ADR-0032).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PaperTextInput {
+    /// arXiv id (e.g. "arxiv:2401.12345"), validated via `Ref::parse`. A
+    /// bare DOI returns `NO_OA_AVAILABLE` (pass the arXiv id;
+    /// DOI→arXiv linking is #281 item 5).
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+    /// Cap the returned text to this many characters (truncation is
+    /// flagged on `truncated`). Omit for the full text.
+    #[serde(default)]
+    pub max_chars: Option<u32>,
+}
+
+/// JSON-schema-derived input for the `doiget_link` MCP tool (DOI → arXiv
+/// preprint linking; #281 item 5).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct LinkInput {
+    /// A **DOI** (e.g. "10.1103/PhysRevB.1"), validated via `Ref::parse`.
+    /// An arXiv id or unparsable ref returns `INVALID_REF` (arXiv → DOI is
+    /// a follow-up).
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+}
+
 /// JSON-schema-derived input for the `doiget_list_recent` MCP tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -2043,6 +2510,9 @@ fn metadata_only_success_envelope(outcome: &MetadataOnlyOutcome, ref_str: &str) 
         "resolver_profile": outcome.resolver_profile,
         "license": outcome.license,
         "oa_url": outcome.oa_url,
+        // OA transparency (#281 item 4): gold/green/hybrid/bronze/closed,
+        // or null when not determined (e.g. the Crossref-first path).
+        "oa_status": outcome.oa_status,
         "metadata": outcome.metadata,
         "schema_version": SCHEMA_VERSION,
     })
@@ -2081,24 +2551,12 @@ fn denial_context_to_value(dc: &DenialContext, surface: &str) -> Value {
 /// structured `denial_context` channel via
 /// `From<&FetchError> for Option<DenialContext>` (ADR-0023 §4).
 fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value {
-    // `FetchError` is not `Clone`; we can't move out of `&err`. Use
-    // the existing `From` boundary indirectly by re-mapping via a
-    // match on `&FetchError`. This duplicates a few lines of the
-    // `From<FetchError> for ErrorCode` impl but avoids cloning the
-    // underlying transport error.
-    let code: ErrorCode = match err {
-        FetchError::NotEligible { .. } => ErrorCode::CapabilityDenied,
-        FetchError::NoOaAvailable => ErrorCode::NoOaAvailable,
-        FetchError::Http(_) => ErrorCode::NetworkError,
-        FetchError::Log(_) => ErrorCode::LogError,
-        FetchError::InvalidRef(_) => ErrorCode::InvalidRef,
-        FetchError::SourceSchema { .. } => ErrorCode::InternalError,
-        // `FetchError` is `#[non_exhaustive]`; this wildcard pins
-        // future variants to `INTERNAL_ERROR` until they get an
-        // explicit mapping. Mirrors the conservative default in
-        // `doiget-core`'s `From<FetchError> for ErrorCode` impl.
-        _ => ErrorCode::InternalError,
-    };
+    // Use the canonical `From<&FetchError> for ErrorCode` (borrow form, so
+    // no clone of the non-`Clone` transport error). This keeps the MCP
+    // surface in lock-step with the core mapping — notably `NotFound` and
+    // `Ambiguous`, which a hand-rolled wildcard here would incorrectly map
+    // to `INTERNAL_ERROR`.
+    let code: ErrorCode = ErrorCode::from(err);
     let denial: Option<DenialContext> = err.into();
     let message = err.to_string();
 
@@ -2202,6 +2660,11 @@ fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> V
         // which the canonical-digest for this fetch was minted.
         "resolver_profile": outcome.resolver_profile,
         "license": outcome.license,
+        // OA transparency (#281 item 4): gold/green/hybrid/bronze/closed,
+        // or null when not determined. Combined with `pdf.status`, lets an
+        // agent tell a paywalled work (`closed` + `no_oa_url`) from one it
+        // simply could not reach.
+        "oa_status": outcome.oa_status,
         "path": outcome.path,
         "size_bytes": outcome.size_bytes,
         "schema_version": outcome.schema_version,
@@ -2511,6 +2974,39 @@ fn batch_fetch_error_envelope(code: ErrorCode, message: &str) -> Value {
     })
 }
 
+/// Resolve the OpenAlex base URL for `doiget_paper_search`: the
+/// `DOIGET_OPENALEX_BASE` override (tests) or the production default.
+fn openalex_base() -> Result<url::Url, String> {
+    let raw = std::env::var("DOIGET_OPENALEX_BASE")
+        .unwrap_or_else(|_| "https://api.openalex.org".to_string());
+    url::Url::parse(&raw).map_err(|e| format!("DOIGET_OPENALEX_BASE is not a URL: {e}"))
+}
+
+/// Resolve the ar5iv base URL for `doiget_paper_text`: the
+/// `DOIGET_AR5IV_BASE` override (tests) or the production default
+/// (ADR-0032 D3).
+fn ar5iv_base() -> Result<url::Url, String> {
+    let raw = std::env::var("DOIGET_AR5IV_BASE")
+        .unwrap_or_else(|_| doiget_core::paper_text::AR5IV_DEFAULT_BASE.to_string());
+    url::Url::parse(&raw).map_err(|e| format!("DOIGET_AR5IV_BASE is not a URL: {e}"))
+}
+
+/// Build the `{ ok:true, arxiv_id, source, title, sections, char_count,
+/// truncated, retrieved_from }` success envelope for `doiget_paper_text`
+/// (the `PaperText` shape plus the `ok` discriminant).
+fn paper_text_success_envelope(t: &doiget_core::paper_text::PaperText) -> Value {
+    json!({
+        "ok": true,
+        "arxiv_id": t.arxiv_id,
+        "source": t.source,
+        "title": t.title,
+        "sections": t.sections,
+        "char_count": t.char_count,
+        "truncated": t.truncated,
+        "retrieved_from": t.retrieved_from,
+    })
+}
+
 /// Build a [`FetchContext`] for the non-dry-run `doiget_metadata_only`
 /// path.
 ///
@@ -2520,9 +3016,9 @@ fn batch_fetch_error_envelope(code: ErrorCode, message: &str) -> Value {
 /// passed explicitly to `orchestrator::metadata_only_to_store` (the §11
 /// store-write entry point), keeping the context store-agnostic:
 ///
-/// - `HttpClient` — production allowlist (Tier 1 ∪ OA publisher), or
-///   the test-mode multi-source allowlist when any `DOIGET_*_BASE` env
-///   var is set.
+/// - `HttpClient` — production allowlist (Tier 1 ∪ OA publisher ∪ Tier 2 ∪
+///   full-text (ar5iv)), or the test-mode multi-source allowlist when any
+///   `DOIGET_*_BASE` env var is set.
 /// - `RateLimiter` — process-wide hard-coded politeness
 ///   ([`RateLimits::HARD_CODED`]).
 /// - `ProvenanceLog` — opened at `$DOIGET_LOG_PATH` or
@@ -2577,7 +3073,8 @@ fn crossref_source_from_env() -> Result<CrossrefSource, String> {
 /// HTTP client construction with the same `DOIGET_*_BASE` test-override
 /// surface that `doiget-cli` honors (`build_http_client` in
 /// `crates/doiget-cli/src/commands/fetch.rs`). When no overrides are
-/// set, returns the production allowlist (Tier 1 ∪ OA publisher).
+/// set, returns the production allowlist (Tier 1 ∪ OA publisher ∪ Tier 2 ∪
+/// full-text (ar5iv)).
 fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     let arxiv = std::env::var("DOIGET_ARXIV_BASE").ok();
     let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
@@ -2585,12 +3082,15 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     let oa_publisher = std::env::var("DOIGET_OA_PUBLISHER_BASE").ok();
 
     let openalex_base = std::env::var("DOIGET_OPENALEX_BASE").ok();
+    // ADR-0032: ar5iv full-text base override (test wiremock origin).
+    let ar5iv_base = std::env::var("DOIGET_AR5IV_BASE").ok();
 
     if arxiv.is_none()
         && crossref.is_none()
         && unpaywall.is_none()
         && oa_publisher.is_none()
         && openalex_base.is_none()
+        && ar5iv_base.is_none()
     {
         let mut allowlists = tier_1_allowlist();
         allowlists.extend(oa_publisher_allowlist());
@@ -2601,6 +3101,10 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
         // including the hosts here cannot widen the network surface
         // beyond what the CapabilityProfile already permits.
         allowlists.extend(tier_2_allowlist());
+        // ADR-0032: full-text extraction (`doiget_paper_text`) is Tier-1
+        // OA, always-on. Register `ar5iv.labs.arxiv.org` under the
+        // `"ar5iv"` source key so `paper_text::paper_text` can reach it.
+        allowlists.extend(fulltext_allowlist());
 
         // ADR-0028 D2: merge user-extension hosts from
         // `<config_dir>/doiget/config.toml`. Mirrors the CLI path in
@@ -2657,6 +3161,7 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
         ("unpaywall", unpaywall.as_deref()),
         ("oa-publisher", oa_publisher.as_deref()),
         ("openalex", openalex_base.as_deref()),
+        ("ar5iv", ar5iv_base.as_deref()),
     ] {
         if let Some(b) = base {
             let url = url::Url::parse(b)
