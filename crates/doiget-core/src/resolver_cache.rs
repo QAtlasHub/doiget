@@ -142,6 +142,7 @@ mod tests {
             resolver_profile: "crossref".to_string(),
             license: Some("cc-by".to_string()),
             oa_url: None,
+            oa_status: Some("gold".to_string()),
             metadata: json!({"title": ["Example"], "DOI": "10.1234/x"}),
         }
     }

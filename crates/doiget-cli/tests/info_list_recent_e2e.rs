@@ -71,6 +71,7 @@ fn fixture(doi_suffix: &str, title: &str, year: i32, fetched_year: i32) -> (Safe
                 .expect("valid timestamp"),
             source: "unpaywall".to_string(),
             license: "CC-BY-4.0".to_string(),
+            oa_status: None,
             size_bytes: 1234,
             mcp_call_id: None,
         }),

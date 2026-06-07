@@ -45,6 +45,8 @@ keywords    = ["physics", "..."]      # optional
 fetched_at  = "2026-05-05T08:30:12Z"  # RFC3339 UTC
 source      = "unpaywall"             # which Source produced this entry
 license     = "CC-BY-4.0"             # OA license string, or "unknown"
+oa_status   = "gold"                  # optional: gold/green/hybrid/bronze/closed (Unpaywall)
+                                      #   or "green" (arXiv); omitted when not determined (#281)
 size_bytes  = 1234567
 mcp_call_id = "01JCKZ7Q..."           # optional, ULID, present if fetched via MCP
 ```

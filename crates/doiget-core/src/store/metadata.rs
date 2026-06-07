@@ -100,6 +100,14 @@ pub struct DoigetExtension {
     pub source: String,
     /// OA license string, or the literal `"unknown"`.
     pub license: String,
+    /// Open-access status for the work, when the resolver supplied one:
+    /// Unpaywall's `gold` / `green` / `hybrid` / `bronze` / `closed`, or
+    /// `"green"` for an arXiv ref (#281 item 4, OA transparency). Absent
+    /// (`None`, omitted from the TOML) when not determined — e.g. a
+    /// Crossref-only metadata-only entry. Additive optional field (does not
+    /// bump `schema_version`; `docs/STORE.md` §7 additive policy).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub oa_status: Option<String>,
     /// Size of the stored PDF in bytes.
     pub size_bytes: u64,
     /// ULID of the originating MCP call, if the fetch came in via MCP.
