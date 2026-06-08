@@ -61,12 +61,40 @@ Permanent non-goals: [docs/SCOPE.md](docs/SCOPE.md)
 Phase plan: [docs/PHASES.md](docs/PHASES.md)
 ADRs: [docs/DECISIONS/](docs/DECISIONS/)
 
-## Quick start (will be available after Phase 1)
+## Installation
+
+doiget ships a single self-contained binary — the Linux build is fully static
+(musl), so it runs on old glibc / HPC boxes too. Every channel installs the
+**same checksum-verified binary** from the signed GitHub Release.
+
+### Shell installer (Linux / macOS)
 
 ```sh
-# Install (after Phase 6 release)
-cargo install doiget
+curl -fsSL https://raw.githubusercontent.com/sotashimozono/doiget/main/scripts/install.sh | sh
+```
 
+Installs to `~/.local/bin` (override with `DOIGET_INSTALL_DIR`); pin a version with
+`DOIGET_VERSION=0.6.0`. The script verifies the published SHA-256 sidecar before installing.
+
+### PowerShell installer (Windows)
+
+```powershell
+irm https://raw.githubusercontent.com/sotashimozono/doiget/main/scripts/install.ps1 | iex
+```
+
+### From crates.io (Rust toolchain)
+
+```sh
+cargo install doiget
+```
+
+Further prebuilt-binary channels (Homebrew tap, `cargo binstall`, npm/npx, Nix flake,
+`.deb`) are tracked in [#247](https://github.com/sotashimozono/doiget/issues/247). Every
+release asset is cosign-keyless signed (`<asset>.cosign.bundle`) for optional verification.
+
+## Quick start
+
+```sh
 # Fetch a paper by DOI (Open Access only by default)
 doiget fetch 10.1103/PhysRevLett.130.200601
 
