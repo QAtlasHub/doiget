@@ -93,7 +93,7 @@ jobs:
       contents: read   # only reads the repo + git tag object
     steps:
       - name: Checkout full history (gate needs tags + lane branches)
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           fetch-depth: 0          # G4 (published history) + G7 (branch reachability)
           ref: ${{ env.TAG }}     # the tagged commit
@@ -131,7 +131,7 @@ jobs:
       id-token: write   # OIDC: exchange GitHub token for short-lived crates.io token
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           ref: ${{ env.TAG }}
       - name: Install Rust toolchain (stable)
@@ -205,7 +205,7 @@ jobs:
       contents: write   # create the GitHub Release + tag association
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           ref: ${{ env.TAG }}
       - name: Extract the CHANGELOG section + decide prerelease
@@ -315,7 +315,7 @@ jobs:
             target: ""
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           ref: ${{ env.TAG }}
       - name: Install Rust toolchain (stable)
@@ -414,7 +414,7 @@ jobs:
       id-token: write   # cosign keyless: mint Fulcio cert from OIDC token
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           ref: ${{ env.TAG }}
       - name: Install Rust toolchain (stable)
