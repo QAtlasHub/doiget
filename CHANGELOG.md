@@ -10,8 +10,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.7.0-beta.2] - 2026-06-16
+
 ### Fixed
 - **[batch]** `doiget batch <file>` no longer aborts the entire run when the input exceeds 100 refs. Previously it printed `Error: batch size N exceeds limit 100` and fetched **nothing** the moment a bibliography crossed 100 entries, forcing a manual `split`. The input is now processed in full, dispatched in bounded windows of `MCP_BATCH_MAX_SIZE` so the in-flight task count stays capped while the shared rate limiter keeps the 5-per-second politeness invariant across every window. The per-ref failure-count exit code is unchanged (non-zero when any ref fails). The `MCP_BATCH_MAX_SIZE` hard cap still applies to a single MCP `batch_fetch` request — that request-shape bound is unrelated to a local file handed to the CLI (#304).
+
+## [0.7.0-beta.1] - 2026-06-16
+
+### Fixed
+- **[text]** `doiget text <arxiv-id>` no longer exits **0 with empty output** when ar5iv has no usable render. A 200 with no extractable prose (`char_count == 0` — the paper was never converted to HTML, including the case where the body parses to heading shells with empty bodies) now surfaces the new `TEXT_UNAVAILABLE` code on a non-zero exit, with an actionable `= note:` pointing at `doiget fetch arxiv:<id>`. Agents and the MCP `doiget_paper_text` tool can now tell **"text unavailable (fetch the PDF)"** apart from **"wrong identifier"** (`NOT_FOUND`) and **"no OA at all"** (`NO_OA_AVAILABLE`) instead of misreading the silent empty output as a bad DOI (#302).
+
+### Added
+- **[core]** `ErrorCode::TextUnavailable` (wire `"TEXT_UNAVAILABLE"`) and `FetchError::TextUnavailable { arxiv_id }` — the id is valid and resolvable but the requested representation is missing. Minor, additive (`ErrorCode` is `#[non_exhaustive]`). See `docs/ERRORS.md` §2.
 
 ## [0.7.0-beta.0] - 2026-06-16
 
