@@ -10,6 +10,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.7.0-beta.4] - 2026-06-16
+
+### Added
+- **[bib]** bulk, offline BibTeX export from the local store (#305): `doiget bib --all` emits every store entry as one deduplicated `.bib`, and `doiget bib --from-file <FILE>` emits the refs listed in a file (plain refs / CSL-JSON / BibTeX), each rendered from the store. Missing entries are skipped with a stderr note; `--from-file` exits non-zero with the missing count (the `batch` failure-count convention) so a script can tell a complete export from a partial one. This turns "fetch a batch, then build a combined `.bib`" into a single offline command instead of a 100-call flaky loop.
+- **[cite]** `doiget cite --offline <ref>` renders from the local store only (no network).
+
+### Fixed
+- **[cite]** `doiget cite <ref>` now falls back to the local store when the live resolve fails (network hiccup / OpenAlex flake) instead of returning nothing — an already-fetched ref always cites, with a `note:` on stderr marking the offline path. A ref in neither place is a non-zero error carrying the resolve failure, never a silent empty stdout (#305, cf. #302/#304).
+
+### Notes
+- CSL-JSON parity (`csl --all` / `--from-file`) is a deferred follow-up; this change covers the BibTeX surface the issue describes.
+
 ## [0.7.0-beta.3] - 2026-06-16
 
 ### Fixed
