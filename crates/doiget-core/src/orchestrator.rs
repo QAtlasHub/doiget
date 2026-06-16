@@ -429,17 +429,7 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
             .get("published")
             .and_then(Value::as_str)
             .and_then(parse_rfc3339_year);
-        m.arxiv_categories = outcome
-            .metadata
-            .get("categories")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
+        m.arxiv_categories = extract_arxiv_categories(&outcome.metadata);
     }
     m
 }
@@ -452,6 +442,23 @@ fn parse_rfc3339_year(s: &str) -> Option<i32> {
     chrono::DateTime::parse_from_rfc3339(s)
         .ok()
         .map(|dt| chrono::Datelike::year(&dt))
+}
+
+/// The arXiv subject categories (primary first) from an Atom-feed JSON's
+/// `categories` array, e.g. `["cond-mat.str-el", "cond-mat.dis-nn"]`.
+/// Empty when absent. Shared by `cite_metadata` (live resolve) and
+/// `fetch_paper_arxiv` (PDF-fetch path) so both populate
+/// `Metadata.arxiv_categories` identically (issue #303).
+fn extract_arxiv_categories(atom: &Value) -> Vec<String> {
+    atom.get("categories")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Convert a Crossref `page` value to BibTeX page-range form: a single
@@ -935,6 +942,7 @@ async fn fetch_paper_arxiv(
         license,
         pdf_bytes,
         final_url,
+        metadata_json,
         ..
     } = source.fetch(ref_, profile, ctx).await?;
     let pdf = pdf_bytes.ok_or_else(|| FetchError::SourceSchema {
@@ -942,21 +950,37 @@ async fn fetch_paper_arxiv(
     })?;
     let size_bytes = pdf.len() as u64;
 
-    // Phase 1 minimal metadata. Full Atom-feed extraction (title /
-    // authors) lives in `ArxivSource::fetch_metadata_only` and the
-    // metadata-only orchestrator; the fetch path keeps the placeholder
-    // for now (a follow-up slice may chain in Atom-parse here).
+    // Real bibliographic metadata from the Atom feed that `fetch` already
+    // retrieved (issue #303). The Atom leg is best-effort — `metadata_json`
+    // is `None` when the feed fetch failed — so an absent/empty title falls
+    // back to the id placeholder, guaranteeing a successful PDF fetch always
+    // stores a VALID entry. `bib` / `info` on the result now show the real
+    // title / authors / year / categories instead of `arxiv:<id>`.
+    let (title, authors, year, arxiv_categories) = match &metadata_json {
+        Some(atom) => (
+            extract_metadata_title(atom).unwrap_or_else(|| format!("arxiv:{}", id.as_str())),
+            extract_metadata_authors(atom),
+            atom.get("published")
+                .and_then(Value::as_str)
+                .and_then(parse_rfc3339_year),
+            extract_arxiv_categories(atom),
+        ),
+        None => (
+            format!("arxiv:{}", id.as_str()),
+            Vec::new(),
+            None,
+            Vec::new(),
+        ),
+    };
+
     let metadata = Metadata {
         schema_version: SCHEMA_VERSION.to_string(),
-        title: format!("arxiv:{}", id.as_str()),
-        authors: Vec::new(),
-        year: None,
+        title,
+        authors,
+        year,
         doi: None,
         arxiv_id: Some(id.clone()),
-        // The PDF-fetch path still writes placeholder metadata (see the
-        // title note above); real Atom categories land with the metadata
-        // chaining follow-up (issue #303).
-        arxiv_categories: Vec::new(),
+        arxiv_categories,
         abstract_: None,
         venue: None,
         volume: None,
