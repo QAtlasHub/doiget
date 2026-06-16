@@ -155,3 +155,114 @@ fn bib_emits_misc_for_missing_type() {
         .success()
         .stdout(predicate::str::contains("@misc{doi_10.1234_example,"));
 }
+
+/// Seed a `journal-article` entry for `doi` with the given `title` into the
+/// store at `root` (which must already exist).
+fn seed(root: &Utf8PathBuf, doi: &str, title: &str) {
+    let store = FsStore::new(root.clone()).expect("FsStore::new");
+    let ref_ = Ref::Doi(Doi::parse(doi).expect("valid DOI"));
+    let mut m = fixture(Some("journal-article"));
+    m.doi = Some(Doi::parse(doi).expect("valid DOI"));
+    m.title = title.to_string();
+    store.write(&ref_.safekey(), &m, None).expect("seed entry");
+}
+
+#[test]
+fn bib_all_exports_every_store_entry() {
+    // Issue #305: `bib --all` is a one-pass offline exporter of the whole
+    // store — no ref argument, no network.
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8_path(&dir).join("papers");
+    FsStore::new(root.clone()).expect("FsStore::new");
+    seed(&root, "10.1234/example", "First Paper");
+    seed(&root, "10.5678/another", "Second Paper");
+
+    doiget(&root)
+        .args(["bib", "--all"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("@article{doi_10.1234_example,"))
+        .stdout(predicate::str::contains("@article{doi_10.5678_another,"))
+        .stdout(predicate::str::contains("First Paper"))
+        .stdout(predicate::str::contains("Second Paper"));
+}
+
+#[test]
+fn bib_all_on_empty_store_succeeds_with_note() {
+    // An empty store is "nothing to export", not a failure (no ref was
+    // requested) — exit 0 with a stderr note, empty stdout.
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8_path(&dir).join("papers");
+    FsStore::new(root.clone()).expect("FsStore::new");
+
+    doiget(&root)
+        .args(["bib", "--all"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("store is empty"));
+}
+
+#[test]
+fn bib_from_file_renders_present_and_exits_nonzero_on_missing() {
+    // Issue #305: `bib --from-file` renders the refs present in the store
+    // and SKIPS the missing ones — but exits non-zero so a script can tell
+    // a complete export from a partial one (the #304 failure-count rule).
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8_path(&dir).join("papers");
+    FsStore::new(root.clone()).expect("FsStore::new");
+    seed(&root, "10.1234/example", "Present Paper");
+
+    let refs = utf8_path(&dir).join("refs.txt");
+    std::fs::write(
+        refs.as_std_path(),
+        "doi:10.1234/example\ndoi:10.9999/missing\n",
+    )
+    .expect("write refs file");
+
+    doiget(&root)
+        .args(["bib", "--from-file", refs.as_str()])
+        .assert()
+        .failure() // one ref missing → non-zero exit
+        .stdout(predicate::str::contains("Present Paper"))
+        .stderr(predicate::str::contains("1 missing"));
+}
+
+#[test]
+fn bib_no_selector_is_a_usage_error() {
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8_path(&dir).join("papers");
+    FsStore::new(root.clone()).expect("FsStore::new");
+
+    doiget(&root)
+        .args(["bib"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("specify a ref"));
+}
+
+#[test]
+fn bib_offline_via_cite_renders_from_store() {
+    // `cite --offline <ref>` renders the stored entry with no network
+    // (issue #305): an already-fetched ref always cites.
+    let (_dir_guard, root) = seeded_store(Some("journal-article"));
+
+    doiget(&root)
+        .args(["cite", "--offline", "doi:10.1234/example"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("@article{doi_10.1234_example,"))
+        .stdout(predicate::str::contains("title      = {Quantum Stuff},"));
+}
+
+#[test]
+fn cite_offline_missing_entry_fails() {
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8_path(&dir).join("papers");
+    FsStore::new(root.clone()).expect("FsStore::new");
+
+    doiget(&root)
+        .args(["cite", "--offline", "doi:10.9999/missing"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no local store entry"));
+}

@@ -310,15 +310,31 @@ enum Command {
         #[arg(long, value_enum, default_value = "relevance")]
         sort: doiget_cli::commands::search::SortArg,
     },
-    /// Export an entry as BibTeX.
+    /// Export stored entries as BibTeX. A single ref, the whole store
+    /// (`--all`), or a ref list (`--from-file`) — all rendered offline
+    /// from the local store (#305).
     Bib {
-        /// DOI or arXiv id.
-        ref_: String,
+        /// DOI or arXiv id. Omit when using `--all` or `--from-file`.
+        ref_: Option<String>,
+        /// Export every entry in the store as one deduplicated `.bib`.
+        #[arg(long)]
+        all: bool,
+        /// Export the refs listed in FILE (one per line, or CSL-JSON /
+        /// BibTeX), each rendered from the store; missing entries are
+        /// skipped (and counted toward the exit code).
+        #[arg(long, value_name = "FILE", value_parser = parse_utf8_path)]
+        from_file: Option<camino::Utf8PathBuf>,
     },
     /// Resolve a ref live and print a clean BibTeX entry (doi2bib-style).
+    /// Falls back to the local store when the live resolve fails, so an
+    /// already-fetched ref always cites (#305).
     Cite {
         /// DOI or arXiv id.
         ref_: String,
+        /// Skip the live resolve and render from the local store only
+        /// (errors if the ref was never fetched).
+        #[arg(long)]
+        offline: bool,
     },
     /// Export an entry as CSL JSON.
     Csl {
@@ -659,8 +675,14 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Batch { path, dry_run }) => {
             doiget_cli::commands::batch::run_with_options(path, dry_run, mode).await
         }
-        Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_, mode),
-        Some(Command::Cite { ref_ }) => doiget_cli::commands::cite::run(ref_, mode).await,
+        Some(Command::Bib {
+            ref_,
+            all,
+            from_file,
+        }) => doiget_cli::commands::bib::run(ref_, all, from_file, mode),
+        Some(Command::Cite { ref_, offline }) => {
+            doiget_cli::commands::cite::run(ref_, offline, mode).await
+        }
         Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_, mode),
         Some(Command::Text {
             ref_,
