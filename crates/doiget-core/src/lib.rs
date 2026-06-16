@@ -688,6 +688,19 @@ pub enum ErrorCode {
     /// next minor release" rather than "report a bug" or "tweak my
     /// capability profile". Wire form: `"NOT_IMPLEMENTED"`.
     NotImplemented,
+    /// The identifier is valid and resolvable, but the **requested
+    /// representation** is not available from its source — currently the
+    /// ar5iv HTML render consulted by `doiget text` (a 200 with no
+    /// extractable prose: the paper was never converted to HTML).
+    ///
+    /// Deliberately distinct from the neighbouring codes so an agent does
+    /// not misdiagnose a missing render as a bad reference (issue #302):
+    /// it is NOT [`Self::NotFound`] (the id *does* exist), NOT
+    /// [`Self::NoOaAvailable`] (the paper may well be OA — only this one
+    /// representation is missing), and NOT [`Self::NetworkError`] (the
+    /// fetch succeeded). The actionable branch is "fetch the PDF instead",
+    /// not "fix the identifier". Wire form: `"TEXT_UNAVAILABLE"`.
+    TextUnavailable,
 }
 
 impl ErrorCode {
@@ -715,6 +728,7 @@ impl ErrorCode {
             ErrorCode::LockTimeout => "LOCK_TIMEOUT",
             ErrorCode::InternalError => "INTERNAL_ERROR",
             ErrorCode::NotImplemented => "NOT_IMPLEMENTED",
+            ErrorCode::TextUnavailable => "TEXT_UNAVAILABLE",
         }
     }
 }

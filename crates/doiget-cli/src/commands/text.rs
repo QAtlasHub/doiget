@@ -40,7 +40,9 @@ fn print_err(args: std::fmt::Arguments<'_>) {
 ///
 /// Surfaces a typed [`ErrorCode`] as a process exit code via
 /// [`CliExit`]: an invalid ref is a usage error; a DOI yields
-/// `NO_OA_AVAILABLE`; extraction failures map through
+/// `NO_OA_AVAILABLE`; an ar5iv render with no extractable prose yields
+/// `TEXT_UNAVAILABLE` (never a silent exit-0 — issue #302) with an
+/// actionable "fetch the PDF" note; other extraction failures map through
 /// [`ErrorCode::from`].
 pub async fn run(
     ref_: String,
@@ -79,6 +81,17 @@ pub async fn run(
         Err(e) => {
             let code = ErrorCode::from(&e);
             print_err(format_args!("error[{}]: {e}", code.as_wire()));
+            // `text unavailable` is the one read-step failure with a
+            // concrete next action: the id is valid and the PDF may well be
+            // fetchable, so spell the exact command out (issue #302) rather
+            // than leave the agent to infer it. Mirrors the `= note:` line
+            // `render_fetch_error` attaches to denial-class failures.
+            if code == ErrorCode::TextUnavailable {
+                print_err(format_args!(
+                    "  = note: the arXiv id is valid — fetch the PDF instead: `doiget fetch arxiv:{}`",
+                    id.as_str()
+                ));
+            }
             return Err(anyhow::Error::new(CliExit(cli_exit_code(code))));
         }
     };

@@ -136,11 +136,14 @@ pub struct PaperText {
 ///
 /// # Errors
 ///
-/// - [`FetchError::Http`] for transport / status failures (a 404 / 410 for
-///   a paper ar5iv has not converted collapses to `NOT_FOUND` at the
-///   boundary).
-/// - [`FetchError::NotFound`] when ar5iv returns a body with no extractable
-///   text (an authoritative "nothing to read here").
+/// - [`FetchError::Http`] for transport / status failures (a 404 / 410
+///   collapses to `NOT_FOUND` at the boundary — the id is genuinely absent
+///   from ar5iv).
+/// - [`FetchError::TextUnavailable`] when ar5iv returns a **200** with no
+///   extractable prose (`char_count == 0`: the paper was never converted to
+///   HTML). Distinct from `NotFound`: the id is valid and the PDF may be
+///   fetchable, so an agent should fetch rather than treat the ref as wrong
+///   (issue #302).
 /// - [`FetchError::SourceSchema`] if the ar5iv URL cannot be constructed
 ///   from `base` + the id. (HTML parsing itself is best-effort and
 ///   infallible on content — see the `parse_ar5iv` helper.)
@@ -185,16 +188,22 @@ async fn fetch_and_parse(
 
     let (title, sections) = parse_ar5iv(&body)?;
 
-    // A 200 with no extractable content (e.g. ar5iv's "not converted"
-    // placeholder) is an authoritative "nothing to read", surfaced as
-    // NotFound so an agent can branch on it rather than receive an empty
-    // success.
-    if sections.is_empty() && title.is_none() {
-        return Err(FetchError::NotFound {
-            hint: format!(
-                "ar5iv returned no extractable text for {} (paper may not be converted to HTML)",
-                id.as_str()
-            ),
+    // A 200 with no readable prose (ar5iv's "not converted" placeholder, or
+    // a stub that parses to section shells with empty bodies) is an
+    // authoritative "nothing to read". Gate on the total extractable char
+    // count — NOT just `sections.is_empty()` — so the empty-bodied-section
+    // case (issue #302's repro: a non-empty `sections` whose text is all
+    // blank) is caught too and never escapes as an empty `Ok` (a silent
+    // exit-0 the caller misreads as a bad identifier).
+    //
+    // Surfaced as `TextUnavailable`, NOT `NotFound`: the arXiv id was
+    // already validated and resolved, so the honest signal is "this
+    // representation is missing — fetch the PDF", not "the id does not
+    // exist" (which would send an agent down a wrong debugging path).
+    let char_count: usize = sections.iter().map(|s| s.text.chars().count()).sum();
+    if char_count == 0 {
+        return Err(FetchError::TextUnavailable {
+            arxiv_id: id.as_str().to_string(),
         });
     }
 
@@ -217,12 +226,13 @@ async fn fetch_and_parse(
         canonical_digest: Some(&canonical),
     })?;
 
-    let char_count = sections.iter().map(|s| s.text.chars().count()).sum();
     Ok(PaperText {
         arxiv_id: id.as_str().to_string(),
         source: TextSource::Ar5iv,
         title,
         sections,
+        // Computed above (the non-empty gate); reused here so the count is
+        // derived exactly once.
         char_count,
         truncated: false,
         retrieved_from: final_url.to_string(),
@@ -343,7 +353,7 @@ fn normalize(s: &str) -> String {
 /// document is recovered (the reader runs with `check_end_names = false`,
 /// and a hard syntax error stops the walk while keeping the partial
 /// result rather than discarding it — ADR-0032 D3). An empty result is
-/// handled by the caller (→ `NotFound`). Returns `Result` only to keep the
+/// handled by the caller (→ `TextUnavailable`). Returns `Result` only to keep the
 /// call-site uniform; it does not currently produce an `Err`.
 fn parse_ar5iv(html: &[u8]) -> Result<(Option<String>, Vec<TextSection>), FetchError> {
     let mut reader = Reader::from_reader(html);
@@ -486,7 +496,7 @@ fn parse_ar5iv(html: &[u8]) -> Result<(Option<String>, Vec<TextSection>), FetchE
                 // Best-effort (ADR-0032 D3): a syntax error deep in the
                 // document must not discard everything already collected.
                 // Stop here and return the partial result — an empty result
-                // still maps to NotFound upstream. The error is observable
+                // still maps to TextUnavailable upstream. The error is observable
                 // on stderr, never on the stdout JSON-RPC channel.
                 tracing::debug!(error = %e, "ar5iv HTML parse error; returning best-effort partial text");
                 break;
@@ -1045,7 +1055,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paper_text_empty_body_is_not_found() {
+    async fn paper_text_empty_body_is_text_unavailable() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path_matcher("/html/2401.99999"))
@@ -1066,10 +1076,59 @@ mod tests {
         let base = Url::parse(&server.uri()).expect("uri");
         let id = ArxivId::parse("2401.99999").unwrap();
 
+        // A 200 that parses to nothing is "this representation is missing",
+        // NOT "the id does not exist" (issue #302): the arXiv id was already
+        // validated, so it must surface as TextUnavailable / TEXT_UNAVAILABLE
+        // so an agent fetches the PDF rather than treating the ref as wrong.
         let err = paper_text(&base, &id, None, &ctx)
             .await
-            .expect_err("empty body must be NotFound");
-        assert!(matches!(err, FetchError::NotFound { .. }), "got {err:?}");
+            .expect_err("empty body must be TextUnavailable");
+        assert!(
+            matches!(err, FetchError::TextUnavailable { .. }),
+            "got {err:?}"
+        );
+        assert_eq!(
+            crate::ErrorCode::from(&err),
+            crate::ErrorCode::TextUnavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn paper_text_prose_free_body_is_text_unavailable() {
+        // Issue #302's actual repro: a 200 whose body parses to a NON-empty
+        // `sections` vec (a heading shell) but zero extractable prose
+        // (`char_count == 0`). The old gate keyed on `sections.is_empty()`,
+        // so this slipped through as an empty `Ok` → a silent exit-0 the
+        // caller misread as a bad identifier. The `char_count == 0` gate
+        // catches it.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_matcher("/html/2012.03644"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(
+                    "<html><head></head><body><h2>1 Introduction</h2></body></html>",
+                ),
+            )
+            .mount(&server)
+            .await;
+        let host = server
+            .uri()
+            .parse::<Url>()
+            .unwrap()
+            .host_str()
+            .unwrap()
+            .to_string();
+        let (_td, ctx) = build_test_context(&host, None);
+        let base = Url::parse(&server.uri()).expect("uri");
+        let id = ArxivId::parse("2012.03644").unwrap();
+
+        let err = paper_text(&base, &id, None, &ctx)
+            .await
+            .expect_err("a body with headings but no prose must be TextUnavailable");
+        assert!(
+            matches!(err, FetchError::TextUnavailable { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
