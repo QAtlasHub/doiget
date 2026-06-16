@@ -341,6 +341,10 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
         year: None,
         doi,
         arxiv_id,
+        // Enriched by `cite_metadata`'s arXiv overlay (issue #303); the
+        // metadata-only baseline leaves it empty like the other
+        // bibliographic fields.
+        arxiv_categories: Vec::new(),
         abstract_: None,
         venue: None,
         volume: None,
@@ -412,8 +416,42 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
             .and_then(|a| a.first())
             .and_then(Value::as_str)
             .map(str::to_string);
+    } else if outcome.source == "arxiv" {
+        // arXiv Atom overlay (issue #303). The baseline already pulled
+        // title/authors; add the publication year (from the Atom
+        // `published` timestamp) and the subject categories (primary class
+        // first) so `cite` renders a COMPLETE arXiv `@misc` —
+        // eprint/archivePrefix/primaryClass/year — instead of the
+        // title+author stub that read as an incomplete reference. Honest by
+        // construction: every field comes straight from the Atom payload.
+        m.year = outcome
+            .metadata
+            .get("published")
+            .and_then(Value::as_str)
+            .and_then(parse_rfc3339_year);
+        m.arxiv_categories = outcome
+            .metadata
+            .get("categories")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
     }
     m
+}
+
+/// Extract the four-digit year from an RFC3339 timestamp — the arXiv Atom
+/// `published` field, e.g. `"2004-03-24T00:00:00Z"`. Returns `None` if the
+/// value does not parse as RFC3339, so a malformed timestamp simply omits
+/// the `year` rather than fabricating one.
+fn parse_rfc3339_year(s: &str) -> Option<i32> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| chrono::Datelike::year(&dt))
 }
 
 /// Convert a Crossref `page` value to BibTeX page-range form: a single
@@ -915,6 +953,10 @@ async fn fetch_paper_arxiv(
         year: None,
         doi: None,
         arxiv_id: Some(id.clone()),
+        // The PDF-fetch path still writes placeholder metadata (see the
+        // title note above); real Atom categories land with the metadata
+        // chaining follow-up (issue #303).
+        arxiv_categories: Vec::new(),
         abstract_: None,
         venue: None,
         volume: None,
@@ -1186,6 +1228,8 @@ async fn fetch_paper_doi(
         year: extracted.year,
         doi: Some(doi.clone()),
         arxiv_id: None,
+        // DOI-fetch path: no arXiv id, so no arXiv categories.
+        arxiv_categories: Vec::new(),
         abstract_: None,
         venue: extracted.venue,
         volume: extracted.volume,
