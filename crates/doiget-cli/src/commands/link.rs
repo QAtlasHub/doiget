@@ -32,7 +32,7 @@ const OPENALEX_DEFAULT_BASE: &str = "https://api.openalex.org";
 /// A non-DOI ref is a usage error; OpenAlex failures surface a typed
 /// [`ErrorCode`] as a process exit code via [`CliExit`] (e.g. a DOI with no
 /// OpenAlex work → `NOT_FOUND`).
-pub async fn run(ref_: String, mode: OutputMode) -> Result<()> {
+pub async fn run(ref_: String, mode: OutputMode, quiet_was_explicit: bool) -> Result<()> {
     let parsed = Ref::parse(&ref_).with_context(|| format!("invalid ref {ref_:?}"))?;
     let doi = match parsed {
         Ref::Doi(d) => d,
@@ -63,7 +63,9 @@ pub async fn run(ref_: String, mode: OutputMode) -> Result<()> {
         }
     };
 
-    if mode == OutputMode::Quiet {
+    // Artifact-class (ADR-0017 Amendment 2 / #301): suppress only on
+    // explicit Quiet; the non-TTY implicit fallback still emits.
+    if mode == OutputMode::Quiet && quiet_was_explicit {
         return Ok(());
     }
 
@@ -142,7 +144,7 @@ mod tests {
 
     #[tokio::test]
     async fn link_rejects_arxiv_input() {
-        let err = run("arxiv:2401.12345".to_string(), OutputMode::Quiet)
+        let err = run("arxiv:2401.12345".to_string(), OutputMode::Quiet, true)
             .await
             .expect_err("arXiv input must be a usage error");
         assert!(err.to_string().contains("Pass a DOI"), "got: {err}");

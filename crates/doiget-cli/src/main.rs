@@ -607,8 +607,12 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             }
         },
         Some(Command::Config { action }) => doiget_cli::commands::config::run(action, mode),
-        Some(Command::Info { ref_ }) => doiget_cli::commands::info::run(ref_, mode),
-        Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit, mode),
+        Some(Command::Info { ref_ }) => {
+            doiget_cli::commands::info::run(ref_, mode, out.quiet_was_explicit)
+        }
+        Some(Command::ListRecent { limit }) => {
+            doiget_cli::commands::list_recent::run(limit, mode, out.quiet_was_explicit)
+        }
         Some(Command::Search {
             query,
             local,
@@ -634,7 +638,7 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 publisher,
                 sort,
             };
-            doiget_cli::commands::search::run(query, local, ext, mode).await
+            doiget_cli::commands::search::run(query, local, ext, mode, out.quiet_was_explicit).await
         }
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
         Some(Command::Verify {
@@ -663,7 +667,9 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             max_chars,
             no_cache,
         }) => doiget_cli::commands::text::run(ref_, max_chars, no_cache, mode).await,
-        Some(Command::Link { ref_ }) => doiget_cli::commands::link::run(ref_, mode).await,
+        Some(Command::Link { ref_ }) => {
+            doiget_cli::commands::link::run(ref_, mode, out.quiet_was_explicit).await
+        }
         // Phase 3 (MCP foundation). The MCP server runs on stdio per
         // ADR-0001. The `tracing_subscriber` installed at the top of
         // `main` is already redirected to stderr, so any rmcp / tool

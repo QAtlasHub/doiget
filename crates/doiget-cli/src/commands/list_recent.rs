@@ -28,17 +28,19 @@ const FETCHED_AT_FMT: &str = "%Y-%m-%dT%H:%M:%SZ";
 /// Emits a tab-separated table on stdout. The column order is intentionally
 /// stable for `cut(1)` consumption; future fields will be APPENDED, not
 /// inserted.
-pub fn run(limit: usize, mode: super::output::OutputMode) -> Result<()> {
-    // `mode` honors ADR-0017: `Quiet` suppresses the TSV table but the
-    // store read still runs (so I/O failures surface as exit 1) (#203).
-    // Json body is tracked in #204.
+pub fn run(limit: usize, mode: super::output::OutputMode, quiet_was_explicit: bool) -> Result<()> {
+    // `mode` honors ADR-0017: explicit `Quiet` suppresses the TSV table
+    // but the store read still runs (so I/O failures surface as exit 1)
+    // (#203). The non-TTY *implicit* Quiet does NOT suppress —
+    // `list-recent` is artifact-class (ADR-0017 Amendment 2 / #301): the
+    // listing IS the requested output. Json body is tracked in #204.
     let store_root = resolve_store_root()?;
     let store = FsStore::new(store_root)?;
     let entries = store
         .list_recent(limit)
         .context("failed to list recent store entries")?;
 
-    if mode == super::output::OutputMode::Quiet {
+    if mode == super::output::OutputMode::Quiet && quiet_was_explicit {
         return Ok(());
     }
 
