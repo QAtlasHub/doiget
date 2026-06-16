@@ -21,9 +21,10 @@ use camino::{Utf8Path, Utf8PathBuf};
 use doiget_cli::commands::batch;
 use doiget_cli::commands::output::OutputMode;
 use doiget_core::provenance::{LogEvent, LogResult, LogRow};
+use doiget_core::MCP_BATCH_MAX_SIZE;
 use serial_test::serial;
 use tempfile::TempDir;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod common;
@@ -292,6 +293,85 @@ async fn batch_with_malformed_ref_continues_and_returns_err() {
     assert_eq!(store_ok, 1, "one StoreWrite(ok) for the good ref");
 
     // Hash chain still intact across the mixed-outcome session.
+    assert_chain_intact(&rows);
+
+    drop(env);
+    drop(td);
+}
+
+#[tokio::test]
+#[serial]
+async fn batch_above_window_size_fetches_every_ref() {
+    // Issue #304: a refs file LARGER than `MCP_BATCH_MAX_SIZE` must no longer
+    // abort fetching nothing — every ref is processed across multiple
+    // dispatch windows, under one session, with a single SessionStart /
+    // SessionEnd. This exercises the real multi-window dispatch loop (not
+    // just the windowing arithmetic), so it confirms counters accumulate
+    // across windows and the bookends are emitted exactly once.
+    //
+    // Slow by construction: `MCP_BATCH_MAX_SIZE + 2` real fetches through the
+    // hard-coded 5-per-second rate cap (~20 s). Kept `#[serial]` so it never
+    // contends with the other batch fixtures.
+    let server = MockServer::start().await;
+    let body = b"%PDF-1.7\n%batch-window-fixture\n".to_vec();
+    // One regex mock serves every generated arXiv id rather than mounting one
+    // mock per ref.
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/pdf/2401\.\d{5}\.pdf$"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+        .mount(&server)
+        .await;
+
+    let (td, store_root, log_path, env) = stage_env();
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_ARXIV_BASE", &server.uri());
+
+    // Two past the window boundary → the second window carries the remaining
+    // 2 refs (the old hard cap aborted the whole run at this size).
+    let n = MCP_BATCH_MAX_SIZE + 2;
+    let ids: Vec<String> = (0..n).map(|i| format!("2401.{:05}", 10000 + i)).collect();
+    let refs_body: String = ids.iter().map(|id| format!("arxiv:{id}\n")).collect();
+    let refs_path = store_root.parent().unwrap().join("refs.txt");
+    std::fs::write(refs_path.as_std_path(), refs_body).expect("write refs file");
+
+    batch::run_with_options(refs_path.as_str().to_string(), false, OutputMode::Human)
+        .await
+        .expect("a batch above the window size must succeed, fetching every ref");
+
+    // Every ref's PDF landed — nothing was dropped by an over-limit abort.
+    for id in &ids {
+        let pdf_path = store_root.join(format!("arxiv_{id}.pdf"));
+        assert!(
+            pdf_path.exists(),
+            "missing PDF for {id} in a {n}-ref (multi-window) batch"
+        );
+    }
+
+    // Provenance: one Fetch(ok) per ref across all windows, framed by exactly
+    // one session bookend pair.
+    let rows = read_log_rows(&log_path);
+    let count_event = |evt: LogEvent| rows.iter().filter(|r| r.event == evt).count();
+    assert_eq!(
+        count_event(LogEvent::Fetch),
+        n,
+        "one Fetch row per ref, summed across every window"
+    );
+    assert_eq!(
+        count_event(LogEvent::SessionStart),
+        1,
+        "exactly one SessionStart for the whole multi-window batch"
+    );
+    assert_eq!(
+        count_event(LogEvent::SessionEnd),
+        1,
+        "exactly one SessionEnd for the whole multi-window batch"
+    );
+    assert_eq!(
+        rows.last().unwrap().result,
+        LogResult::Ok,
+        "all refs fetched → SessionEnd ok"
+    );
     assert_chain_intact(&rows);
 
     drop(env);

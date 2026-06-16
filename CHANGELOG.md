@@ -10,6 +10,9 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Fixed
+- **[batch]** `doiget batch <file>` no longer aborts the entire run when the input exceeds 100 refs. Previously it printed `Error: batch size N exceeds limit 100` and fetched **nothing** the moment a bibliography crossed 100 entries, forcing a manual `split`. The input is now processed in full, dispatched in bounded windows of `MCP_BATCH_MAX_SIZE` so the in-flight task count stays capped while the shared rate limiter keeps the 5-per-second politeness invariant across every window. The per-ref failure-count exit code is unchanged (non-zero when any ref fails). The `MCP_BATCH_MAX_SIZE` hard cap still applies to a single MCP `batch_fetch` request — that request-shape bound is unrelated to a local file handed to the CLI (#304).
+
 ## [0.7.0-beta.0] - 2026-06-16
 
 ### Added
