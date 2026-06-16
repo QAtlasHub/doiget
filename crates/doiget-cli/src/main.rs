@@ -336,10 +336,20 @@ enum Command {
         #[arg(long)]
         offline: bool,
     },
-    /// Export an entry as CSL JSON.
+    /// Export stored entries as CSL JSON. A single ref, the whole store
+    /// (`--all`), or a ref list (`--from-file`) — all rendered offline
+    /// from the local store (#305).
     Csl {
-        /// DOI or arXiv id.
-        ref_: String,
+        /// DOI or arXiv id. Omit when using `--all` or `--from-file`.
+        ref_: Option<String>,
+        /// Export every store entry as one deduplicated CSL JSON array.
+        #[arg(long)]
+        all: bool,
+        /// Export the refs listed in FILE (one per line, or CSL-JSON /
+        /// BibTeX), each rendered from the store; missing entries are
+        /// skipped (and counted toward the exit code).
+        #[arg(long, value_name = "FILE", value_parser = parse_utf8_path)]
+        from_file: Option<camino::Utf8PathBuf>,
     },
     /// Extract a paper's full text from ar5iv as sectioned plain text
     /// (the #281 "read" step; ADR-0032). Takes an arXiv id; the PDF blob
@@ -683,7 +693,11 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Cite { ref_, offline }) => {
             doiget_cli::commands::cite::run(ref_, offline, mode).await
         }
-        Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_, mode),
+        Some(Command::Csl {
+            ref_,
+            all,
+            from_file,
+        }) => doiget_cli::commands::csl::run(ref_, all, from_file, mode),
         Some(Command::Text {
             ref_,
             max_chars,
