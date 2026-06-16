@@ -27,6 +27,11 @@
 //! - Exit code: `Ok(())` only when **every** parse + fetch succeeded; any
 //!   parse-error or per-ref-fetch-error returns `Err(...)` so the binary
 //!   surfaces a non-zero exit.
+//! - After the one-line count summary, a per-ref **failure digest**
+//!   (`<ref> -> <ERROR_CODE>`) is written to stderr (issue #222) so a
+//!   human / agent sees which refs failed and why without grepping the
+//!   JSONL provenance log. stdout stays clean (the `--mode json` JSON-Lines
+//!   is the machine channel).
 //! - The bookend rows are always emitted: one `SessionStart` at the top, one
 //!   `SessionEnd` at the bottom, regardless of per-ref outcome.
 
@@ -226,6 +231,9 @@ pub async fn run_with_options(
     let mut parse_errors: usize = 0;
     let mut fetch_ok: usize = 0;
     let mut fetch_errors: usize = 0;
+    // `(ref, error_code)` per failed entry, drained into the end-of-batch
+    // stderr failure digest (issue #222).
+    let mut failures: Vec<(String, &'static str)> = Vec::new();
     let mut remaining = inputs.into_iter();
     loop {
         let window: Vec<String> = remaining.by_ref().take(MCP_BATCH_MAX_SIZE).collect();
@@ -239,6 +247,7 @@ pub async fn run_with_options(
                 Ok(r) => r,
                 Err(e) => {
                     parse_errors += 1;
+                    failures.push((input.clone(), "INVALID_REF"));
                     if json_mode {
                         // #205: parse failures get an INVALID_REF JSONL line
                         // with the human message in `error.message`. Per
@@ -306,11 +315,15 @@ pub async fn run_with_options(
                 is_error,
                 json_record,
                 log_breadcrumb,
+                failure,
             } = classify_joined(joined, json_mode);
             if is_error {
                 fetch_errors += 1;
             } else {
                 fetch_ok += 1;
+            }
+            if let Some(f) = failure {
+                failures.push(f);
             }
             if let Some(record) = json_record {
                 #[allow(clippy::print_stdout)]
@@ -336,6 +349,17 @@ pub async fn run_with_options(
         "batch: {} OK, {} failed ({} parse errors, {} fetch errors)",
         fetch_ok, total_errors, parse_errors, fetch_errors,
     ));
+
+    // Issue #222: a per-ref failure digest on stderr so a human / agent
+    // sees WHICH refs failed and WHY (the primary error code) without
+    // grepping the JSONL provenance log. stdout stays clean (ADR-0001 /
+    // #205 JSON-Lines is the machine channel).
+    if !failures.is_empty() {
+        print_summary(format_args!("batch failures ({}):", failures.len()));
+        for (ref_, code) in &failures {
+            print_summary(format_args!("  {ref_} -> {code}"));
+        }
+    }
 
     if all_ok {
         Ok(())
@@ -392,6 +416,12 @@ struct JoinedOutcome {
     /// here so `classify_joined` stays pure and the loop just calls
     /// `.log()` on the outcome.
     log_breadcrumb: LogBreadcrumb,
+    /// `(ref, error_code)` for a failed entry, collected into the
+    /// end-of-batch stderr failure digest (issue #222) so a human / agent
+    /// sees WHICH refs failed and WHY without grepping the JSONL log.
+    /// `None` on success. The ref is a sentinel only for a task panic
+    /// (the `JoinSet` lost the input).
+    failure: Option<(String, &'static str)>,
 }
 
 enum LogBreadcrumb {
@@ -457,10 +487,12 @@ fn classify_joined(
                     });
                     let error_dbg =
                         format!("pdf_leg=Blocked code={effective:?} message={message:?}");
+                    let failure = Some((input.clone(), effective.as_wire()));
                     return JoinedOutcome {
                         is_error: true,
                         json_record: record,
                         log_breadcrumb: LogBreadcrumb::FetchFailed { input, error_dbg },
+                        failure,
                     };
                 }
                 let result_value = json_mode.then(|| outcome_to_result_value(&outcome));
@@ -469,6 +501,7 @@ fn classify_joined(
                     json_record: json_mode
                         .then(|| build_jsonl_success(&input, result_value.clone().flatten())),
                     log_breadcrumb: LogBreadcrumb::None,
+                    failure: None,
                 }
             }
             Err(e) => {
@@ -481,10 +514,12 @@ fn classify_joined(
                 let record = json_mode.then(|| {
                     build_jsonl_failure(Some(&input), code.as_wire(), &json_msg, denial_value)
                 });
+                let failure = Some((input.clone(), code.as_wire()));
                 JoinedOutcome {
                     is_error: true,
                     json_record: record,
                     log_breadcrumb: LogBreadcrumb::FetchFailed { input, error_dbg },
+                    failure,
                 }
             }
         },
@@ -502,6 +537,7 @@ fn classify_joined(
                 is_error: true,
                 json_record: record,
                 log_breadcrumb: LogBreadcrumb::TaskPanicked { error_dbg },
+                failure: Some(("(task panicked — ref lost)".to_string(), "FETCH_ERROR")),
             }
         }
     }
@@ -776,6 +812,11 @@ mod tests {
             outcome.log_breadcrumb,
             LogBreadcrumb::FetchFailed { .. }
         ));
+        // #222: the digest entry carries the ref + the same typed code.
+        assert_eq!(
+            outcome.failure,
+            Some(("arxiv:2401.99999".to_string(), "INTERNAL_ERROR"))
+        );
     }
 
     #[test]
