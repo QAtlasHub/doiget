@@ -114,26 +114,34 @@ fn print_err(args: std::fmt::Arguments<'_>) {
 /// Propagates store-open / scan failures (local) or surfaces a typed
 /// [`ErrorCode`] as a process exit code (external); an empty query is a
 /// usage error.
-pub async fn run(query: String, local: bool, ext: ExternalArgs, mode: OutputMode) -> Result<()> {
+pub async fn run(
+    query: String,
+    local: bool,
+    ext: ExternalArgs,
+    mode: OutputMode,
+    quiet_was_explicit: bool,
+) -> Result<()> {
     if query.trim().is_empty() {
         anyhow::bail!("search query is empty");
     }
     if local {
-        run_local(&query, mode)
+        run_local(&query, mode, quiet_was_explicit)
     } else {
-        run_external(&query, ext, mode).await
+        run_external(&query, ext, mode, quiet_was_explicit).await
     }
 }
 
 /// Local-store substring scan (legacy behaviour, now behind `--local`).
-fn run_local(query: &str, mode: OutputMode) -> Result<()> {
+fn run_local(query: &str, mode: OutputMode, quiet_was_explicit: bool) -> Result<()> {
     let store_root = resolve_store_root()?;
     let store = FsStore::new(store_root)?;
     let entries = store
         .search(query, LOCAL_DEFAULT_LIMIT)
         .with_context(|| format!("search failed for query {query:?}"))?;
 
-    if mode == OutputMode::Quiet {
+    // Artifact-class (ADR-0017 Amendment 2 / #301): suppress only on
+    // explicit Quiet; the non-TTY implicit fallback still emits.
+    if mode == OutputMode::Quiet && quiet_was_explicit {
         return Ok(());
     }
 
@@ -165,7 +173,12 @@ fn run_local(query: &str, mode: OutputMode) -> Result<()> {
 }
 
 /// External OpenAlex discovery search (the default scope).
-async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Result<()> {
+async fn run_external(
+    query: &str,
+    ext: ExternalArgs,
+    mode: OutputMode,
+    quiet_was_explicit: bool,
+) -> Result<()> {
     let q = PaperSearchQuery {
         query: query.to_string(),
         limit: ext.limit,
@@ -206,7 +219,9 @@ async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Resul
         }
     };
 
-    if mode == OutputMode::Quiet {
+    // Artifact-class (ADR-0017 Amendment 2 / #301): suppress only on
+    // explicit Quiet; the non-TTY implicit fallback still emits.
+    if mode == OutputMode::Quiet && quiet_was_explicit {
         return Ok(());
     }
 
@@ -355,17 +370,29 @@ mod tests {
 
     #[tokio::test]
     async fn external_rejects_limit_below_1() {
-        let err = run("q".into(), false, ext(0, None, None), OutputMode::Quiet)
-            .await
-            .expect_err("limit 0 must be rejected");
+        let err = run(
+            "q".into(),
+            false,
+            ext(0, None, None),
+            OutputMode::Quiet,
+            true,
+        )
+        .await
+        .expect_err("limit 0 must be rejected");
         assert!(err.to_string().contains("limit"), "got: {err}");
     }
 
     #[tokio::test]
     async fn external_rejects_limit_above_200() {
-        let err = run("q".into(), false, ext(201, None, None), OutputMode::Quiet)
-            .await
-            .expect_err("limit 201 must be rejected");
+        let err = run(
+            "q".into(),
+            false,
+            ext(201, None, None),
+            OutputMode::Quiet,
+            true,
+        )
+        .await
+        .expect_err("limit 201 must be rejected");
         assert!(err.to_string().contains("limit"), "got: {err}");
     }
 
@@ -376,6 +403,7 @@ mod tests {
             false,
             ext(25, Some(2025), Some(2010)),
             OutputMode::Quiet,
+            true,
         )
         .await
         .expect_err("from_year > to_year must be rejected");

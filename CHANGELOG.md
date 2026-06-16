@@ -10,8 +10,13 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.7.0-beta.0] - 2026-06-16
+
 ### Added
 - **[dist]** `scripts/install.sh` (POSIX `sh`, Linux/macOS) and `scripts/install.ps1` (Windows) — install the prebuilt, SHA-256-verified binary from the signed GitHub Release with no Rust toolchain required: `curl -fsSL https://raw.githubusercontent.com/sotashimozono/doiget/main/scripts/install.sh | sh`. `DOIGET_VERSION` pins a release (default: latest stable); `DOIGET_INSTALL_DIR` overrides the target (default `~/.local/bin` / `%LOCALAPPDATA%\Programs\doiget`). The binary's published `.sha256` sidecar is verified before install. First channel of the multi-platform distribution roadmap (#247); README gains an **Installation** section.
+
+### Fixed
+- **[cli]** `info` / `list-recent` / `search` / `link` no longer emit nothing under a non-TTY implicit Quiet (agent / pipe / ssh). They are now artifact-class and honor only **explicit** Quiet (`--quiet` / `-q` / `--mode quiet` / `DOIGET_MODE=quiet`), per [ADR-0017 Amendment 2](docs/DECISIONS/0017-output-mode-resolution.md): their stdout rendering IS the requested artifact and must reach a captured / piped caller. Previously a fetch-then-`info` confirmation read as "fetch failed" or "store empty" when it had in fact succeeded (#301).
 
 ## [0.6.0] - 2026-06-07
 
