@@ -816,6 +816,18 @@ mod tests {
     }
 
     #[test]
+    fn merge_metadata_preserves_existing_arxiv_categories() {
+        // Issue #303 / review #318: a later metadata-only re-write that did
+        // NOT carry the Atom categories must not drop the stored ones.
+        let mut existing = sample_metadata();
+        existing.arxiv_categories = vec!["cond-mat.str-el".to_string()];
+        let mut incoming = sample_metadata();
+        incoming.arxiv_categories = vec![]; // re-write without categories
+        let merged = merge_metadata(existing, incoming);
+        assert_eq!(merged.arxiv_categories, vec!["cond-mat.str-el".to_string()]);
+    }
+
+    #[test]
     fn roundtrip_reserved_fields() {
         let dir = TempDir::new().expect("tmp");
         let store = fresh_store(&dir);

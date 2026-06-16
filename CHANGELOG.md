@@ -10,6 +10,8 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.7.0-beta.6] - 2026-06-16
+
 ### Added
 - **[cite]** published-version merge for arXiv preprints (#303): when `doiget cite <arxiv-id>`'s Atom feed cross-references a published journal DOI (`<arxiv:doi>`), the entry now cites as the rich `@article` (journal / volume / issue / pages / publisher / issn / doi from Crossref) with the arXiv preprint identity retained (`eprint` / `archivePrefix` / `primaryClass`). No extra OpenAlex call — the DOI comes from the already-fetched feed. Best-effort: an absent or unresolvable cross-ref keeps the `@misc` preprint entry.
 - **[csl]** bulk, offline CSL-JSON export from the local store, at parity with `bib` (#305): `doiget csl --all` emits every store entry as one deduplicated CSL-JSON array, and `doiget csl --from-file <FILE>` emits the refs listed in a file (plain refs / CSL-JSON / BibTeX), each rendered from the store. Missing entries are skipped; `--from-file` exits non-zero with the missing count. The positional ref is now optional and mutually exclusive with the two flags.
@@ -20,6 +22,7 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 - **[fetch]** `doiget fetch <arxiv-id>` now stores the **real** title / authors / year / subject categories from the Atom feed (which the fetch already retrieves) instead of an `arxiv:<id>` placeholder title. A later `doiget bib` / `info` on a fetched arXiv entry shows a usable reference rather than the bare id. The Atom leg stays best-effort — if it fails, the placeholder is kept so a successful PDF fetch always stores a valid entry (#303).
+- **[review #318]** robustness fixes from the promotion review: `bib`/`csl` `--from-file` no longer aborts the whole export on one entry's read error (skip + count, matching `--all`); `csl` flattening surfaces (not silently drops) an entry that renders to an empty CSL item; `cite` prints a `note:` when a published-version DOI resolve fails (no longer a silent degradation) and only treats a bare-DOI cross-ref as a merge trigger; `csl` validates "no selector" before opening the store (parity with `bib`); `FetchError::TextUnavailable` now carries a validated `ArxivId` instead of a raw `String`.
 
 ## [0.7.0-beta.5] - 2026-06-16
 
