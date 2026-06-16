@@ -55,6 +55,8 @@ const SAMPLE_ATOM_FEED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <summary>This is an example abstract.</summary>
     <author><name>Jane Doe</name></author>
     <published>2024-01-15T00:00:00Z</published>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="stat.ML" scheme="http://arxiv.org/schemas/atom"/>
   </entry>
 </feed>"#;
 
@@ -132,7 +134,14 @@ async fn cite_arxiv_emits_bibtex() {
         .success()
         // arXiv has no Crossref `type`, so it renders as @misc.
         .stdout(contains("@misc{"))
-        .stdout(contains("Example arXiv Paper Title"));
+        .stdout(contains("Example arXiv Paper Title"))
+        // issue #303: a complete arXiv entry, not a title+author stub —
+        // year from the Atom `published`, the preprint identity, and the
+        // primary subject class from the first `<category>`.
+        .stdout(contains("year       = {2024},"))
+        .stdout(contains("= {2401.12345},")) // eprint value (short key padding)
+        .stdout(contains("archivePrefix = {arXiv},"))
+        .stdout(contains("primaryClass = {cs.LG},"));
 }
 
 #[tokio::test]

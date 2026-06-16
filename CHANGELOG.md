@@ -10,6 +10,17 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.7.0-beta.3] - 2026-06-16
+
+### Fixed
+- **[cite]** `doiget cite <arxiv-id>` now emits a **complete** arXiv BibTeX entry instead of a title+author stub. The `@misc` entry gains `eprint`, `archivePrefix = {arXiv}`, `primaryClass`, and `year`: the year is parsed from the Atom `published` timestamp, and the primary class from the first `<category>` (or, for an old-style id like `cond-mat/0403602`, the archive prefix). Any entry carrying an arXiv id — including a stored one read by `bib` — now renders these fields. Previously an arXiv reference (a large fraction of a physics bibliography) needed manual `eprint`/`year` injection (#303).
+
+### Added
+- **[core]** `Metadata.arxiv_categories` — the arXiv subject categories (primary first), populated from the Atom feed and preserved across re-writes. Additive optional field; does not bump `schema_version` (`docs/STORE.md` §7).
+
+### Notes
+- Deferred to follow-ups (still part of #303): `bib` on a store entry written by the PDF-fetch path can still show a placeholder `arxiv:<id>` title until that path chains in Atom extraction; and merging a published version's metadata (`@article` via the DOI↔arXiv `link`) for arXiv ids with a journal version.
+
 ## [0.7.0-beta.2] - 2026-06-16
 
 ### Fixed

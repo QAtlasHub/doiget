@@ -52,6 +52,7 @@ fn fixture(doi_suffix: &str, title: &str, year: i32, fetched_year: i32) -> (Safe
         year: Some(year),
         doi: Some(Doi::parse(&doi).expect("valid DOI")),
         arxiv_id: None,
+        arxiv_categories: vec![],
         abstract_: None,
         venue: Some("Phys. Rev. X".to_string()),
         volume: None,

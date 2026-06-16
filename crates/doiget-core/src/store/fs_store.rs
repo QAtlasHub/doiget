@@ -468,6 +468,19 @@ fn merge_metadata(existing: Metadata, incoming: Metadata) -> Metadata {
         out.keywords = existing.keywords;
     }
 
+    // arxiv_categories (Vec<String>): same preserve-existing rule as
+    // keywords, so a later metadata-only re-write that didn't carry the
+    // Atom categories does not drop them (issue #303).
+    if !existing.arxiv_categories.is_empty()
+        && existing.arxiv_categories != incoming.arxiv_categories
+    {
+        warn!(
+            field = "arxiv_categories",
+            "preserving reserved field set by another tool (docs/STORE.md §6)"
+        );
+        out.arxiv_categories = existing.arxiv_categories;
+    }
+
     // [doiget]: doiget owns this table; incoming wins (already in `out`).
     // If incoming has no [doiget] but existing did, keep the existing one
     // so a metadata-only re-write doesn't silently drop a fetch record.
@@ -772,6 +785,7 @@ mod tests {
             year: Some(2026),
             doi: Some(Doi("10.1234/example".to_string())),
             arxiv_id: None,
+            arxiv_categories: vec![],
             abstract_: Some("A short abstract.".to_string()),
             venue: Some("Phys. Rev. X".to_string()),
             volume: Some("12".to_string()),
