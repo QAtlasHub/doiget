@@ -294,6 +294,16 @@ enum Command {
         /// External: only works cited strictly more than this many times.
         #[arg(long)]
         min_citations: Option<u64>,
+        /// External: minimum field-and-year-normalized impact (FWCI). A
+        /// quality FILTER (not a sort) — `fwci:>{f}`. See #290.
+        #[arg(long)]
+        min_fwci: Option<f64>,
+        /// External: minimum within-cohort citation percentile (0–100),
+        /// i.e. top-X% among same-year works (`cited_by_percentile_year`).
+        /// Combine with `--from-year` for "recent and already standing
+        /// out". See #290.
+        #[arg(long)]
+        min_percentile: Option<u8>,
         /// External: filter to an author by name (resolved to an OpenAlex
         /// author ID via `/authors?search=`).
         #[arg(long)]
@@ -310,20 +320,46 @@ enum Command {
         #[arg(long, value_enum, default_value = "relevance")]
         sort: doiget_cli::commands::search::SortArg,
     },
-    /// Export an entry as BibTeX.
+    /// Export stored entries as BibTeX. A single ref, the whole store
+    /// (`--all`), or a ref list (`--from-file`) — all rendered offline
+    /// from the local store (#305).
     Bib {
-        /// DOI or arXiv id.
-        ref_: String,
+        /// DOI or arXiv id. Omit when using `--all` or `--from-file`.
+        ref_: Option<String>,
+        /// Export every entry in the store as one deduplicated `.bib`.
+        #[arg(long)]
+        all: bool,
+        /// Export the refs listed in FILE (one per line, or CSL-JSON /
+        /// BibTeX), each rendered from the store; missing entries are
+        /// skipped (and counted toward the exit code).
+        #[arg(long, value_name = "FILE", value_parser = parse_utf8_path)]
+        from_file: Option<camino::Utf8PathBuf>,
     },
     /// Resolve a ref live and print a clean BibTeX entry (doi2bib-style).
+    /// Falls back to the local store when the live resolve fails, so an
+    /// already-fetched ref always cites (#305).
     Cite {
         /// DOI or arXiv id.
         ref_: String,
+        /// Skip the live resolve and render from the local store only
+        /// (errors if the ref was never fetched).
+        #[arg(long)]
+        offline: bool,
     },
-    /// Export an entry as CSL JSON.
+    /// Export stored entries as CSL JSON. A single ref, the whole store
+    /// (`--all`), or a ref list (`--from-file`) — all rendered offline
+    /// from the local store (#305).
     Csl {
-        /// DOI or arXiv id.
-        ref_: String,
+        /// DOI or arXiv id. Omit when using `--all` or `--from-file`.
+        ref_: Option<String>,
+        /// Export every store entry as one deduplicated CSL JSON array.
+        #[arg(long)]
+        all: bool,
+        /// Export the refs listed in FILE (one per line, or CSL-JSON /
+        /// BibTeX), each rendered from the store; missing entries are
+        /// skipped (and counted toward the exit code).
+        #[arg(long, value_name = "FILE", value_parser = parse_utf8_path)]
+        from_file: Option<camino::Utf8PathBuf>,
     },
     /// Extract a paper's full text from ar5iv as sectioned plain text
     /// (the #281 "read" step; ADR-0032). Takes an arXiv id; the PDF blob
@@ -607,8 +643,12 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             }
         },
         Some(Command::Config { action }) => doiget_cli::commands::config::run(action, mode),
-        Some(Command::Info { ref_ }) => doiget_cli::commands::info::run(ref_, mode),
-        Some(Command::ListRecent { limit }) => doiget_cli::commands::list_recent::run(limit, mode),
+        Some(Command::Info { ref_ }) => {
+            doiget_cli::commands::info::run(ref_, mode, out.quiet_was_explicit)
+        }
+        Some(Command::ListRecent { limit }) => {
+            doiget_cli::commands::list_recent::run(limit, mode, out.quiet_was_explicit)
+        }
         Some(Command::Search {
             query,
             local,
@@ -618,6 +658,8 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             to_year,
             oa_only,
             min_citations,
+            min_fwci,
+            min_percentile,
             author,
             venue,
             publisher,
@@ -629,12 +671,14 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 to_year,
                 oa_only,
                 min_citations,
+                min_fwci,
+                min_percentile,
                 author,
                 venue,
                 publisher,
                 sort,
             };
-            doiget_cli::commands::search::run(query, local, ext, mode).await
+            doiget_cli::commands::search::run(query, local, ext, mode, out.quiet_was_explicit).await
         }
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
         Some(Command::Verify {
@@ -655,15 +699,30 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Batch { path, dry_run }) => {
             doiget_cli::commands::batch::run_with_options(path, dry_run, mode).await
         }
-        Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_, mode),
-        Some(Command::Cite { ref_ }) => doiget_cli::commands::cite::run(ref_, mode).await,
-        Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_, mode),
+        Some(Command::Bib {
+            ref_,
+            all,
+            from_file,
+        }) => doiget_cli::commands::bib::run(ref_, all, from_file, mode),
+        Some(Command::Cite { ref_, offline }) => {
+            doiget_cli::commands::cite::run(ref_, offline, mode).await
+        }
+        Some(Command::Csl {
+            ref_,
+            all,
+            from_file,
+        }) => doiget_cli::commands::csl::run(ref_, all, from_file, mode),
         Some(Command::Text {
             ref_,
             max_chars,
             no_cache,
-        }) => doiget_cli::commands::text::run(ref_, max_chars, no_cache, mode).await,
-        Some(Command::Link { ref_ }) => doiget_cli::commands::link::run(ref_, mode).await,
+        }) => {
+            doiget_cli::commands::text::run(ref_, max_chars, no_cache, mode, out.quiet_was_explicit)
+                .await
+        }
+        Some(Command::Link { ref_ }) => {
+            doiget_cli::commands::link::run(ref_, mode, out.quiet_was_explicit).await
+        }
         // Phase 3 (MCP foundation). The MCP server runs on stdio per
         // ADR-0001. The `tracing_subscriber` installed at the top of
         // `main` is already redirected to stderr, so any rmcp / tool

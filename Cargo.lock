@@ -165,9 +165,9 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "biblatex"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53d0c374feba1b9a59042a7c1cf00ce7c34b977b9134fe7c42b08e5183729f66"
+checksum = "591eba69b7c085632e22ca03606f0bbea68d53bbe26c8962e2d549af20c6a561"
 dependencies = [
  "paste",
  "roman-numerals-rs",
@@ -277,9 +277,9 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "chrono"
-version = "0.4.44"
+version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "num-traits",
@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "doiget-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -542,7 +542,7 @@ dependencies = [
 
 [[package]]
 name = "doiget-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "biblatex",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "doiget-mcp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2169,7 +2169,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -2560,9 +2560,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.23.2"
+version = "1.23.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d258b83ceec21034727ecee8c382cfa6c3e133699b0742c64571814fb420c9f7"
+checksum = "144d6b123cef80b301b8f72a9e2ca4370ddec21950d0a103dd22c437006d2db7"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",

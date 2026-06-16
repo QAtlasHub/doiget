@@ -156,6 +156,26 @@ pub enum FetchError {
         /// The hard cap ([`crate::MAX_BATCH_REFS`]).
         max: usize,
     },
+    /// A source returned a successful response that contained no usable
+    /// representation of the requested kind — currently `doiget text`'s
+    /// ar5iv leg returning a 200 with no extractable prose (the paper was
+    /// never converted to HTML). The identifier is valid; only this one
+    /// representation is missing. Surfaces as
+    /// [`crate::ErrorCode::TextUnavailable`] so an agent fetches the PDF
+    /// instead of concluding the reference is wrong (issue #302) — NOT
+    /// [`Self::NotFound`], which means the id itself does not exist.
+    #[error(
+        "no readable text for arXiv:{arxiv_id} (no ar5iv HTML render); \
+         the PDF may be fetchable instead"
+    )]
+    TextUnavailable {
+        /// The arXiv id whose ar5iv render was empty; echoed into the
+        /// human/MCP message so the actionable `doiget fetch <id>` hint is
+        /// self-contained. A validated [`crate::ArxivId`] (review #318) —
+        /// the id was already parsed, so the error cannot carry a malformed
+        /// string into the actionable `doiget fetch <id>` hint.
+        arxiv_id: crate::ArxivId,
+    },
 }
 
 /// Map [`FetchError`] to the closed [`crate::ErrorCode`] set surfaced at
@@ -198,6 +218,10 @@ impl From<&FetchError> for crate::ErrorCode {
             // `#[non_exhaustive]` wildcard below would otherwise route
             // it to `INTERNAL_ERROR`, which would mislead agents.
             FetchError::TooManyRefs { .. } => crate::ErrorCode::InvalidRef,
+            // The id resolved; only the ar5iv text representation is
+            // missing. Its own code so an agent fetches the PDF rather
+            // than conclude the reference is wrong (issue #302).
+            FetchError::TextUnavailable { .. } => crate::ErrorCode::TextUnavailable,
         }
     }
 }
@@ -237,7 +261,8 @@ impl From<&FetchError> for Option<crate::DenialContext> {
             | FetchError::Log(_)
             | FetchError::InvalidRef(_)
             | FetchError::SourceSchema { .. }
-            | FetchError::TooManyRefs { .. } => None,
+            | FetchError::TooManyRefs { .. }
+            | FetchError::TextUnavailable { .. } => None,
         }
     }
 }

@@ -67,6 +67,7 @@ fn seed_store() -> (tempfile::TempDir, camino::Utf8PathBuf) {
         year: Some(2026),
         doi: Some(Doi::parse("10.1234/example").expect("valid DOI")),
         arxiv_id: None,
+        arxiv_categories: vec![],
         abstract_: None,
         venue: Some("Phys Rev X".to_string()),
         volume: None,

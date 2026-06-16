@@ -15,7 +15,7 @@ exclude = [
 ]
 
 [workspace.package]
-version       = "0.6.0"
+version       = "0.7.0"
 edition       = "2021"
 rust-version  = "1.86"
 license       = "MIT"
@@ -41,9 +41,9 @@ features-doc-link = "docs/SOURCES.md"
 
 [workspace.dependencies]
 # Core
-doiget-core = { path = "crates/doiget-core", version = "0.6.0" }
-doiget-cli  = { path = "crates/doiget-cli", version = "0.6.0" }
-doiget-mcp  = { path = "crates/doiget-mcp", version = "0.6.0" }
+doiget-core = { path = "crates/doiget-core", version = "0.7.0-beta.0" }
+doiget-cli  = { path = "crates/doiget-cli", version = "0.7.0-beta.0" }
+doiget-mcp  = { path = "crates/doiget-mcp", version = "0.7.0-beta.0" }
 
 # Async runtime — features are deliberately limited (avoid `full`).
 tokio = { version = "1", default-features = false, features = [
@@ -161,7 +161,7 @@ quick-xml = { version = "0.40", default-features = false }
 # `cargo install doiget-cli` lacks `.bib` support out of the box. ~500 KB
 # compiled (~5% of the musl-static binary). MIT/Apache-2.0 — within
 # deny.toml's allow list.
-biblatex = "0.11"
+biblatex = "0.12"
 
 # Byte buffer + async stream combinators for streaming-with-cap body reads
 # (see crates/doiget-core/src/http.rs, docs/SECURITY.md §1.2 oversized PDF).

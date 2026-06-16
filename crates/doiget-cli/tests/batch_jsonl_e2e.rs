@@ -120,6 +120,39 @@ fn batch_json_fetch_failure_emits_fetch_error_jsonl() {
     );
 }
 
+#[test]
+fn batch_failure_digest_names_ref_and_code_on_stderr() {
+    // Issue #222: the end-of-batch stderr digest names WHICH refs failed
+    // and their primary error code, so a human / agent need not grep the
+    // JSONL provenance log. Human mode (no `--json`) so the digest is the
+    // visible failure surface.
+    let dir = TempDir::new().expect("tempdir");
+    let refs = dir.path().join("refs.txt");
+    std::fs::File::create(&refs)
+        .expect("create refs file")
+        .write_all(b"arxiv:2401.99999\n")
+        .expect("write refs");
+
+    let stderr = doiget(&dir)
+        // Closed port → connect-refused → NETWORK_ERROR.
+        .env("DOIGET_ARXIV_BASE", "http://127.0.0.1:1/")
+        .args(["batch", refs.to_str().unwrap()])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(stderr).expect("stderr utf-8");
+    assert!(
+        stderr.contains("batch failures"),
+        "digest header missing: {stderr}"
+    );
+    assert!(
+        stderr.contains("2401.99999 -> NETWORK_ERROR"),
+        "digest must name the ref and its primary error code: {stderr}"
+    );
+}
+
 /// #210: a successful single-arxiv batch produces a structured success
 /// JSONL record carrying `result.{safekey, store_path, canonical_digest}`.
 /// Wiremock-driven so no real network traffic; the subprocess inherits
@@ -305,5 +338,31 @@ fn batch_human_mode_remains_silent_on_stdout() {
     assert!(
         stdout.is_empty(),
         "human-mode batch stdout MUST be empty (summary is stderr): {stdout:?}"
+    );
+}
+
+#[test]
+fn batch_failure_digest_includes_parse_errors() {
+    // Review #318: the stderr failure digest must list INVALID_REF
+    // (parse-failure) entries, not only fetch errors.
+    let dir = TempDir::new().expect("tempdir");
+    let refs = dir.path().join("refs.txt");
+    std::fs::File::create(&refs)
+        .expect("create refs file")
+        .write_all(b"not-a-doi\n")
+        .expect("write refs");
+
+    let stderr = doiget(&dir)
+        .args(["batch", refs.to_str().unwrap()])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(stderr).expect("stderr utf-8");
+    assert!(stderr.contains("batch failures"), "digest header: {stderr}");
+    assert!(
+        stderr.contains("not-a-doi -> INVALID_REF"),
+        "digest must list the parse failure: {stderr}"
     );
 }

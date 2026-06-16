@@ -1,5 +1,5 @@
 //! Output-mode resolution for the `doiget` CLI (ADR-0017, #144;
-//! Amendment 1 = #219/#220).
+//! Amendment 1 = #219/#220; Amendment 2 = #301).
 //!
 //! ADR-0017 specifies the precedence ladder
 //! `--mode > --json/--quiet > DOIGET_MODE env > subcommand-implicit > TTY > quiet`.
@@ -11,11 +11,13 @@
 //!
 //! [`resolve`] returns a [`ResolvedOutput`] carrying the [`OutputMode`]
 //! plus a `quiet_was_explicit` discriminator. The distinction is
-//! load-bearing per ADR-0017 Amendment 1: artifact-producing commands
-//! (`bib` / `csl` / `capabilities` / `audit-log --verify --mode json`)
-//! suppress only on **explicit** Quiet (`--quiet` / `-q` /
-//! `DOIGET_MODE=quiet` / `--mode quiet`), not on the non-TTY default.
-//! Informational commands continue to suppress on any Quiet.
+//! load-bearing per ADR-0017 Amendment 1 (extended by Amendment 2, #301):
+//! artifact-producing commands — export/inventory (`bib` / `csl` /
+//! `capabilities`) and read/inspection (`info` / `list-recent` / `search` /
+//! `link` / `text`), plus `audit-log --verify --mode json` — suppress only
+//! on **explicit** Quiet (`--quiet` / `-q` / `DOIGET_MODE=quiet` /
+//! `--mode quiet`), not on the non-TTY default. Informational commands
+//! continue to suppress on any Quiet. See [`is_artifact_command`].
 //!
 //! Resolution is split into a pure function ([`resolve`]) plus a thin
 //! TTY-detection wrapper ([`stdout_is_tty`]) so the ladder is fully
@@ -25,12 +27,15 @@
 //!
 //! - `Human` — default for TTY stdout. Human-readable text, the
 //!   pre-#144 behaviour.
-//! - `Quiet` — informational stdout suppressed across the six
-//!   info-emitting commands (audit-log / info / list-recent / search /
-//!   config show / config path / provenance migrate) per #203.
-//!   Errors (stderr) and exit codes are unaffected. Product-output
-//!   commands (bib / csl / graph / *-dry-run / batch JSONL) are NOT
-//!   suppressed.
+//! - `Quiet` — stdout suppressed for *informational* commands whose
+//!   stdout is a status report (audit-log Human / config show / config
+//!   path / provenance migrate / fetch + batch status) per #203. Errors
+//!   (stderr) and exit codes are unaffected. *Artifact* commands —
+//!   whose stdout IS the requested product — suppress ONLY on
+//!   **explicit** Quiet, never on the non-TTY implicit fallback:
+//!   export/inventory (bib / csl / capabilities) per Amendment 1, and
+//!   read/inspection (info / list-recent / search / link / text) per
+//!   Amendment 2 (#301). See [`is_artifact_command`].
 //! - `Json` — structured JSON bodies for the human-table commands
 //!   (#204) plus the ERRORS.md §3 JSON-Lines per-ref shape for batch
 //!   (#205). Single-value-per-stdout for the table commands;
@@ -102,11 +107,14 @@ pub enum FlagInput {
 /// `DOIGET_MODE=quiet` / `--mode quiet`) from the resolver's
 /// **implicit** fallback to Quiet when stdout is not a TTY.
 ///
-/// Per ADR-0017 Amendment 1, *informational* commands (audit-log Human,
-/// list-recent, search, info, config show/path, provenance migrate,
-/// fetch/batch status) suppress on any Quiet; *artifact* commands
-/// (`bib` / `csl` / `capabilities` / `audit-log --verify --mode json`)
-/// suppress only on **explicit** Quiet. The wire format of
+/// Per ADR-0017 Amendment 1 (extended by Amendment 2, #301),
+/// *informational* commands whose stdout is a status report (audit-log
+/// Human, config show/path, provenance migrate, fetch/batch status)
+/// suppress on any Quiet; *artifact* commands whose stdout IS the
+/// product — `bib` / `csl` / `capabilities` plus the read/inspection
+/// commands `info` / `list-recent` / `search` / `link` / `text`, and
+/// `audit-log --verify --mode json` — suppress only on **explicit**
+/// Quiet. See [`is_artifact_command`]. The wire format of
 /// [`OutputMode`] (`DOIGET_MODE` string values, the `modes` array in
 /// `capabilities` JSON, the `--mode` clap values) is **unchanged**;
 /// this struct lives only in-memory.
@@ -122,15 +130,29 @@ pub struct ResolvedOutput {
 }
 
 /// `true` if `name` identifies an artifact-producing subcommand whose
-/// stdout output IS the deliverable (per ADR-0017 Amendment 1).
-/// Artifact commands suppress only on **explicit** Quiet
-/// ([`ResolvedOutput::quiet_was_explicit`] == `true`).
+/// stdout output IS the deliverable (per ADR-0017 Amendment 1, extended
+/// by Amendment 2). Artifact commands suppress only on **explicit** Quiet
+/// ([`ResolvedOutput::quiet_was_explicit`] == `true`), never on the
+/// non-TTY implicit fallback.
+///
+/// The set has two cohorts:
+/// - **Export / inventory** (`bib` / `csl` / `capabilities`) — Amendment 1.
+/// - **Read / inspection** (`info` / `list-recent` / `search` / `link` /
+///   `text`) — Amendment 2 (#301). For these the stdout rendering IS the
+///   requested data, not a status report, so a non-TTY caller (agent / pipe
+///   / ssh) must still receive it; silencing it reads as "fetch failed" or
+///   "store empty" when the data is present and correct. `text` in
+///   particular is almost always piped (`doiget text arxiv:… > paper.txt`),
+///   so the implicit-Quiet fallback would otherwise blank the output.
 ///
 /// `audit-log` is omitted on purpose: it is *informational* in Human
 /// mode and *artifact* in Json mode; the command checks the resolved
 /// mode rather than its name, so this classifier doesn't apply.
 pub fn is_artifact_command(name: &str) -> bool {
-    matches!(name, "bib" | "csl" | "capabilities")
+    matches!(
+        name,
+        "bib" | "csl" | "capabilities" | "info" | "list-recent" | "search" | "link" | "text"
+    )
 }
 
 /// Resolve the effective [`OutputMode`] per ADR-0017 and the
@@ -370,15 +392,28 @@ mod tests {
     // ---- artifact-command classifier (ADR-0017 Am1) ------------------
 
     #[test]
-    fn artifact_command_classifier_covers_bib_csl_capabilities() {
+    fn artifact_command_classifier_covers_export_and_inspection_commands() {
+        // Amendment 1: export / inventory commands.
         assert!(is_artifact_command("bib"));
         assert!(is_artifact_command("csl"));
         assert!(is_artifact_command("capabilities"));
+        // Amendment 2 (#301): read / inspection commands — their stdout
+        // rendering IS the requested artifact, so the non-TTY implicit
+        // Quiet must NOT erase it.
+        assert!(is_artifact_command("info"));
+        assert!(is_artifact_command("list-recent"));
+        assert!(is_artifact_command("search"));
+        assert!(is_artifact_command("link"));
+        // `text` extracts paper prose to stdout — almost always piped, so
+        // implicit non-TTY Quiet must not blank it (review #318).
+        assert!(is_artifact_command("text"));
         // audit-log is informational-vs-artifact per resolved mode,
         // not per name; the classifier does NOT match it.
         assert!(!is_artifact_command("audit-log"));
+        // Informational status-only commands stay suppressible on any Quiet.
         assert!(!is_artifact_command("fetch"));
-        assert!(!is_artifact_command("info"));
+        assert!(!is_artifact_command("batch"));
+        assert!(!is_artifact_command("config"));
         assert!(!is_artifact_command(""));
     }
 }

@@ -15,7 +15,10 @@
 //!
 //! ## Failure semantics
 //!
-//! - File read / over-limit-size errors abort the batch BEFORE any fetch.
+//! - A file-read error (or a whole-input parse failure: `Decode` /
+//!   `UnsupportedFormat`) aborts the batch BEFORE any fetch. There is no
+//!   size cap: any number of refs is accepted and processed in bounded
+//!   windows of [`doiget_core::MCP_BATCH_MAX_SIZE`] (issue #304).
 //! - A single `Ref::parse` failure is non-fatal: the orchestrator emits a
 //!   `Resolve` row with `result=err` and continues with the remaining refs.
 //! - A single fetch failure is also non-fatal: per-task errors are recorded
@@ -24,6 +27,11 @@
 //! - Exit code: `Ok(())` only when **every** parse + fetch succeeded; any
 //!   parse-error or per-ref-fetch-error returns `Err(...)` so the binary
 //!   surfaces a non-zero exit.
+//! - After the one-line count summary, a per-ref **failure digest**
+//!   (`<ref> -> <ERROR_CODE>`) is written to stderr (issue #222) so a
+//!   human / agent sees which refs failed and why without grepping the
+//!   JSONL provenance log. stdout stays clean (the `--mode json` JSON-Lines
+//!   is the machine channel).
 //! - The bookend rows are always emitted: one `SessionStart` at the top, one
 //!   `SessionEnd` at the bottom, regardless of per-ref outcome.
 
@@ -151,15 +159,17 @@ pub async fn run_with_options(
         }
     }
 
-    // Step 3: enforce the hard cap before doing any work. The cap is the
-    // same one the MCP `batch_fetch` tool enforces (`MCP_BATCH_MAX_SIZE`).
-    if inputs.len() > MCP_BATCH_MAX_SIZE {
-        return Err(anyhow!(
-            "batch size {} exceeds limit {}",
-            inputs.len(),
-            MCP_BATCH_MAX_SIZE,
-        ));
-    }
+    // Step 3: no hard cap. A local refs file is the user's whole working
+    // set, so the CLI `batch` processes ALL of it (issue #304): a previous
+    // hard `> MCP_BATCH_MAX_SIZE` abort lost the entire run — fetching
+    // nothing — the moment a bibliography crossed 100 refs, forcing a manual
+    // `split`. Instead `MCP_BATCH_MAX_SIZE` becomes the dispatch **window**
+    // (Step 7): refs are processed in chunks of that size so the number of
+    // concurrently-spawned tasks stays bounded, while the shared
+    // `RateLimiter` keeps the 5-per-second politeness invariant across every
+    // window. (`MCP_BATCH_MAX_SIZE` still hard-caps a single MCP
+    // `batch_fetch` request — that request-shape bound is unrelated to a
+    // local file the operator hands to the CLI.)
 
     // Step 3a: dry-run branch (ADR-0022). Emit one `FetchPlan` envelope
     // per ref on stdout WITHOUT opening the provenance log, building the
@@ -209,97 +219,120 @@ pub async fn run_with_options(
     let max_concurrent = RateLimits::HARD_CODED.max_concurrent_fetches() as usize;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
-    // Step 7: dispatch. We iterate sequentially to spawn (cheap), and the
-    // semaphore serializes the actual work to the bound. Parse errors are
-    // logged as `Resolve` rows directly off the harness's shared log.
+    // Step 7: dispatch in bounded windows. The ENTIRE input is processed —
+    // no ref is ever dropped (issue #304) — but at most `MCP_BATCH_MAX_SIZE`
+    // tasks exist at once: each window is spawned and then fully drained
+    // (Step 8) before the next window is spawned, so a large refs file never
+    // materialises one task per ref up front. The harness's shared
+    // `RateLimiter` enforces the 5-per-second + per-source backoff
+    // invariants across every window, so windowing changes only the
+    // spawn-side memory bound, never politeness. Counters accumulate across
+    // windows; parse errors are logged as `Resolve` rows off the shared log.
     let mut parse_errors: usize = 0;
-    let mut joins: tokio::task::JoinSet<TaskOutcome> = tokio::task::JoinSet::new();
-    for input in inputs {
-        let ref_ = match Ref::parse(&input) {
-            Ok(r) => r,
-            Err(e) => {
-                parse_errors += 1;
-                if json_mode {
-                    // #205: parse failures get an INVALID_REF JSONL line
-                    // with the human message in `error.message`. Per
-                    // ERRORS.md §3.1 there is no `denial_context` on
-                    // INVALID_REF (the input never reached a guard).
-                    emit_jsonl_failure(Some(&input), "INVALID_REF", &e.to_string());
-                }
-                // Best-effort `Resolve` row capturing the parse failure; we
-                // do NOT abort the batch on a single bad line.
-                let _ = harness.log.append(RowInput {
-                    event: LogEvent::Resolve,
-                    result: LogResult::Err,
-                    capability: Capability::Oa,
-                    ref_: Some(&input),
-                    source: None,
-                    error_code: Some("INVALID_REF"),
-                    size_bytes: None,
-                    license: None,
-                    store_path: None,
-                    // The input failed to parse as a Ref, so no
-                    // CanonicalRef can be minted (ADR-0021 §1 requires
-                    // a validated source_id).
-                    canonical_digest: None,
-                });
-                tracing::warn!(
-                    %input,
-                    error = %e,
-                    "skipping malformed batch entry",
-                );
-                continue;
-            }
-        };
-
-        let harness_task = Arc::clone(&harness);
-        let sem_task = Arc::clone(&semaphore);
-        joins.spawn(async move {
-            // `Semaphore::acquire_owned` only errors when the semaphore is
-            // closed; we never close it. The fallback maps that
-            // structurally-unreachable arm to a fetch failure rather than
-            // panicking.
-            let _permit = match sem_task.acquire_owned().await {
-                Ok(p) => p,
-                Err(_) => {
-                    // Map the semaphore-closed structural impossibility
-                    // to a typed `FetchError` (closest closed-set fit)
-                    // so `TaskOutcome::result` stays typed end-to-end.
-                    return TaskOutcome {
-                        input,
-                        result: Err(FetchError::SourceSchema {
-                            hint: "batch semaphore unexpectedly closed".to_string(),
-                        }),
-                    };
-                }
-            };
-            let result = harness_task.fetch_one(&ref_).await;
-            TaskOutcome { input, result }
-        });
-    }
-
-    // Step 8: drain the JoinSet. We collect all outcomes before deciding
-    // the session result so a single failure does not abort sibling tasks.
     let mut fetch_ok: usize = 0;
     let mut fetch_errors: usize = 0;
-    while let Some(joined) = joins.join_next().await {
-        let JoinedOutcome {
-            is_error,
-            json_record,
-            log_breadcrumb,
-        } = classify_joined(joined, json_mode);
-        if is_error {
-            fetch_errors += 1;
-        } else {
-            fetch_ok += 1;
+    // `(ref, error_code)` per failed entry, drained into the end-of-batch
+    // stderr failure digest (issue #222).
+    let mut failures: Vec<(String, &'static str)> = Vec::new();
+    let mut remaining = inputs.into_iter();
+    loop {
+        let window: Vec<String> = remaining.by_ref().take(MCP_BATCH_MAX_SIZE).collect();
+        if window.is_empty() {
+            break;
         }
-        if let Some(record) = json_record {
-            #[allow(clippy::print_stdout)]
-            {
-                println!("{record}");
+
+        let mut joins: tokio::task::JoinSet<TaskOutcome> = tokio::task::JoinSet::new();
+        for input in window {
+            let ref_ = match Ref::parse(&input) {
+                Ok(r) => r,
+                Err(e) => {
+                    parse_errors += 1;
+                    failures.push((input.clone(), "INVALID_REF"));
+                    if json_mode {
+                        // #205: parse failures get an INVALID_REF JSONL line
+                        // with the human message in `error.message`. Per
+                        // ERRORS.md §3.1 there is no `denial_context` on
+                        // INVALID_REF (the input never reached a guard).
+                        emit_jsonl_failure(Some(&input), "INVALID_REF", &e.to_string());
+                    }
+                    // Best-effort `Resolve` row capturing the parse failure;
+                    // we do NOT abort the batch on a single bad line.
+                    let _ = harness.log.append(RowInput {
+                        event: LogEvent::Resolve,
+                        result: LogResult::Err,
+                        capability: Capability::Oa,
+                        ref_: Some(&input),
+                        source: None,
+                        error_code: Some("INVALID_REF"),
+                        size_bytes: None,
+                        license: None,
+                        store_path: None,
+                        // The input failed to parse as a Ref, so no
+                        // CanonicalRef can be minted (ADR-0021 §1 requires
+                        // a validated source_id).
+                        canonical_digest: None,
+                    });
+                    tracing::warn!(
+                        %input,
+                        error = %e,
+                        "skipping malformed batch entry",
+                    );
+                    continue;
+                }
+            };
+
+            let harness_task = Arc::clone(&harness);
+            let sem_task = Arc::clone(&semaphore);
+            joins.spawn(async move {
+                // `Semaphore::acquire_owned` only errors when the semaphore
+                // is closed; we never close it. The fallback maps that
+                // structurally-unreachable arm to a fetch failure rather
+                // than panicking.
+                let _permit = match sem_task.acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => {
+                        // Map the semaphore-closed structural impossibility
+                        // to a typed `FetchError` (closest closed-set fit)
+                        // so `TaskOutcome::result` stays typed end-to-end.
+                        return TaskOutcome {
+                            input,
+                            result: Err(FetchError::SourceSchema {
+                                hint: "batch semaphore unexpectedly closed".to_string(),
+                            }),
+                        };
+                    }
+                };
+                let result = harness_task.fetch_one(&ref_).await;
+                TaskOutcome { input, result }
+            });
+        }
+
+        // Step 8: drain THIS window before spawning the next, so the
+        // in-flight task count stays bounded. Outcomes accumulate into the
+        // batch-wide counters; a single failure never aborts its siblings.
+        while let Some(joined) = joins.join_next().await {
+            let JoinedOutcome {
+                is_error,
+                json_record,
+                log_breadcrumb,
+                failure,
+            } = classify_joined(joined, json_mode);
+            if is_error {
+                fetch_errors += 1;
+            } else {
+                fetch_ok += 1;
             }
+            if let Some(f) = failure {
+                failures.push(f);
+            }
+            if let Some(record) = json_record {
+                #[allow(clippy::print_stdout)]
+                {
+                    println!("{record}");
+                }
+            }
+            log_breadcrumb.emit();
         }
-        log_breadcrumb.emit();
     }
 
     let total_errors = parse_errors + fetch_errors;
@@ -316,6 +349,17 @@ pub async fn run_with_options(
         "batch: {} OK, {} failed ({} parse errors, {} fetch errors)",
         fetch_ok, total_errors, parse_errors, fetch_errors,
     ));
+
+    // Issue #222: a per-ref failure digest on stderr so a human / agent
+    // sees WHICH refs failed and WHY (the primary error code) without
+    // grepping the JSONL provenance log. stdout stays clean (ADR-0001 /
+    // #205 JSON-Lines is the machine channel).
+    if !failures.is_empty() {
+        print_summary(format_args!("batch failures ({}):", failures.len()));
+        for (ref_, code) in &failures {
+            print_summary(format_args!("  {ref_} -> {code}"));
+        }
+    }
 
     if all_ok {
         Ok(())
@@ -372,6 +416,12 @@ struct JoinedOutcome {
     /// here so `classify_joined` stays pure and the loop just calls
     /// `.log()` on the outcome.
     log_breadcrumb: LogBreadcrumb,
+    /// `(ref, error_code)` for a failed entry, collected into the
+    /// end-of-batch stderr failure digest (issue #222) so a human / agent
+    /// sees WHICH refs failed and WHY without grepping the JSONL log.
+    /// `None` on success. The ref is a sentinel only for a task panic
+    /// (the `JoinSet` lost the input).
+    failure: Option<(String, &'static str)>,
 }
 
 enum LogBreadcrumb {
@@ -437,10 +487,12 @@ fn classify_joined(
                     });
                     let error_dbg =
                         format!("pdf_leg=Blocked code={effective:?} message={message:?}");
+                    let failure = Some((input.clone(), effective.as_wire()));
                     return JoinedOutcome {
                         is_error: true,
                         json_record: record,
                         log_breadcrumb: LogBreadcrumb::FetchFailed { input, error_dbg },
+                        failure,
                     };
                 }
                 let result_value = json_mode.then(|| outcome_to_result_value(&outcome));
@@ -449,6 +501,7 @@ fn classify_joined(
                     json_record: json_mode
                         .then(|| build_jsonl_success(&input, result_value.clone().flatten())),
                     log_breadcrumb: LogBreadcrumb::None,
+                    failure: None,
                 }
             }
             Err(e) => {
@@ -461,10 +514,12 @@ fn classify_joined(
                 let record = json_mode.then(|| {
                     build_jsonl_failure(Some(&input), code.as_wire(), &json_msg, denial_value)
                 });
+                let failure = Some((input.clone(), code.as_wire()));
                 JoinedOutcome {
                     is_error: true,
                     json_record: record,
                     log_breadcrumb: LogBreadcrumb::FetchFailed { input, error_dbg },
+                    failure,
                 }
             }
         },
@@ -482,6 +537,7 @@ fn classify_joined(
                 is_error: true,
                 json_record: record,
                 log_breadcrumb: LogBreadcrumb::TaskPanicked { error_dbg },
+                failure: Some(("(task panicked — ref lost)".to_string(), "FETCH_ERROR")),
             }
         }
     }
@@ -756,6 +812,11 @@ mod tests {
             outcome.log_breadcrumb,
             LogBreadcrumb::FetchFailed { .. }
         ));
+        // #222: the digest entry carries the ref + the same typed code.
+        assert_eq!(
+            outcome.failure,
+            Some(("arxiv:2401.99999".to_string(), "INTERNAL_ERROR"))
+        );
     }
 
     #[test]
@@ -921,20 +982,33 @@ arxiv:2401.12346
     }
 
     #[test]
-    fn over_limit_input_is_rejected() {
-        // Verify that lengths above the documented cap surface the canonical
-        // error message before any fetch is dispatched.
+    fn over_limit_input_is_windowed_not_rejected() {
+        // Issue #304: an input above `MCP_BATCH_MAX_SIZE` is no longer
+        // rejected — it is dispatched in bounded windows of that size, and
+        // every ref is processed. This pins the windowing arithmetic that
+        // the dispatch loop relies on (`into_iter().take(MAX)` until empty):
+        // `n` refs split into `ceil(n / MAX)` windows, the last possibly
+        // short, with no ref lost.
         let n = MCP_BATCH_MAX_SIZE + 1;
-        let body: String = (0..n)
-            .map(|i| format!("arxiv:2401.{:05}\n", 10000 + i))
+        let inputs: Vec<String> = (0..n)
+            .map(|i| format!("arxiv:2401.{:05}", 10000 + i))
             .collect();
-        let lines: Vec<String> = body
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(lines.len(), n);
-        assert!(lines.len() > MCP_BATCH_MAX_SIZE);
+
+        let mut remaining = inputs.clone().into_iter();
+        let mut windows: Vec<usize> = Vec::new();
+        loop {
+            let window: Vec<String> = remaining.by_ref().take(MCP_BATCH_MAX_SIZE).collect();
+            if window.is_empty() {
+                break;
+            }
+            windows.push(window.len());
+        }
+
+        // ceil(n / MAX) windows; every ref accounted for; each window within
+        // the bound.
+        assert_eq!(windows.len(), n.div_ceil(MCP_BATCH_MAX_SIZE));
+        assert_eq!(windows.iter().sum::<usize>(), n);
+        assert!(windows.iter().all(|&w| w <= MCP_BATCH_MAX_SIZE));
+        assert_eq!(*windows.last().unwrap(), n % MCP_BATCH_MAX_SIZE);
     }
 }

@@ -70,8 +70,8 @@ const SOURCE_KEY: &str = "openalex";
 /// the top-level fields [`PaperHit`] needs; every entry here is a
 /// top-level Work field (nested selection is not used).
 const SELECT_FIELDS: &str = "id,doi,title,display_name,publication_year,\
-cited_by_count,abstract_inverted_index,authorships,primary_location,\
-open_access,locations";
+cited_by_count,fwci,cited_by_percentile_year,abstract_inverted_index,authorships,\
+primary_location,open_access,locations";
 
 /// OpenAlex caps `per-page` at 200; requests above that are rejected by
 /// the API. `build_search_url` clamps to this as defense-in-depth, but
@@ -83,17 +83,22 @@ pub const MAX_PER_PAGE: usize = 200;
 pub const DEFAULT_LIMIT: usize = 25;
 
 /// Ordering applied to the discovery result set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// **Relevance is the only sort** (issue #290). Verified against live
+/// OpenAlex: every non-relevance sort (`cited_by_count`, `fwci`,
+/// `publication_date`) over OpenAlex's loose full-text match floats
+/// high-scoring *off-topic* papers to the top — they override the one
+/// signal that enforces topicality. "Important / recent / high-quality" is
+/// therefore expressed as **filters** (`min_fwci` / `min_percentile` /
+/// `from_year`), which narrow the candidate set without discarding
+/// relevance ordering. (Non-relevance sorting is only safe over an
+/// already-topically-constrained set — not free-text `search`.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchSort {
     /// OpenAlex `relevance_score:desc` — best textual match to `query`
-    /// first. The default; only meaningful because a `search` term is
-    /// always present.
+    /// first. Only meaningful because a search term is always present.
+    #[default]
     Relevance,
-    /// `cited_by_count:desc` — most-cited first (surface the canonical /
-    /// high-impact papers in a topic).
-    Cited,
-    /// `publication_date:desc` — newest first (surface the frontier).
-    Recent,
 }
 
 impl SearchSort {
@@ -102,8 +107,6 @@ impl SearchSort {
     pub fn as_openalex(self) -> &'static str {
         match self {
             SearchSort::Relevance => "relevance_score:desc",
-            SearchSort::Cited => "cited_by_count:desc",
-            SearchSort::Recent => "publication_date:desc",
         }
     }
 }
@@ -135,6 +138,15 @@ pub struct PaperSearchQuery {
     /// ("more than n"); the off-by-one versus "at least n" is documented
     /// on the CLI flag.
     pub min_citations: Option<u64>,
+    /// Minimum field-and-year-normalized citation impact (FWCI). Maps to
+    /// OpenAlex `fwci:>{f}` — an impact floor that, unlike sorting by
+    /// citations, narrows the set without overriding relevance (#290).
+    pub min_fwci: Option<f64>,
+    /// Minimum within-cohort citation percentile (0–100). Maps to OpenAlex
+    /// `cited_by_percentile_year.min:{p}` — "top-X% among same-year works";
+    /// combined with `from_year` this is the "recent × already standing
+    /// out" set (#290).
+    pub min_percentile: Option<u8>,
     /// Author name to filter by. Resolved to an OpenAlex author ID via
     /// `/authors?search=` then applied as `authorships.author.id`.
     pub author: Option<String>,
@@ -161,6 +173,8 @@ impl PaperSearchQuery {
             to_year: None,
             oa_only: false,
             min_citations: None,
+            min_fwci: None,
+            min_percentile: None,
             author: None,
             venue: None,
             publisher: None,
@@ -174,8 +188,9 @@ impl PaperSearchQuery {
     /// (`paper_search` itself stays permissive — see its docs); keeping it
     /// here prevents the two surfaces from drifting.
     ///
-    /// Checks: non-empty `query`, `limit` in `1..=`[`MAX_PER_PAGE`], and a
-    /// non-inverted `from_year`/`to_year` range.
+    /// Checks: non-empty `query`, `limit` in `1..=`[`MAX_PER_PAGE`], a
+    /// non-inverted `from_year`/`to_year` range, a finite non-negative
+    /// `min_fwci`, and a `min_percentile` in `0..=100`.
     ///
     /// # Errors
     ///
@@ -194,6 +209,27 @@ impl PaperSearchQuery {
         if let (Some(from), Some(to)) = (self.from_year, self.to_year) {
             if from > to {
                 return Err(format!("from_year ({from}) is after to_year ({to})"));
+            }
+        }
+        // `min_fwci` becomes a literal `fwci:>{f}` filter clause; a negative
+        // or non-finite value would be a malformed OpenAlex request that the
+        // API rejects (or silently ignores). Reject it here, at the same
+        // boundary as the year range, rather than emit a bad filter (#290).
+        if let Some(f) = self.min_fwci {
+            if !f.is_finite() || f < 0.0 {
+                return Err(format!(
+                    "min_fwci must be a finite, non-negative number (got {f})"
+                ));
+            }
+        }
+        // The percentile is a 0–100 cohort rank; `u8` already excludes
+        // negatives, but 101–255 would emit a `cited_by_percentile_year.min`
+        // clause OpenAlex cannot satisfy (empty result, no error).
+        if let Some(p) = self.min_percentile {
+            if p > 100 {
+                return Err(format!(
+                    "min_percentile must be between 0 and 100 (got {p})"
+                ));
             }
         }
         Ok(())
@@ -600,6 +636,16 @@ fn build_search_url(
     // Compose the comma-joined `filter=` value. OpenAlex treats commas as
     // an AND of clauses within a single `filter` parameter.
     let mut filters: Vec<String> = Vec::new();
+    // Match on title + abstract only, as a FILTER rather than the loose
+    // `search=` parameter (#290): `search=` includes full-text, which lets
+    // off-topic full-text hits in; `title_and_abstract.search` is the
+    // precision form. A comma in the query would split the comma-joined
+    // filter list, so commas are normalised to spaces (they carry no search
+    // meaning here).
+    filters.push(format!(
+        "title_and_abstract.search:{}",
+        query.query.replace(',', " ")
+    ));
     if let Some(from) = query.from_year {
         filters.push(format!("from_publication_date:{from}-01-01"));
     }
@@ -615,6 +661,15 @@ fn build_search_url(
         // the CLI flag.
         filters.push(format!("cited_by_count:>{min}"));
     }
+    if let Some(f) = query.min_fwci {
+        // Field-and-year-normalized impact floor (#290): narrows the set
+        // without overriding relevance, unlike a `sort=fwci`.
+        filters.push(format!("fwci:>{f}"));
+    }
+    if let Some(p) = query.min_percentile {
+        // Top-X% within the same-year cohort (#290).
+        filters.push(format!("cited_by_percentile_year.min:{p}"));
+    }
     if let Some(author_id) = &ids.author {
         filters.push(format!("authorships.author.id:{author_id}"));
     }
@@ -629,13 +684,14 @@ fn build_search_url(
 
     {
         let mut qp = url.query_pairs_mut();
-        qp.append_pair("search", &query.query);
+        // The query is now a `title_and_abstract.search` FILTER clause
+        // (above), not the `search=` parameter (#290).
         qp.append_pair("per-page", &per_page.to_string());
         qp.append_pair("sort", query.sort.as_openalex());
         qp.append_pair("select", SELECT_FIELDS);
-        if !filters.is_empty() {
-            qp.append_pair("filter", &filters.join(","));
-        }
+        // `filters` always carries at least the title_and_abstract.search
+        // clause, so it is never empty here.
+        qp.append_pair("filter", &filters.join(","));
         if !contact_email.is_empty() {
             qp.append_pair("mailto", contact_email);
         }
@@ -1057,7 +1113,11 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/works"))
-            .and(query_param("search", "tropical tensor networks"))
+            // #290: the query is a `title_and_abstract.search` filter clause.
+            .and(query_param(
+                "filter",
+                "title_and_abstract.search:tropical tensor networks",
+            ))
             .and(query_param("mailto", "doiget@localhost"))
             .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_SEARCH))
             .mount(&server)
@@ -1103,10 +1163,12 @@ mod tests {
         // Assert the composed filter + sort params reach the wire.
         Mock::given(method("GET"))
             .and(path("/works"))
-            .and(query_param("sort", "cited_by_count:desc"))
+            // #290: relevance is the only sort; the query is the leading
+            // `title_and_abstract.search` filter clause.
+            .and(query_param("sort", "relevance_score:desc"))
             .and(query_param(
                 "filter",
-                "from_publication_date:2020-01-01,is_oa:true,cited_by_count:>10",
+                "title_and_abstract.search:spin glass,from_publication_date:2020-01-01,is_oa:true,cited_by_count:>10",
             ))
             .and(query_param("per-page", "5"))
             .respond_with(
@@ -1125,10 +1187,12 @@ mod tests {
             to_year: None,
             oa_only: true,
             min_citations: Some(10),
+            min_fwci: None,
+            min_percentile: None,
             author: None,
             venue: None,
             publisher: None,
-            sort: SearchSort::Cited,
+            sort: SearchSort::Relevance,
         };
 
         let out = paper_search(&base, "doiget@localhost", &q, &ctx)
@@ -1207,7 +1271,10 @@ mod tests {
         // Second leg: /works filtered by the resolved source id.
         Mock::given(method("GET"))
             .and(path("/works"))
-            .and(query_param("filter", "primary_location.source.id:S99"))
+            .and(query_param(
+                "filter",
+                "title_and_abstract.search:spin glass,primary_location.source.id:S99",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_string(
                 r#"{ "meta": { "count": 1 }, "results": [ { "id": "https://openalex.org/W1", "title": "In PRB" } ] }"#,
             ))
@@ -1292,7 +1359,10 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/works"))
-            .and(query_param("filter", "primary_location.source.id:S1"))
+            .and(query_param(
+                "filter",
+                "title_and_abstract.search:spin glass,primary_location.source.id:S1",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_string(
                 r#"{ "meta": { "count": 1 }, "results": [ { "id": "https://openalex.org/W1", "title": "x" } ] }"#,
             ))
@@ -1326,7 +1396,10 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/works"))
-            .and(query_param("filter", "authorships.author.id:A1"))
+            .and(query_param(
+                "filter",
+                "title_and_abstract.search:replica symmetry breaking,authorships.author.id:A1",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_string(
                 r#"{ "meta": { "count": 1 }, "results": [ { "id": "https://openalex.org/W9", "title": "y" } ] }"#,
             ))
@@ -1534,18 +1607,39 @@ mod tests {
     }
 
     #[test]
-    fn to_year_and_recent_sort_land_on_url() {
+    fn to_year_filter_and_relevance_only_sort_land_on_url() {
         let base = Url::parse("https://api.openalex.org").expect("base");
         let mut q = PaperSearchQuery::new("x");
         q.to_year = Some(2023);
-        q.sort = SearchSort::Recent;
         let u = build_search_url(&base, "", &q, &ResolvedIds::default()).expect("url");
-        assert_eq!(param(&u, "sort").as_deref(), Some("publication_date:desc"));
+        // Relevance is the only sort (#290).
+        assert_eq!(param(&u, "sort").as_deref(), Some("relevance_score:desc"));
         assert!(
             param(&u, "filter")
                 .unwrap_or_default()
                 .contains("to_publication_date:2023-12-31"),
             "to_year must map to to_publication_date:<y>-12-31"
+        );
+    }
+
+    #[test]
+    fn query_is_a_title_and_abstract_filter_not_search_param(/* #290 */) {
+        let base = Url::parse("https://api.openalex.org").expect("base");
+        let mut q = PaperSearchQuery::new("classical shadows");
+        q.min_fwci = Some(5.0);
+        q.min_percentile = Some(90);
+        let u = build_search_url(&base, "", &q, &ResolvedIds::default()).expect("url");
+        // The query is a filter clause now; no top-level `search=` param.
+        assert_eq!(param(&u, "search"), None, "no loose `search=` param");
+        let filter = param(&u, "filter").unwrap_or_default();
+        assert!(
+            filter.contains("title_and_abstract.search:classical shadows"),
+            "query must be a title_and_abstract.search filter: {filter}"
+        );
+        assert!(filter.contains("fwci:>5"), "min_fwci filter: {filter}");
+        assert!(
+            filter.contains("cited_by_percentile_year.min:90"),
+            "min_percentile filter: {filter}"
         );
     }
 
@@ -1655,6 +1749,33 @@ mod tests {
         assert!(q.validate().unwrap_err().contains("after"));
         // Equal bounds are valid (inclusive range).
         q.to_year = Some(2025);
+        assert!(q.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range_impact_filters() {
+        // #290 / review #318: a negative or non-finite `min_fwci`, or a
+        // percentile above 100, would compose a malformed OpenAlex filter
+        // clause. `validate()` must reject them at the boundary instead.
+        let mut q = PaperSearchQuery::new("topic");
+        q.min_fwci = Some(-1.0);
+        assert!(q.validate().unwrap_err().contains("min_fwci"));
+        q.min_fwci = Some(f64::NAN);
+        assert!(q.validate().unwrap_err().contains("min_fwci"));
+        q.min_fwci = Some(f64::INFINITY);
+        assert!(q.validate().unwrap_err().contains("min_fwci"));
+        // A valid floor passes.
+        q.min_fwci = Some(2.5);
+        assert!(q.validate().is_ok());
+
+        let mut q = PaperSearchQuery::new("topic");
+        q.min_percentile = Some(101);
+        assert!(q.validate().unwrap_err().contains("min_percentile"));
+        // Boundary value 100 is valid (top 0%, i.e. the single best cohort
+        // rank); 0 is valid (no floor).
+        q.min_percentile = Some(100);
+        assert!(q.validate().is_ok());
+        q.min_percentile = Some(0);
         assert!(q.validate().is_ok());
     }
 }

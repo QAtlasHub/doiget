@@ -75,7 +75,7 @@ async fn link_resolves_doi_to_arxiv_and_logs() {
 
     // `Doi::parse` lower-cases nothing, but OpenAlex is case-insensitive;
     // the mock matches the lower-cased filter the command sends.
-    let res = run("10.1103/physrevb.1".to_string(), OutputMode::Quiet).await;
+    let res = run("10.1103/physrevb.1".to_string(), OutputMode::Quiet, true).await;
     assert!(res.is_ok(), "link run failed: {res:?}");
 
     // Provenance: one Metadata/Fetch row under source "openalex".
@@ -111,7 +111,7 @@ async fn link_unknown_doi_exits_nonzero() {
     guard.set("HOME", root.as_str());
     guard.set("USERPROFILE", root.as_str());
 
-    let err = run("10.0000/nope".to_string(), OutputMode::Quiet)
+    let err = run("10.0000/nope".to_string(), OutputMode::Quiet, true)
         .await
         .expect_err("an unmatched DOI must error");
     let exit = err
@@ -128,7 +128,7 @@ async fn link_rejects_arxiv_input_without_network() {
     let guard = EnvGuard::new(ENV_KEYS);
     let _ = &guard;
 
-    let err = run("arxiv:2401.12345".to_string(), OutputMode::Quiet)
+    let err = run("arxiv:2401.12345".to_string(), OutputMode::Quiet, true)
         .await
         .expect_err("arXiv input must be a usage error");
     assert!(err.to_string().contains("Pass a DOI"), "got: {err}");

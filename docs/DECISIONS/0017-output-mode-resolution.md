@@ -1,7 +1,7 @@
 # 0017 - Output mode resolution (flag > env > implicit > TTY > quiet)
 
 - **Date:** 2026-05-05
-- **Status:** Accepted — fully implemented (#144, 0.2.1-beta.7). The resolution ladder (`--mode` > `--json`/`--quiet` > `DOIGET_MODE` > subcommand-implicit > TTY) is wired through `crates/doiget-cli/src/commands/output.rs::resolve` and threaded into every command's `run(..)`; the load-bearing MCP / stdout-purity invariant (Slice 9 + Slice 1) remains in force, now backed by the `serve → forced Mcp` override in `commands::main::run_dispatch`. Per-mode command behaviour (Quiet stdout suppression, Json bodies for human-table commands, ERRORS.md §3 batch JSONL) is staged as follow-up issues #203 / #204 / #205. Amendment 1 (2026-05-21) distinguishes **explicit** vs **implicit** Quiet and adds an artifact-command classification so commands whose output is the product (`bib`/`csl`/`capabilities`/`audit-log --verify --mode json`) honor only explicit Quiet, fixing the LLM cold-boot deadlock reported in #219 / #220.
+- **Status:** Accepted — fully implemented (#144, 0.2.1-beta.7). The resolution ladder (`--mode` > `--json`/`--quiet` > `DOIGET_MODE` > subcommand-implicit > TTY) is wired through `crates/doiget-cli/src/commands/output.rs::resolve` and threaded into every command's `run(..)`; the load-bearing MCP / stdout-purity invariant (Slice 9 + Slice 1) remains in force, now backed by the `serve → forced Mcp` override in `commands::main::run_dispatch`. Per-mode command behaviour (Quiet stdout suppression, Json bodies for human-table commands, ERRORS.md §3 batch JSONL) is staged as follow-up issues #203 / #204 / #205. Amendment 1 (2026-05-21) distinguishes **explicit** vs **implicit** Quiet and adds an artifact-command classification so commands whose output is the product (`bib`/`csl`/`capabilities`/`audit-log --verify --mode json`) honor only explicit Quiet, fixing the LLM cold-boot deadlock reported in #219 / #220. Amendment 2 (2026-06-16) extends the artifact classification to the read/inspection commands (`info` / `list-recent` / `search` / `link`) so the non-TTY implicit Quiet no longer silences them (#301).
 - **Supersedes:** -
 - **Source:** Discussion #14
 
@@ -153,3 +153,75 @@ The implementation slice is a CLI-internal refactor; consumers
 *restoration* for artifact commands in pipes — no API change.
 The 0.3.0 non-TTY-default callout in CHANGELOG remains in force
 for informational commands.
+
+## Amendment — 2026-06-16 (2): read/inspection commands are artifact-class
+
+**Diagnosis (#301).** Amendment 1 split Quiet into explicit vs implicit
+and classified `bib` / `csl` / `capabilities` as *artifact* so the
+non-TTY implicit Quiet no longer silences them. But it left the
+read/inspection commands — `info`, `list-recent`, `search`, `link` —
+classified as *informational*, so they still emit **nothing** (exit 0,
+zero bytes on stdout AND stderr) whenever stdout is not a TTY (piped,
+redirected, or run from an agent / over ssh):
+
+```text
+$ doiget info 10.1103/PhysRevB.106.094409   # non-TTY -> implicit Quiet
+$ echo "exit=$?"
+exit=0                                       # stdout 0 bytes, stderr 0 bytes
+$ doiget info 10.1103/PhysRevB.106.094409 --json   # works
+{ "title": "...", ... }
+```
+
+Same ADR-0017 root cause as #219 / #220, but for the commands whose
+**stdout rendering IS the requested artifact**: the user fetches a paper,
+then runs `info` / `list-recent` to confirm it landed, and gets total
+silence — which reads as "the fetch failed" or "the store is empty",
+when in fact everything succeeded. For these commands the output is the
+product, not a status report, so the implicit (display-heuristic) Quiet
+must not erase it.
+
+**Decision.** Extend the *artifact* cohort of Amendment 1 to the
+read/inspection commands. The Quiet-honoring contract is unchanged (the
+table in Amendment 1 still binds); only the membership of the artifact
+set grows:
+
+| cohort                | commands                                    | added in |
+|-----------------------|---------------------------------------------|----------|
+| export / inventory    | `bib`, `csl`, `capabilities`                | Am 1     |
+| **read / inspection** | **`info`, `list-recent`, `search`, `link`** | **Am 2** |
+
+Artifact commands suppress stdout ONLY on **explicit** Quiet
+(`--quiet` / `-q` / `--mode quiet` / `DOIGET_MODE=quiet`); the non-TTY
+implicit fallback emits. Informational status-report commands (audit-log
+Human, config show/path, provenance migrate, fetch/batch status) are
+unchanged: they suppress on any Quiet.
+
+### Implementation
+
+- `commands::output::is_artifact_command` gains `info` / `list-recent` /
+  `search` / `link` (the single source of truth for the classification).
+- `info::run`, `list_recent::run`, `search::run`, `link::run` receive the
+  `quiet_was_explicit` discriminator from the dispatcher (mirroring
+  `capabilities::run`) and guard on `mode == Quiet && quiet_was_explicit`
+  instead of `mode == Quiet`.
+- No wire-format change: `OutputMode`, the `--mode` values, `DOIGET_MODE`
+  semantics, and the `capabilities` JSON `modes` array are untouched;
+  `--mode json` / `--quiet` behaviour for these commands is unchanged.
+
+### Test plan
+
+- Unit (`output.rs`): `is_artifact_command` is `true` for
+  `info` / `list-recent` / `search` / `link`; still `false` for
+  `fetch` / `batch` / `config` / `audit-log`.
+- E2E (`info_list_recent_e2e.rs`): `info <doi>` and `list-recent` under a
+  non-TTY capture with **no** `DOIGET_MODE` emit their rendering (closes
+  #301); under `--quiet` / `-q` / `DOIGET_MODE=quiet` they emit empty
+  stdout with the unchanged exit-code contract.
+
+### Out of scope
+
+The secondary observation in #301 — `fetch` by arXiv id storing a
+degraded record (`title` = the verbatim id, `year` = null) versus the
+full Crossref metadata a DOI fetch carries — is a metadata-backfill
+concern on the arXiv fetch path, tracked separately; this amendment is
+limited to the output-mode classification.

@@ -52,6 +52,7 @@ fn fixture(doi_suffix: &str, title: &str, year: i32, fetched_year: i32) -> (Safe
         year: Some(year),
         doi: Some(Doi::parse(&doi).expect("valid DOI")),
         arxiv_id: None,
+        arxiv_categories: vec![],
         abstract_: None,
         venue: Some("Phys. Rev. X".to_string()),
         volume: None,
@@ -272,4 +273,77 @@ fn list_recent_json_emits_array_of_entries() {
         assert!(entry["safekey"].is_string(), "safekey is a string");
         assert!(entry["title"].is_string(), "title is a string");
     }
+}
+
+// ---- #301 / ADR-0017 Amendment 2: artifact-class honors only EXPLICIT Quiet
+
+/// `doiget` rooted at `root` WITHOUT forcing `DOIGET_MODE`, so the
+/// resolver sees a non-TTY captured stdout (assert_cmd pipes it) and
+/// falls through to the *implicit* Quiet branch. Pre-#301 this silenced
+/// `info` / `list-recent`; post-#301 they are artifact-class and emit.
+/// `DOIGET_MODE` is explicitly removed in case the parent environment
+/// has it set.
+fn doiget_implicit(root: &Utf8PathBuf) -> Command {
+    let mut cmd = Command::cargo_bin("doiget").expect("locate doiget binary");
+    cmd.env("DOIGET_STORE_ROOT", root.as_str())
+        .env("HOME", root.as_str())
+        .env("USERPROFILE", root.as_str())
+        .env_remove("DOIGET_MODE");
+    cmd
+}
+
+#[test]
+fn info_emits_under_implicit_non_tty_quiet() {
+    // The #301 repro: agent / pipe / ssh caller (non-TTY, no flag, no
+    // DOIGET_MODE). `info` MUST still print its metadata.
+    let (_dir_guard, root) = seeded_store();
+    doiget_implicit(&root)
+        .args(["info", "10.1234/alpha"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("First Quantum Result"));
+}
+
+#[test]
+fn list_recent_emits_under_implicit_non_tty_quiet() {
+    let (_dir_guard, root) = seeded_store();
+    doiget_implicit(&root)
+        .args(["list-recent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("First Quantum Result"));
+}
+
+#[test]
+fn info_explicit_quiet_flag_suppresses_stdout() {
+    // Explicit `--quiet` still silences (the entry exists → exit 0); the
+    // not-found contract is unaffected.
+    let (_dir_guard, root) = seeded_store();
+    doiget_implicit(&root)
+        .args(["--quiet", "info", "10.1234/alpha"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn list_recent_explicit_quiet_flag_suppresses_stdout() {
+    let (_dir_guard, root) = seeded_store();
+    doiget_implicit(&root)
+        .args(["-q", "list-recent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn info_explicit_quiet_env_suppresses_stdout() {
+    // `DOIGET_MODE=quiet` is an explicit Quiet signal → suppress.
+    let (_dir_guard, root) = seeded_store();
+    doiget_implicit(&root)
+        .env("DOIGET_MODE", "quiet")
+        .args(["info", "10.1234/alpha"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
 }

@@ -159,6 +159,15 @@ impl Doi {
     }
 }
 
+impl std::fmt::Display for ArxivId {
+    /// Displays the validated id as its canonical string (e.g.
+    /// `2401.12345`) so it can be interpolated into messages — notably the
+    /// `FetchError::TextUnavailable` `#[error]` template (review #318).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 impl ArxivId {
     /// Returns the arXiv id as a string slice.
     pub fn as_str(&self) -> &str {
@@ -688,6 +697,19 @@ pub enum ErrorCode {
     /// next minor release" rather than "report a bug" or "tweak my
     /// capability profile". Wire form: `"NOT_IMPLEMENTED"`.
     NotImplemented,
+    /// The identifier is valid and resolvable, but the **requested
+    /// representation** is not available from its source — currently the
+    /// ar5iv HTML render consulted by `doiget text` (a 200 with no
+    /// extractable prose: the paper was never converted to HTML).
+    ///
+    /// Deliberately distinct from the neighbouring codes so an agent does
+    /// not misdiagnose a missing render as a bad reference (issue #302):
+    /// it is NOT [`Self::NotFound`] (the id *does* exist), NOT
+    /// [`Self::NoOaAvailable`] (the paper may well be OA — only this one
+    /// representation is missing), and NOT [`Self::NetworkError`] (the
+    /// fetch succeeded). The actionable branch is "fetch the PDF instead",
+    /// not "fix the identifier". Wire form: `"TEXT_UNAVAILABLE"`.
+    TextUnavailable,
 }
 
 impl ErrorCode {
@@ -715,6 +737,7 @@ impl ErrorCode {
             ErrorCode::LockTimeout => "LOCK_TIMEOUT",
             ErrorCode::InternalError => "INTERNAL_ERROR",
             ErrorCode::NotImplemented => "NOT_IMPLEMENTED",
+            ErrorCode::TextUnavailable => "TEXT_UNAVAILABLE",
         }
     }
 }

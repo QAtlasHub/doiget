@@ -25,8 +25,10 @@ use super::Metadata;
 /// `journal-article` → `@article`; everything else → `@misc` (Phase 2
 /// starter — `@inproceedings` / `@book` mapping is a follow-up). Field
 /// order: `title`, `author`, `year`, `doi`, `journal`, `volume`,
-/// `number`, `pages`, `publisher`, `issn`; any empty / `None` field is
-/// omitted. The returned string is a complete entry terminated by `}\n`.
+/// `number`, `pages`, `publisher`, `issn`, then — when the entry carries
+/// an arXiv id — `eprint`, `archivePrefix`, `primaryClass` (issue #303).
+/// Any empty / `None` field is omitted. The returned string is a complete
+/// entry terminated by `}\n`.
 ///
 /// Literal `{` / `}` in a field value would unbalance the surrounding
 /// braces; they are stripped (with a `tracing::warn!`) rather than
@@ -81,8 +83,40 @@ pub fn to_bibtex(citation_key: &str, m: &Metadata) -> String {
         }
     }
 
+    // arXiv preprint identity (issue #303): emit `eprint` + `archivePrefix`
+    // (+ `primaryClass` when known) for any entry carrying an arXiv id, so
+    // the reference resolves on arXiv and in reference managers instead of
+    // reading as a title+author stub. Standard arXiv BibTeX convention;
+    // applies to both the `@misc` preprint and a `@article` that also has a
+    // preprint.
+    if let Some(arxiv_id) = &m.arxiv_id {
+        push_field(&mut out, "eprint", arxiv_id.as_str());
+        push_field(&mut out, "archivePrefix", "arXiv");
+        if let Some(class) = arxiv_primary_class(m) {
+            push_field(&mut out, "primaryClass", &class);
+        }
+    }
+
     out.push_str("}\n");
     out
+}
+
+/// The arXiv primary subject class for a BibTeX `primaryClass` field.
+///
+/// Prefers the parsed Atom category (`Metadata::arxiv_categories[0]`, the
+/// only source for a new-style id like `2012.03644`). Falls back to the
+/// archive prefix embedded in an **old-style** id (`cond-mat/0403602` →
+/// `cond-mat`); a new-style id with no stored categories yields `None`, so
+/// the field is honestly omitted rather than guessed.
+fn arxiv_primary_class(m: &Metadata) -> Option<String> {
+    if let Some(first) = m.arxiv_categories.first() {
+        return Some(first.clone());
+    }
+    m.arxiv_id.as_ref().and_then(|id| {
+        id.as_str()
+            .split_once('/')
+            .map(|(archive, _)| archive.to_string())
+    })
 }
 
 /// Map a Crossref-taxonomy `type` string to a BibTeX entry type.
@@ -298,6 +332,7 @@ mod tests {
             year: Some(2026),
             doi: Some(Doi::parse("10.1234/example").expect("valid DOI")),
             arxiv_id: None,
+            arxiv_categories: vec![],
             abstract_: None,
             venue: Some("Phys Rev X".to_string()),
             volume: Some("12".to_string()),
@@ -351,6 +386,53 @@ mod tests {
     fn bibtex_missing_and_unknown_type_render_as_misc() {
         assert!(to_bibtex("k", &fixture(None)).starts_with("@misc{k,\n"));
         assert!(to_bibtex("k", &fixture(Some("posted-content"))).starts_with("@misc{k,\n"));
+    }
+
+    #[test]
+    fn bibtex_arxiv_emits_eprint_archiveprefix_primaryclass() {
+        // issue #303: an arXiv entry must carry the preprint identity, not
+        // just title + author. New-style id → `primaryClass` from the
+        // parsed Atom category (`arxiv_categories[0]`).
+        let mut m = fixture(None);
+        m.doi = None;
+        m.venue = None;
+        m.volume = None;
+        m.issue = None;
+        m.pages = None;
+        m.publisher = None;
+        m.issn = None;
+        m.arxiv_id = Some(crate::ArxivId::parse("2012.03644").expect("valid id"));
+        m.arxiv_categories = vec!["cond-mat.str-el".to_string(), "cond-mat.dis-nn".to_string()];
+        let s = to_bibtex("arxiv_2012.03644", &m);
+        assert!(s.starts_with("@misc{arxiv_2012.03644,\n"), "{s}");
+        // Long keys are not padded, so the field lines are exact.
+        assert!(s.contains("archivePrefix = {arXiv},"), "{s}");
+        assert!(s.contains("primaryClass = {cond-mat.str-el},"), "{s}");
+        // `eprint` is a short key; assert the value to avoid padding fuss.
+        assert!(s.contains("eprint") && s.contains("= {2012.03644},"), "{s}");
+        // Year still rendered (populated by the cite overlay upstream).
+        assert!(s.contains("year       = {2026},"), "{s}");
+    }
+
+    #[test]
+    fn bibtex_arxiv_old_style_id_primaryclass_from_prefix() {
+        // No stored categories (e.g. a pre-#303 store entry): the old-style
+        // id's archive prefix supplies `primaryClass`.
+        let mut m = fixture(None);
+        m.doi = None;
+        m.arxiv_id = Some(crate::ArxivId::parse("cond-mat/0403602").expect("valid id"));
+        m.arxiv_categories = vec![];
+        let s = to_bibtex("k", &m);
+        assert!(s.contains("= {cond-mat/0403602},"), "{s}");
+        assert!(s.contains("primaryClass = {cond-mat},"), "{s}");
+    }
+
+    #[test]
+    fn bibtex_non_arxiv_omits_eprint() {
+        // A DOI-only entry must not grow arXiv fields.
+        let s = to_bibtex("k", &fixture(Some("journal-article")));
+        assert!(!s.contains("eprint"), "{s}");
+        assert!(!s.contains("archivePrefix"), "{s}");
     }
 
     #[test]

@@ -49,22 +49,22 @@ const OPENALEX_DEFAULT_BASE: &str = "https://api.openalex.org";
 
 /// `--sort` choices for external discovery. Maps 1:1 onto
 /// [`SearchSort`]; kept CLI-local so `doiget-core` carries no `clap` dep.
-#[derive(Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum SortArg {
     /// Best textual match first (OpenAlex `relevance_score:desc`).
+    ///
+    /// The only sort: `cited` / `recent` were removed (#290) — over
+    /// OpenAlex's loose free-text match they float off-topic papers to the
+    /// top. Use `--min-fwci` / `--min-percentile` / `--from-year` to
+    /// surface "important / recent" results as FILTERS instead.
+    #[default]
     Relevance,
-    /// Most-cited first (`cited_by_count:desc`).
-    Cited,
-    /// Newest first (`publication_date:desc`).
-    Recent,
 }
 
 impl From<SortArg> for SearchSort {
     fn from(s: SortArg) -> Self {
         match s {
             SortArg::Relevance => SearchSort::Relevance,
-            SortArg::Cited => SearchSort::Cited,
-            SortArg::Recent => SearchSort::Recent,
         }
     }
 }
@@ -85,6 +85,10 @@ pub struct ExternalArgs {
     pub oa_only: bool,
     /// Only works cited strictly more than this many times.
     pub min_citations: Option<u64>,
+    /// Minimum field-and-year-normalized impact (FWCI) floor (#290).
+    pub min_fwci: Option<f64>,
+    /// Minimum within-cohort citation percentile, 0–100 (#290).
+    pub min_percentile: Option<u8>,
     /// Author name to filter by (resolved to an OpenAlex author ID).
     pub author: Option<String>,
     /// Venue / journal name to filter by (resolved to an OpenAlex source ID).
@@ -114,26 +118,34 @@ fn print_err(args: std::fmt::Arguments<'_>) {
 /// Propagates store-open / scan failures (local) or surfaces a typed
 /// [`ErrorCode`] as a process exit code (external); an empty query is a
 /// usage error.
-pub async fn run(query: String, local: bool, ext: ExternalArgs, mode: OutputMode) -> Result<()> {
+pub async fn run(
+    query: String,
+    local: bool,
+    ext: ExternalArgs,
+    mode: OutputMode,
+    quiet_was_explicit: bool,
+) -> Result<()> {
     if query.trim().is_empty() {
         anyhow::bail!("search query is empty");
     }
     if local {
-        run_local(&query, mode)
+        run_local(&query, mode, quiet_was_explicit)
     } else {
-        run_external(&query, ext, mode).await
+        run_external(&query, ext, mode, quiet_was_explicit).await
     }
 }
 
 /// Local-store substring scan (legacy behaviour, now behind `--local`).
-fn run_local(query: &str, mode: OutputMode) -> Result<()> {
+fn run_local(query: &str, mode: OutputMode, quiet_was_explicit: bool) -> Result<()> {
     let store_root = resolve_store_root()?;
     let store = FsStore::new(store_root)?;
     let entries = store
         .search(query, LOCAL_DEFAULT_LIMIT)
         .with_context(|| format!("search failed for query {query:?}"))?;
 
-    if mode == OutputMode::Quiet {
+    // Artifact-class (ADR-0017 Amendment 2 / #301): suppress only on
+    // explicit Quiet; the non-TTY implicit fallback still emits.
+    if mode == OutputMode::Quiet && quiet_was_explicit {
         return Ok(());
     }
 
@@ -165,7 +177,12 @@ fn run_local(query: &str, mode: OutputMode) -> Result<()> {
 }
 
 /// External OpenAlex discovery search (the default scope).
-async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Result<()> {
+async fn run_external(
+    query: &str,
+    ext: ExternalArgs,
+    mode: OutputMode,
+    quiet_was_explicit: bool,
+) -> Result<()> {
     let q = PaperSearchQuery {
         query: query.to_string(),
         limit: ext.limit,
@@ -173,6 +190,8 @@ async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Resul
         to_year: ext.to_year,
         oa_only: ext.oa_only,
         min_citations: ext.min_citations,
+        min_fwci: ext.min_fwci,
+        min_percentile: ext.min_percentile,
         author: ext.author,
         venue: ext.venue,
         publisher: ext.publisher,
@@ -206,7 +225,9 @@ async fn run_external(query: &str, ext: ExternalArgs, mode: OutputMode) -> Resul
         }
     };
 
-    if mode == OutputMode::Quiet {
+    // Artifact-class (ADR-0017 Amendment 2 / #301): suppress only on
+    // explicit Quiet; the non-TTY implicit fallback still emits.
+    if mode == OutputMode::Quiet && quiet_was_explicit {
         return Ok(());
     }
 
@@ -319,9 +340,8 @@ mod tests {
 
     #[test]
     fn sort_arg_lowers_to_core() {
+        // Relevance is the only sort (#290); `cited` / `recent` were removed.
         assert_eq!(SearchSort::from(SortArg::Relevance), SearchSort::Relevance);
-        assert_eq!(SearchSort::from(SortArg::Cited), SearchSort::Cited);
-        assert_eq!(SearchSort::from(SortArg::Recent), SearchSort::Recent);
     }
 
     #[test]
@@ -343,6 +363,8 @@ mod tests {
             to_year,
             oa_only: false,
             min_citations: None,
+            min_fwci: None,
+            min_percentile: None,
             author: None,
             venue: None,
             publisher: None,
@@ -355,17 +377,29 @@ mod tests {
 
     #[tokio::test]
     async fn external_rejects_limit_below_1() {
-        let err = run("q".into(), false, ext(0, None, None), OutputMode::Quiet)
-            .await
-            .expect_err("limit 0 must be rejected");
+        let err = run(
+            "q".into(),
+            false,
+            ext(0, None, None),
+            OutputMode::Quiet,
+            true,
+        )
+        .await
+        .expect_err("limit 0 must be rejected");
         assert!(err.to_string().contains("limit"), "got: {err}");
     }
 
     #[tokio::test]
     async fn external_rejects_limit_above_200() {
-        let err = run("q".into(), false, ext(201, None, None), OutputMode::Quiet)
-            .await
-            .expect_err("limit 201 must be rejected");
+        let err = run(
+            "q".into(),
+            false,
+            ext(201, None, None),
+            OutputMode::Quiet,
+            true,
+        )
+        .await
+        .expect_err("limit 201 must be rejected");
         assert!(err.to_string().contains("limit"), "got: {err}");
     }
 
@@ -376,6 +410,7 @@ mod tests {
             false,
             ext(25, Some(2025), Some(2010)),
             OutputMode::Quiet,
+            true,
         )
         .await
         .expect_err("from_year > to_year must be rejected");

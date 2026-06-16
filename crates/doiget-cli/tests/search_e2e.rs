@@ -62,6 +62,7 @@ fn fixture(doi_suffix: &str, title: &str, authors: Vec<String>) -> (Safekey, Met
         year: Some(2025),
         doi: Some(Doi::parse(&doi).expect("valid DOI")),
         arxiv_id: None,
+        arxiv_categories: vec![],
         abstract_: None,
         venue: Some("Phys. Rev. X".to_string()),
         volume: None,

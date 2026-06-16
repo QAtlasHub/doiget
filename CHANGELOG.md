@@ -8,6 +8,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `doiget-core` is the only crate with strict semver guarantees during the 0.x line; CLI
 flag changes and `doiget-mcp` tool spec changes will be called out explicitly here.
 
+## [Unreleased]
+
+## [0.7.0] - 2026-06-16
+
+Promotes the cumulative `0.7.0-beta.0`–`0.7.0-beta.6` line to a stable release
+(next → main, #318). Highlights since 0.6.0: discovery-search relevance-only
+ranking with impact/recency filters (#290), arXiv published-version `cite`
+merge (#303), bulk offline `bib` / `csl` export (#305), batch failure digest
+and auto-chunking (#222 / #304), `TEXT_UNAVAILABLE` signalling (#302), and
+real arXiv fetch metadata (#303). See the `0.7.0-beta.*` sections below for the
+per-change detail.
+
+### Fixed
+- **[review #318]** second-pass promotion-review fixes:
+  - **[text]** `doiget text <arxiv-id>` now emits its extracted prose under a
+    non-TTY *implicit* Quiet — piping `doiget text … > paper.txt` no longer
+    writes an empty file. `text` joins the artifact-command set (ADR-0017
+    Amendment 2); only an **explicit** `--quiet` / `DOIGET_MODE=quiet`
+    suppresses it.
+  - **[search]** `--min-fwci` / `--min-percentile` are now validated: a
+    negative or non-finite FWCI floor, or a percentile above 100, is rejected
+    up front instead of composing a malformed OpenAlex `filter` clause (#290).
+  - **[docs]** corrected the `output` module's Amendment 2 artifact-command
+    list and the `csl --from-file` partial-array contract wording.
+  - **Tests**: `text` piped / explicit-Quiet / unavailable-note behaviors,
+    `cite` arXiv-shaped cross-ref guard (no spurious second resolve),
+    `--min-fwci` / `--min-percentile` filter-clause e2e, out-of-range
+    validation, and tightened `bib` / `csl --from-file` digest assertions.
+
+## [0.7.0-beta.6] - 2026-06-16
+
+### Added
+- **[cite]** published-version merge for arXiv preprints (#303): when `doiget cite <arxiv-id>`'s Atom feed cross-references a published journal DOI (`<arxiv:doi>`), the entry now cites as the rich `@article` (journal / volume / issue / pages / publisher / issn / doi from Crossref) with the arXiv preprint identity retained (`eprint` / `archivePrefix` / `primaryClass`). No extra OpenAlex call — the DOI comes from the already-fetched feed. Best-effort: an absent or unresolvable cross-ref keeps the `@misc` preprint entry.
+- **[csl]** bulk, offline CSL-JSON export from the local store, at parity with `bib` (#305): `doiget csl --all` emits every store entry as one deduplicated CSL-JSON array, and `doiget csl --from-file <FILE>` emits the refs listed in a file (plain refs / CSL-JSON / BibTeX), each rendered from the store. Missing entries are skipped; `--from-file` exits non-zero with the missing count. The positional ref is now optional and mutually exclusive with the two flags.
+- **[batch]** end-of-batch **failure digest** on stderr: after the count summary, `doiget batch` lists each failed ref and its primary error code (`<ref> -> <ERROR_CODE>`), so a human / agent sees which refs failed and why without grepping the JSONL provenance log. stdout stays clean (`--mode json` JSON-Lines remains the machine channel) (#222).
+
+### Changed
+- **[search]** **(breaking)** discovery search ranking — relevance is now the **only** sort (#290). `--sort cited` / `--sort recent` (and the MCP `sort: cited|recent`) are **removed**: verified against live OpenAlex, every non-relevance sort over the loose free-text match floats high-scoring *off-topic* papers to the top. "Important / recent / high-quality" is now expressed as server-side **filters** that narrow the set without overriding topicality: new `--min-fwci <f>` (field-and-year-normalized impact floor), `--min-percentile <p>` (top-X% within the same-year cohort), and the existing `--from-year` used as a recency filter. The free-text query also now matches on `title_and_abstract.search` instead of the looser full-text `search=` (precision win). Still one OpenAlex request — `fwci` / `cited_by_percentile_year` are existing response fields.
+
+### Fixed
+- **[fetch]** `doiget fetch <arxiv-id>` now stores the **real** title / authors / year / subject categories from the Atom feed (which the fetch already retrieves) instead of an `arxiv:<id>` placeholder title. A later `doiget bib` / `info` on a fetched arXiv entry shows a usable reference rather than the bare id. The Atom leg stays best-effort — if it fails, the placeholder is kept so a successful PDF fetch always stores a valid entry (#303).
+- **[review #318]** robustness fixes from the promotion review: `bib`/`csl` `--from-file` no longer aborts the whole export on one entry's read error (skip + count, matching `--all`); `csl` flattening surfaces (not silently drops) an entry that renders to an empty CSL item; `cite` prints a `note:` when a published-version DOI resolve fails (no longer a silent degradation) and only treats a bare-DOI cross-ref as a merge trigger; `csl` validates "no selector" before opening the store (parity with `bib`); `FetchError::TextUnavailable` now carries a validated `ArxivId` instead of a raw `String`.
+
+## [0.7.0-beta.5] - 2026-06-16
+
+### Changed
+- **[deps]** dependency bumps merged from Dependabot: `biblatex` 0.11.0 → 0.12.0, `chrono` 0.4.44 → 0.4.45, `uuid` 1.23.2 → 1.23.3 (#298, #306), and the `codecov/codecov-action` CI action 6.0.1 → 7.0.0 (#300). `cargo-vet` `safe-to-deploy` exemptions updated to the new versions.
+
+## [0.7.0-beta.4] - 2026-06-16
+
+### Added
+- **[bib]** bulk, offline BibTeX export from the local store (#305): `doiget bib --all` emits every store entry as one deduplicated `.bib`, and `doiget bib --from-file <FILE>` emits the refs listed in a file (plain refs / CSL-JSON / BibTeX), each rendered from the store. Missing entries are skipped with a stderr note; `--from-file` exits non-zero with the missing count (the `batch` failure-count convention) so a script can tell a complete export from a partial one. This turns "fetch a batch, then build a combined `.bib`" into a single offline command instead of a 100-call flaky loop.
+- **[cite]** `doiget cite --offline <ref>` renders from the local store only (no network).
+
+### Fixed
+- **[cite]** `doiget cite <ref>` now falls back to the local store when the live resolve fails (network hiccup / OpenAlex flake) instead of returning nothing — an already-fetched ref always cites, with a `note:` on stderr marking the offline path. A ref in neither place is a non-zero error carrying the resolve failure, never a silent empty stdout (#305, cf. #302/#304).
+
+### Notes
+- CSL-JSON parity (`csl --all` / `--from-file`) is a deferred follow-up; this change covers the BibTeX surface the issue describes.
+
+## [0.7.0-beta.3] - 2026-06-16
+
+### Fixed
+- **[cite]** `doiget cite <arxiv-id>` now emits a **complete** arXiv BibTeX entry instead of a title+author stub. The `@misc` entry gains `eprint`, `archivePrefix = {arXiv}`, `primaryClass`, and `year`: the year is parsed from the Atom `published` timestamp, and the primary class from the first `<category>` (or, for an old-style id like `cond-mat/0403602`, the archive prefix). Any entry carrying an arXiv id — including a stored one read by `bib` — now renders these fields. Previously an arXiv reference (a large fraction of a physics bibliography) needed manual `eprint`/`year` injection (#303).
+
+### Added
+- **[core]** `Metadata.arxiv_categories` — the arXiv subject categories (primary first), populated from the Atom feed and preserved across re-writes. Additive optional field; does not bump `schema_version` (`docs/STORE.md` §7).
+
+### Notes
+- Deferred to follow-ups (still part of #303): `bib` on a store entry written by the PDF-fetch path can still show a placeholder `arxiv:<id>` title until that path chains in Atom extraction; and merging a published version's metadata (`@article` via the DOI↔arXiv `link`) for arXiv ids with a journal version.
+
+## [0.7.0-beta.2] - 2026-06-16
+
+### Fixed
+- **[batch]** `doiget batch <file>` no longer aborts the entire run when the input exceeds 100 refs. Previously it printed `Error: batch size N exceeds limit 100` and fetched **nothing** the moment a bibliography crossed 100 entries, forcing a manual `split`. The input is now processed in full, dispatched in bounded windows of `MCP_BATCH_MAX_SIZE` so the in-flight task count stays capped while the shared rate limiter keeps the 5-per-second politeness invariant across every window. The per-ref failure-count exit code is unchanged (non-zero when any ref fails). The `MCP_BATCH_MAX_SIZE` hard cap still applies to a single MCP `batch_fetch` request — that request-shape bound is unrelated to a local file handed to the CLI (#304).
+
+## [0.7.0-beta.1] - 2026-06-16
+
+### Fixed
+- **[text]** `doiget text <arxiv-id>` no longer exits **0 with empty output** when ar5iv has no usable render. A 200 with no extractable prose (`char_count == 0` — the paper was never converted to HTML, including the case where the body parses to heading shells with empty bodies) now surfaces the new `TEXT_UNAVAILABLE` code on a non-zero exit, with an actionable `= note:` pointing at `doiget fetch arxiv:<id>`. Agents and the MCP `doiget_paper_text` tool can now tell **"text unavailable (fetch the PDF)"** apart from **"wrong identifier"** (`NOT_FOUND`) and **"no OA at all"** (`NO_OA_AVAILABLE`) instead of misreading the silent empty output as a bad DOI (#302).
+
+### Added
+- **[core]** `ErrorCode::TextUnavailable` (wire `"TEXT_UNAVAILABLE"`) and `FetchError::TextUnavailable { arxiv_id }` — the id is valid and resolvable but the requested representation is missing. Minor, additive (`ErrorCode` is `#[non_exhaustive]`). See `docs/ERRORS.md` §2.
+
+## [0.7.0-beta.0] - 2026-06-16
+
+### Added
+- **[dist]** `scripts/install.sh` (POSIX `sh`, Linux/macOS) and `scripts/install.ps1` (Windows) — install the prebuilt, SHA-256-verified binary from the signed GitHub Release with no Rust toolchain required: `curl -fsSL https://raw.githubusercontent.com/sotashimozono/doiget/main/scripts/install.sh | sh`. `DOIGET_VERSION` pins a release (default: latest stable); `DOIGET_INSTALL_DIR` overrides the target (default `~/.local/bin` / `%LOCALAPPDATA%\Programs\doiget`). The binary's published `.sha256` sidecar is verified before install. First channel of the multi-platform distribution roadmap (#247); README gains an **Installation** section.
+
+### Fixed
+- **[cli]** `info` / `list-recent` / `search` / `link` no longer emit nothing under a non-TTY implicit Quiet (agent / pipe / ssh). They are now artifact-class and honor only **explicit** Quiet (`--quiet` / `-q` / `--mode quiet` / `DOIGET_MODE=quiet`), per [ADR-0017 Amendment 2](docs/DECISIONS/0017-output-mode-resolution.md): their stdout rendering IS the requested artifact and must reach a captured / piped caller. Previously a fetch-then-`info` confirmation read as "fetch failed" or "store empty" when it had in fact succeeded (#301).
+
 ## [0.6.0] - 2026-06-07
 
 Discovery — the front half of the agent research loop (#281). `doiget search` becomes

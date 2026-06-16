@@ -37,6 +37,15 @@ pub struct Metadata {
     /// arXiv id, if any.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub arxiv_id: Option<crate::ArxivId>,
+    /// arXiv subject categories in feed order (e.g. `["cond-mat.str-el",
+    /// "cond-mat.dis-nn"]`); the first is the **primary** class. Populated
+    /// from the Atom feed `<category term="…">` elements so `cite` / `bib`
+    /// can emit a complete arXiv BibTeX entry (`primaryClass`, issue #303).
+    /// Additive optional field — does not bump `schema_version`
+    /// (`docs/STORE.md` §7 additive policy); omitted from the TOML when
+    /// empty.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub arxiv_categories: Vec<String>,
     /// Abstract; serialized as the bare `abstract` key (Rust keyword).
     #[serde(rename = "abstract", skip_serializing_if = "Option::is_none", default)]
     pub abstract_: Option<String>,
