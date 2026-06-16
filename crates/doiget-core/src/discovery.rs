@@ -1091,7 +1091,11 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/works"))
-            .and(query_param("search", "tropical tensor networks"))
+            // #290: the query is a `title_and_abstract.search` filter clause.
+            .and(query_param(
+                "filter",
+                "title_and_abstract.search:tropical tensor networks",
+            ))
             .and(query_param("mailto", "doiget@localhost"))
             .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_SEARCH))
             .mount(&server)
@@ -1137,10 +1141,12 @@ mod tests {
         // Assert the composed filter + sort params reach the wire.
         Mock::given(method("GET"))
             .and(path("/works"))
-            .and(query_param("sort", "cited_by_count:desc"))
+            // #290: relevance is the only sort; the query is the leading
+            // `title_and_abstract.search` filter clause.
+            .and(query_param("sort", "relevance_score:desc"))
             .and(query_param(
                 "filter",
-                "from_publication_date:2020-01-01,is_oa:true,cited_by_count:>10",
+                "title_and_abstract.search:spin glass,from_publication_date:2020-01-01,is_oa:true,cited_by_count:>10",
             ))
             .and(query_param("per-page", "5"))
             .respond_with(
@@ -1243,7 +1249,10 @@ mod tests {
         // Second leg: /works filtered by the resolved source id.
         Mock::given(method("GET"))
             .and(path("/works"))
-            .and(query_param("filter", "primary_location.source.id:S99"))
+            .and(query_param(
+                "filter",
+                "title_and_abstract.search:spin glass,primary_location.source.id:S99",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_string(
                 r#"{ "meta": { "count": 1 }, "results": [ { "id": "https://openalex.org/W1", "title": "In PRB" } ] }"#,
             ))
@@ -1328,7 +1337,10 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/works"))
-            .and(query_param("filter", "primary_location.source.id:S1"))
+            .and(query_param(
+                "filter",
+                "title_and_abstract.search:spin glass,primary_location.source.id:S1",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_string(
                 r#"{ "meta": { "count": 1 }, "results": [ { "id": "https://openalex.org/W1", "title": "x" } ] }"#,
             ))
@@ -1362,7 +1374,10 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/works"))
-            .and(query_param("filter", "authorships.author.id:A1"))
+            .and(query_param(
+                "filter",
+                "title_and_abstract.search:replica symmetry breaking,authorships.author.id:A1",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_string(
                 r#"{ "meta": { "count": 1 }, "results": [ { "id": "https://openalex.org/W9", "title": "y" } ] }"#,
             ))
