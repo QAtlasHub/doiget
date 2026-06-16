@@ -73,7 +73,12 @@ async fn external_search_runs_and_logs_openalex_fetch() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/works"))
-        .and(query_param("search", "tropical tensor networks"))
+        // #290: the query is now a `title_and_abstract.search` FILTER clause,
+        // not the loose top-level `search=` parameter.
+        .and(query_param(
+            "filter",
+            "title_and_abstract.search:tropical tensor networks",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE))
         .mount(&server)
         .await;
@@ -98,6 +103,8 @@ async fn external_search_runs_and_logs_openalex_fetch() {
         to_year: None,
         oa_only: false,
         min_citations: None,
+        min_fwci: None,
+        min_percentile: None,
         author: None,
         venue: None,
         publisher: None,

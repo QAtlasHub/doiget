@@ -49,22 +49,22 @@ const OPENALEX_DEFAULT_BASE: &str = "https://api.openalex.org";
 
 /// `--sort` choices for external discovery. Maps 1:1 onto
 /// [`SearchSort`]; kept CLI-local so `doiget-core` carries no `clap` dep.
-#[derive(Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum SortArg {
     /// Best textual match first (OpenAlex `relevance_score:desc`).
+    ///
+    /// The only sort: `cited` / `recent` were removed (#290) — over
+    /// OpenAlex's loose free-text match they float off-topic papers to the
+    /// top. Use `--min-fwci` / `--min-percentile` / `--from-year` to
+    /// surface "important / recent" results as FILTERS instead.
+    #[default]
     Relevance,
-    /// Most-cited first (`cited_by_count:desc`).
-    Cited,
-    /// Newest first (`publication_date:desc`).
-    Recent,
 }
 
 impl From<SortArg> for SearchSort {
     fn from(s: SortArg) -> Self {
         match s {
             SortArg::Relevance => SearchSort::Relevance,
-            SortArg::Cited => SearchSort::Cited,
-            SortArg::Recent => SearchSort::Recent,
         }
     }
 }
@@ -85,6 +85,10 @@ pub struct ExternalArgs {
     pub oa_only: bool,
     /// Only works cited strictly more than this many times.
     pub min_citations: Option<u64>,
+    /// Minimum field-and-year-normalized impact (FWCI) floor (#290).
+    pub min_fwci: Option<f64>,
+    /// Minimum within-cohort citation percentile, 0–100 (#290).
+    pub min_percentile: Option<u8>,
     /// Author name to filter by (resolved to an OpenAlex author ID).
     pub author: Option<String>,
     /// Venue / journal name to filter by (resolved to an OpenAlex source ID).
@@ -186,6 +190,8 @@ async fn run_external(
         to_year: ext.to_year,
         oa_only: ext.oa_only,
         min_citations: ext.min_citations,
+        min_fwci: ext.min_fwci,
+        min_percentile: ext.min_percentile,
         author: ext.author,
         venue: ext.venue,
         publisher: ext.publisher,
@@ -334,9 +340,8 @@ mod tests {
 
     #[test]
     fn sort_arg_lowers_to_core() {
+        // Relevance is the only sort (#290); `cited` / `recent` were removed.
         assert_eq!(SearchSort::from(SortArg::Relevance), SearchSort::Relevance);
-        assert_eq!(SearchSort::from(SortArg::Cited), SearchSort::Cited);
-        assert_eq!(SearchSort::from(SortArg::Recent), SearchSort::Recent);
     }
 
     #[test]
@@ -358,6 +363,8 @@ mod tests {
             to_year,
             oa_only: false,
             min_citations: None,
+            min_fwci: None,
+            min_percentile: None,
             author: None,
             venue: None,
             publisher: None,

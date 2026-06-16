@@ -294,6 +294,16 @@ enum Command {
         /// External: only works cited strictly more than this many times.
         #[arg(long)]
         min_citations: Option<u64>,
+        /// External: minimum field-and-year-normalized impact (FWCI). A
+        /// quality FILTER (not a sort) — `fwci:>{f}`. See #290.
+        #[arg(long)]
+        min_fwci: Option<f64>,
+        /// External: minimum within-cohort citation percentile (0–100),
+        /// i.e. top-X% among same-year works (`cited_by_percentile_year`).
+        /// Combine with `--from-year` for "recent and already standing
+        /// out". See #290.
+        #[arg(long)]
+        min_percentile: Option<u8>,
         /// External: filter to an author by name (resolved to an OpenAlex
         /// author ID via `/authors?search=`).
         #[arg(long)]
@@ -648,6 +658,8 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             to_year,
             oa_only,
             min_citations,
+            min_fwci,
+            min_percentile,
             author,
             venue,
             publisher,
@@ -659,6 +671,8 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 to_year,
                 oa_only,
                 min_citations,
+                min_fwci,
+                min_percentile,
                 author,
                 venue,
                 publisher,

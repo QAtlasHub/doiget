@@ -1199,7 +1199,7 @@ impl Server {
     /// `NOT_FOUND`.
     #[tool(
         description = "WHEN TO USE: Discover papers on a topic via external OpenAlex search, abstract-first, before fetching any PDF.\n\
-                       INPUTS: query (string); optional limit (1-200, default 25), from_year, to_year, oa_only (bool), min_citations, author, venue, publisher (names — resolved to OpenAlex ids), sort (relevance|cited|recent, default relevance).\n\
+                       INPUTS: query (string); optional limit (1-200, default 25), from_year, to_year, oa_only (bool), min_citations, min_fwci (impact floor), min_percentile (0-100, top-X% in cohort), author, venue, publisher (names — resolved to OpenAlex ids), sort (relevance only — use min_fwci/min_percentile/from_year as filters, #290).\n\
                        OUTPUTS: { ok: true, scope: \"external\", query, total_results, count, results: [{ doi, openalex_id, arxiv, title, authors, year, venue, abstract, cited_by_count, oa_status, source }] } OR { ok:false, error }.\n\
                        COSTS: 1 OpenAlex request, plus 1 per supplied author/venue/publisher name to resolve.\n\
                        SIDE EFFECTS: Emits Metadata provenance rows. NEVER writes the store. NEVER fetches a PDF.\n\
@@ -1227,6 +1227,8 @@ impl Server {
             to_year: input.to_year,
             oa_only: input.oa_only.unwrap_or(false),
             min_citations: input.min_citations,
+            min_fwci: input.min_fwci,
+            min_percentile: input.min_percentile,
             author: input.author.clone(),
             venue: input.venue.clone(),
             publisher: input.publisher.clone(),
@@ -2104,20 +2106,18 @@ pub struct SearchLocalInput {
 #[serde(rename_all = "lowercase")]
 #[schemars(rename_all = "lowercase")]
 pub enum SortInput {
-    /// Best textual match first (`relevance_score:desc`). The default.
+    /// Best textual match first (`relevance_score:desc`). The only sort:
+    /// `cited` / `recent` were removed (#290) because over OpenAlex's loose
+    /// free-text match they surface off-topic papers; use `min_fwci` /
+    /// `min_percentile` / `from_year` to express "important / recent" as
+    /// filters instead.
     Relevance,
-    /// Most-cited first (`cited_by_count:desc`).
-    Cited,
-    /// Newest first (`publication_date:desc`).
-    Recent,
 }
 
 impl From<SortInput> for doiget_core::discovery::SearchSort {
     fn from(s: SortInput) -> Self {
         match s {
             SortInput::Relevance => Self::Relevance,
-            SortInput::Cited => Self::Cited,
-            SortInput::Recent => Self::Recent,
         }
     }
 }
@@ -2145,6 +2145,15 @@ pub struct PaperSearchInput {
     /// Only works cited strictly more than this many times.
     #[serde(default)]
     pub min_citations: Option<u64>,
+    /// Minimum field-and-year-normalized impact (FWCI) — a quality filter
+    /// (#290).
+    #[serde(default)]
+    pub min_fwci: Option<f64>,
+    /// Minimum within-cohort citation percentile (0–100): top-X% among
+    /// same-year works; combine with `from_year` for "recent and standing
+    /// out" (#290).
+    #[serde(default)]
+    pub min_percentile: Option<u8>,
     /// Author name (resolved to an OpenAlex author id).
     #[serde(default)]
     pub author: Option<String>,
@@ -2154,7 +2163,8 @@ pub struct PaperSearchInput {
     /// Publisher name (resolved to an OpenAlex publisher id).
     #[serde(default)]
     pub publisher: Option<String>,
-    /// Result ordering: `relevance` (default) | `cited` | `recent`.
+    /// Result ordering: `relevance` only (the default; `cited` / `recent`
+    /// were removed — see `min_fwci` / `min_percentile` / `from_year`, #290).
     #[serde(default)]
     pub sort: Option<SortInput>,
 }
