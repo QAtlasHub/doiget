@@ -10,6 +10,11 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.7.0-beta.5] - 2026-06-16
+
+### Changed
+- **[deps]** dependency bumps merged from Dependabot: `biblatex` 0.11.0 → 0.12.0, `chrono` 0.4.44 → 0.4.45, `uuid` 1.23.2 → 1.23.3 (#298, #306), and the `codecov/codecov-action` CI action 6.0.1 → 7.0.0 (#300). `cargo-vet` `safe-to-deploy` exemptions updated to the new versions.
+
 ## [0.7.0-beta.4] - 2026-06-16
 
 ### Added
