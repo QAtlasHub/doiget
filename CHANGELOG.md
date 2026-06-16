@@ -11,6 +11,7 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 ## [Unreleased]
 
 ### Added
+- **[cite]** published-version merge for arXiv preprints (#303): when `doiget cite <arxiv-id>`'s Atom feed cross-references a published journal DOI (`<arxiv:doi>`), the entry now cites as the rich `@article` (journal / volume / issue / pages / publisher / issn / doi from Crossref) with the arXiv preprint identity retained (`eprint` / `archivePrefix` / `primaryClass`). No extra OpenAlex call — the DOI comes from the already-fetched feed. Best-effort: an absent or unresolvable cross-ref keeps the `@misc` preprint entry.
 - **[csl]** bulk, offline CSL-JSON export from the local store, at parity with `bib` (#305): `doiget csl --all` emits every store entry as one deduplicated CSL-JSON array, and `doiget csl --from-file <FILE>` emits the refs listed in a file (plain refs / CSL-JSON / BibTeX), each rendered from the store. Missing entries are skipped; `--from-file` exits non-zero with the missing count. The positional ref is now optional and mutually exclusive with the two flags.
 - **[batch]** end-of-batch **failure digest** on stderr: after the count summary, `doiget batch` lists each failed ref and its primary error code (`<ref> -> <ERROR_CODE>`), so a human / agent sees which refs failed and why without grepping the JSONL provenance log. stdout stays clean (`--mode json` JSON-Lines remains the machine channel) (#222).
 

@@ -145,6 +145,57 @@ async fn cite_arxiv_emits_bibtex() {
 }
 
 #[tokio::test]
+async fn cite_arxiv_with_published_doi_merges_to_article() {
+    // Issue #303 published-version merge: an arXiv Atom feed that
+    // cross-references a published journal DOI (`<arxiv:doi>`) cites as the
+    // rich `@article` (journal / volume / doi from Crossref) with the arXiv
+    // preprint identity retained (eprint / archivePrefix / primaryClass).
+    let atom = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.12345v1</id>
+    <title>Preprint Title</title>
+    <author><name>Jane Doe</name></author>
+    <published>2024-01-15T00:00:00Z</published>
+    <category term="cond-mat.str-el" scheme="http://arxiv.org/schemas/atom"/>
+    <arxiv:doi>{TEST_DOI}</arxiv:doi>
+  </entry>
+</feed>"#
+    );
+
+    let arxiv = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(atom))
+        .mount(&arxiv)
+        .await;
+    let crossref = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/works/{TEST_DOI}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(crossref_body()))
+        .mount(&crossref)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .args(["cite", "arxiv:2401.12345"])
+        .env("DOIGET_ARXIV_BASE", arxiv.uri())
+        .env("DOIGET_CROSSREF_BASE", crossref.uri())
+        .assert()
+        .success()
+        // Merged to the published @article (Crossref fields win) ...
+        .stdout(contains("@article{"))
+        .stdout(contains("journal    = {Synthetic Journal of Physics},"))
+        .stdout(contains("volume     = {42},"))
+        .stdout(contains("doi        = {10.1234/cite.test},"))
+        // ... with the arXiv preprint identity retained.
+        .stdout(contains("archivePrefix = {arXiv},"))
+        .stdout(contains("= {2401.12345},")) // eprint
+        .stdout(contains("primaryClass = {cond-mat.str-el},"));
+}
+
+#[tokio::test]
 async fn cite_unresolved_doi_fails() {
     let server = MockServer::start().await;
     // 404 for the works endpoint and the unpaywall fallback → unresolved.

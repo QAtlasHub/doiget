@@ -39,8 +39,8 @@ use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
 
-use doiget_core::orchestrator::{cite_metadata, resolve_only};
-use doiget_core::store::{render, FsStore, Store};
+use doiget_core::orchestrator::{cite_metadata, resolve_only, MetadataOnlyOutcome};
+use doiget_core::store::{render, FsStore, Metadata, Store};
 use doiget_core::{CapabilityProfile, Ref};
 
 use super::resolve_store_root;
@@ -83,7 +83,21 @@ pub async fn run(input: String, offline: bool, _mode: super::output::OutputMode)
 
     match resolve_only(&ref_, &profile, &ctx).await {
         Ok(outcome) => {
-            let metadata = cite_metadata(&ref_, &outcome);
+            let mut metadata = cite_metadata(&ref_, &outcome);
+            // #303 published-version merge: when an arXiv preprint's Atom
+            // feed cross-references a published journal DOI (`<arxiv:doi>`),
+            // resolve that DOI (Crossref) and prefer its rich `@article`
+            // fields (journal / volume / issue / pages / publisher / issn /
+            // doi) while RETAINING the arXiv preprint identity
+            // (eprint / archivePrefix / primaryClass). Best-effort: a
+            // missing or unresolvable cross-ref keeps the `@misc` preprint
+            // entry, never failing the cite. No extra OpenAlex call — the
+            // DOI comes free from the Atom feed already fetched.
+            if let Some(doi_ref) = published_doi_ref(&ref_, &outcome) {
+                if let Ok(doi_outcome) = resolve_only(&doi_ref, &profile, &ctx).await {
+                    metadata = merge_published(cite_metadata(&doi_ref, &doi_outcome), metadata);
+                }
+            }
             let bib = render::to_bibtex(ref_.safekey().as_str(), &metadata);
             write_bib(&bib)
         }
@@ -105,6 +119,30 @@ pub async fn run(input: String, offline: bool, _mode: super::output::OutputMode)
             }
         }
     }
+}
+
+/// The published-journal DOI an arXiv Atom feed cross-references via
+/// `<arxiv:doi>` (issue #303), as a `Ref::Doi`. `None` for a DOI input, an
+/// absent cross-ref, or a malformed DOI (a bad cross-ref is simply ignored
+/// rather than failing the cite).
+fn published_doi_ref(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Option<Ref> {
+    if !matches!(ref_, Ref::Arxiv(_)) {
+        return None;
+    }
+    let doi = outcome.metadata.get("doi").and_then(|v| v.as_str())?;
+    Ref::parse(doi).ok()
+}
+
+/// Merge the arXiv preprint identity into the published DOI's `@article`
+/// metadata: keep the rich Crossref entry and graft on the arXiv id +
+/// categories so `to_bibtex` still emits `eprint` / `archivePrefix` /
+/// `primaryClass`. The published record wins on every shared field — it is
+/// the version a reader should cite — with the preprint retained for
+/// discoverability.
+fn merge_published(mut article: Metadata, arxiv: Metadata) -> Metadata {
+    article.arxiv_id = arxiv.arxiv_id;
+    article.arxiv_categories = arxiv.arxiv_categories;
+    article
 }
 
 /// Render the stored BibTeX for `ref_`, or `None` when the store has no
