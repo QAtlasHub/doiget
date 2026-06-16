@@ -14,6 +14,9 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 - **[csl]** bulk, offline CSL-JSON export from the local store, at parity with `bib` (#305): `doiget csl --all` emits every store entry as one deduplicated CSL-JSON array, and `doiget csl --from-file <FILE>` emits the refs listed in a file (plain refs / CSL-JSON / BibTeX), each rendered from the store. Missing entries are skipped; `--from-file` exits non-zero with the missing count. The positional ref is now optional and mutually exclusive with the two flags.
 - **[batch]** end-of-batch **failure digest** on stderr: after the count summary, `doiget batch` lists each failed ref and its primary error code (`<ref> -> <ERROR_CODE>`), so a human / agent sees which refs failed and why without grepping the JSONL provenance log. stdout stays clean (`--mode json` JSON-Lines remains the machine channel) (#222).
 
+### Fixed
+- **[fetch]** `doiget fetch <arxiv-id>` now stores the **real** title / authors / year / subject categories from the Atom feed (which the fetch already retrieves) instead of an `arxiv:<id>` placeholder title. A later `doiget bib` / `info` on a fetched arXiv entry shows a usable reference rather than the bare id. The Atom leg stays best-effort — if it fails, the placeholder is kept so a successful PDF fetch always stores a valid entry (#303).
+
 ## [0.7.0-beta.5] - 2026-06-16
 
 ### Changed

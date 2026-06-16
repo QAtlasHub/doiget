@@ -151,3 +151,78 @@ async fn arxiv_2401_12345_end_to_end() {
     drop(env);
     drop(td);
 }
+
+/// Issue #303: when the Atom feed is available, the PDF-fetch path stores
+/// the REAL title / authors / year / categories (not the `arxiv:<id>`
+/// placeholder), so a later `bib` / `info` shows a usable entry. The arXiv
+/// source fetches the Atom feed from the same `DOIGET_ARXIV_BASE`, so one
+/// mock serves both `/api/query` and `/pdf/...`.
+#[tokio::test]
+#[serial]
+async fn arxiv_fetch_stores_real_atom_metadata() {
+    const ATOM: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.12345v1</id>
+    <title>A Real Paper Title</title>
+    <summary>Abstract text.</summary>
+    <author><name>Jane Doe</name></author>
+    <author><name>John Roe</name></author>
+    <published>2024-01-15T00:00:00Z</published>
+    <category term="cond-mat.str-el" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cond-mat.dis-nn" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>"#;
+
+    let server = MockServer::start().await;
+    let body = b"%PDF-1.7\n%fixture-bytes\n".to_vec();
+    Mock::given(method("GET"))
+        .and(path("/pdf/2401.12345.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ATOM))
+        .mount(&server)
+        .await;
+
+    let td = TempDir::new().expect("tempdir");
+    let temp_root: Utf8PathBuf = Utf8Path::from_path(td.path())
+        .expect("temp dir is utf-8")
+        .to_path_buf();
+    let store_root = temp_root.join("papers");
+
+    let env = EnvGuard::new(&[
+        "DOIGET_STORE_ROOT",
+        "DOIGET_LOG_PATH",
+        "DOIGET_ARXIV_BASE",
+        "DOIGET_CONTACT_EMAIL",
+    ]);
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
+    env.set("DOIGET_LOG_PATH", temp_root.join("log.jsonl").as_str());
+    env.set("DOIGET_ARXIV_BASE", &server.uri());
+
+    fetch::run_with_options("arxiv:2401.12345".to_string(), false, OutputMode::Human)
+        .await
+        .expect("fetch succeeds");
+
+    let meta_path = store_root.join(".metadata").join("arxiv_2401.12345.toml");
+    let meta_raw = std::fs::read_to_string(meta_path.as_std_path()).expect("read metadata toml");
+    let metadata: Metadata = toml::from_str(&meta_raw).expect("metadata round-trips");
+
+    // The placeholder `arxiv:<id>` is gone; real Atom fields landed.
+    assert_eq!(metadata.title, "A Real Paper Title");
+    assert_eq!(
+        metadata.authors,
+        vec!["Jane Doe".to_string(), "John Roe".to_string()]
+    );
+    assert_eq!(metadata.year, Some(2024));
+    assert_eq!(
+        metadata.arxiv_categories,
+        vec!["cond-mat.str-el".to_string(), "cond-mat.dis-nn".to_string()]
+    );
+
+    drop(env);
+    drop(td);
+}
