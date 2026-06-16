@@ -322,8 +322,8 @@ enum Command {
         /// Export the refs listed in FILE (one per line, or CSL-JSON /
         /// BibTeX), each rendered from the store; missing entries are
         /// skipped (and counted toward the exit code).
-        #[arg(long, value_name = "FILE")]
-        from_file: Option<std::path::PathBuf>,
+        #[arg(long, value_name = "FILE", value_parser = parse_utf8_path)]
+        from_file: Option<camino::Utf8PathBuf>,
     },
     /// Resolve a ref live and print a clean BibTeX entry (doi2bib-style).
     /// Falls back to the local store when the live resolve fails, so an

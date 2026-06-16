@@ -13,10 +13,9 @@
 //! and the `doiget_bibtex_export` MCP tool share one implementation.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
-use camino::Utf8Path;
+use anyhow::{bail, Context, Result};
+use camino::{Utf8Path, Utf8PathBuf};
 
 use doiget_core::refs::{self, Format};
 use doiget_core::store::{render, FsStore, Metadata, Store};
@@ -42,7 +41,7 @@ fn print_err(args: std::fmt::Arguments<'_>) {
 pub fn run(
     ref_: Option<String>,
     all: bool,
-    from_file: Option<PathBuf>,
+    from_file: Option<Utf8PathBuf>,
     _mode: super::output::OutputMode,
 ) -> Result<()> {
     // Exactly-one-of selector validation (clap leaves all three optional).
@@ -121,15 +120,12 @@ fn run_all(store: &FsStore) -> Result<()> {
 /// non-zero (failure count, capped at 255 — same convention as `batch`)
 /// when any requested ref could not be rendered, so a script can tell a
 /// complete export from a partial one.
-fn run_from_file(store: &FsStore, path: &Path) -> Result<()> {
-    let path_str = path
-        .to_str()
-        .ok_or_else(|| anyhow!("--from-file path is not valid UTF-8: {}", path.display()))?;
+fn run_from_file(store: &FsStore, path: &Utf8Path) -> Result<()> {
     let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("reading --from-file list: {path_str}"))?;
+        .with_context(|| format!("reading --from-file list: {path}"))?;
     // Same bibliography adapter `batch` uses: plain refs / CSL-JSON /
     // BibTeX, auto-detected by extension + content.
-    let parsed = refs::parse_input(&raw, Format::Auto, Some(Utf8Path::new(path_str)));
+    let parsed = refs::parse_input(&raw, Format::Auto, Some(path));
 
     let mut out = String::new();
     let mut seen: Vec<String> = Vec::new();
@@ -141,7 +137,7 @@ fn run_from_file(store: &FsStore, path: &Path) -> Result<()> {
             Err(e) => {
                 missing += 1;
                 print_err(format_args!(
-                    "bib --from-file: skipping unparseable entry ({e})"
+                    "bib --from-file: skipping unparsable entry ({e})"
                 ));
                 continue;
             }
