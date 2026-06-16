@@ -224,7 +224,12 @@ fn bib_from_file_renders_present_and_exits_nonzero_on_missing() {
         .assert()
         .failure() // one ref missing → non-zero exit
         .stdout(predicate::str::contains("Present Paper"))
-        .stderr(predicate::str::contains("1 missing"));
+        // Full summary line: 1 of 2 refs rendered, 1 skipped. Asserting both
+        // counts (not just the loose "1 missing" substring) pins the digest
+        // so a wording or count regression is caught (review #318).
+        .stderr(predicate::str::contains(
+            "bib --from-file: exported 1 entries, 1 missing",
+        ));
 }
 
 #[test]

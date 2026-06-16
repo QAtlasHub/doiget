@@ -20,7 +20,9 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
+use assert_cmd::Command;
 use camino::Utf8PathBuf;
+use predicates::str::contains;
 use serial_test::serial;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
@@ -90,6 +92,7 @@ async fn text_extracts_logs_and_caches() {
         None,
         false, // no_cache = false → cache enabled
         OutputMode::Quiet,
+        true, // DOIGET_MODE=quiet → explicit Quiet, output suppressed
     )
     .await;
     assert!(res.is_ok(), "text run failed: {res:?}");
@@ -123,6 +126,7 @@ async fn text_extracts_logs_and_caches() {
         None,
         false,
         OutputMode::Quiet,
+        true,
     )
     .await;
     assert!(res2.is_ok(), "second (cached) text run failed: {res2:?}");
@@ -150,6 +154,7 @@ async fn text_for_doi_reports_no_oa_available() {
         None,
         false,
         OutputMode::Quiet,
+        true,
     )
     .await
     .expect_err("a DOI must error (no full-text source)");
@@ -194,6 +199,7 @@ async fn text_unconverted_render_exits_non_zero_never_silent() {
         None,
         true, // no_cache: exercise the live render path, not a cache hit
         OutputMode::Quiet,
+        true,
     )
     .await
     .expect_err("an unconverted render must error, never silently succeed");
@@ -204,4 +210,93 @@ async fn text_unconverted_render_exits_non_zero_never_silent() {
         exit.0, 0,
         "exit code must be non-zero when no text is produced"
     );
+}
+
+/// Build env for a subprocess `doiget` run against `server`, isolated to
+/// `root`. Deliberately does NOT set `DOIGET_MODE`, so the piped (non-TTY)
+/// child resolves to *implicit* Quiet — the exact condition the artifact
+/// rule must override.
+fn doiget_subprocess(root: &Utf8PathBuf, server_uri: &str) -> Command {
+    let mut cmd = Command::cargo_bin("doiget").expect("locate doiget binary");
+    let p = root.as_str();
+    cmd.env("DOIGET_AR5IV_BASE", server_uri)
+        .env("DOIGET_CACHE_ROOT", root.join("cache").as_str())
+        .env("DOIGET_STORE_ROOT", root.join("papers").as_str())
+        .env("DOIGET_LOG_PATH", root.join("access.jsonl").as_str())
+        .env("HOME", p)
+        .env("USERPROFILE", p);
+    cmd
+}
+
+#[tokio::test]
+#[serial]
+async fn text_piped_non_tty_still_emits_prose() {
+    // Review #318: extracted paper prose IS the artifact. Piped without an
+    // explicit `--quiet`, the mode is *implicit* Quiet; the artifact rule
+    // (ADR-0017 Amendment 2, extended to `text`) must still emit, or
+    // `doiget text arxiv:… > paper.txt` would silently write an empty file.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/html/2401.12345"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_AR5IV))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8(&dir);
+    doiget_subprocess(&root, &server.uri())
+        .args(["text", "arxiv:2401.12345"])
+        .assert()
+        .success()
+        // The rendered prose reaches stdout — not blanked by implicit Quiet.
+        .stdout(contains("Extracted Paper"))
+        .stdout(contains("Intro body."));
+}
+
+#[tokio::test]
+#[serial]
+async fn text_explicit_quiet_still_suppresses_prose() {
+    // The flip side: an *explicit* `--quiet` DOES suppress the artifact
+    // (exit 0, empty stdout) — the artifact rule only overrides the implicit
+    // non-TTY fallback, not a deliberate quiet request.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/html/2401.12345"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_AR5IV))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8(&dir);
+    doiget_subprocess(&root, &server.uri())
+        .args(["text", "arxiv:2401.12345", "--quiet"])
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty());
+}
+
+#[tokio::test]
+#[serial]
+async fn text_unavailable_prints_actionable_fetch_note() {
+    // Review #318 / #302: an ar5iv 200 with no extractable prose must fail
+    // with the ACTIONABLE `= note:` naming the exact fetch command, not just
+    // a bare non-zero exit. Pins the note string a human / agent acts on.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/html/2012.03644"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("<html><head></head><body></body></html>"),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8(&dir);
+    doiget_subprocess(&root, &server.uri())
+        .args(["text", "arxiv:2012.03644"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "fetch the PDF instead: `doiget fetch arxiv:2012.03644`",
+        ));
 }

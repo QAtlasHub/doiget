@@ -196,6 +196,48 @@ async fn cite_arxiv_with_published_doi_merges_to_article() {
 }
 
 #[tokio::test]
+async fn cite_arxiv_shaped_cross_ref_is_ignored_no_second_resolve() {
+    // Fix #318-D: the published-version merge must trigger ONLY on a bare
+    // DOI cross-ref. An `<arxiv:doi>` carrying an arXiv-shaped value (a
+    // malformed feed) parses as `Ref::Arxiv` and must hit the `=> None`
+    // guard arm — NOT be resolved as if it were a published DOI — so cite
+    // keeps the `@misc` preprint and makes no spurious second arXiv call.
+    let atom = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.12345v1</id>
+    <title>Preprint Title</title>
+    <author><name>Jane Doe</name></author>
+    <published>2024-01-15T00:00:00Z</published>
+    <category term="cond-mat.str-el" scheme="http://arxiv.org/schemas/atom"/>
+    <arxiv:doi>arxiv:2401.99999</arxiv:doi>
+  </entry>
+</feed>"#;
+
+    let arxiv = MockServer::start().await;
+    // `expect(1)`: the feed is fetched exactly once. A broken guard would
+    // resolve the arXiv-shaped cross-ref and hit `/api/query` a second time,
+    // failing this expectation on server drop.
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(atom))
+        .expect(1)
+        .mount(&arxiv)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .args(["cite", "arxiv:2401.12345"])
+        .env("DOIGET_ARXIV_BASE", arxiv.uri())
+        // No Crossref base: a correct guard never reaches a DOI resolver.
+        .assert()
+        .success()
+        // Kept the preprint @misc, with its primary class from the feed.
+        .stdout(contains("@misc{"))
+        .stdout(contains("primaryClass = {cond-mat.str-el},"));
+}
+
+#[tokio::test]
 async fn cite_unresolved_doi_fails() {
     let server = MockServer::start().await;
     // 404 for the works endpoint and the unpaywall fallback → unresolved.

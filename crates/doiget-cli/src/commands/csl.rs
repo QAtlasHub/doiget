@@ -36,7 +36,9 @@ fn print_err(args: std::fmt::Arguments<'_>) {
 /// Exactly one selector must be supplied: a positional `ref_`, `--all`, or
 /// `--from-file`. CSL JSON is product output, so Quiet does NOT suppress
 /// it. A missing single entry — or any missing ref under `--from-file` —
-/// yields a non-zero exit (the array still serializes, possibly empty).
+/// yields a non-zero exit. Under `--from-file` the partial array is still
+/// written to stdout before the failure (a possibly-empty array); a missing
+/// single positional ref produces no stdout at all.
 pub fn run(
     ref_: Option<String>,
     all: bool,
