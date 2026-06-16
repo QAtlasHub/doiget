@@ -109,6 +109,7 @@ async fn external_search_runs_and_logs_openalex_fetch() {
         false, // local = false → external discovery
         ext,
         OutputMode::Quiet,
+        true,
     )
     .await;
     assert!(res.is_ok(), "external search run failed: {res:?}");
