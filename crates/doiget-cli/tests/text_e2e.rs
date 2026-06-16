@@ -159,3 +159,49 @@ async fn text_for_doi_reports_no_oa_available() {
         .expect("DOI path must yield a CliExit");
     assert_ne!(exit.0, 0, "exit code must be non-zero for a DOI");
 }
+
+#[tokio::test]
+#[serial]
+async fn text_unconverted_render_exits_non_zero_never_silent() {
+    // Issue #302: when ar5iv returns a 200 with no readable prose (the paper
+    // was never converted to HTML), `text` MUST NOT exit 0 with empty output
+    // — that is the silent-success that agents misread as a bad identifier.
+    // It must surface as a non-zero `CliExit` (the `TEXT_UNAVAILABLE` code is
+    // asserted at the core/MCP layers; here we pin the never-exit-0 contract).
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/html/2012.03644"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("<html><head></head><body></body></html>"),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8(&dir);
+
+    let guard = EnvGuard::new(ENV_KEYS);
+    guard.set("DOIGET_AR5IV_BASE", &server.uri());
+    guard.set("DOIGET_CACHE_ROOT", root.join("cache").as_str());
+    guard.set("DOIGET_STORE_ROOT", root.join("papers").as_str());
+    guard.set("DOIGET_LOG_PATH", root.join("access.jsonl").as_str());
+    guard.set("DOIGET_MODE", "quiet");
+    guard.set("HOME", root.as_str());
+    guard.set("USERPROFILE", root.as_str());
+
+    let err = run(
+        "arxiv:2012.03644".to_string(),
+        None,
+        true, // no_cache: exercise the live render path, not a cache hit
+        OutputMode::Quiet,
+    )
+    .await
+    .expect_err("an unconverted render must error, never silently succeed");
+    let exit = err
+        .downcast_ref::<doiget_cli::commands::fetch::CliExit>()
+        .expect("unavailable text must yield a CliExit");
+    assert_ne!(
+        exit.0, 0,
+        "exit code must be non-zero when no text is produced"
+    );
+}

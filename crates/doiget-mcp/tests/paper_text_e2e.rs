@@ -208,9 +208,11 @@ async fn paper_text_doi_maps_to_no_oa_available() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[serial_test::serial]
-async fn paper_text_unconverted_paper_maps_to_not_found() -> anyhow::Result<()> {
-    // ar5iv returns a 200 with no extractable text → NOT_FOUND (the paper
-    // is not converted), distinct from a transport error.
+async fn paper_text_unconverted_paper_maps_to_text_unavailable() -> anyhow::Result<()> {
+    // ar5iv returns a 200 with no extractable text → TEXT_UNAVAILABLE (the
+    // paper is not converted to HTML), distinct from both a transport error
+    // and a bad identifier. The MCP `text` tool must surface this so an
+    // agent fetches the PDF instead of misreading it as a wrong DOI (#302).
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/html/2401.99999"))
@@ -239,7 +241,7 @@ async fn paper_text_unconverted_paper_maps_to_not_found() -> anyhow::Result<()> 
     let s = result.structured_content.as_ref().expect("structured");
 
     assert_eq!(s["ok"], serde_json::json!(false), "envelope: {s:?}");
-    assert_eq!(s["error"]["code"], serde_json::json!("NOT_FOUND"));
+    assert_eq!(s["error"]["code"], serde_json::json!("TEXT_UNAVAILABLE"));
 
     client.cancel().await?;
     server_handle.await??;
