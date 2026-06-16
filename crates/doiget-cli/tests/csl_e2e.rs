@@ -286,3 +286,75 @@ fn csl_fails_for_invalid_ref_string() {
         .failure()
         .stderr(predicate::str::contains("invalid ref"));
 }
+
+/// Seed a temp store with BOTH the journal-article and comma-form
+/// fixtures (two distinct DOIs / safekeys).
+fn seeded_store_both() -> (TempDir, Utf8PathBuf) {
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8_path(&dir).join("papers");
+    let store = FsStore::new(root.clone()).expect("FsStore::new");
+    let (k1, m1) = journal_article_fixture();
+    let (k2, m2) = comma_form_fixture();
+    store.write(&k1, &m1, None).expect("seed entry 1");
+    store.write(&k2, &m2, None).expect("seed entry 2");
+    (dir, root)
+}
+
+#[test]
+fn csl_all_exports_every_store_entry_in_one_array() {
+    // Issue #305 (CSL parity): `csl --all` emits one flat CSL JSON array
+    // of every store entry — no ref argument, no network.
+    let (_dir_guard, root) = seeded_store_both();
+
+    let assert = doiget(&root).args(["csl", "--all"]).assert().success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf-8");
+    let value: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("not valid JSON: {e}\nstdout:\n{stdout}"));
+    let array = value
+        .as_array()
+        .unwrap_or_else(|| panic!("expected a JSON array, got: {value}"));
+    assert_eq!(array.len(), 2, "one item per store entry: {value}");
+
+    let ids: Vec<&str> = array.iter().filter_map(|i| i["id"].as_str()).collect();
+    assert!(ids.contains(&"doi_10.1234_example"), "ids: {ids:?}");
+    assert!(ids.contains(&"doi_10.5678_comma"), "ids: {ids:?}");
+}
+
+#[test]
+fn csl_from_file_renders_present_and_exits_nonzero_on_missing() {
+    // Issue #305: `csl --from-file` renders the present refs into one array
+    // and exits non-zero when a requested ref is missing (batch convention).
+    let (dir_guard, root) = seeded_store_journal();
+    let refs = utf8_path(&dir_guard).join("refs.txt");
+    std::fs::write(
+        refs.as_std_path(),
+        "doi:10.1234/example\ndoi:10.9999/missing\n",
+    )
+    .expect("write refs file");
+
+    let assert = doiget(&root)
+        .args(["csl", "--from-file", refs.as_str()])
+        .assert()
+        .failure(); // one ref missing → non-zero exit
+    let out = assert.get_output();
+    let stdout = String::from_utf8(out.stdout.clone()).expect("stdout utf-8");
+    let value: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("not valid JSON: {e}\nstdout:\n{stdout}"));
+    assert_eq!(
+        value.as_array().map(|a| a.len()),
+        Some(1),
+        "only the present ref renders: {value}"
+    );
+    let stderr = String::from_utf8(out.stderr.clone()).expect("stderr utf-8");
+    assert!(stderr.contains("1 missing"), "stderr digest: {stderr}");
+}
+
+#[test]
+fn csl_no_selector_is_a_usage_error() {
+    let (_dir_guard, root) = seeded_store_journal();
+    doiget(&root)
+        .args(["csl"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("specify a ref"));
+}
