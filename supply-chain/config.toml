@@ -83,7 +83,7 @@ version = "0.40.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.biblatex]]
-version = "0.11.0"
+version = "0.12.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.block-buffer]]
@@ -111,7 +111,7 @@ version = "1.2.61"
 criteria = "safe-to-deploy"
 
 [[exemptions.chrono]]
-version = "0.4.44"
+version = "0.4.45"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap]]
@@ -851,7 +851,7 @@ version = "2.5.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.uuid]]
-version = "1.23.2"
+version = "1.23.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.walkdir]]
