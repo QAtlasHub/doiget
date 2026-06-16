@@ -94,8 +94,17 @@ pub async fn run(input: String, offline: bool, _mode: super::output::OutputMode)
             // entry, never failing the cite. No extra OpenAlex call — the
             // DOI comes free from the Atom feed already fetched.
             if let Some(doi_ref) = published_doi_ref(&ref_, &outcome) {
-                if let Ok(doi_outcome) = resolve_only(&doi_ref, &profile, &ctx).await {
-                    metadata = merge_published(cite_metadata(&doi_ref, &doi_outcome), metadata);
+                match resolve_only(&doi_ref, &profile, &ctx).await {
+                    Ok(doi_outcome) => {
+                        metadata = merge_published(cite_metadata(&doi_ref, &doi_outcome), metadata);
+                    }
+                    // Best-effort, but make the degradation VISIBLE (review
+                    // #318): a published version exists yet could not be
+                    // resolved, so we fall back to the @misc preprint — say
+                    // so on stderr rather than silently.
+                    Err(e) => print_err(format_args!(
+                        "note: published-version DOI resolve failed ({e}); citing the arXiv preprint"
+                    )),
                 }
             }
             let bib = render::to_bibtex(ref_.safekey().as_str(), &metadata);
@@ -130,7 +139,13 @@ fn published_doi_ref(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Option<Ref> {
         return None;
     }
     let doi = outcome.metadata.get("doi").and_then(|v| v.as_str())?;
-    Ref::parse(doi).ok()
+    // Narrow to a DOI: a URL-form or arXiv-shaped cross-ref must NOT trigger
+    // a spurious second arXiv resolve against the wrong id (review #318). A
+    // value that does not parse as a bare DOI is simply ignored.
+    match Ref::parse(doi).ok()? {
+        r @ Ref::Doi(_) => Some(r),
+        Ref::Arxiv(_) => None,
+    }
 }
 
 /// Merge the arXiv preprint identity into the published DOI's `@article`

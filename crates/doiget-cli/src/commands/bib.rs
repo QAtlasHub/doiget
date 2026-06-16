@@ -143,12 +143,22 @@ fn run_from_file(store: &FsStore, path: &Utf8Path) -> Result<()> {
             }
         };
         let safekey = ref_.safekey();
-        match store.read(&safekey)? {
-            Some(m) => push_entry(&mut out, &mut seen, &safekey, &m, &mut rendered),
-            None => {
+        // A read error on one entry skips that entry (counted), matching
+        // `run_all` — it must NOT abort the whole export and lose every
+        // remaining ref (review #318).
+        match store.read(&safekey) {
+            Ok(Some(m)) => push_entry(&mut out, &mut seen, &safekey, &m, &mut rendered),
+            Ok(None) => {
                 missing += 1;
                 print_err(format_args!(
                     "bib --from-file: no store entry for {} (skipped)",
+                    ref_.as_input_str()
+                ));
+            }
+            Err(err) => {
+                missing += 1;
+                print_err(format_args!(
+                    "bib --from-file: read failed for {} ({err}; skipped)",
                     ref_.as_input_str()
                 ));
             }

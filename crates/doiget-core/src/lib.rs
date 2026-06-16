@@ -159,6 +159,15 @@ impl Doi {
     }
 }
 
+impl std::fmt::Display for ArxivId {
+    /// Displays the validated id as its canonical string (e.g.
+    /// `2401.12345`) so it can be interpolated into messages — notably the
+    /// `FetchError::TextUnavailable` `#[error]` template (review #318).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 impl ArxivId {
     /// Returns the arXiv id as a string slice.
     pub fn as_str(&self) -> &str {

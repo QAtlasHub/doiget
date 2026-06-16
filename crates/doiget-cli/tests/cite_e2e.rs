@@ -212,3 +212,46 @@ async fn cite_unresolved_doi_fails() {
         .assert()
         .failure();
 }
+
+#[tokio::test]
+async fn cite_arxiv_published_doi_resolve_failure_notes_and_falls_back() {
+    // Fix #318-C: when the cross-referenced published DOI fails to resolve,
+    // cite emits a VISIBLE note on stderr and falls back to the @misc
+    // preprint, rather than silently dropping the published-version upgrade.
+    let atom = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.12345v1</id>
+    <title>Preprint Title</title>
+    <author><name>Jane Doe</name></author>
+    <published>2024-01-15T00:00:00Z</published>
+    <arxiv:doi>{TEST_DOI}</arxiv:doi>
+  </entry>
+</feed>"#
+    );
+    let arxiv = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(atom))
+        .mount(&arxiv)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    let assert = doiget(&dir)
+        .args(["cite", "arxiv:2401.12345"])
+        .env("DOIGET_ARXIV_BASE", arxiv.uri())
+        // Crossref closed → the cross-referenced DOI resolve fails.
+        .env("DOIGET_CROSSREF_BASE", "http://127.0.0.1:1/")
+        .env("DOIGET_UNPAYWALL_BASE", "http://127.0.0.1:1/")
+        .assert()
+        .success();
+    let out = assert.get_output();
+    let stdout = String::from_utf8(out.stdout.clone()).expect("stdout utf-8");
+    let stderr = String::from_utf8(out.stderr.clone()).expect("stderr utf-8");
+    assert!(stdout.contains("@misc{"), "fell back to preprint: {stdout}");
+    assert!(
+        stderr.contains("published-version DOI resolve failed"),
+        "the degradation must be visible: {stderr}"
+    );
+}

@@ -266,3 +266,22 @@ fn cite_offline_missing_entry_fails() {
         .failure()
         .stderr(predicate::str::contains("no local store entry"));
 }
+
+#[test]
+fn cite_auto_falls_back_to_store_when_live_resolve_fails() {
+    // Review #318 / #305: `cite <ref>` (NO --offline) whose live resolve
+    // fails still cites from the local store, with a `note:` on stderr — an
+    // already-fetched ref is never lost to a network flake.
+    let (_dir_guard, root) = seeded_store(Some("journal-article"));
+
+    doiget(&root)
+        // Closed loopback for every resolver leg → live resolve fails fast.
+        .env("DOIGET_CROSSREF_BASE", "http://127.0.0.1:1/")
+        .env("DOIGET_UNPAYWALL_BASE", "http://127.0.0.1:1/")
+        .env("DOIGET_CONTACT_EMAIL", "test@example.com")
+        .args(["cite", "doi:10.1234/example"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("@article{doi_10.1234_example,"))
+        .stderr(predicate::str::contains("note: live resolve failed"));
+}

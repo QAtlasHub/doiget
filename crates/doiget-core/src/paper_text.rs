@@ -203,7 +203,7 @@ async fn fetch_and_parse(
     let char_count: usize = sections.iter().map(|s| s.text.chars().count()).sum();
     if char_count == 0 {
         return Err(FetchError::TextUnavailable {
-            arxiv_id: id.as_str().to_string(),
+            arxiv_id: id.clone(),
         });
     }
 

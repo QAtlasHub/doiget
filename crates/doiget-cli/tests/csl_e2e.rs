@@ -358,3 +358,29 @@ fn csl_no_selector_is_a_usage_error() {
         .failure()
         .stderr(predicate::str::contains("specify a ref"));
 }
+
+#[test]
+fn csl_all_on_empty_store_emits_empty_array_exit_zero() {
+    // Review #318: parity with `bib --all` on an empty store — `csl --all`
+    // emits a valid empty CSL array `[]` and exits 0 (nothing to export is
+    // not a failure), with a count note on stderr.
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8_path(&dir).join("papers");
+    FsStore::new(root.clone()).expect("FsStore::new");
+
+    let assert = doiget(&root).args(["csl", "--all"]).assert().success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf-8");
+    let value: Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("not JSON: {e}\n{stdout}"));
+    assert_eq!(
+        value.as_array().map(|a| a.len()),
+        Some(0),
+        "empty array: {value}"
+    );
+    assert!(
+        String::from_utf8(assert.get_output().stderr.clone())
+            .unwrap()
+            .contains("exported 0 entries"),
+        "stderr count note"
+    );
+}

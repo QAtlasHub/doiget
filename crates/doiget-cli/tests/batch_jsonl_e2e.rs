@@ -340,3 +340,29 @@ fn batch_human_mode_remains_silent_on_stdout() {
         "human-mode batch stdout MUST be empty (summary is stderr): {stdout:?}"
     );
 }
+
+#[test]
+fn batch_failure_digest_includes_parse_errors() {
+    // Review #318: the stderr failure digest must list INVALID_REF
+    // (parse-failure) entries, not only fetch errors.
+    let dir = TempDir::new().expect("tempdir");
+    let refs = dir.path().join("refs.txt");
+    std::fs::File::create(&refs)
+        .expect("create refs file")
+        .write_all(b"not-a-doi\n")
+        .expect("write refs");
+
+    let stderr = doiget(&dir)
+        .args(["batch", refs.to_str().unwrap()])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(stderr).expect("stderr utf-8");
+    assert!(stderr.contains("batch failures"), "digest header: {stderr}");
+    assert!(
+        stderr.contains("not-a-doi -> INVALID_REF"),
+        "digest must list the parse failure: {stderr}"
+    );
+}

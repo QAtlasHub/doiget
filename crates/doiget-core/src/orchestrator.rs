@@ -1950,6 +1950,39 @@ mod tests {
     }
 
     #[test]
+    fn cite_metadata_arxiv_overlay_fills_year_and_categories() {
+        // Issue #303: an arXiv outcome whose Atom payload carries `published`
+        // + `categories` populates year + arxiv_categories via the overlay
+        // (not the Crossref extractor). Review #318: this path was untested.
+        let ref_ = Ref::parse("arxiv:2401.12345").unwrap();
+        let outcome = MetadataOnlyOutcome {
+            source: "arxiv".to_string(),
+            resolver_profile: "arxiv".to_string(),
+            license: Some("arxiv-default".to_string()),
+            oa_url: None,
+            oa_status: Some("green".to_string()),
+            metadata: serde_json::json!({
+                "title": "An arXiv Preprint",
+                "published": "2024-03-15T00:00:00Z",
+                "categories": ["cond-mat.str-el", "cond-mat.dis-nn"],
+            }),
+        };
+        let m = cite_metadata(&ref_, &outcome);
+        assert_eq!(m.year, Some(2024));
+        assert_eq!(
+            m.arxiv_categories,
+            vec!["cond-mat.str-el".to_string(), "cond-mat.dis-nn".to_string()]
+        );
+
+        // A malformed `published` omits the year rather than fabricating one.
+        let bad = MetadataOnlyOutcome {
+            metadata: serde_json::json!({ "title": "x", "published": "not-a-date" }),
+            ..outcome
+        };
+        assert_eq!(cite_metadata(&ref_, &bad).year, None);
+    }
+
+    #[test]
     fn test_extract_arxiv_id_from_url() {
         let urls = [
             // Basic new-style ID

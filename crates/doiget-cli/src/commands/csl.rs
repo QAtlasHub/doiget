@@ -48,6 +48,12 @@ pub fn run(
     if selectors > 1 {
         bail!("`--all`, `--from-file`, and a positional ref are mutually exclusive");
     }
+    // Fail the usage error BEFORE opening the store (parity with `bib`,
+    // review #318): otherwise a store-open failure would mask the real
+    // "no selector" mistake.
+    if selectors == 0 {
+        bail!("specify a ref, `--all`, or `--from-file <FILE>`");
+    }
 
     let store = FsStore::new(resolve_store_root()?)?;
 
@@ -122,12 +128,22 @@ fn run_from_file(store: &FsStore, path: &Utf8Path) -> Result<()> {
             }
         };
         let safekey = ref_.safekey();
-        match store.read(&safekey)? {
-            Some(m) => push_item(&mut items, &mut seen, &safekey, &m),
-            None => {
+        // A read error on one entry skips that entry (counted), matching
+        // `run_all` — it must NOT abort the whole export and lose every
+        // remaining ref (review #318).
+        match store.read(&safekey) {
+            Ok(Some(m)) => push_item(&mut items, &mut seen, &safekey, &m),
+            Ok(None) => {
                 missing += 1;
                 print_err(format_args!(
                     "csl --from-file: no store entry for {} (skipped)",
+                    ref_.as_input_str()
+                ));
+            }
+            Err(err) => {
+                missing += 1;
+                print_err(format_args!(
+                    "csl --from-file: read failed for {} ({err}; skipped)",
                     ref_.as_input_str()
                 ));
             }
@@ -156,8 +172,17 @@ fn push_item(items: &mut Vec<Value>, seen: &mut Vec<String>, safekey: &Safekey, 
         return;
     }
     seen.push(key.to_string());
-    if let Value::Array(rendered) = render::to_csl_array(key, m) {
-        items.extend(rendered);
+    match render::to_csl_array(key, m) {
+        Value::Array(rendered) if !rendered.is_empty() => items.extend(rendered),
+        // `to_csl_array` falls back to an empty array on a (rare)
+        // serialization failure. Don't silently drop the entry from the
+        // export — surface it (review #318), consistent with the release's
+        // never-silently-lose-data contract.
+        other => tracing::error!(
+            safekey = key,
+            value = %other,
+            "to_csl_array produced no CSL item; entry omitted from export"
+        ),
     }
 }
 

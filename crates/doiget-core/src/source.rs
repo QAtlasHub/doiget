@@ -171,8 +171,10 @@ pub enum FetchError {
     TextUnavailable {
         /// The arXiv id whose ar5iv render was empty; echoed into the
         /// human/MCP message so the actionable `doiget fetch <id>` hint is
-        /// self-contained.
-        arxiv_id: String,
+        /// self-contained. A validated [`crate::ArxivId`] (review #318) —
+        /// the id was already parsed, so the error cannot carry a malformed
+        /// string into the actionable `doiget fetch <id>` hint.
+        arxiv_id: crate::ArxivId,
     },
 }
 
