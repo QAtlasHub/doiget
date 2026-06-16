@@ -716,7 +716,10 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             ref_,
             max_chars,
             no_cache,
-        }) => doiget_cli::commands::text::run(ref_, max_chars, no_cache, mode).await,
+        }) => {
+            doiget_cli::commands::text::run(ref_, max_chars, no_cache, mode, out.quiet_was_explicit)
+                .await
+        }
         Some(Command::Link { ref_ }) => {
             doiget_cli::commands::link::run(ref_, mode, out.quiet_was_explicit).await
         }

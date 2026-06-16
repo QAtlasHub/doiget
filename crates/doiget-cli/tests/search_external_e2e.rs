@@ -138,3 +138,66 @@ async fn external_search_runs_and_logs_openalex_fetch() {
         "missing session_end row in:\n{log}"
     );
 }
+
+#[tokio::test]
+#[serial]
+async fn external_search_min_fwci_and_percentile_become_filter_clauses() {
+    // Review #318 / #290: the `--min-fwci` / `--min-percentile` triage flags
+    // must travel CLI args → ExternalArgs → PaperSearchQuery → the OpenAlex
+    // `filter=` value as AND-joined clauses. Exercise the whole chain end to
+    // end so a typo in the mapping cannot pass unnoticed. The mock only
+    // answers if the exact composed filter arrives.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works"))
+        .and(query_param(
+            "filter",
+            "title_and_abstract.search:tropical tensor networks,fwci:>2.5,cited_by_percentile_year.min:75",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8(&dir);
+    let store_root = root.join("papers");
+    let log_path = root.join("access.jsonl");
+
+    let guard = EnvGuard::new(ENV_KEYS);
+    guard.set("DOIGET_OPENALEX_BASE", &server.uri());
+    guard.set("DOIGET_STORE_ROOT", store_root.as_str());
+    guard.set("DOIGET_LOG_PATH", log_path.as_str());
+    guard.set("DOIGET_CONTACT_EMAIL", "doiget@localhost");
+    guard.set("DOIGET_MODE", "quiet");
+    guard.set("HOME", root.as_str());
+    guard.set("USERPROFILE", root.as_str());
+
+    let ext = ExternalArgs {
+        limit: 25,
+        from_year: None,
+        to_year: None,
+        oa_only: false,
+        min_citations: None,
+        min_fwci: Some(2.5),
+        min_percentile: Some(75),
+        author: None,
+        venue: None,
+        publisher: None,
+        sort: SortArg::Relevance,
+    };
+
+    let res = run(
+        "tropical tensor networks".to_string(),
+        false,
+        ext,
+        OutputMode::Quiet,
+        true,
+    )
+    .await;
+    // The mock only matches the fully-composed filter, so a successful run
+    // proves both clauses were appended in the documented order.
+    assert!(
+        res.is_ok(),
+        "external search with impact filters failed: {res:?}"
+    );
+}

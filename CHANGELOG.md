@@ -10,6 +10,33 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-16
+
+Promotes the cumulative `0.7.0-beta.0`–`0.7.0-beta.6` line to a stable release
+(next → main, #318). Highlights since 0.6.0: discovery-search relevance-only
+ranking with impact/recency filters (#290), arXiv published-version `cite`
+merge (#303), bulk offline `bib` / `csl` export (#305), batch failure digest
+and auto-chunking (#222 / #304), `TEXT_UNAVAILABLE` signalling (#302), and
+real arXiv fetch metadata (#303). See the `0.7.0-beta.*` sections below for the
+per-change detail.
+
+### Fixed
+- **[review #318]** second-pass promotion-review fixes:
+  - **[text]** `doiget text <arxiv-id>` now emits its extracted prose under a
+    non-TTY *implicit* Quiet — piping `doiget text … > paper.txt` no longer
+    writes an empty file. `text` joins the artifact-command set (ADR-0017
+    Amendment 2); only an **explicit** `--quiet` / `DOIGET_MODE=quiet`
+    suppresses it.
+  - **[search]** `--min-fwci` / `--min-percentile` are now validated: a
+    negative or non-finite FWCI floor, or a percentile above 100, is rejected
+    up front instead of composing a malformed OpenAlex `filter` clause (#290).
+  - **[docs]** corrected the `output` module's Amendment 2 artifact-command
+    list and the `csl --from-file` partial-array contract wording.
+  - **Tests**: `text` piped / explicit-Quiet / unavailable-note behaviors,
+    `cite` arXiv-shaped cross-ref guard (no spurious second resolve),
+    `--min-fwci` / `--min-percentile` filter-clause e2e, out-of-range
+    validation, and tightened `bib` / `csl --from-file` digest assertions.
+
 ## [0.7.0-beta.6] - 2026-06-16
 
 ### Added

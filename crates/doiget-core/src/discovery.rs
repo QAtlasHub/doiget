@@ -188,8 +188,9 @@ impl PaperSearchQuery {
     /// (`paper_search` itself stays permissive — see its docs); keeping it
     /// here prevents the two surfaces from drifting.
     ///
-    /// Checks: non-empty `query`, `limit` in `1..=`[`MAX_PER_PAGE`], and a
-    /// non-inverted `from_year`/`to_year` range.
+    /// Checks: non-empty `query`, `limit` in `1..=`[`MAX_PER_PAGE`], a
+    /// non-inverted `from_year`/`to_year` range, a finite non-negative
+    /// `min_fwci`, and a `min_percentile` in `0..=100`.
     ///
     /// # Errors
     ///
@@ -208,6 +209,27 @@ impl PaperSearchQuery {
         if let (Some(from), Some(to)) = (self.from_year, self.to_year) {
             if from > to {
                 return Err(format!("from_year ({from}) is after to_year ({to})"));
+            }
+        }
+        // `min_fwci` becomes a literal `fwci:>{f}` filter clause; a negative
+        // or non-finite value would be a malformed OpenAlex request that the
+        // API rejects (or silently ignores). Reject it here, at the same
+        // boundary as the year range, rather than emit a bad filter (#290).
+        if let Some(f) = self.min_fwci {
+            if !f.is_finite() || f < 0.0 {
+                return Err(format!(
+                    "min_fwci must be a finite, non-negative number (got {f})"
+                ));
+            }
+        }
+        // The percentile is a 0–100 cohort rank; `u8` already excludes
+        // negatives, but 101–255 would emit a `cited_by_percentile_year.min`
+        // clause OpenAlex cannot satisfy (empty result, no error).
+        if let Some(p) = self.min_percentile {
+            if p > 100 {
+                return Err(format!(
+                    "min_percentile must be between 0 and 100 (got {p})"
+                ));
             }
         }
         Ok(())
@@ -1727,6 +1749,33 @@ mod tests {
         assert!(q.validate().unwrap_err().contains("after"));
         // Equal bounds are valid (inclusive range).
         q.to_year = Some(2025);
+        assert!(q.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range_impact_filters() {
+        // #290 / review #318: a negative or non-finite `min_fwci`, or a
+        // percentile above 100, would compose a malformed OpenAlex filter
+        // clause. `validate()` must reject them at the boundary instead.
+        let mut q = PaperSearchQuery::new("topic");
+        q.min_fwci = Some(-1.0);
+        assert!(q.validate().unwrap_err().contains("min_fwci"));
+        q.min_fwci = Some(f64::NAN);
+        assert!(q.validate().unwrap_err().contains("min_fwci"));
+        q.min_fwci = Some(f64::INFINITY);
+        assert!(q.validate().unwrap_err().contains("min_fwci"));
+        // A valid floor passes.
+        q.min_fwci = Some(2.5);
+        assert!(q.validate().is_ok());
+
+        let mut q = PaperSearchQuery::new("topic");
+        q.min_percentile = Some(101);
+        assert!(q.validate().unwrap_err().contains("min_percentile"));
+        // Boundary value 100 is valid (top 0%, i.e. the single best cohort
+        // rank); 0 is valid (no floor).
+        q.min_percentile = Some(100);
+        assert!(q.validate().is_ok());
+        q.min_percentile = Some(0);
         assert!(q.validate().is_ok());
     }
 }

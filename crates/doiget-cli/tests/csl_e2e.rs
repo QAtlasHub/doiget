@@ -346,7 +346,12 @@ fn csl_from_file_renders_present_and_exits_nonzero_on_missing() {
         "only the present ref renders: {value}"
     );
     let stderr = String::from_utf8(out.stderr.clone()).expect("stderr utf-8");
-    assert!(stderr.contains("1 missing"), "stderr digest: {stderr}");
+    // Full summary line (not the loose "1 missing" substring): 1 rendered,
+    // 1 skipped, so a wording or count regression is caught (review #318).
+    assert!(
+        stderr.contains("csl --from-file: exported 1 entries, 1 missing"),
+        "stderr digest: {stderr}"
+    );
 }
 
 #[test]

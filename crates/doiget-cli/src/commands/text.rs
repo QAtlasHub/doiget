@@ -49,6 +49,7 @@ pub async fn run(
     max_chars: Option<usize>,
     no_cache: bool,
     mode: OutputMode,
+    quiet_was_explicit: bool,
 ) -> Result<()> {
     let parsed = Ref::parse(&ref_).with_context(|| format!("invalid ref {ref_:?}"))?;
     let id: ArxivId = match parsed {
@@ -96,7 +97,11 @@ pub async fn run(
         }
     };
 
-    if mode == OutputMode::Quiet {
+    // Extracted paper prose IS the requested artifact (like `bib` / `info`),
+    // so an *implicit* non-TTY Quiet (e.g. `doiget text arxiv:… > paper.txt`)
+    // must NOT swallow it — only an explicit `--quiet` / `DOIGET_MODE=quiet`
+    // does. This is ADR-0017 Amendment 2 (#301), extended to `text`.
+    if mode == OutputMode::Quiet && quiet_was_explicit {
         return Ok(());
     }
 
