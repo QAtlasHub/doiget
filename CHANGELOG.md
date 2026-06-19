@@ -10,6 +10,25 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.7.1-beta.0] - 2026-06-20
+
+### Added
+- **[tex-source]** `doiget tex-source <arxiv-id>` — Tier-1 OA command that
+  fetches the raw LaTeX source for an arXiv preprint from the arXiv source API
+  (`export.arxiv.org/src/<id>`) (#327). Supports gzip+tar archives (picks the
+  longest `.tex` file by content length) and single-file gzip; detects
+  PDF-only responses and emits an actionable `doiget fetch` note. The source
+  text is the artifact (ADR-0017 Amendment 2): implicit Quiet does not suppress
+  it, enabling `doiget tex-source arxiv:2401.12345 > paper.tex`. Results are
+  cached under `<cache_root>/tex-src/` with a 7-day TTL. The MCP
+  `get_paper_tex_source` tool follows the same fetch/cache path and emits
+  provenance log `SessionStart`/`SessionEnd` bookends.
+- **[core]** `paper_tex_source` module with `paper_tex_source()`, `PaperTexSource`,
+  and `resolve_arxiv_src_base()` — the shared fetch/cache/extract logic used by
+  both CLI and MCP.
+- **[error]** HTTP 401/403 from the arXiv source endpoint maps to
+  `ErrorCode::CapabilityDenied` in the `source` module.
+
 ## [0.7.0] - 2026-06-16
 
 Promotes the cumulative `0.7.0-beta.0`–`0.7.0-beta.6` line to a stable release
