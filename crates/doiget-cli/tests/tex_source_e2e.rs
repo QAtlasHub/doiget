@@ -151,7 +151,11 @@ async fn tex_source_extracts_logs_and_caches() {
                 .unwrap_or(false)
         })
         .collect();
-    assert_eq!(entries.len(), 1, "exactly one cached tex-src entry expected");
+    assert_eq!(
+        entries.len(),
+        1,
+        "exactly one cached tex-src entry expected"
+    );
 
     // Second run: single-shot mock exhausted; success proves cache hit.
     let res2 = run(
@@ -162,7 +166,10 @@ async fn tex_source_extracts_logs_and_caches() {
         true,
     )
     .await;
-    assert!(res2.is_ok(), "second (cached) tex-source run failed: {res2:?}");
+    assert!(
+        res2.is_ok(),
+        "second (cached) tex-source run failed: {res2:?}"
+    );
 }
 
 // ── DOI rejection ─────────────────────────────────────────────────────────────
@@ -204,9 +211,7 @@ async fn tex_source_pdf_only_exits_non_zero_with_fetch_note() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/src/2012.03644"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_bytes(b"%PDF-1.4 fake-pdf".as_slice()),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"%PDF-1.4 fake-pdf".as_slice()))
         .mount(&server)
         .await;
 

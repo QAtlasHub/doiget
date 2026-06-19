@@ -3145,9 +3145,7 @@ fn ar5iv_base() -> Result<url::Url, String> {
 /// the `DOIGET_ARXIV_SRC_BASE` override (tests) or the production default.
 fn arxiv_src_base() -> Result<url::Url, String> {
     let raw = std::env::var("DOIGET_ARXIV_SRC_BASE")
-        .unwrap_or_else(|_| {
-            doiget_core::paper_tex_source::ARXIV_SRC_DEFAULT_BASE.to_string()
-        });
+        .unwrap_or_else(|_| doiget_core::paper_tex_source::ARXIV_SRC_DEFAULT_BASE.to_string());
     url::Url::parse(&raw).map_err(|e| format!("DOIGET_ARXIV_SRC_BASE is not a URL: {e}"))
 }
 

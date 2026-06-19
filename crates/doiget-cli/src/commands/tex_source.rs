@@ -14,9 +14,7 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 
-use doiget_core::paper_tex_source::{
-    paper_tex_source, resolve_arxiv_src_base, PaperTexSource,
-};
+use doiget_core::paper_tex_source::{paper_tex_source, resolve_arxiv_src_base, PaperTexSource};
 use doiget_core::{ArxivId, ErrorCode, Ref};
 
 use super::fetch::{build_resolve_context, cli_exit_code, CliExit};

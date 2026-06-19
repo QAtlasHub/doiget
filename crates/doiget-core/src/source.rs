@@ -213,8 +213,7 @@ impl From<&FetchError> for crate::ErrorCode {
                 ..
             }) => crate::ErrorCode::NotFound,
             FetchError::Http(HttpError::HttpStatus {
-                status: 401 | 403,
-                ..
+                status: 401 | 403, ..
             }) => crate::ErrorCode::CapabilityDenied,
             FetchError::Http(_) => crate::ErrorCode::NetworkError,
             FetchError::Log(_) => crate::ErrorCode::LogError,

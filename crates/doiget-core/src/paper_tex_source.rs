@@ -206,10 +206,7 @@ fn src_url(base: &Url, id: &ArxivId) -> Result<Url, FetchError> {
 /// Detect content type by magic bytes and extract the main LaTeX source.
 ///
 /// Returns an [`ExtractedTex`] with `main_file` and `content`.
-pub(crate) fn extract_tex(
-    id: &ArxivId,
-    bytes: &[u8],
-) -> Result<ExtractedTex, FetchError> {
+pub(crate) fn extract_tex(id: &ArxivId, bytes: &[u8]) -> Result<ExtractedTex, FetchError> {
     // PDF-only submission — no TeX source available.
     if bytes.starts_with(b"%PDF-") {
         return Err(FetchError::TextUnavailable {
@@ -273,10 +270,7 @@ pub(crate) fn extract_tex(
 /// ~1 GB (byte count overflows `i64`), which is not a realistic `.tex` size.
 /// Within tied `\documentclass` files, `main.tex` always wins unless the
 /// competing file exceeds 100 KB — also not a realistic sub-file size.
-fn extract_from_tar(
-    id: &ArxivId,
-    bytes: &[u8],
-) -> Result<ExtractedTex, FetchError> {
+fn extract_from_tar(id: &ArxivId, bytes: &[u8]) -> Result<ExtractedTex, FetchError> {
     let mut archive = Archive::new(std::io::Cursor::new(bytes));
     let entries = archive.entries().map_err(|e| FetchError::SourceSchema {
         hint: format!("tar read failed: {e}"),
@@ -309,9 +303,7 @@ fn extract_from_tar(
         // the paper has no TeX source).
         return Err(if tex_attempted > 0 {
             FetchError::SourceSchema {
-                hint: format!(
-                    "tar contained {tex_attempted} .tex entries but all failed to read"
-                ),
+                hint: format!("tar contained {tex_attempted} .tex entries but all failed to read"),
             }
         } else {
             FetchError::TextUnavailable {
@@ -320,15 +312,12 @@ fn extract_from_tar(
         });
     }
 
-    let best = tex_files
-        .into_iter()
-        .max_by_key(|(name, content)| {
-            let docclass = i64::from(content.contains(r"\documentclass")) * 1_000_000;
-            let is_main =
-                i64::from(name.ends_with("main.tex") || name == "main.tex") * 100_000;
-            let size = i64::try_from(content.len()).unwrap_or(i64::MAX);
-            docclass + is_main + size
-        });
+    let best = tex_files.into_iter().max_by_key(|(name, content)| {
+        let docclass = i64::from(content.contains(r"\documentclass")) * 1_000_000;
+        let is_main = i64::from(name.ends_with("main.tex") || name == "main.tex") * 100_000;
+        let size = i64::try_from(content.len()).unwrap_or(i64::MAX);
+        docclass + is_main + size
+    });
 
     match best {
         Some((name, content)) => Ok(ExtractedTex {
@@ -421,12 +410,7 @@ pub fn resolve_arxiv_src_base() -> Result<Url, String> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    clippy::panic,
-    missing_docs
-)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic, missing_docs)]
 mod tests {
     use super::*;
     use flate2::write::GzEncoder;
@@ -587,8 +571,7 @@ mod tests {
     #[test]
     fn cache_round_trip() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let root =
-            camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
         let id = make_id("2401.12345");
         let src = make_src(&id);
         assert!(cache_write(&root, &id, &src));
@@ -599,8 +582,7 @@ mod tests {
     #[test]
     fn cache_expired_returns_none() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let root =
-            camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
         let id = make_id("2401.12345");
         let src = PaperTexSource {
             arxiv_id: id.as_str().to_string(),
@@ -618,8 +600,7 @@ mod tests {
     #[test]
     fn cache_schema_version_mismatch_returns_none() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let root =
-            camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
         let id = make_id("2401.12345");
         let src = make_src(&id);
         // Write a stale-schema entry manually.
