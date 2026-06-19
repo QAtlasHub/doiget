@@ -117,6 +117,7 @@ enum ProvenanceAction {
                   \x20 cite         Resolve a ref live and print clean BibTeX (doi2bib-style)\n\
                   \x20 csl          Export a stored entry as CSL JSON\n\
                   \x20 text         Extract a paper's full text from ar5iv (arXiv id)\n\
+                  \x20 tex-source   Fetch raw LaTeX source from arXiv source API (arXiv id)\n\
                   \x20 link         Resolve a DOI to its arXiv preprint (OpenAlex)\n\
                   \x20 info         Show metadata for a stored entry\n\
                   \x20 search       Search the local store by title / authors / venue\n\
@@ -375,6 +376,21 @@ enum Command {
         #[arg(long)]
         max_chars: Option<usize>,
         /// Bypass the on-disk text cache (always re-fetch from ar5iv).
+        #[arg(long)]
+        no_cache: bool,
+    },
+    /// Fetch the raw LaTeX source of an arXiv paper directly from the arXiv
+    /// source API (`export.arxiv.org/src/<id>`). More reliable than `text`
+    /// (ar5iv HTML) for papers not yet processed by LaTeXML. PDF-only
+    /// submissions yield `TEXT_UNAVAILABLE`. Tier-1 OA, always-on.
+    TexSource {
+        /// arXiv id (e.g. "arxiv:2401.12345"). A DOI reports `NO_OA_AVAILABLE`.
+        ref_: String,
+        /// Cap the returned LaTeX source to this many characters (truncation is
+        /// flagged, never silent). Omit for the full source.
+        #[arg(long)]
+        max_chars: Option<usize>,
+        /// Bypass the on-disk TeX source cache (always re-fetch).
         #[arg(long)]
         no_cache: bool,
     },
@@ -719,6 +735,20 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         }) => {
             doiget_cli::commands::text::run(ref_, max_chars, no_cache, mode, out.quiet_was_explicit)
                 .await
+        }
+        Some(Command::TexSource {
+            ref_,
+            max_chars,
+            no_cache,
+        }) => {
+            doiget_cli::commands::tex_source::run(
+                ref_,
+                max_chars,
+                no_cache,
+                mode,
+                out.quiet_was_explicit,
+            )
+            .await
         }
         Some(Command::Link { ref_ }) => {
             doiget_cli::commands::link::run(ref_, mode, out.quiet_was_explicit).await

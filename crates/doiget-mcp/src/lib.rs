@@ -1438,6 +1438,124 @@ impl Server {
         }
     }
 
+    /// `doiget_paper_tex_source` — fetch the raw LaTeX source of an arXiv
+    /// paper from the arXiv source API (`export.arxiv.org/src/<id>`).
+    ///
+    /// This is the structured-text complement to [`Self::doiget_paper_text`]
+    /// (ar5iv HTML extraction). More reliable for papers that ar5iv has not
+    /// yet processed through LaTeXML. LLMs handle LaTeX well — `\section{}`
+    /// and equation environments provide explicit structure. PDF-only
+    /// submissions return `TEXT_UNAVAILABLE`. Tier-1 OA, always-on.
+    #[tool(
+        description = "WHEN TO USE: Fetch the raw LaTeX source of an arXiv paper — more reliable than `doiget_paper_text` (ar5iv) for papers not yet processed by LaTeXML.\n\
+                       INPUTS: ref (arXiv id, e.g. \"arxiv:2401.12345\"); optional max_chars (cap; omit for full source).\n\
+                       OUTPUTS: { ok: true, arxiv_id, main_file, tex_source, char_count, truncated, retrieved_from } OR { ok:false, error }.\n\
+                       COSTS: 1 arXiv source API request (gzip'd tar download); large papers can be sizeable — use max_chars to bound.\n\
+                       SIDE EFFECTS: Emits an OA provenance row. NEVER writes the store; NEVER opens a PDF blob.\n\
+                       LIMITS: arXiv only (a DOI → NO_OA_AVAILABLE; pass the arXiv id). PDF-only submissions → TEXT_UNAVAILABLE."
+    )]
+    async fn doiget_paper_tex_source(
+        &self,
+        Parameters(input): Parameters<PaperTexSourceInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let id = match doiget_core::Ref::parse(&input.ref_) {
+            Ok(doiget_core::Ref::Arxiv(a)) => a,
+            Ok(doiget_core::Ref::Doi(_)) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::NoOaAvailable,
+                    "no TeX source for a DOI — pass the arXiv id if a preprint exists",
+                )));
+            }
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &e.to_string(),
+                )));
+            }
+        };
+
+        let base = match arxiv_src_base() {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(id.as_str()),
+                    ErrorCode::InternalError,
+                    &e,
+                )));
+            }
+        };
+
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(id.as_str()),
+                    ErrorCode::InternalError,
+                    &format!("paper-tex-source context init failed: {e}"),
+                )));
+            }
+        };
+
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Oa,
+            ref_: Some(id.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        }) {
+            return Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(id.as_str()),
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        let max_chars = input.max_chars.map(|m| m as usize);
+        let outcome =
+            doiget_core::paper_tex_source::paper_tex_source(&base, &id, max_chars, &ctx).await;
+
+        let _ = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if outcome.is_ok() {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Oa,
+            ref_: Some(id.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        });
+
+        match outcome {
+            Ok(t) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "arxiv_id": t.arxiv_id,
+                "main_file": t.main_file,
+                "tex_source": t.tex_source,
+                "char_count": t.char_count,
+                "truncated": t.truncated,
+                "retrieved_from": t.retrieved_from,
+            }))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(id.as_str()),
+                ErrorCode::from(&e),
+                &e.to_string(),
+            ))),
+        }
+    }
+
     /// `doiget_link` — resolve a **DOI** to its arXiv preprint + identity
     /// cluster over OpenAlex (#281 item 5). Reports whether the same work
     /// has a free arXiv preprint so an agent can read the free full text or
@@ -2183,6 +2301,22 @@ pub struct PaperTextInput {
     pub ref_: String,
     /// Cap the returned text to this many characters (truncation is
     /// flagged on `truncated`). Omit for the full text.
+    #[serde(default)]
+    pub max_chars: Option<u32>,
+}
+
+/// JSON-schema-derived input for the `doiget_paper_tex_source` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PaperTexSourceInput {
+    /// arXiv id (e.g. "arxiv:2401.12345"), validated via `Ref::parse`. A
+    /// bare DOI returns `NO_OA_AVAILABLE` (pass the arXiv id).
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+    /// Cap the returned LaTeX source to this many characters (truncation is
+    /// flagged on `truncated`). Omit for the full source.
     #[serde(default)]
     pub max_chars: Option<u32>,
 }
@@ -2999,6 +3133,16 @@ fn ar5iv_base() -> Result<url::Url, String> {
     let raw = std::env::var("DOIGET_AR5IV_BASE")
         .unwrap_or_else(|_| doiget_core::paper_text::AR5IV_DEFAULT_BASE.to_string());
     url::Url::parse(&raw).map_err(|e| format!("DOIGET_AR5IV_BASE is not a URL: {e}"))
+}
+
+/// Resolve the arXiv source API base URL for `doiget_paper_tex_source`:
+/// the `DOIGET_ARXIV_SRC_BASE` override (tests) or the production default.
+fn arxiv_src_base() -> Result<url::Url, String> {
+    let raw = std::env::var("DOIGET_ARXIV_SRC_BASE")
+        .unwrap_or_else(|_| {
+            doiget_core::paper_tex_source::ARXIV_SRC_DEFAULT_BASE.to_string()
+        });
+    url::Url::parse(&raw).map_err(|e| format!("DOIGET_ARXIV_SRC_BASE is not a URL: {e}"))
 }
 
 /// Build the `{ ok:true, arxiv_id, source, title, sections, char_count,

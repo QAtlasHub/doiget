@@ -137,6 +137,9 @@ hex  = "0.4"
 # with the ADR-0020 portability posture (cargo-installable / musl-static
 # anywhere). MIT/Apache-2.0/Zlib — within deny.toml's allow list.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# tar extraction for arXiv TeX source (paper_tex_source). Pure-Rust, no C
+# toolchain. MIT/Apache-2.0 — within deny.toml's allow list.
+tar = "0.4"
 
 # UUIDs / ULIDs (mcp_call_id, session_id)
 uuid = { version = "1", features = ["v4", "serde"] }
