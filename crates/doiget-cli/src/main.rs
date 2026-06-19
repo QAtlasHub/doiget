@@ -287,6 +287,7 @@ enum Command {
     /// (title / authors / venue) instead.
     Search {
         /// Query string (a topic for discovery, or a substring for `--local`).
+        /// May be empty when `--local --tag` is given (matches all tagged entries).
         query: String,
         /// Scan the local store instead of external discovery.
         #[arg(long, conflicts_with = "external")]
@@ -295,6 +296,10 @@ enum Command {
         /// exclusive with `--local`).
         #[arg(long, conflicts_with = "local")]
         external: bool,
+        /// Filter local-store results to entries tagged with this tag
+        /// (case-sensitive). Requires `--local`.
+        #[arg(long, requires = "local")]
+        tag: Option<String>,
         /// External: maximum results. Must be 1..=200 (OpenAlex's per-page
         /// cap); an out-of-range value is rejected, not clamped.
         #[arg(long, default_value_t = 25)]
@@ -474,6 +479,40 @@ enum Command {
         /// Promote warnings to errors so any finding fails the run.
         #[arg(long)]
         strict: bool,
+    },
+    /// Assign or remove tags and collections on a stored entry (#294).
+    ///
+    /// Positional `<tag>...` arguments add tags. Use `--remove` to remove.
+    /// Use `--collection` / `--remove-collection` for collection membership.
+    /// Use `--list` to show current tags, collections, and annotation.
+    Tag {
+        /// DOI or arXiv id.
+        ref_: String,
+        /// Tags to add (idempotent). Positional — may repeat.
+        #[arg(value_name = "TAG")]
+        tags: Vec<String>,
+        /// Tags to remove.
+        #[arg(long = "remove", value_name = "TAG")]
+        remove: Vec<String>,
+        /// Collections to join (idempotent).
+        #[arg(long = "collection", value_name = "COL")]
+        collection: Vec<String>,
+        /// Collections to leave.
+        #[arg(long = "remove-collection", value_name = "COL")]
+        remove_collection: Vec<String>,
+        /// Show current tags, collections, and annotation; no mutation.
+        #[arg(long)]
+        list: bool,
+    },
+    /// Set or clear the freeform annotation for a stored entry (#294).
+    Annotate {
+        /// DOI or arXiv id.
+        ref_: String,
+        /// Annotation text (replaces any previous annotation).
+        text: Option<String>,
+        /// Clear the annotation (remove it from the TOML).
+        #[arg(long)]
+        clear: bool,
     },
     /// Resolve a bibliographic citation string to ranked DOI candidates.
     #[command(name = "resolve-citation")]
@@ -698,6 +737,7 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             query,
             local,
             external: _,
+            tag,
             limit,
             from_year,
             to_year,
@@ -723,7 +763,8 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 publisher,
                 sort,
             };
-            doiget_cli::commands::search::run(query, local, ext, mode, out.quiet_was_explicit).await
+            doiget_cli::commands::search::run(query, local, tag, ext, mode, out.quiet_was_explicit)
+                .await
         }
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
         Some(Command::Verify {
@@ -732,6 +773,26 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             strict,
         }) => doiget_cli::commands::verify::run(path, format, strict, mode).await,
         Some(Command::Lint { path, strict }) => doiget_cli::commands::lint::run(path, strict, mode),
+        Some(Command::Tag {
+            ref_,
+            tags,
+            remove,
+            collection,
+            remove_collection,
+            list,
+        }) => doiget_cli::commands::tag::run(
+            ref_,
+            tags,
+            remove,
+            collection,
+            remove_collection,
+            list,
+            mode,
+            out.quiet_was_explicit,
+        ),
+        Some(Command::Annotate { ref_, text, clear }) => {
+            doiget_cli::commands::tag::run_annotate(ref_, text, clear)
+        }
         Some(Command::ResolveCitation { query, limit }) => {
             doiget_cli::commands::resolve_citation::run(query, limit, mode).await
         }

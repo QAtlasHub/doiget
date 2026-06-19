@@ -100,6 +100,31 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 ### Changed
 - **[core]** `PaperHit` and `PaperSearchResults` drop the `Eq` derive
   (retained `PartialEq`); `f64` fields preclude a total equality relation.
+- **[store / tags]** `DoigetExtension` gains three additive optional fields:
+  `tags: Vec<String>`, `collections: Vec<String>`, `annotation: Option<String>`
+  (#294). Stored in `[doiget].tags`, `[doiget].collections`, and
+  `[doiget].annotation`; omitted from the TOML when empty / absent (no schema
+  bump per `docs/STORE.md` §7 additive policy). Existing metadata is read
+  transparently by older builds (unknown fields are tolerated per §8).
+- **[cli / tag]** `doiget tag <ref> [<tag>...]` — add one or more tags to a
+  stored entry (idempotent). `--remove <tag>` removes. `--collection <col>`
+  joins a collection; `--remove-collection <col>` leaves. `--list` prints
+  current tags, collections, and annotation (#294).
+- **[cli / annotate]** `doiget annotate <ref> <text>` — attach a freeform
+  note to a stored entry; replaces any previous annotation. `--clear` removes
+  it (#294).
+- **[cli / search]** `doiget search --local --tag <t>` — filter local-store
+  results to entries tagged with `<t>` (case-sensitive). Empty query matches
+  all tagged entries (#294).
+- **[mcp / tag]** `doiget_tag` MCP tool — add / remove tags and collections
+  on a stored entry. Inputs: `ref`, `add[]`, `remove[]`, `collection_add[]`,
+  `collection_remove[]`. Output: `{ ok, ref, tags, collections }` (#294).
+- **[mcp / annotate]** `doiget_annotate` MCP tool — set or clear the
+  freeform annotation on a stored entry. Inputs: `ref`, `text`, `clear`
+  (bool). Output: `{ ok, ref, annotation }` (#294).
+- **[core]** `FsStore::search_by_tag(tag, query, limit)` — scan
+  `.metadata/*.toml` for entries whose `[doiget].tags` contains `tag`,
+  optionally also filtering by substring query (#294).
 
 ## [0.7.1-beta.0] - 2026-06-20
 

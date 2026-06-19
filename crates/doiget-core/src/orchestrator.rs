@@ -367,6 +367,9 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
             oa_status: outcome.oa_status.clone(),
             size_bytes: 0,
             mcp_call_id: None,
+            tags: Vec::new(),
+            collections: Vec::new(),
+            annotation: None,
         }),
         other: BTreeMap::new(),
     }
@@ -1013,6 +1016,9 @@ async fn fetch_paper_arxiv(
             oa_status: Some("green".to_string()),
             size_bytes,
             mcp_call_id: None,
+            tags: Vec::new(),
+            collections: Vec::new(),
+            annotation: None,
         }),
         other: BTreeMap::new(),
     };
@@ -1303,6 +1309,9 @@ async fn fetch_paper_doi(
             oa_status: oa_status.clone(),
             size_bytes,
             mcp_call_id: None,
+            tags: Vec::new(),
+            collections: Vec::new(),
+            annotation: None,
         }),
         other: BTreeMap::new(),
     };
