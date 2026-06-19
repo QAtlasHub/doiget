@@ -75,6 +75,7 @@ use super::resolve_store_root;
 pub async fn run_with_options(
     path: String,
     dry_run: bool,
+    only_failed: bool,
     mode: super::output::OutputMode,
 ) -> Result<()> {
     // `mode` honors ADR-0017. `Quiet` is a no-op here because batch's
@@ -234,6 +235,9 @@ pub async fn run_with_options(
     // `(ref, error_code)` per failed entry, drained into the end-of-batch
     // stderr failure digest (issue #222).
     let mut failures: Vec<(String, &'static str)> = Vec::new();
+    // Issue #324: count of refs skipped because a PDF already exists in the
+    // store (only populated when `--only-failed` is active).
+    let mut skipped: usize = 0;
     let mut remaining = inputs.into_iter();
     loop {
         let window: Vec<String> = remaining.by_ref().take(MCP_BATCH_MAX_SIZE).collect();
@@ -280,6 +284,30 @@ pub async fn run_with_options(
                     continue;
                 }
             };
+
+            // Issue #324: --only-failed — skip refs that already have a PDF
+            // in the store so a re-run only processes not-yet-succeeded entries.
+            // A PDF at `<store>/<safekey>.pdf` is the success signal; metadata-
+            // only entries (`.metadata/<safekey>.toml`) are NOT skipped because
+            // they indicate a NoOaUrl or prior Blocked outcome that may now
+            // succeed (e.g. after an allowlist update or preprint fallback).
+            if only_failed {
+                let safekey = ref_.safekey();
+                let pdf_path =
+                    harness.cfg.store_root.join(format!("{}.pdf", safekey.as_str()));
+                if pdf_path.exists() {
+                    tracing::debug!(
+                        ref_ = %input,
+                        path = %pdf_path,
+                        "already fetched; skipping (--only-failed)"
+                    );
+                    skipped += 1;
+                    if json_mode {
+                        emit_jsonl_already_fetched(&input);
+                    }
+                    continue;
+                }
+            }
 
             let harness_task = Arc::clone(&harness);
             let sem_task = Arc::clone(&semaphore);
@@ -345,10 +373,17 @@ pub async fn run_with_options(
     // Step 10: stderr summary. ADR-0001: success / progress lines go to
     // stderr; the workspace `print_stderr` lint is `warn`, promoted to deny
     // in CI, so the localized `#[allow]` is the minimal intervention.
-    print_summary(format_args!(
-        "batch: {} OK, {} failed ({} parse errors, {} fetch errors)",
-        fetch_ok, total_errors, parse_errors, fetch_errors,
-    ));
+    if skipped > 0 {
+        print_summary(format_args!(
+            "batch: {} OK, {} failed, {} skipped-already-fetched ({} parse errors, {} fetch errors)",
+            fetch_ok, total_errors, skipped, parse_errors, fetch_errors,
+        ));
+    } else {
+        print_summary(format_args!(
+            "batch: {} OK, {} failed ({} parse errors, {} fetch errors)",
+            fetch_ok, total_errors, parse_errors, fetch_errors,
+        ));
+    }
 
     // Issue #222: a per-ref failure digest on stderr so a human / agent
     // sees WHICH refs failed and WHY (the primary error code) without
@@ -630,6 +665,20 @@ fn build_jsonl_failure(
 #[allow(clippy::print_stdout)]
 fn emit_jsonl_failure(ref_input: Option<&str>, code: &str, message: &str) {
     println!("{}", build_jsonl_failure(ref_input, code, message, None));
+}
+
+/// Emit a JSON-Lines record for a ref skipped because its PDF already exists
+/// in the store (`--only-failed`, issue #324). Uses `ok: true` + an
+/// `already_fetched: true` extension field so downstream consumers can
+/// distinguish "new success" from "pre-existing success without re-fetch".
+#[allow(clippy::print_stdout)]
+fn emit_jsonl_already_fetched(ref_input: &str) {
+    let record = serde_json::json!({
+        "ok": true,
+        "ref": ref_input,
+        "already_fetched": true,
+    });
+    println!("{record}");
 }
 
 // ---------------------------------------------------------------------------

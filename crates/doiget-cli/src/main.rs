@@ -253,6 +253,14 @@ enum Command {
         /// exit so a malformed batch is visible.
         #[arg(long)]
         dry_run: bool,
+        /// Skip refs that already have a PDF in the store
+        /// (`<store>/<safekey>.pdf` exists). Metadata-only entries are
+        /// NOT skipped — they may now succeed via the preprint fallback
+        /// or allowlist updates. Use after a partial batch run to
+        /// re-attempt only failures without wasting API budget on
+        /// already-fetched refs (issue #324).
+        #[arg(long)]
+        only_failed: bool,
     },
     /// Show metadata for a stored entry.
     Info {
@@ -712,8 +720,8 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Fetch { ref_, dry_run }) => {
             doiget_cli::commands::fetch::run_with_options(ref_, dry_run, mode).await
         }
-        Some(Command::Batch { path, dry_run }) => {
-            doiget_cli::commands::batch::run_with_options(path, dry_run, mode).await
+        Some(Command::Batch { path, dry_run, only_failed }) => {
+            doiget_cli::commands::batch::run_with_options(path, dry_run, only_failed, mode).await
         }
         Some(Command::Bib {
             ref_,
