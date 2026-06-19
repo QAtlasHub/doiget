@@ -181,8 +181,12 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
             // `Ok(vec![])` for not-found, so the OK arm always reports
             // a count.
             match doiget_core::user_extension::load(&cfg.config_path) {
-                Ok(hosts) => check(
-                    &format!("user-extension hosts loaded: {}", hosts.len()),
+                Ok(cfg_ext) => check(
+                    &format!(
+                        "user-extension hosts loaded: {} (trust_academic_repos={})",
+                        cfg_ext.additional_hosts.len(),
+                        cfg_ext.trust_academic_repos
+                    ),
                     true,
                     &mut all_ok,
                 ),

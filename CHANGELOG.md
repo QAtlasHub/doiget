@@ -31,6 +31,22 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   represent prior `NoOaUrl` or `Blocked` outcomes that may now succeed.
   In `--mode json`, skipped refs emit `{"ok": true, "ref": "...", "already_fetched": true}`.
   Summary line gains a `skipped-already-fetched` count when non-zero.
+- **[core]** `trust_academic_repos` config flag (`[network] trust_academic_repos = true`
+  in `config.toml`) that activates a curated set of 15 single-suffix academic host
+  wildcards (`.ac.uk`, `.ac.jp`, `.edu.au`, `.edu.cn`, `.edu.br`, etc.) without
+  requiring manual `[[network.additional_hosts]]` entries (#323).
+- **[core]** `academic_repo_hosts()` public function in `doiget_core::user_extension`
+  returning the built-in academic patterns; callers can compose or extend the set.
+- **[core]** `UserExtensionConfig` struct (replaces the bare `Vec<UserExtensionHost>`
+  previously returned by `load()`) exposing `additional_hosts` and
+  `trust_academic_repos` fields.
+- **[cli]** `config doctor` check now reports `trust_academic_repos` status alongside
+  the user-extension host count.
+
+### Changed
+- **[core]** `user_extension::load()` return type changed from
+  `Result<Vec<UserExtensionHost>, _>` to `Result<UserExtensionConfig, _>` (semver
+  minor bump). Callers access hosts via `cfg.additional_hosts`.
 
 ## [0.7.1-beta.0] - 2026-06-20
 
