@@ -26,6 +26,14 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   `outcome_is_clean_success` treats it as success; `Blocked` semantics
   (exit ≠ 0) are preserved when arXiv also fails.
 
+### Changed
+- **[cli]** `doiget config doctor` now prints a `tip:` remediation line on
+  stderr for each failed check, naming the exact env var to set or the
+  config file path to fix (#322). Stdout remains clean (no change to the
+  empty-stdout-on-pass contract). Tips cover: missing `store_root` / `log_dir`
+  parents (`DOIGET_STORE_ROOT`, `DOIGET_LOG_PATH`), unset contact email
+  (`DOIGET_CONTACT_EMAIL`), and malformed `config.toml` (resolved path shown).
+
 ## [0.7.1-beta.0] - 2026-06-20
 
 ### Added
