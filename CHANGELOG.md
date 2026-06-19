@@ -10,6 +10,22 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.7.2-beta.0] - 2026-06-20
+
+### Added
+- **[fetch]** Auto preprint fallback (issue #325): when a DOI OA PDF fetch is
+  blocked (403, allowlist denial, magic-byte mismatch) and Unpaywall's response
+  includes an arXiv preprint URL, `doiget fetch` now automatically retrieves
+  the arXiv PDF and stores it under the DOI entry instead of returning an error.
+  The stored metadata includes both `doi` and `arxiv_id`; `[doiget].source` is
+  set to `"arxiv"`. Observable: `tracing::info!` at fallback attempt and
+  success; the CLI success line names the arXiv ID used; the MCP
+  `pdf_leg.status` wire value is `"preprint_fallback"`.
+- **[core]** `PdfLegStatus::PreprintFallback { arxiv_id, original_block }` — new
+  variant signalling that the stored PDF came from arXiv, not the publisher.
+  `outcome_is_clean_success` treats it as success; `Blocked` semantics
+  (exit ≠ 0) are preserved when arXiv also fails.
+
 ## [0.7.1-beta.0] - 2026-06-20
 
 ### Added
