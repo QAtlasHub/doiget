@@ -67,14 +67,35 @@ const PROV_SOURCE_LABEL: &str = "arxiv-src";
 /// `DOIGET_ARXIV_SRC_BASE` for tests.
 pub const ARXIV_SRC_DEFAULT_BASE: &str = "https://export.arxiv.org";
 
+// arXiv sources can be revised (v2, v3 can appear within days of v1); 7 days
+// balances freshness against re-fetch cost for stable papers.
 const TEX_SRC_CACHE_TTL_DAYS: i64 = 7;
 const TEX_SRC_CACHE_SCHEMA_VERSION: &str = "1.0";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CacheEntry {
     schema_version: String,
-    cached_at: DateTime<Utc>,
+    /// RFC 3339 timestamp; matches `fetched_at` in `TextCacheEntry` and
+    /// `resolver_cache::CacheEntry` for consistency across cache formats.
+    fetched_at: String,
+    /// Stored explicitly so future versions can adjust per-entry TTL on read
+    /// without a code change (matches the pattern in `resolver_cache`).
+    ttl_seconds: i64,
     inner: PaperTexSource,
+}
+
+/// Typed result from [`extract_tex`].
+///
+/// Using a named struct prevents accidental `(content, main_file)` swap bugs
+/// at the destructuring site (both members are `String` / `Option<String>`
+/// and would compile silently if swapped).
+#[derive(Debug)]
+pub(crate) struct ExtractedTex {
+    /// Filename of the main `.tex` file within the source tarball.
+    /// `None` when the submission was a single gzip'd file (no tar wrapper).
+    pub main_file: Option<String>,
+    /// Raw LaTeX content of the selected file.
+    pub content: String,
 }
 
 /// The raw LaTeX source of an arXiv paper.
@@ -124,7 +145,13 @@ pub async fn paper_tex_source(
     let full = fetch_and_extract(base, id, ctx).await?;
 
     if let Some(root) = &ctx.cache_root {
-        cache_write(root, id, &full);
+        if !cache_write(root, id, &full) {
+            tracing::warn!(
+                cache_root = %root,
+                arxiv_id = %id.as_str(),
+                "tex-source cache write failed; next request will re-fetch"
+            );
+        }
     }
 
     Ok(apply_max_chars(full, max_chars))
@@ -140,8 +167,8 @@ async fn fetch_and_extract(
     let url = src_url(base, id)?;
     let (body, final_url) = ctx.http.fetch_bytes(HTTP_SOURCE_KEY, url).await?;
 
-    let (main_file, tex_source) = extract_tex(id, &body)?;
-    let char_count = tex_source.chars().count();
+    let extracted = extract_tex(id, &body)?;
+    let char_count = extracted.content.chars().count();
 
     let canonical = Ref::Arxiv(id.clone())
         .promote(PROV_SOURCE_LABEL, None)
@@ -161,8 +188,8 @@ async fn fetch_and_extract(
 
     Ok(PaperTexSource {
         arxiv_id: id.as_str().to_string(),
-        main_file,
-        tex_source,
+        main_file: extracted.main_file,
+        tex_source: extracted.content,
         char_count,
         truncated: false,
         retrieved_from: final_url.to_string(),
@@ -178,19 +205,20 @@ fn src_url(base: &Url, id: &ArxivId) -> Result<Url, FetchError> {
 
 /// Detect content type by magic bytes and extract the main LaTeX source.
 ///
-/// Returns `(main_file_name, tex_content)`.
+/// Returns an [`ExtractedTex`] with `main_file` and `content`.
 pub(crate) fn extract_tex(
     id: &ArxivId,
     bytes: &[u8],
-) -> Result<(Option<String>, String), FetchError> {
-    // PDF-only submission.
+) -> Result<ExtractedTex, FetchError> {
+    // PDF-only submission — no TeX source available.
     if bytes.starts_with(b"%PDF-") {
         return Err(FetchError::TextUnavailable {
             arxiv_id: id.clone(),
         });
     }
 
-    // Not gzip: try as raw TeX.
+    // arXiv occasionally serves a bare uncompressed .tex file for trivial
+    // single-file submissions that were not gzip-compressed by the submitter.
     if bytes.len() < 2 || bytes[0..2] != [0x1f, 0x8b] {
         let text = String::from_utf8_lossy(bytes).into_owned();
         if text.trim().is_empty() {
@@ -198,7 +226,10 @@ pub(crate) fn extract_tex(
                 arxiv_id: id.clone(),
             });
         }
-        return Ok((None, text));
+        return Ok(ExtractedTex {
+            main_file: None,
+            content: text,
+        });
     }
 
     // Decompress gzip.
@@ -209,9 +240,10 @@ pub(crate) fn extract_tex(
             hint: format!("gzip decompress of arXiv src failed: {e}"),
         })?;
 
-    // Detect tar by POSIX magic at byte 257.
-    let is_tar = decompressed.len() > 262
-        && (&decompressed[257..262] == b"ustar" || &decompressed[257..261] == b"usta");
+    // UStar tar detection: POSIX.1-1988 tar header magic at byte offset 257.
+    // A valid tar header is ≥ 512 bytes; the `> 262` guard is conservative
+    // (only 262 bytes are needed for the magic slice) and avoids a panic.
+    let is_tar = decompressed.len() > 262 && &decompressed[257..262] == b"ustar";
 
     if is_tar {
         extract_from_tar(id, &decompressed)
@@ -222,26 +254,38 @@ pub(crate) fn extract_tex(
                 arxiv_id: id.clone(),
             });
         }
-        Ok((None, text))
+        Ok(ExtractedTex {
+            main_file: None,
+            content: text,
+        })
     }
 }
 
-/// Extract the main `.tex` file from an uncompressed tar archive.
+/// Extract the main `.tex` file from an uncompressed tar archive using a
+/// weighted scoring heuristic:
 ///
-/// Selection priority:
-/// 1. File containing `\documentclass` (root document).
-/// 2. Among those, prefer `main.tex`.
-/// 3. Fallback: largest `.tex` file by character count.
+///   score = (1 if `\documentclass` present) × 1_000_000
+///         + (1 if filename ends with `main.tex`) × 100_000
+///         + byte_count_of_file
+///
+/// The weights are sized to dominate any realistic file size: a `.tex` file
+/// with `\documentclass` always beats one without it unless the file exceeds
+/// ~1 GB (byte count overflows `i64`), which is not a realistic `.tex` size.
+/// Within tied `\documentclass` files, `main.tex` always wins unless the
+/// competing file exceeds 100 KB — also not a realistic sub-file size.
 fn extract_from_tar(
     id: &ArxivId,
     bytes: &[u8],
-) -> Result<(Option<String>, String), FetchError> {
+) -> Result<ExtractedTex, FetchError> {
     let mut archive = Archive::new(std::io::Cursor::new(bytes));
     let entries = archive.entries().map_err(|e| FetchError::SourceSchema {
         hint: format!("tar read failed: {e}"),
     })?;
 
     let mut tex_files: Vec<(String, String)> = Vec::new();
+    // Track .tex entries attempted (even if read failed) so that a corrupt
+    // archive is distinguishable from a PDF-only submission.
+    let mut tex_attempted: usize = 0;
     for entry in entries {
         let Ok(mut entry) = entry else { continue };
         let path = match entry.path() {
@@ -251,6 +295,7 @@ fn extract_from_tar(
         if !path.ends_with(".tex") {
             continue;
         }
+        tex_attempted += 1;
         let mut content = String::new();
         if entry.read_to_string(&mut content).is_ok() && !content.trim().is_empty() {
             tex_files.push((path, content));
@@ -258,8 +303,20 @@ fn extract_from_tar(
     }
 
     if tex_files.is_empty() {
-        return Err(FetchError::TextUnavailable {
-            arxiv_id: id.clone(),
+        // Distinguish "PDF-only" from "corrupt archive": if .tex entries were
+        // present but none could be read, this is a schema/decode error, not a
+        // missing-source condition (which would mislead agents into thinking
+        // the paper has no TeX source).
+        return Err(if tex_attempted > 0 {
+            FetchError::SourceSchema {
+                hint: format!(
+                    "tar contained {tex_attempted} .tex entries but all failed to read"
+                ),
+            }
+        } else {
+            FetchError::TextUnavailable {
+                arxiv_id: id.clone(),
+            }
         });
     }
 
@@ -269,11 +326,15 @@ fn extract_from_tar(
             let docclass = i64::from(content.contains(r"\documentclass")) * 1_000_000;
             let is_main =
                 i64::from(name.ends_with("main.tex") || name == "main.tex") * 100_000;
-            docclass + is_main + content.len() as i64
+            let size = i64::try_from(content.len()).unwrap_or(i64::MAX);
+            docclass + is_main + size
         });
 
     match best {
-        Some((name, content)) => Ok((Some(name), content)),
+        Some((name, content)) => Ok(ExtractedTex {
+            main_file: Some(name),
+            content,
+        }),
         None => Err(FetchError::TextUnavailable {
             arxiv_id: id.clone(),
         }),
@@ -315,7 +376,10 @@ fn cache_read_at(
     if entry.schema_version != TEX_SRC_CACHE_SCHEMA_VERSION {
         return None;
     }
-    if now.signed_duration_since(entry.cached_at) > Duration::days(TEX_SRC_CACHE_TTL_DAYS) {
+    let fetched = DateTime::parse_from_rfc3339(&entry.fetched_at)
+        .ok()?
+        .with_timezone(&Utc);
+    if now.signed_duration_since(fetched) > Duration::seconds(entry.ttl_seconds) {
         return None;
     }
     Some(entry.inner)
@@ -339,7 +403,8 @@ fn cache_write_at(
     }
     let entry = CacheEntry {
         schema_version: TEX_SRC_CACHE_SCHEMA_VERSION.to_string(),
-        cached_at: now,
+        fetched_at: now.to_rfc3339(),
+        ttl_seconds: TEX_SRC_CACHE_TTL_DAYS * 86_400,
         inner: full.clone(),
     };
     match serde_json::to_vec(&entry) {
@@ -364,6 +429,9 @@ pub fn resolve_arxiv_src_base() -> Result<Url, String> {
 )]
 mod tests {
     use super::*;
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write as _;
 
     fn make_id(s: &str) -> ArxivId {
         match Ref::parse(s).expect("parse") {
@@ -372,17 +440,43 @@ mod tests {
         }
     }
 
-    #[test]
-    fn apply_max_chars_no_cap_is_identity() {
-        let id = make_id("2401.12345");
-        let src = PaperTexSource {
+    fn gzip_bytes(data: &[u8]) -> Vec<u8> {
+        let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(data).expect("gzip write");
+        enc.finish().expect("gzip finish")
+    }
+
+    fn tar_gzip(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        for (name, data) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, name, std::io::Cursor::new(data))
+                .expect("tar append");
+        }
+        gzip_bytes(&builder.into_inner().expect("tar finish"))
+    }
+
+    fn make_src(id: &ArxivId) -> PaperTexSource {
+        PaperTexSource {
             arxiv_id: id.as_str().to_string(),
-            main_file: None,
+            main_file: Some("main.tex".into()),
             tex_source: "\\documentclass{article}".into(),
             char_count: 23,
             truncated: false,
             retrieved_from: "https://export.arxiv.org/src/2401.12345".into(),
-        };
+        }
+    }
+
+    // ── apply_max_chars ───────────────────────────────────────────────────────
+
+    #[test]
+    fn apply_max_chars_no_cap_is_identity() {
+        let id = make_id("2401.12345");
+        let src = make_src(&id);
         let out = apply_max_chars(src.clone(), None);
         assert_eq!(out, src);
     }
@@ -404,6 +498,8 @@ mod tests {
         assert!(out.truncated);
     }
 
+    // ── extract_tex: magic-byte paths ────────────────────────────────────────
+
     #[test]
     fn pdf_only_yields_text_unavailable() {
         let id = make_id("2401.12345");
@@ -415,10 +511,70 @@ mod tests {
     fn raw_tex_passthrough() {
         let id = make_id("2401.12345");
         let tex = b"\\documentclass{article}\n\\begin{document}\nHello.\\end{document}";
-        let (main_file, content) = extract_tex(&id, tex).expect("extract");
-        assert!(main_file.is_none());
-        assert!(content.contains("\\documentclass"));
+        let ext = extract_tex(&id, tex).expect("extract");
+        assert!(ext.main_file.is_none());
+        assert!(ext.content.contains("\\documentclass"));
     }
+
+    #[test]
+    fn gzip_single_file_extracted() {
+        let id = make_id("2401.12345");
+        let tex = b"\\documentclass{article}\n\\begin{document}Hello\\end{document}";
+        let gz = gzip_bytes(tex);
+        let ext = extract_tex(&id, &gz).expect("extract");
+        assert!(ext.main_file.is_none(), "single gzip has no tar filename");
+        assert!(ext.content.contains("\\documentclass"));
+    }
+
+    // ── extract_from_tar: selection heuristic ────────────────────────────────
+
+    #[test]
+    fn tar_selects_documentclass_file_over_plain() {
+        let id = make_id("2401.12345");
+        let payload = tar_gzip(&[
+            ("paper.tex", b"\\documentclass{article} main content"),
+            ("macros.tex", b"\\newcommand{\\foo}{bar}"),
+        ]);
+        let ext = extract_tex(&id, &payload).expect("extract");
+        assert_eq!(ext.main_file.as_deref(), Some("paper.tex"));
+        assert!(ext.content.contains("\\documentclass"));
+    }
+
+    #[test]
+    fn tar_prefers_main_tex_among_documentclass_files() {
+        let id = make_id("2401.12345");
+        let payload = tar_gzip(&[
+            ("other.tex", b"\\documentclass{article} other content here"),
+            ("main.tex", b"\\documentclass{article} main"),
+        ]);
+        let ext = extract_tex(&id, &payload).expect("extract");
+        assert_eq!(
+            ext.main_file.as_deref(),
+            Some("main.tex"),
+            "main.tex bonus must override smaller-but-also-documentclass other.tex"
+        );
+    }
+
+    #[test]
+    fn tar_falls_back_to_largest_file_when_no_documentclass() {
+        let id = make_id("2401.12345");
+        let short = b"\\section{Short}".as_slice();
+        let mut long_content = b"\\section{Long} ".to_vec();
+        long_content.extend(vec![b'x'; 500]);
+        let payload = tar_gzip(&[("short.tex", short), ("long.tex", &long_content)]);
+        let ext = extract_tex(&id, &payload).expect("extract");
+        assert_eq!(ext.main_file.as_deref(), Some("long.tex"));
+    }
+
+    #[test]
+    fn tar_with_no_tex_files_is_text_unavailable() {
+        let id = make_id("2401.12345");
+        let payload = tar_gzip(&[("README.md", b"# Paper"), ("figure.eps", b"%!PS")]);
+        let err = extract_tex(&id, &payload).expect_err("should fail");
+        assert!(matches!(err, FetchError::TextUnavailable { .. }));
+    }
+
+    // ── cache ────────────────────────────────────────────────────────────────
 
     #[test]
     fn resolve_base_defaults_to_production() {
@@ -434,14 +590,7 @@ mod tests {
         let root =
             camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
         let id = make_id("2401.12345");
-        let src = PaperTexSource {
-            arxiv_id: id.as_str().to_string(),
-            main_file: Some("main.tex".into()),
-            tex_source: "\\documentclass{article}".into(),
-            char_count: 23,
-            truncated: false,
-            retrieved_from: "https://export.arxiv.org/src/2401.12345".into(),
-        };
+        let src = make_src(&id);
         assert!(cache_write(&root, &id, &src));
         let read = cache_read(&root, &id).expect("cache hit");
         assert_eq!(read, src);
@@ -464,5 +613,28 @@ mod tests {
         let past = Utc::now() - Duration::days(TEX_SRC_CACHE_TTL_DAYS + 1);
         assert!(cache_write_at(&root, &id, &src, past));
         assert!(cache_read_at(&root, &id, Utc::now()).is_none());
+    }
+
+    #[test]
+    fn cache_schema_version_mismatch_returns_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root =
+            camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
+        let id = make_id("2401.12345");
+        let src = make_src(&id);
+        // Write a stale-schema entry manually.
+        let bad = serde_json::json!({
+            "schema_version": "0.9",
+            "fetched_at": Utc::now().to_rfc3339(),
+            "ttl_seconds": 86_400 * 7i64,
+            "inner": src,
+        });
+        let path = cache_file(&root, &id);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&path, serde_json::to_vec(&bad).expect("json")).expect("write");
+        assert!(
+            cache_read_at(&root, &id, Utc::now()).is_none(),
+            "stale schema version must be rejected"
+        );
     }
 }

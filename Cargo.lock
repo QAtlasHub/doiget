@@ -530,6 +530,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "tar",
  "tempfile",
  "tokio",
  "toml",

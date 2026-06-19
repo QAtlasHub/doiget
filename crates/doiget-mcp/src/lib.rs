@@ -1521,7 +1521,7 @@ impl Server {
         let outcome =
             doiget_core::paper_tex_source::paper_tex_source(&base, &id, max_chars, &ctx).await;
 
-        let _ = ctx.log.append(RowInput {
+        if let Err(e) = ctx.log.append(RowInput {
             event: LogEvent::SessionEnd,
             result: if outcome.is_ok() {
                 LogResult::Ok
@@ -1536,7 +1536,13 @@ impl Server {
             license: None,
             store_path: None,
             canonical_digest: None,
-        });
+        }) {
+            tracing::warn!(
+                arxiv_id = %id.as_str(),
+                error = %e,
+                "SessionEnd append failed; session bookend missing from provenance log"
+            );
+        }
 
         match outcome {
             Ok(t) => Ok(CallToolResult::structured(json!({
@@ -3238,8 +3244,15 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     let openalex_base = std::env::var("DOIGET_OPENALEX_BASE").ok();
     // ADR-0032: ar5iv full-text base override (test wiremock origin).
     let ar5iv_base = std::env::var("DOIGET_AR5IV_BASE").ok();
+    // `doiget_paper_tex_source` uses the `"arxiv"` HTTP source key (same key
+    // as `DOIGET_ARXIV_BASE`). MCP integration tests that override only the
+    // source API can set `DOIGET_ARXIV_SRC_BASE`; in the test-mode path below
+    // it is treated as a fallback for the `"arxiv"` source entry when
+    // `DOIGET_ARXIV_BASE` is absent.
+    let arxiv_src = std::env::var("DOIGET_ARXIV_SRC_BASE").ok();
 
     if arxiv.is_none()
+        && arxiv_src.is_none()
         && crossref.is_none()
         && unpaywall.is_none()
         && oa_publisher.is_none()
@@ -3309,8 +3322,11 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     }
 
     let mut owned: Vec<(String, String)> = Vec::new();
+    // When DOIGET_ARXIV_BASE is set use it; otherwise fall back to
+    // DOIGET_ARXIV_SRC_BASE (they share the "arxiv" HTTP source key).
+    let arxiv_entry = arxiv.as_deref().or(arxiv_src.as_deref());
     for (source, base) in [
-        ("arxiv", arxiv.as_deref()),
+        ("arxiv", arxiv_entry),
         ("crossref", crossref.as_deref()),
         ("unpaywall", unpaywall.as_deref()),
         ("oa-publisher", oa_publisher.as_deref()),

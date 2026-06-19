@@ -202,13 +202,20 @@ impl From<&FetchError> for crate::ErrorCode {
             // code so agents can distinguish "narrow the name" from
             // "does not exist" (ADR-0031 D5).
             FetchError::Ambiguous { .. } => crate::ErrorCode::Ambiguous,
-            // 404 / 410 / 451 are authoritative, reproducible "this id is
-            // not (and will not be) here" signals → `NotFound`; see
-            // `ErrorCode::NotFound`. Everything else is transient.
+            // 404 / 410 / 451 are authoritative "this id does not exist"
+            // signals → `NotFound` (not retriable). 401 / 403 mean the
+            // server understood the request but denied access (IP block, auth
+            // required) — `CapabilityDenied` lets agents distinguish access
+            // denial from a transient connectivity failure. Everything else
+            // is treated as transient.
             FetchError::Http(HttpError::HttpStatus {
                 status: 404 | 410 | 451,
                 ..
             }) => crate::ErrorCode::NotFound,
+            FetchError::Http(HttpError::HttpStatus {
+                status: 401 | 403,
+                ..
+            }) => crate::ErrorCode::CapabilityDenied,
             FetchError::Http(_) => crate::ErrorCode::NetworkError,
             FetchError::Log(_) => crate::ErrorCode::LogError,
             FetchError::InvalidRef(_) => crate::ErrorCode::InvalidRef,
