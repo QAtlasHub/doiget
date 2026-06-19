@@ -319,6 +319,8 @@ mod tests {
             abstract_: Some("abs".to_string()),
             cited_by_count: 3,
             oa_status: Some("gold".to_string()),
+            fwci: Some(2.5),
+            cited_by_percentile_year_min: Some(85),
             source: DiscoverySource::OpenAlex,
         }
     }

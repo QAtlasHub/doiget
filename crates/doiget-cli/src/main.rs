@@ -387,6 +387,19 @@ enum Command {
         #[arg(long)]
         no_cache: bool,
     },
+    /// Discover the frontier neighbourhood of a seed paper: surfaces papers
+    /// that **cite the seed**, ranked by age-normalized impact (fwci),
+    /// excluding papers already in the local store (#295).
+    Frontier {
+        /// Seed DOI (e.g. "10.1103/PhysRevB.1").
+        doi: String,
+        /// Maximum results to return (1–200; default 25).
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+        /// Only include works published on or after this year.
+        #[arg(long)]
+        from_year: Option<i32>,
+    },
     /// Fetch the raw LaTeX source of an arXiv paper directly from the arXiv
     /// source API (`export.arxiv.org/src/<id>`). More reliable than `text`
     /// (ar5iv HTML) for papers not yet processed by LaTeXML. PDF-only
@@ -744,6 +757,14 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             no_cache,
         }) => {
             doiget_cli::commands::text::run(ref_, max_chars, no_cache, mode, out.quiet_was_explicit)
+                .await
+        }
+        Some(Command::Frontier {
+            doi,
+            limit,
+            from_year,
+        }) => {
+            doiget_cli::commands::frontier::run(doi, limit, from_year, mode, out.quiet_was_explicit)
                 .await
         }
         Some(Command::TexSource {

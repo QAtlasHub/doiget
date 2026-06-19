@@ -257,7 +257,7 @@ pub enum DiscoverySource {
 /// (e.g. no DOI for a dataset, no abstract for an Elsevier-gated
 /// abstract). Absent fields serialize to JSON `null` (not skipped) so
 /// the wire shape is stable for agents.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PaperHit {
     /// Bare DOI (lower-cased, `https://doi.org/` prefix stripped), or
     /// `None` when the record has no DOI.
@@ -287,13 +287,22 @@ pub struct PaperHit {
     /// OpenAlex open-access status (`gold` / `green` / `hybrid` /
     /// `bronze` / `closed`), or `None`.
     pub oa_status: Option<String>,
+    /// OpenAlex `fwci` (Field-Weighted Citation Impact). A value > 1.0
+    /// means above-average impact for the paper's field and year. `None`
+    /// when OpenAlex has not yet computed a value for the work.
+    pub fwci: Option<f64>,
+    /// OpenAlex `cited_by_percentile_year.min` — the paper's minimum
+    /// percentile rank among same-year works in the same field (0–100).
+    /// `None` when OpenAlex has not computed the percentile. A value of
+    /// 90 means "top 10% of same-year works in its field" (#295).
+    pub cited_by_percentile_year_min: Option<u8>,
     /// Discovery backend that produced this hit (PR1: always
     /// [`DiscoverySource::OpenAlex`]). Serializes to `"openalex"`.
     pub source: DiscoverySource,
 }
 
 /// The result of a discovery search: the hits plus the upstream total.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PaperSearchResults {
     /// The candidate papers (length ≤ `query.limit`).
     pub results: Vec<PaperHit>,
@@ -771,6 +780,14 @@ fn work_to_hit(work: &serde_json::Value) -> PaperHit {
         .and_then(serde_json::Value::as_array)
         .and_then(|locs| locs.iter().find_map(extract_arxiv_from_location));
 
+    let fwci = work.get("fwci").and_then(serde_json::Value::as_f64);
+
+    let cited_by_percentile_year_min = work
+        .get("cited_by_percentile_year")
+        .and_then(|p| p.get("min"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|v| u8::try_from(v).ok());
+
     PaperHit {
         doi,
         openalex_id,
@@ -782,6 +799,8 @@ fn work_to_hit(work: &serde_json::Value) -> PaperHit {
         abstract_,
         cited_by_count,
         oa_status,
+        fwci,
+        cited_by_percentile_year_min,
         source: DiscoverySource::OpenAlex,
     }
 }
@@ -1022,6 +1041,177 @@ fn work_to_links(work: &serde_json::Value) -> PaperLinks {
         openalex_id,
         title,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Frontier view (#295)
+// ---------------------------------------------------------------------------
+
+/// Parameters for `frontier_view`: the gap-spotting view that surfaces
+/// candidate papers structurally connected to a seed but not yet noticed.
+///
+/// Phase 1 (this PR): finds papers that **cite the seed** sorted by
+/// age-normalized impact (`fwci` desc). Phase 2 will add bibliographic-
+/// coupling candidates (papers sharing references with the seed).
+#[derive(Debug, Clone)]
+pub struct FrontierQuery {
+    /// The anchor paper whose citing neighbourhood forms the candidate set.
+    pub seed_doi: crate::Doi,
+    /// Maximum results returned (clamped to `1..=MAX_PER_PAGE`).
+    /// Defaults to [`DEFAULT_LIMIT`].
+    pub limit: usize,
+    /// When set, only include works published on or after this year.
+    pub min_year: Option<i32>,
+}
+
+impl FrontierQuery {
+    /// Construct a new query for the given seed DOI with default limits.
+    pub fn new(seed_doi: crate::Doi) -> Self {
+        Self {
+            seed_doi,
+            limit: DEFAULT_LIMIT,
+            min_year: None,
+        }
+    }
+}
+
+/// Results of a `frontier_view` query.
+#[derive(Debug, Clone, Serialize)]
+pub struct FrontierResults {
+    /// Ranked candidate papers (length ≤ `query.limit`).
+    ///
+    /// Sorted by `fwci` descending (nulls last), then by `year` descending,
+    /// then by `cited_by_count` descending for stable ordering.
+    pub hits: Vec<PaperHit>,
+    /// OpenAlex Work ID of the seed paper (`W…` prefix stripped).
+    pub seed_openalex_id: String,
+    /// Title of the seed paper, when available from OpenAlex.
+    pub seed_title: Option<String>,
+    /// Total number of citing works in OpenAlex (usually larger than
+    /// `hits.len()`). `None` if the API response omitted the count.
+    pub total_citing: Option<u64>,
+}
+
+/// Surface the frontier neighbourhood of `seed_doi`: papers that cite the
+/// seed, ranked by age-normalized impact, ready for the agent to triage.
+///
+/// ## Algorithm (Phase 1)
+///
+/// 1. Resolve the seed DOI to an OpenAlex Work ID via a direct DOI lookup
+///    (`/works/https://doi.org/<doi>`).
+/// 2. Query `/works?filter=cites:<seed_id>` to fetch citing papers.
+///    Unlike free-text search, `filter=cites:` constrains the result set to
+///    papers that actually build on the seed, so `sort=fwci:desc` is safe
+///    here (no off-topic papers; the topicality concern from #290 does not
+///    apply). Phase 2 will add bibliographic-coupling candidates.
+/// 3. Sort locally by `fwci` desc (nulls last) → `year` desc → `cited_by_count` desc.
+/// 4. Apply `min_year` filter if provided.
+///
+/// Returns `FrontierResults` containing the ranked hits. The caller is
+/// responsible for excluding papers already in the local store (the core
+/// function is store-agnostic).
+pub async fn frontier_view(
+    query: &FrontierQuery,
+    base: &Url,
+    contact_email: &str,
+    ctx: &FetchContext,
+) -> Result<FrontierResults, FetchError> {
+    let limit = query.limit.clamp(1, MAX_PER_PAGE);
+
+    // Step 1: resolve seed DOI to OpenAlex Work ID via filter=doi: (the
+    // query-param form handles the DOI's `/` and `:` without manual
+    // encoding — same pattern as `build_doi_lookup_url`).
+    let seed_url = {
+        let mut u = base.join("/works").map_err(|e| FetchError::SourceSchema {
+            hint: format!("frontier seed URL construction failed: {e}"),
+        })?;
+        {
+            let mut qp = u.query_pairs_mut();
+            qp.append_pair("filter", &format!("doi:{}", query.seed_doi.as_str()));
+            qp.append_pair("per-page", "1");
+            qp.append_pair("select", "id,title,display_name");
+            if !contact_email.is_empty() {
+                qp.append_pair("mailto", contact_email);
+            }
+        }
+        u
+    };
+    let (seed_resp, _) = openalex_get(&seed_url, ctx).await?;
+    let seed_results = seed_resp
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| missing_results_array("frontier/seed", &seed_resp))?;
+    let seed_work = seed_results
+        .first()
+        .ok_or_else(|| FetchError::NotFound {
+            hint: format!("no OpenAlex work matched seed doi '{}'", query.seed_doi.as_str()),
+        })?;
+    let seed_openalex_id = seed_work
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(strip_openalex_prefix)
+        .ok_or_else(|| FetchError::SourceSchema {
+            hint: format!("seed OpenAlex record for '{}' has no id", query.seed_doi.as_str()),
+        })?
+        .to_string();
+    let seed_title = seed_work
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            seed_work
+                .get("display_name")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::to_string);
+
+    // Step 2: fetch citing papers with fwci sort.
+    let mut citing_url = base.clone();
+    citing_url.set_path("/works");
+    {
+        let mut pairs = citing_url.query_pairs_mut();
+        pairs.append_pair("filter", &format!("cites:{seed_openalex_id}"));
+        pairs.append_pair("select", SELECT_FIELDS);
+        pairs.append_pair("sort", "fwci:desc");
+        pairs.append_pair("per-page", &limit.to_string());
+        if !contact_email.is_empty() {
+            pairs.append_pair("mailto", contact_email);
+        }
+    }
+    let (citing_resp, _) = openalex_get(&citing_url, ctx).await?;
+    let total_citing = citing_resp
+        .get("meta")
+        .and_then(|m| m.get("count"))
+        .and_then(serde_json::Value::as_u64);
+    let results_arr = citing_resp
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| missing_results_array("frontier/cites", &citing_resp))?;
+
+    // Step 3: parse, apply min_year filter, and sort.
+    let mut hits: Vec<PaperHit> = results_arr
+        .iter()
+        .map(work_to_hit)
+        .filter(|h| query.min_year.map_or(true, |y| h.year.map_or(false, |hy| hy >= y)))
+        .collect();
+
+    hits.sort_by(|a, b| {
+        let fwci_ord = match (a.fwci, b.fwci) {
+            (Some(fa), Some(fb)) => fb.partial_cmp(&fa).unwrap_or(std::cmp::Ordering::Equal),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        };
+        fwci_ord
+            .then_with(|| b.year.cmp(&a.year))
+            .then_with(|| b.cited_by_count.cmp(&a.cited_by_count))
+    });
+
+    Ok(FrontierResults {
+        hits,
+        seed_openalex_id,
+        seed_title,
+        total_citing,
+    })
 }
 
 // ---------------------------------------------------------------------------
