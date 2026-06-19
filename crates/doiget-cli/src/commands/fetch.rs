@@ -524,11 +524,11 @@ impl FetchHarness {
 }
 
 /// `true` iff the outcome represents a clean fetch: `Fetched` (full
-/// PDF) or `NoOaUrl` (metadata-only by design). A `Blocked` PDF leg
-/// is a failure for SessionEnd / exit-code purposes — an OA PDF was
-/// discovered but could not be retrieved — even though the metadata
-/// TOML did land on disk. Pulled out so both `run_with_options` and
-/// `commands::batch` agree on the failure boundary.
+/// PDF), `NoOaUrl` (metadata-only by design), or `PreprintFallback`
+/// (OA blocked but arXiv preprint auto-fetched — issue #325).
+/// A `Blocked` PDF leg is a failure for SessionEnd / exit-code purposes.
+/// Pulled out so both `run_with_options` and `commands::batch` agree on
+/// the failure boundary.
 pub(crate) fn outcome_is_clean_success(outcome: &FetchPaperOutcome) -> bool {
     !matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. })
 }
@@ -554,6 +554,13 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
             print_success(format_args!(
                 "fetched {} (metadata-only: no OA PDF available) -> {}",
                 label, outcome.path
+            ));
+        }
+        // Issue #325: publisher PDF was blocked, arXiv preprint auto-fetched.
+        PdfLegStatus::PreprintFallback { arxiv_id, .. } => {
+            print_success(format_args!(
+                "fetched {} ({} bytes) via arXiv preprint arxiv:{} -> {}",
+                label, outcome.size_bytes, arxiv_id, outcome.path
             ));
         }
         // Issue #145: `Blocked` is NO LONGER a success outcome. It is

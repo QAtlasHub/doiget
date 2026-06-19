@@ -2794,6 +2794,15 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             }
             Value::Object(o)
         }
+        // Issue #325: publisher blocked but arXiv preprint auto-fetched.
+        PdfLegStatus::PreprintFallback {
+            arxiv_id,
+            original_block,
+        } => json!({
+            "status": "preprint_fallback",
+            "arxiv_id": arxiv_id,
+            "original_block": original_block,
+        }),
         // `PdfLegStatus` is `#[non_exhaustive]`; a future variant
         // surfaces as a forward-compatible neutral status rather than
         // failing the build in this downstream crate.
