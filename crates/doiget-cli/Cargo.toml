@@ -78,3 +78,5 @@ serial_test = { workspace = true }
 # Build a gzipped rotated `.gz` segment fixture for the multi-segment
 # `audit-log --verify` e2e (provenance §6 / #140).
 flate2      = { workspace = true }
+# tex_source_e2e: build synthetic tar+gzip payloads for the arXiv src mock.
+tar         = { workspace = true }

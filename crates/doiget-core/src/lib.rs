@@ -20,6 +20,7 @@ pub mod discovery;
 pub mod dry_run;
 pub mod http;
 pub mod orchestrator;
+pub mod paper_tex_source;
 pub mod paper_text;
 pub mod provenance;
 pub mod rate_limiter;
