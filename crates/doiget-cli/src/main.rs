@@ -249,6 +249,14 @@ enum Command {
         /// exit so a malformed batch is visible.
         #[arg(long)]
         dry_run: bool,
+        /// Seconds to sleep between individual fetches. Useful for hosts
+        /// that throttle below the HTTP 429 threshold (issue #326).
+        #[arg(long, value_name = "SECS")]
+        delay: Option<f64>,
+        /// Override the User-Agent header for every HTTP request in this
+        /// batch. Default: `doiget/<version> (+https://github.com/sotashimozono/doiget)`.
+        #[arg(long, value_name = "STRING")]
+        user_agent: Option<String>,
     },
     /// Show metadata for a stored entry.
     Info {
@@ -491,8 +499,14 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Fetch { ref_, dry_run }) => {
             doiget_cli::commands::fetch::run_with_options(ref_, dry_run, mode).await
         }
-        Some(Command::Batch { path, dry_run }) => {
-            doiget_cli::commands::batch::run_with_options(path, dry_run, mode).await
+        Some(Command::Batch {
+            path,
+            dry_run,
+            delay,
+            user_agent,
+        }) => {
+            doiget_cli::commands::batch::run_with_options(path, dry_run, delay, user_agent, mode)
+                .await
         }
         Some(Command::Bib { ref_ }) => doiget_cli::commands::bib::run(ref_, mode),
         Some(Command::Csl { ref_ }) => doiget_cli::commands::csl::run(ref_, mode),

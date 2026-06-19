@@ -10,6 +10,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.4.2-beta.0] - 2026-06-20
+
+### Added
+- **[batch]** `--delay <SECS>` — sleep between individual fetches in a batch
+  run. Complements the internal per-source rate-limiting (#264) for hosts that
+  throttle below the HTTP 429 threshold (APS, Springer, …) (#326).
+- **[batch]** `--user-agent <STRING>` — override the `User-Agent` header for
+  every HTTP request in the batch. Default behaviour is unchanged; the flag
+  only takes effect when explicitly set (#326).
+- **[core]** `HttpClient::new_with_user_agent` — companion to `HttpClient::new`
+  that accepts a caller-supplied UA string, used by the batch UA override path.
+
 ## [0.4.1-beta.0] - 2026-05-31
 
 ### Added
