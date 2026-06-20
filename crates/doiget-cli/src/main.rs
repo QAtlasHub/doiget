@@ -720,9 +720,11 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Fetch { ref_, dry_run }) => {
             doiget_cli::commands::fetch::run_with_options(ref_, dry_run, mode).await
         }
-        Some(Command::Batch { path, dry_run, only_failed }) => {
-            doiget_cli::commands::batch::run_with_options(path, dry_run, only_failed, mode).await
-        }
+        Some(Command::Batch {
+            path,
+            dry_run,
+            only_failed,
+        }) => doiget_cli::commands::batch::run_with_options(path, dry_run, only_failed, mode).await,
         Some(Command::Bib {
             ref_,
             all,

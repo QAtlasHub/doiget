@@ -293,8 +293,10 @@ pub async fn run_with_options(
             // succeed (e.g. after an allowlist update or preprint fallback).
             if only_failed {
                 let safekey = ref_.safekey();
-                let pdf_path =
-                    harness.cfg.store_root.join(format!("{}.pdf", safekey.as_str()));
+                let pdf_path = harness
+                    .cfg
+                    .store_root
+                    .join(format!("{}.pdf", safekey.as_str()));
                 if pdf_path.exists() {
                     tracing::debug!(
                         ref_ = %input,
