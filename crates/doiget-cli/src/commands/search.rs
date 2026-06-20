@@ -280,11 +280,12 @@ fn resolve_openalex_base() -> Result<url::Url> {
     url::Url::parse(&raw).with_context(|| format!("DOIGET_OPENALEX_BASE is not a URL: {raw}"))
 }
 
-/// Build the local-scan `--mode json` envelope (ADR-0031 D5):
-/// `{ scope: "local", query, count, results }`. The `results[]` element is
+/// Build the local-scan `--mode json` envelope (ADR-0031 D5, #212):
+/// `{ ok, scope: "local", query, count, results }`. The `results[]` element is
 /// the legacy `EntryInfo` shape, unchanged.
 fn local_envelope(query: &str, entries: &[EntryInfo]) -> serde_json::Value {
     serde_json::json!({
+        "ok": true,
         "scope": "local",
         "query": query,
         "count": entries.len(),
@@ -292,11 +293,12 @@ fn local_envelope(query: &str, entries: &[EntryInfo]) -> serde_json::Value {
     })
 }
 
-/// Build the external-discovery `--mode json` envelope (ADR-0031 D5):
-/// `{ scope, query, total_results, count, results }`. Extracted as a pure
+/// Build the external-discovery `--mode json` envelope (ADR-0031 D5, #212):
+/// `{ ok, scope, query, total_results, count, results }`. Extracted as a pure
 /// function so the wire shape is unit-testable without capturing stdout.
 fn external_envelope(query: &str, results: &PaperSearchResults) -> serde_json::Value {
     serde_json::json!({
+        "ok": true,
         "scope": "external",
         "query": query,
         "total_results": results.total_results,
@@ -348,6 +350,7 @@ mod tests {
             total_results: Some(4012),
         };
         let v = external_envelope("spin glass", &results);
+        assert_eq!(v["ok"], true);
         assert_eq!(v["scope"], "external");
         assert_eq!(v["query"], "spin glass");
         assert_eq!(v["total_results"], 4012);
@@ -365,6 +368,7 @@ mod tests {
     #[test]
     fn local_envelope_has_local_scope_and_count() {
         let v = local_envelope("quantum", &[]);
+        assert_eq!(v["ok"], true);
         assert_eq!(v["scope"], "local");
         assert_eq!(v["query"], "quantum");
         assert_eq!(v["count"], 0);

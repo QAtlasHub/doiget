@@ -59,7 +59,13 @@ pub fn run(input: String, mode: super::output::OutputMode, quiet_was_explicit: b
             let stdout = std::io::stdout();
             let mut out = stdout.lock();
             if mode == super::output::OutputMode::Json {
-                let s = serde_json::to_string_pretty(&m)
+                let envelope = serde_json::json!({
+                    "ok": true,
+                    "ref": input,
+                    "safekey": safekey.as_str(),
+                    "metadata": m,
+                });
+                let s = serde_json::to_string_pretty(&envelope)
                     .context("failed to serialize metadata to JSON for stdout")?;
                 writeln!(out, "{s}").context("failed to write metadata JSON to stdout")?;
                 return Ok(());
