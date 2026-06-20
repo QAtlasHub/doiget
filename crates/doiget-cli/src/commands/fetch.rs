@@ -279,18 +279,24 @@ pub(crate) fn build_http_client() -> Result<HttpClient> {
             Ok(cfg_dir) => {
                 let path = cfg_dir.join("doiget").join("config.toml");
                 match doiget_core::user_extension::load(&path) {
-                    Ok(user_hosts) if !user_hosts.is_empty() => {
-                        tracing::info!(
-                            count = user_hosts.len(),
-                            path = %path,
-                            "merging user-extension allowlist hosts (ADR-0028 D2)"
-                        );
-                        doiget_core::user_extension::merge_into_allowlists(
-                            &mut allowlists,
-                            &user_hosts,
-                        );
+                    Ok(cfg) => {
+                        let mut hosts = cfg.additional_hosts;
+                        if cfg.trust_academic_repos {
+                            hosts.extend(doiget_core::user_extension::academic_repo_hosts());
+                        }
+                        if !hosts.is_empty() {
+                            tracing::info!(
+                                count = hosts.len(),
+                                trust_academic_repos = cfg.trust_academic_repos,
+                                path = %path,
+                                "merging user-extension allowlist hosts (ADR-0028 D2)"
+                            );
+                            doiget_core::user_extension::merge_into_allowlists(
+                                &mut allowlists,
+                                &hosts,
+                            );
+                        }
                     }
-                    Ok(_) => {}
                     Err(e) => {
                         tracing::warn!(
                             error = %e,

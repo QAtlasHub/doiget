@@ -614,7 +614,7 @@ fn user_extension_count() -> usize {
     };
     let path = cfg_dir.join("doiget").join("config.toml");
     match doiget_core::user_extension::load(&path) {
-        Ok(hosts) => hosts.len(),
+        Ok(cfg) => cfg.additional_hosts.len(),
         Err(_) => 0,
     }
 }
