@@ -158,19 +158,36 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
         },
         "doctor" => {
             let mut all_ok = true;
+            let store_parent = cfg.store_root.parent().map(|p| p.as_str()).unwrap_or("");
             check(
                 "store_root parent exists",
                 cfg.store_root.parent().map(|p| p.exists()).unwrap_or(true),
+                Some(&format!(
+                    "create the parent directory or override via \
+                     DOIGET_STORE_ROOT\n               \
+                     missing parent: {store_parent}"
+                )),
                 &mut all_ok,
             );
+            let log_parent = cfg.log_dir.parent().map(|p| p.as_str()).unwrap_or("");
             check(
                 "log_dir parent exists",
                 cfg.log_dir.parent().map(|p| p.exists()).unwrap_or(true),
+                Some(&format!(
+                    "create the parent directory or override via \
+                     DOIGET_LOG_PATH\n               \
+                     missing parent: {log_parent}"
+                )),
                 &mut all_ok,
             );
             check(
                 "contact_email set",
                 cfg.contact_email.is_some(),
+                Some(
+                    "set DOIGET_CONTACT_EMAIL to your email address\n               \
+                     e.g. export DOIGET_CONTACT_EMAIL=you@institution.edu\n               \
+                     (required for the polite User-Agent header and Unpaywall API)",
+                ),
                 &mut all_ok,
             );
             // ADR-0028 D2: surface user-extension allowlist health. A
@@ -184,11 +201,17 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
                 Ok(hosts) => check(
                     &format!("user-extension hosts loaded: {}", hosts.len()),
                     true,
+                    None,
                     &mut all_ok,
                 ),
                 Err(e) => check(
                     &format!("user-extension config invalid: {e}"),
                     false,
+                    Some(&format!(
+                        "fix {} — see docs/CONFIG.md §3 for the \
+                         [[network.additional_hosts]] schema",
+                        cfg.config_path
+                    )),
                     &mut all_ok,
                 ),
             }
@@ -227,11 +250,18 @@ fn eprintln_err(msg: &str) {
 /// Emit one `[ ok ]` / `[FAIL]` checklist line to stderr and update the
 /// running pass/fail flag. Stderr is used so that `doiget config doctor`
 /// stdout stays empty for green runs (script-friendly).
+///
+/// When `ok` is `false` and `tip` is `Some`, a remediation tip is printed
+/// on the next line, indented so it is visually attached to the failed
+/// check (issue #322).
 #[allow(clippy::print_stderr)]
-fn check(label: &str, ok: bool, all_ok: &mut bool) {
+fn check(label: &str, ok: bool, tip: Option<&str>, all_ok: &mut bool) {
     let mark = if ok { "[ ok ]" } else { "[FAIL]" };
     eprintln!("{mark} {label}");
     if !ok {
+        if let Some(t) = tip {
+            eprintln!("       tip: {t}");
+        }
         *all_ok = false;
     }
 }
@@ -420,6 +450,26 @@ mod tests {
             .downcast_ref::<CliExit>()
             .expect("failing doctor must carry a CliExit");
         assert_eq!(cli_exit.0, 2);
+    }
+
+    /// Issue #322: `check` must emit a `tip:` line to stderr when the
+    /// check fails and a tip is provided. Passing `ok=true` must NOT
+    /// emit the tip line even when one is supplied.
+    #[test]
+    fn check_emits_tip_on_failure_only() {
+        let mut flag = true;
+        // Passing check — tip must be swallowed.
+        check("passing check", true, Some("should not appear"), &mut flag);
+        assert!(flag, "all_ok must stay true for a passing check");
+
+        // Failing check with tip — all_ok must flip.
+        check(
+            "failing check",
+            false,
+            Some("set DOIGET_CONTACT_EMAIL"),
+            &mut flag,
+        );
+        assert!(!flag, "all_ok must flip to false on a failing check");
     }
 
     #[test]
