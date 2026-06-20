@@ -2140,6 +2140,229 @@ impl Server {
             "results": results,
         })))
     }
+
+    /// `doiget_tag` — add / remove tags and collection membership on a stored
+    /// entry. Mutates `[doiget].tags` and `[doiget].collections` in the
+    /// metadata TOML (issue #294). All mutations are idempotent.
+    ///
+    /// The entry must already be in the store (fetched via `doiget_fetch_paper`
+    /// or equivalent). No network I/O is performed.
+    #[tool(
+        description = "WHEN TO USE: Add or remove tags / collections on a stored paper entry for local knowledge-base organisation (#294).\n\
+                       INPUTS: ref (DOI or arXiv id); add (array of tags to add, optional); remove (array of tags to remove, optional); collection_add (array of collections to join, optional); collection_remove (array of collections to leave, optional).\n\
+                       OUTPUTS: { ok: true, ref, tags, collections } OR { ok: false, error }.\n\
+                       COSTS: 0 network requests; one store read + write.\n\
+                       SIDE EFFECTS: Overwrites [doiget].tags / [doiget].collections in <store>/.metadata/<safekey>.toml.\n\
+                       LIMITS: Entry must already exist in the store. Tags are case-sensitive; idempotent add/remove."
+    )]
+    async fn doiget_tag(
+        &self,
+        Parameters(input): Parameters<TagInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let ref_ = match Ref::parse(&input.ref_) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &format!("invalid ref: {e}"),
+                )));
+            }
+        };
+        let safekey = ref_.safekey();
+
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InternalError,
+                    "could not resolve store root",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+
+        let mut metadata = match store.read(&safekey) {
+            Ok(Some(m)) => m,
+            Ok(None) => {
+                return Ok(CallToolResult::structured(json!({
+                    "ok": false,
+                    "error": format!("no store entry for {}; fetch the paper first", input.ref_),
+                })));
+            }
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    &format!("store read failed: {e}"),
+                )));
+            }
+        };
+
+        let ext = match metadata.doiget.as_mut() {
+            Some(d) => d,
+            None => {
+                return Ok(CallToolResult::structured(json!({
+                    "ok": false,
+                    "error": format!("entry {} has no [doiget] table; fetch it first", input.ref_),
+                })));
+            }
+        };
+
+        for t in &input.add {
+            if !ext.tags.contains(t) {
+                ext.tags.push(t.clone());
+            }
+        }
+        for t in &input.remove {
+            ext.tags.retain(|x| x != t);
+        }
+        for c in &input.collection_add {
+            if !ext.collections.contains(c) {
+                ext.collections.push(c.clone());
+            }
+        }
+        for c in &input.collection_remove {
+            ext.collections.retain(|x| x != c);
+        }
+
+        let tags = ext.tags.clone();
+        let collections = ext.collections.clone();
+
+        match store.write(&safekey, &metadata, None) {
+            Ok(()) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "ref": input.ref_,
+                "tags": tags,
+                "collections": collections,
+            }))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(&input.ref_),
+                ErrorCode::StoreError,
+                &format!("store write failed: {e}"),
+            ))),
+        }
+    }
+
+    /// `doiget_annotate` — set or clear the freeform annotation on a stored
+    /// paper entry. Mutates `[doiget].annotation` in the metadata TOML
+    /// (issue #294).
+    ///
+    /// The entry must already be in the store. No network I/O is performed.
+    #[tool(
+        description = "WHEN TO USE: Attach or clear a freeform annotation / note on a stored paper for local knowledge-base organisation (#294).\n\
+                       INPUTS: ref (DOI or arXiv id); text (string — the annotation; omit or set to null to clear); clear (bool, default false — explicitly clear the annotation).\n\
+                       OUTPUTS: { ok: true, ref, annotation } OR { ok: false, error }.\n\
+                       COSTS: 0 network requests; one store read + write.\n\
+                       SIDE EFFECTS: Overwrites [doiget].annotation in <store>/.metadata/<safekey>.toml.\n\
+                       LIMITS: Entry must already exist in the store. Setting text overrides any existing annotation."
+    )]
+    async fn doiget_annotate(
+        &self,
+        Parameters(input): Parameters<AnnotateInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let ref_ = match Ref::parse(&input.ref_) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &format!("invalid ref: {e}"),
+                )));
+            }
+        };
+        let safekey = ref_.safekey();
+
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InternalError,
+                    "could not resolve store root",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+
+        let mut metadata = match store.read(&safekey) {
+            Ok(Some(m)) => m,
+            Ok(None) => {
+                return Ok(CallToolResult::structured(json!({
+                    "ok": false,
+                    "error": format!("no store entry for {}; fetch the paper first", input.ref_),
+                })));
+            }
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    &format!("store read failed: {e}"),
+                )));
+            }
+        };
+
+        let ext = match metadata.doiget.as_mut() {
+            Some(d) => d,
+            None => {
+                return Ok(CallToolResult::structured(json!({
+                    "ok": false,
+                    "error": format!("entry {} has no [doiget] table; fetch it first", input.ref_),
+                })));
+            }
+        };
+
+        if input.clear.unwrap_or(false) {
+            ext.annotation = None;
+        } else if let Some(ref text) = input.text {
+            if text.is_empty() {
+                return Ok(CallToolResult::structured(json!({
+                    "ok": false,
+                    "error": "annotation text must not be empty; set clear:true to remove it",
+                })));
+            }
+            ext.annotation = Some(text.clone());
+        } else {
+            return Ok(CallToolResult::structured(json!({
+                "ok": false,
+                "error": "provide 'text' to set an annotation, or 'clear: true' to remove it",
+            })));
+        }
+
+        let annotation = ext.annotation.clone();
+
+        match store.write(&safekey, &metadata, None) {
+            Ok(()) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "ref": input.ref_,
+                "annotation": annotation,
+            }))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(&input.ref_),
+                ErrorCode::StoreError,
+                &format!("store write failed: {e}"),
+            ))),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2444,6 +2667,49 @@ pub struct BatchResolveCitationsInput {
 
 fn default_resolve_limit() -> u8 {
     5
+}
+
+/// JSON-schema-derived input for the `doiget_tag` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct TagInput {
+    /// DOI or arXiv id. Validated via `Ref::parse`; failures surface as
+    /// `INVALID_REF`.
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+    /// Tags to add (idempotent, case-sensitive).
+    #[serde(default)]
+    pub add: Vec<String>,
+    /// Tags to remove.
+    #[serde(default)]
+    pub remove: Vec<String>,
+    /// Collections to join (idempotent, case-sensitive).
+    #[serde(default)]
+    pub collection_add: Vec<String>,
+    /// Collections to leave.
+    #[serde(default)]
+    pub collection_remove: Vec<String>,
+}
+
+/// JSON-schema-derived input for the `doiget_annotate` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct AnnotateInput {
+    /// DOI or arXiv id. Validated via `Ref::parse`; failures surface as
+    /// `INVALID_REF`.
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+    /// Annotation text. Replaces any existing annotation. Omit or set to
+    /// null together with `clear: true` to remove the annotation.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Set to `true` to clear (remove) the annotation instead of setting it.
+    #[serde(default)]
+    pub clear: Option<bool>,
 }
 
 /// Hard cap on refs accepted by a single `doiget_bibtex_export` /

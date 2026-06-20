@@ -123,6 +123,55 @@ impl FsStore {
         guard_safekey(key.as_str())?;
         Ok(self.root.join(format!("{}.pdf", key.as_str())))
     }
+
+    /// Return up to `limit` entries whose `[doiget].tags` list contains `tag`
+    /// (case-sensitive exact match). If `query` is non-empty, also apply a
+    /// case-insensitive substring filter over title / authors / venue /
+    /// publisher. An empty `query` matches all tagged entries.
+    pub fn search_by_tag(
+        &self,
+        tag: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<EntryInfo>, StoreError> {
+        let q = query.to_lowercase();
+        let mut hits = Vec::new();
+        for path in metadata_files(&self.metadata_dir)? {
+            let raw = std::fs::read_to_string(path.as_std_path())?;
+            let Ok(md) = toml::from_str::<Metadata>(&raw) else {
+                continue;
+            };
+            let has_tag = md
+                .doiget
+                .as_ref()
+                .is_some_and(|d| d.tags.iter().any(|t| t == tag));
+            if !has_tag {
+                continue;
+            }
+            if !q.is_empty() {
+                let haystacks = [
+                    md.title.to_lowercase(),
+                    md.authors.join(" ").to_lowercase(),
+                    md.venue.clone().unwrap_or_default().to_lowercase(),
+                    md.publisher.clone().unwrap_or_default().to_lowercase(),
+                ];
+                if !haystacks.iter().any(|h| h.contains(&q)) {
+                    continue;
+                }
+            }
+            let safekey = safekey_from_metadata_filename(&path);
+            hits.push(EntryInfo {
+                safekey,
+                title: md.title,
+                year: md.year,
+                fetched_at: md.doiget.as_ref().map(|d| d.fetched_at),
+            });
+            if hits.len() >= limit {
+                break;
+            }
+        }
+        Ok(hits)
+    }
 }
 
 impl Store for FsStore {
@@ -805,6 +854,9 @@ mod tests {
                 oa_status: Some("gold".to_string()),
                 size_bytes: 1234567,
                 mcp_call_id: Some("01JCKZ7Q0000000000000000AB".to_string()),
+                tags: Vec::new(),
+                collections: Vec::new(),
+                annotation: None,
             }),
             other: BTreeMap::new(),
         }
