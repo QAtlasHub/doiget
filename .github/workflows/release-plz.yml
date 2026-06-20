@@ -309,6 +309,11 @@ jobs:
             artifact: doiget-macos-aarch64
             ext: ""
             target: ""
+          # Intel macOS runner (last GitHub-hosted x86_64 macOS runner, ADR-0025).
+          - os: macos-13
+            artifact: doiget-macos-x86_64
+            ext: ""
+            target: ""
           - os: windows-latest
             artifact: doiget-windows-x86_64
             ext: ".exe"
