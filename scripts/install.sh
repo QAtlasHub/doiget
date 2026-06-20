@@ -37,7 +37,7 @@ case "$os" in
   Darwin)
     case "$arch" in
       arm64 | aarch64) asset="doiget-macos-aarch64" ;;
-      x86_64) err "macos-x86_64 (Intel) is not published yet — use 'cargo binstall doiget' or 'cargo install doiget' (target tracked in #247)" ;;
+      x86_64) asset="doiget-macos-x86_64" ;;
       *) err "unsupported macOS architecture: $arch" ;;
     esac
     ;;

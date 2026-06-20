@@ -10,6 +10,23 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.7.2-beta.1] - 2026-06-20
+
+### Added
+- **[distribution]** `flake.nix` — Nix Flakes integration (#247). Provides
+  `packages.doiget` (built with `rustPlatform.buildRustPackage`, `oa-only`
+  feature, Rust 1.86 toolchain), `apps.doiget` for `nix run`, and
+  `devShells.default` with `cargo-deny`, `cargo-nextest`, `cargo-llvm-cov`,
+  and `taplo`. Uses `rust-overlay` to pin the toolchain; `doCheck = false` in
+  the Nix sandbox (network tests skipped).
+- **[distribution]** macOS Intel (`doiget-macos-x86_64`) added to the release
+  CI matrix (#247). The `macos-13` GitHub Actions runner builds natively for
+  `x86_64-apple-darwin`; the signed binary and `.sha256` sidecar are uploaded
+  to every GitHub Release.
+- **[distribution]** `scripts/install.sh` now supports macOS Intel (#247).
+  `uname -m == x86_64` on Darwin downloads `doiget-macos-x86_64` instead of
+  erroring.
+
 ## [0.7.2-beta.0] - 2026-06-20
 
 ### Added
