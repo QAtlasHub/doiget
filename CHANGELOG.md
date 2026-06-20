@@ -35,6 +35,17 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 - **[core]** `HttpClient::new_with_user_agent(allowlists, ua)` — new public
   constructor that takes an explicit User-Agent string; `HttpClient::new` delegates
   to it using the default `doiget/<version>` UA.
+### Changed
+- **[mcp/cli]** Aligned `--mode json` output shapes with MCP tool envelopes (#212):
+  - `doiget info --mode json` now emits `{ok, ref, safekey, metadata}` instead
+    of bare `Metadata` JSON, matching `doiget_info`'s MCP envelope.
+  - `doiget list-recent --mode json` now emits `{ok, count, entries: [EntryInfo]}`
+    instead of a bare JSON array; MCP `doiget_list_recent` gains the `count` field.
+  - `doiget search --local --mode json` and `--mode json` (external) both gain
+    `"ok": true` at the top level.
+  - MCP `doiget_search_local` now emits `{ok, scope:"local", query, count, results}`
+    (was `{ok, query, entries}`) — `scope` and `count` added, `entries` renamed to
+    `results` — matching the CLI's local search envelope.
 
 ## [0.7.2-beta.0] - 2026-06-20
 

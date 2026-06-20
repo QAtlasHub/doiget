@@ -99,8 +99,18 @@ fn list_recent_json_empty_store_emits_empty_array() {
         .clone();
     let s = String::from_utf8(out).expect("stdout utf-8");
     let v: Value = serde_json::from_str(&s).expect("list-recent JSON parses");
-    assert!(v.is_array(), "list-recent emits an array");
-    assert_eq!(v.as_array().unwrap().len(), 0, "empty store → []");
+    // #212: list-recent --json now emits {ok, count, entries} envelope.
+    assert_eq!(v["ok"], true, "envelope ok");
+    assert!(
+        v["entries"].is_array(),
+        "list-recent emits an entries array"
+    );
+    assert_eq!(
+        v["entries"].as_array().unwrap().len(),
+        0,
+        "empty store → []"
+    );
+    assert_eq!(v["count"], 0, "count matches entries length");
 }
 
 // ---- audit-log issue-rendering JSON path -------------------------------

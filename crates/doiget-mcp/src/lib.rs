@@ -1143,7 +1143,7 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: Find stored entries whose title / authors / venue / publisher contain a query substring (case-insensitive).\n\
                        INPUTS: query (string), limit (optional integer, default 50, max 200).\n\
-                       OUTPUTS: { ok: true, query, entries: [{ safekey, title, year, fetched_at }] } OR { ok:false, error }.\n\
+                       OUTPUTS: { ok: true, scope: \"local\", query, count, results: [{ safekey, title, year, fetched_at }] } OR { ok:false, error }.\n\
                        COSTS: O(N) over the local store; <100 ms for a few thousand entries.\n\
                        SIDE EFFECTS: none.\n\
                        LIMITS: Returns at most `limit` entries (capped at 200)."
@@ -1176,8 +1176,10 @@ impl Server {
         match store.search(&input.query, limit) {
             Ok(entries) => Ok(CallToolResult::structured(json!({
                 "ok": true,
+                "scope": "local",
                 "query": input.query,
-                "entries": entries.iter().map(entry_info_to_json).collect::<Vec<_>>(),
+                "count": entries.len(),
+                "results": entries.iter().map(entry_info_to_json).collect::<Vec<_>>(),
             }))),
             Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
                 None,
@@ -1690,7 +1692,7 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: List the most-recently fetched entries in the local store.\n\
                        INPUTS: limit (optional integer, default 50, max 200).\n\
-                       OUTPUTS: { ok: true, entries: [{ safekey, title, year, fetched_at }] } OR { ok:false, error }.\n\
+                       OUTPUTS: { ok: true, count, entries: [{ safekey, title, year, fetched_at }] } OR { ok:false, error }.\n\
                        COSTS: <100 ms for a few thousand entries.\n\
                        SIDE EFFECTS: none.\n\
                        LIMITS: Returns at most `limit` entries (capped at 200)."
@@ -1723,6 +1725,7 @@ impl Server {
         match store.list_recent(limit) {
             Ok(entries) => Ok(CallToolResult::structured(json!({
                 "ok": true,
+                "count": entries.len(),
                 "entries": entries.iter().map(entry_info_to_json).collect::<Vec<_>>(),
             }))),
             Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(

@@ -206,7 +206,8 @@ fn search_local_json_emits_scope_envelope() {
     let s = String::from_utf8(out).expect("search JSON stdout utf-8");
     let v: serde_json::Value = serde_json::from_str(&s).expect("search JSON parses");
 
-    // ADR-0031 D5: `{scope, query, count, results}` envelope.
+    // ADR-0031 D5, #212: `{ok, scope, query, count, results}` envelope.
+    assert_eq!(v["ok"], true, "ok flag");
     assert_eq!(v["scope"], "local", "local scope tag");
     assert_eq!(v["query"], "quantum");
     let arr = v["results"].as_array().expect("results is an array");

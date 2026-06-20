@@ -250,9 +250,10 @@ fn info_json_emits_metadata_object() {
         .clone();
     let s = String::from_utf8(out).expect("info JSON stdout utf-8");
     let v: serde_json::Value = serde_json::from_str(&s).expect("info JSON parses");
-    // The Metadata struct's `title` field is the only stable assertion
-    // surface at this level (the rest is the on-disk TOML schema).
-    assert_eq!(v["title"], "First Quantum Result");
+    // #212: info --mode json emits {ok, ref, safekey, metadata} envelope.
+    assert_eq!(v["ok"], true, "envelope ok");
+    assert!(v["safekey"].is_string(), "safekey present");
+    assert_eq!(v["metadata"]["title"], "First Quantum Result");
 }
 
 #[test]
@@ -269,8 +270,11 @@ fn list_recent_json_emits_array_of_entries() {
         .clone();
     let s = String::from_utf8(out).expect("list-recent JSON stdout utf-8");
     let v: serde_json::Value = serde_json::from_str(&s).expect("list-recent JSON parses");
-    let arr = v.as_array().expect("list-recent JSON is an array");
+    // #212: list-recent --mode json emits {ok, count, entries} envelope.
+    assert_eq!(v["ok"], true, "envelope ok");
+    let arr = v["entries"].as_array().expect("entries is an array");
     assert_eq!(arr.len(), 2, "seeded store has 2 entries");
+    assert_eq!(v["count"], 2, "count matches entries length");
     // EntryInfo schema (#204): {safekey, title, year, fetched_at}.
     for entry in arr {
         assert!(entry["safekey"].is_string(), "safekey is a string");
