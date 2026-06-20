@@ -81,6 +81,25 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   empty-stdout-on-pass contract). Tips cover: missing `store_root` / `log_dir`
   parents (`DOIGET_STORE_ROOT`, `DOIGET_LOG_PATH`), unset contact email
   (`DOIGET_CONTACT_EMAIL`), and malformed `config.toml` (resolved path shown).
+- **[cli]** `doiget frontier <doi>` — gap-spotting frontier view that surfaces
+  papers citing the seed DOI, ranked by age-normalized impact (`fwci`
+  descending), with papers already in the local store filtered out (#295).
+  Flags: `--limit N` (1–200, default 25), `--from-year YYYY`.
+  `--mode json` emits `{ seed_doi, seed_title, seed_openalex_id,
+  total_citing, count, results: [PaperHit…] }`.
+- **[core]** `FrontierQuery` and `FrontierResults` types in
+  `doiget_core::discovery`.
+- **[core]** `frontier_view()` async function in `doiget_core::discovery`:
+  resolves the seed DOI via OpenAlex, queries `filter=cites:<seed_id>` with
+  `sort=fwci:desc`, and returns hits sorted by `fwci` → `year` → `cited_by_count`.
+- **[core]** `PaperHit` now carries `fwci: Option<f64>` and
+  `cited_by_percentile_year_min: Option<u8>` (both already in the OpenAlex
+  `select=` field list; now parsed and surfaced). These fields are emitted in
+  all `search` and `frontier` JSON output.
+
+### Changed
+- **[core]** `PaperHit` and `PaperSearchResults` drop the `Eq` derive
+  (retained `PartialEq`); `f64` fields preclude a total equality relation.
 
 ## [0.7.1-beta.0] - 2026-06-20
 

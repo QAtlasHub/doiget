@@ -29,6 +29,7 @@ pub mod cite;
 pub mod config;
 pub mod csl;
 pub mod fetch;
+pub mod frontier;
 pub mod info;
 pub mod link;
 pub mod lint;
