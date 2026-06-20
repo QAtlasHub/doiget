@@ -26,6 +26,7 @@ use super::resolve_store_root;
 /// `collection_add` — collections to join (idempotent).
 /// `collection_remove` — collections to leave.
 /// `list` — print current tags / collections / annotation then exit.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     ref_str: String,
     add: Vec<String>,

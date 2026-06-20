@@ -1198,7 +1198,7 @@ pub async fn frontier_view(
         .filter(|h| {
             query
                 .min_year
-                .map_or(true, |y| h.year.map_or(false, |hy| hy >= y))
+                .is_none_or(|y| h.year.is_some_and(|hy| hy >= y))
         })
         .collect();
 

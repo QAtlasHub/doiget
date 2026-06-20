@@ -144,7 +144,7 @@ impl FsStore {
             let has_tag = md
                 .doiget
                 .as_ref()
-                .map_or(false, |d| d.tags.iter().any(|t| t == tag));
+                .is_some_and(|d| d.tags.iter().any(|t| t == tag));
             if !has_tag {
                 continue;
             }
