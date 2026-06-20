@@ -261,6 +261,14 @@ enum Command {
         /// already-fetched refs (issue #324).
         #[arg(long)]
         only_failed: bool,
+        /// Seconds to sleep between individual fetches. Useful for hosts
+        /// that throttle below the HTTP 429 threshold (issue #326).
+        #[arg(long, value_name = "SECS")]
+        delay: Option<f64>,
+        /// Override the User-Agent header for every HTTP request in this
+        /// batch. Default: `doiget/<version> (+https://github.com/sotashimozono/doiget)`.
+        #[arg(long, value_name = "STRING")]
+        user_agent: Option<String>,
     },
     /// Show metadata for a stored entry.
     Info {
@@ -724,7 +732,19 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             path,
             dry_run,
             only_failed,
-        }) => doiget_cli::commands::batch::run_with_options(path, dry_run, only_failed, mode).await,
+            delay,
+            user_agent,
+        }) => {
+            doiget_cli::commands::batch::run_with_options(
+                path,
+                dry_run,
+                only_failed,
+                delay,
+                user_agent,
+                mode,
+            )
+            .await
+        }
         Some(Command::Bib {
             ref_,
             all,

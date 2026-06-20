@@ -127,9 +127,16 @@ async fn batch_three_arxiv_refs_succeeds_end_to_end() {
     )
     .expect("write refs file");
 
-    batch::run_with_options(refs_path.as_str().to_string(), false, false, OutputMode::Human)
-        .await
-        .expect("batch::run_with_options succeeds");
+    batch::run_with_options(
+        refs_path.as_str().to_string(),
+        false,
+        false,
+        None,
+        None,
+        OutputMode::Human,
+    )
+    .await
+    .expect("batch::run_with_options succeeds");
 
     // Step 4: assert all three PDFs landed in the store under the expected
     // safekey-derived names.
@@ -239,8 +246,15 @@ async fn batch_with_malformed_ref_continues_and_returns_err() {
     )
     .expect("write refs file");
 
-    let result =
-        batch::run_with_options(refs_path.as_str().to_string(), false, false, OutputMode::Human).await;
+    let result = batch::run_with_options(
+        refs_path.as_str().to_string(),
+        false,
+        false,
+        None,
+        None,
+        OutputMode::Human,
+    )
+    .await;
     let err = result.expect_err("batch with a malformed ref must surface an error to the binary");
     // Issue #143 / `docs/ERRORS.md` §4: the batch exit code is the number
     // of failures (capped at 255), NOT a blanket 1. Exactly one entry
@@ -335,9 +349,16 @@ async fn batch_above_window_size_fetches_every_ref() {
     let refs_path = store_root.parent().unwrap().join("refs.txt");
     std::fs::write(refs_path.as_std_path(), refs_body).expect("write refs file");
 
-    batch::run_with_options(refs_path.as_str().to_string(), false, false, OutputMode::Human)
-        .await
-        .expect("a batch above the window size must succeed, fetching every ref");
+    batch::run_with_options(
+        refs_path.as_str().to_string(),
+        false,
+        false,
+        None,
+        None,
+        OutputMode::Human,
+    )
+    .await
+    .expect("a batch above the window size must succeed, fetching every ref");
 
     // Every ref's PDF landed — nothing was dropped by an over-limit abort.
     for id in &ids {

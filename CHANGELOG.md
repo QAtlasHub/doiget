@@ -26,6 +26,15 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 - **[distribution]** `scripts/install.sh` now supports macOS Intel (#247).
   `uname -m == x86_64` on Darwin downloads `doiget-macos-x86_64` instead of
   erroring.
+- **[batch]** `--delay <SECS>` (#326): sleep between individual fetches to avoid
+  tripping per-host rate limits below the HTTP 429 threshold (APS, Springer, etc.).
+  No delay before the first fetch; `<SECS>` is a float (e.g. `--delay 1.5`).
+- **[batch]** `--user-agent <STRING>` (#326): override the default
+  `doiget/<version>` User-Agent for every HTTP request in the batch. Useful when
+  a publisher's WAF classifies the default string as a bot.
+- **[core]** `HttpClient::new_with_user_agent(allowlists, ua)` — new public
+  constructor that takes an explicit User-Agent string; `HttpClient::new` delegates
+  to it using the default `doiget/<version>` UA.
 
 ## [0.7.2-beta.0] - 2026-06-20
 

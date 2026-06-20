@@ -15,7 +15,7 @@ fn build_context() -> Result<FetchContext> {
     let session_id = crate::commands::fetch::new_session_id();
     let log_path = crate::commands::fetch::resolve_log_path()?;
 
-    let http = Arc::new(crate::commands::fetch::build_http_client()?);
+    let http = Arc::new(crate::commands::fetch::build_http_client(None)?);
     let rate_limiter = Arc::new(doiget_core::rate_limiter::RateLimiter::new(
         RateLimits::HARD_CODED,
     ));

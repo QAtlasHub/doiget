@@ -683,16 +683,27 @@ impl HttpClient {
     /// Returns the underlying `reqwest::Error` if `ClientBuilder::build`
     /// fails (typically a TLS-backend init failure).
     pub fn new(allowlists: Vec<SourceAllowlist>) -> Result<Self, reqwest::Error> {
+        let ua = format!(
+            "doiget/{} (+https://github.com/sotashimozono/doiget)",
+            VERSION
+        );
+        Self::new_with_user_agent(allowlists, &ua)
+    }
+
+    /// Build a client with a custom `User-Agent` header.
+    ///
+    /// Used by `doiget batch --user-agent` to override the default UA for
+    /// hosts that classify the default string as a bot.
+    pub fn new_with_user_agent(
+        allowlists: Vec<SourceAllowlist>,
+        user_agent: &str,
+    ) -> Result<Self, reqwest::Error> {
         let mut clients = HashMap::with_capacity(allowlists.len());
         let mut allowlist_map = HashMap::with_capacity(allowlists.len());
         for entry in allowlists {
             let source = entry.source.clone();
-            // Keep the *same* allowlist value both inside the redirect
-            // closure (via `build_client`) and queryable on the client
-            // (issue #145 pre-fetch check). `build_client` takes the
-            // allowlist by value, so clone once for the side table first.
             allowlist_map.insert(source.clone(), entry.clone());
-            let client = build_client(entry)?;
+            let client = build_client(entry, user_agent)?;
             clients.insert(source, client);
         }
         Ok(Self {
@@ -1203,13 +1214,10 @@ fn is_ipv6_loopback(ip: std::net::Ipv6Addr) -> bool {
     matches!(ip.to_ipv4_mapped(), Some(v4) if v4.is_loopback())
 }
 
-fn build_client(allowlist: SourceAllowlist) -> Result<Client, reqwest::Error> {
+fn build_client(allowlist: SourceAllowlist, ua: &str) -> Result<Client, reqwest::Error> {
     ensure_crypto_provider();
 
-    let user_agent = format!(
-        "doiget/{} (+https://github.com/sotashimozono/doiget)",
-        VERSION
-    );
+    let user_agent = ua.to_string();
 
     // Redirect policy: capture the per-source allowlist by value. The
     // closure is called for every redirect hop — there is no global
