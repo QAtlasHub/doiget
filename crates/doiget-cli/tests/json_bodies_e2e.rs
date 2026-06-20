@@ -101,8 +101,15 @@ fn list_recent_json_empty_store_emits_empty_array() {
     let v: Value = serde_json::from_str(&s).expect("list-recent JSON parses");
     // #212: list-recent --json now emits {ok, count, entries} envelope.
     assert_eq!(v["ok"], true, "envelope ok");
-    assert!(v["entries"].is_array(), "list-recent emits an entries array");
-    assert_eq!(v["entries"].as_array().unwrap().len(), 0, "empty store → []");
+    assert!(
+        v["entries"].is_array(),
+        "list-recent emits an entries array"
+    );
+    assert_eq!(
+        v["entries"].as_array().unwrap().len(),
+        0,
+        "empty store → []"
+    );
     assert_eq!(v["count"], 0, "count matches entries length");
 }
 
