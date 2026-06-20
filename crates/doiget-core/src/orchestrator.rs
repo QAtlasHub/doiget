@@ -1357,7 +1357,12 @@ async fn try_arxiv_preprint_fallback(
     oa_pdf_bytes: Option<Vec<u8>>,
     profile: &CapabilityProfile,
     ctx: &FetchContext,
-) -> (PdfLegStatus, Option<Vec<u8>>, Option<ArxivId>, Option<String>) {
+) -> (
+    PdfLegStatus,
+    Option<Vec<u8>>,
+    Option<ArxivId>,
+    Option<String>,
+) {
     let (arxiv_id_str, original_block) = match &pdf_leg {
         PdfLegStatus::Blocked {
             suggested_arxiv_id: Some(s),

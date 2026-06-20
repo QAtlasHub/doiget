@@ -255,7 +255,9 @@ impl std::fmt::Display for InvalidPatternIssue {
 pub fn load(config_path: &Utf8Path) -> Result<UserExtensionConfig, UserExtensionError> {
     let text = match std::fs::read_to_string(config_path.as_std_path()) {
         Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(UserExtensionConfig::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(UserExtensionConfig::default())
+        }
         Err(e) => {
             return Err(UserExtensionError::Io {
                 path: config_path.to_string(),
@@ -734,7 +736,10 @@ mod tests {
         assert_eq!(got.additional_hosts[0].host.as_str(), "ruj.uj.edu.pl");
         assert!(got.additional_hosts[0].note.is_none());
         assert_eq!(got.additional_hosts[1].host.as_str(), "*.aps.org");
-        assert_eq!(got.additional_hosts[1].note.as_deref(), Some("user override"));
+        assert_eq!(
+            got.additional_hosts[1].note.as_deref(),
+            Some("user override")
+        );
     }
 
     #[test]
@@ -939,7 +944,10 @@ host = "*.uj.edu.pl"
     #[test]
     fn academic_repo_hosts_are_valid_patterns() {
         let hosts = academic_repo_hosts();
-        assert!(!hosts.is_empty(), "at least one academic host pattern expected");
+        assert!(
+            !hosts.is_empty(),
+            "at least one academic host pattern expected"
+        );
         // Every returned entry must round-trip through HostPattern::new
         for h in &hosts {
             assert!(
