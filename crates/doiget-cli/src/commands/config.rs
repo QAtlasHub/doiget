@@ -186,7 +186,7 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
                 Some(
                     "set DOIGET_CONTACT_EMAIL to your email address\n               \
                      e.g. export DOIGET_CONTACT_EMAIL=you@institution.edu\n               \
-                     (required for the polite User-Agent header and Unpaywall API)"
+                     (required for the polite User-Agent header and Unpaywall API)",
                 ),
                 &mut all_ok,
             );
@@ -463,7 +463,12 @@ mod tests {
         assert!(flag, "all_ok must stay true for a passing check");
 
         // Failing check with tip — all_ok must flip.
-        check("failing check", false, Some("set DOIGET_CONTACT_EMAIL"), &mut flag);
+        check(
+            "failing check",
+            false,
+            Some("set DOIGET_CONTACT_EMAIL"),
+            &mut flag,
+        );
         assert!(!flag, "all_ok must flip to false on a failing check");
     }
 
