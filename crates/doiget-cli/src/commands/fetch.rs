@@ -184,7 +184,7 @@ pub(crate) fn cache_dir_utf8() -> Result<Utf8PathBuf> {
 pub(crate) fn build_resolve_context() -> Result<FetchContext> {
     let session_id = new_session_id();
     let log_path = resolve_log_path()?;
-    let http = Arc::new(build_http_client()?);
+    let http = Arc::new(build_http_client(None)?);
     let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
     let log = Arc::new(
         ProvenanceLog::open(log_path, session_id.clone())
@@ -217,7 +217,7 @@ pub(crate) fn build_resolve_context() -> Result<FetchContext> {
 /// when `DOIGET_OA_PUBLISHER_BASE` is set — this lets the integration tests
 /// under `tests/fetch_doi_oa_pdf_e2e.rs` exercise the full PDF leg without
 /// touching the real network.
-pub(crate) fn build_http_client() -> Result<HttpClient> {
+pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> {
     let arxiv = std::env::var("DOIGET_ARXIV_BASE").ok();
     let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
     let unpaywall = std::env::var("DOIGET_UNPAYWALL_BASE").ok();
@@ -310,7 +310,11 @@ pub(crate) fn build_http_client() -> Result<HttpClient> {
             }
         }
 
-        return HttpClient::new(allowlists).context("building HTTP client");
+        return match user_agent {
+            Some(ua) => HttpClient::new_with_user_agent(allowlists, ua),
+            None => HttpClient::new(allowlists),
+        }
+        .context("building HTTP client");
     }
 
     // Test-base mode: build a relaxed client per overridden source.
@@ -412,6 +416,12 @@ impl FetchHarness {
     /// the provenance log (allocating a fresh `session_id`), and constructs
     /// the HTTP client honoring `DOIGET_*_BASE` overrides for tests.
     pub(crate) fn from_env() -> Result<Self> {
+        Self::from_env_with_ua(None)
+    }
+
+    /// Like [`from_env`](Self::from_env) but overrides the `User-Agent` on
+    /// every HTTP request. Used by `doiget batch --user-agent`.
+    pub(crate) fn from_env_with_ua(user_agent: Option<&str>) -> Result<Self> {
         let cfg = OrchestratorConfig::from_env()?;
         if let Some(parent) = cfg.log_path.parent() {
             if !parent.as_str().is_empty() {
@@ -424,7 +434,7 @@ impl FetchHarness {
             ProvenanceLog::open(cfg.log_path.clone(), session_id.clone())
                 .context("opening provenance log")?,
         );
-        let http = Arc::new(build_http_client()?);
+        let http = Arc::new(build_http_client(user_agent)?);
         let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
         let store = FsStore::new(cfg.store_root.clone()).context("opening store")?;
         let profile = CapabilityProfile::from_env().context("resolving capability profile")?;
@@ -1038,7 +1048,7 @@ host = "*.uj.edu.pl"
         std::env::remove_var("DOIGET_OA_PUBLISHER_BASE");
         std::env::remove_var("DOIGET_OPENALEX_BASE");
 
-        let client = build_http_client().expect("HttpClient builds");
+        let client = build_http_client(None).expect("HttpClient builds");
         let oa = client
             .source_allowlist("oa-publisher")
             .expect("oa-publisher source registered");
@@ -1120,7 +1130,7 @@ host = "*.uj.edu.pl"
         std::env::remove_var("DOIGET_OA_PUBLISHER_BASE");
         std::env::remove_var("DOIGET_OPENALEX_BASE");
 
-        let client = build_http_client().expect("HttpClient builds");
+        let client = build_http_client(None).expect("HttpClient builds");
         let oa = client
             .source_allowlist("openalex")
             .expect("openalex source registered for discovery (ADR-0031 D2)");

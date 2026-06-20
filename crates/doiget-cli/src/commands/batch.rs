@@ -76,6 +76,8 @@ pub async fn run_with_options(
     path: String,
     dry_run: bool,
     only_failed: bool,
+    delay: Option<f64>,
+    user_agent: Option<String>,
     mode: super::output::OutputMode,
 ) -> Result<()> {
     // `mode` honors ADR-0017. `Quiet` is a no-op here because batch's
@@ -207,7 +209,7 @@ pub async fn run_with_options(
     // Step 4: build the harness once. All spawned tasks share an `Arc` to
     // it; the harness already wraps the foundation modules in `Arc<...>` so
     // this introduces no extra cloning overhead per task.
-    let harness = Arc::new(FetchHarness::from_env()?);
+    let harness = Arc::new(FetchHarness::from_env_with_ua(user_agent.as_deref())?);
 
     // Step 5: SessionStart. Pass `None` for the ref — there is no single
     // ref to attribute the session to.
@@ -239,6 +241,8 @@ pub async fn run_with_options(
     // store (only populated when `--only-failed` is active).
     let mut skipped: usize = 0;
     let mut remaining = inputs.into_iter();
+    // Skip delay before the very first fetch; apply between all subsequent ones.
+    let mut is_first_spawn = true;
     loop {
         let window: Vec<String> = remaining.by_ref().take(MCP_BATCH_MAX_SIZE).collect();
         if window.is_empty() {
@@ -313,6 +317,15 @@ pub async fn run_with_options(
 
             let harness_task = Arc::clone(&harness);
             let sem_task = Arc::clone(&semaphore);
+            if let Some(d) = delay {
+                if is_first_spawn {
+                    is_first_spawn = false;
+                } else {
+                    tokio::time::sleep(tokio::time::Duration::from_secs_f64(d)).await;
+                }
+            } else {
+                is_first_spawn = false;
+            }
             joins.spawn(async move {
                 // `Semaphore::acquire_owned` only errors when the semaphore
                 // is closed; we never close it. The fallback maps that
