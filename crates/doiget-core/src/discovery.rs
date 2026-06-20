@@ -1141,17 +1141,21 @@ pub async fn frontier_view(
         .get("results")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| missing_results_array("frontier/seed", &seed_resp))?;
-    let seed_work = seed_results
-        .first()
-        .ok_or_else(|| FetchError::NotFound {
-            hint: format!("no OpenAlex work matched seed doi '{}'", query.seed_doi.as_str()),
-        })?;
+    let seed_work = seed_results.first().ok_or_else(|| FetchError::NotFound {
+        hint: format!(
+            "no OpenAlex work matched seed doi '{}'",
+            query.seed_doi.as_str()
+        ),
+    })?;
     let seed_openalex_id = seed_work
         .get("id")
         .and_then(serde_json::Value::as_str)
         .map(strip_openalex_prefix)
         .ok_or_else(|| FetchError::SourceSchema {
-            hint: format!("seed OpenAlex record for '{}' has no id", query.seed_doi.as_str()),
+            hint: format!(
+                "seed OpenAlex record for '{}' has no id",
+                query.seed_doi.as_str()
+            ),
         })?
         .to_string();
     let seed_title = seed_work
@@ -1191,7 +1195,11 @@ pub async fn frontier_view(
     let mut hits: Vec<PaperHit> = results_arr
         .iter()
         .map(work_to_hit)
-        .filter(|h| query.min_year.map_or(true, |y| h.year.map_or(false, |hy| hy >= y)))
+        .filter(|h| {
+            query
+                .min_year
+                .map_or(true, |y| h.year.map_or(false, |hy| hy >= y))
+        })
         .collect();
 
     hits.sort_by(|a, b| {

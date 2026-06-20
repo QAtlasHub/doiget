@@ -98,22 +98,23 @@ pub async fn run(
 
     if mode == OutputMode::Json {
         let envelope = json_envelope(&doi_str, &results);
-        let s = serde_json::to_string(&envelope)
-            .context("serialise frontier results to JSON")?;
+        let s = serde_json::to_string(&envelope).context("serialise frontier results to JSON")?;
         writeln!(out, "{s}").context("write frontier JSON to stdout")?;
         return Ok(());
     }
 
     // Human table: fwci first (the age-normalized signal that matters most),
     // then year / oa / doi / title.
-    writeln!(out, "fwci\tyear\toa\tdoi\ttitle")
-        .context("write frontier header")?;
+    writeln!(out, "fwci\tyear\toa\tdoi\ttitle").context("write frontier header")?;
     for hit in &results.hits {
         let fwci = hit
             .fwci
             .map(|f| format!("{f:.2}"))
             .unwrap_or_else(|| "-".into());
-        let year = hit.year.map(|y| y.to_string()).unwrap_or_else(|| "-".into());
+        let year = hit
+            .year
+            .map(|y| y.to_string())
+            .unwrap_or_else(|| "-".into());
         let oa = hit.oa_status.as_deref().unwrap_or("-");
         let doi = hit.doi.as_deref().unwrap_or("-");
         writeln!(out, "{fwci}\t{year}\t{oa}\t{doi}\t{}", hit.title)
