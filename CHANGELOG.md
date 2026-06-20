@@ -25,6 +25,12 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   variant signalling that the stored PDF came from arXiv, not the publisher.
   `outcome_is_clean_success` treats it as success; `Blocked` semantics
   (exit ≠ 0) are preserved when arXiv also fails.
+- **[batch]** `--only-failed` flag (issue #324): re-run a batch file and skip
+  refs whose PDF already exists in the store (`<store>/<safekey>.pdf`).
+  Metadata-only entries (`.metadata/<safekey>.toml`) are NOT skipped — they
+  represent prior `NoOaUrl` or `Blocked` outcomes that may now succeed.
+  In `--mode json`, skipped refs emit `{"ok": true, "ref": "...", "already_fetched": true}`.
+  Summary line gains a `skipped-already-fetched` count when non-zero.
 
 ## [0.7.1-beta.0] - 2026-06-20
 
