@@ -180,10 +180,12 @@ async fn doiget_search_local_empty_store_returns_empty_entries() -> anyhow::Resu
         .expect("doiget_search_local uses CallToolResult::structured");
     assert_eq!(structured["ok"], serde_json::json!(true));
     assert_eq!(structured["query"], serde_json::json!("anything"));
+    assert_eq!(structured["scope"], serde_json::json!("local"));
+    assert_eq!(structured["count"], serde_json::json!(0));
     assert_eq!(
-        structured["entries"],
+        structured["results"],
         serde_json::json!([]),
-        "empty store must return an empty entries array; got: {structured:?}"
+        "empty store must return an empty results array; got: {structured:?}"
     );
 
     client.cancel().await?;
