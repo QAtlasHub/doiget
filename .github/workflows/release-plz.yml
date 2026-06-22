@@ -145,7 +145,7 @@ jobs:
         # removed release-plz.yml's `release` job authenticated (release-plz
         # did this exchange inside its own action). Each crate must be
         # registered as a Trusted Publisher on crates.io before the first run.
-        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe  # v1.0.4
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18  # v1.0.5
         id: auth
       - name: Publish doiget-core, then doiget-mcp, then doiget-cli (idempotent)
         shell: bash
