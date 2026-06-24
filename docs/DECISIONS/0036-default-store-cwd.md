@@ -1,7 +1,7 @@
 # 0036 - Default store root is `./papers` (current working directory)
 
 - **Date:** 2026-06-24
-- **Status:** Proposed (implemented by `feat/344-default-store-cwd`; flips to Accepted on merge)
+- **Status:** Accepted (implemented by `feat/344-default-store-cwd`; promoted in 0.8.0, #352)
 - **Supersedes:** -  (amends [0004](0004-bibliofetch-coexistence.md): the *co-location* default only — the shared on-disk *format* contract in [`STORE.md`](../STORE.md) is unchanged)
 - **Source:** #344 problem 1 / dogfood 2026-06-24
 

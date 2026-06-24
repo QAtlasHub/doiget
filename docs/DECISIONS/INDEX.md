@@ -49,10 +49,10 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0030 | Bibliography input adapters (.bib / CSL-JSON) in `doiget-core`; new MCP tool `doiget_batch_from_bibliography` | Accepted (design; slice TBD) | TBD | #222 / Zotero distribution review 2026-05-20 |
 | 0031 | Discovery search is Tier-1 OA metadata (always-on); `doiget search` defaults to external discovery | Accepted (design; PR1 slice) | PR1 (`feat/paper-search`) | #281 / feasibility read 2026-06-04 |
 | 0032 | Structured full-text (HTML/XML) extraction in scope; PDF-blob processing stays out of scope | Accepted (design; PR4 ships ar5iv leg) | PR4 (`feat/paper-text`) | #281 item 3 / scope decision 2026-06-06 |
-| 0033 | Per-PR version-bump enforcement + strict next→main promotion (amends 0025 §D6) | Proposed (implemented by `chore/version-bump-gate`; flips on merge) | `chore/version-bump-gate` | maintainer review 2026-06-24 (0.7.1 vanishing) |
-| 0034 | arXiv source bundle + individual figure download | Proposed (implemented by `feat/343-source-bundle-figures`; flips on merge) | `feat/343-source-bundle-figures` | #343 / dogfood 2026-06-24 |
-| 0035 | `fetch --link`: surface fetched artifacts into the working tree | Proposed (implemented by `feat/344-fetch-link`; flips on merge) | `feat/344-fetch-link` | #344 / dogfood 2026-06-24 |
-| 0036 | Default store root → `./papers` (cwd); amends 0004 co-location | Proposed (implemented by `feat/344-default-store-cwd`; flips on merge) | `feat/344-default-store-cwd` | #344 problem 1 / dogfood 2026-06-24 |
+| 0033 | Per-PR version-bump enforcement + strict next→main promotion (amends 0025 §D6) | Accepted (0.8.0, #352) | `chore/version-bump-gate` | maintainer review 2026-06-24 (0.7.1 vanishing) |
+| 0034 | arXiv source bundle + individual figure download | Accepted (0.8.0, #352) | `feat/343-source-bundle-figures` | #343 / dogfood 2026-06-24 |
+| 0035 | `fetch --link`: surface fetched artifacts into the working tree | Accepted (0.8.0, #352) | `feat/344-fetch-link` | #344 / dogfood 2026-06-24 |
+| 0036 | Default store root → `./papers` (cwd); amends 0004 co-location | Accepted (0.8.0, #352) | `feat/344-default-store-cwd` | #344 problem 1 / dogfood 2026-06-24 |
 
 ## Conventions
 

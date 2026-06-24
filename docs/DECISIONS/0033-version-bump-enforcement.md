@@ -1,9 +1,8 @@
 # 0033 - Per-PR version-bump enforcement + strict next→main promotion
 
 - **Date:** 2026-06-24
-- **Status:** Proposed — implemented by the same PR that adds this ADR
-  (`chore/version-bump-gate`); flips to `Accepted` on merge per
-  `DECISIONS/INDEX.md` conventions.
+- **Status:** Accepted — implemented by `chore/version-bump-gate`; promoted in
+  0.8.0 (#352).
 - **Amends:** [0025](0025-tag-driven-release.md) §D6 — adds a per-PR cadence to
   rule 2 and **retires rule 4's direct-to-`main` hotfix** path. Complements
   ADR-0025 Amendment 6 (advisory `version-check`); the tag-time gate (D2) and

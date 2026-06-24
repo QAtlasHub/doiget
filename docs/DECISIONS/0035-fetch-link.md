@@ -1,8 +1,8 @@
 # 0035 - `fetch --link`: surface fetched artifacts into the working tree
 
 - **Date:** 2026-06-24
-- **Status:** Proposed — implemented by `feat/344-fetch-link` (issue #344
-  Slice 2); flips to `Accepted` on merge per `DECISIONS/INDEX.md` conventions.
+- **Status:** Accepted — implemented by `feat/344-fetch-link` (issue #344
+  Slice 2); promoted in 0.8.0 (#352).
 - **Relates:** issue #344 (agent-driven UX) problem 1 (store locality). Bounded
   by [`SCOPE.md`](../SCOPE.md) §non-goal 3 (no redistribution / share-vault).
 - **Source:** dogfooding 2026-06-24 (#344).
