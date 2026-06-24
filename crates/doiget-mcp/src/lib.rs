@@ -3745,10 +3745,13 @@ fn resolve_store_root() -> Option<Utf8PathBuf> {
             return Some(Utf8PathBuf::from(s));
         }
     }
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()?;
-    Some(Utf8PathBuf::from(home).join("papers"))
+    // Default: `papers/` under the current working directory (#344 / ADR-0036),
+    // so an agent's fetches land where the work is; set DOIGET_STORE_ROOT for a
+    // central library.
+    let cwd = std::env::current_dir().ok()?;
+    Utf8PathBuf::from_path_buf(cwd)
+        .ok()
+        .map(|d| d.join("papers"))
 }
 
 /// Best-effort writability probe for the resolved store root.

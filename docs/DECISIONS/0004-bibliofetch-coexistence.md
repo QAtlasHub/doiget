@@ -1,7 +1,7 @@
 # 0004 - BiblioFetch.jl coexistence — shared store contract
 
 - **Date:** 2026-05-05
-- **Status:** Accepted — implemented; Store contract in `doiget-core/src/store/` (Phase 1) + BiblioFetch round-trip preservation test (CHANGELOG `0.1.2`, issue #121)
+- **Status:** Accepted — implemented; Store contract in `doiget-core/src/store/` (Phase 1) + BiblioFetch round-trip preservation test (CHANGELOG `0.1.2`, issue #121). **Amended by [0036](0036-default-store-cwd.md)** (2026-06-24): the default store root moved to `./papers` (under the cwd), so doiget and BiblioFetch.jl no longer co-locate *by default*; the shared on-disk *format* contract below is unchanged.
 - **Supersedes:** -
 - **Source:** Discussion #1 / #2
 

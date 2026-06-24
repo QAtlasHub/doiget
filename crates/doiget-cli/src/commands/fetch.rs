@@ -31,7 +31,7 @@
 //!
 //! | Env var | Default | Purpose |
 //! |---|---|---|
-//! | `DOIGET_STORE_ROOT` | `$HOME/papers` (or `%USERPROFILE%\papers` on Windows) | Filesystem store root |
+//! | `DOIGET_STORE_ROOT` | `./papers` (under the current working dir) | Filesystem store root |
 //! | `DOIGET_LOG_PATH` | `<config>/doiget/access.jsonl` | Provenance log file |
 //! | `DOIGET_CONTACT_EMAIL` | `doiget@localhost` | Polite-pool contact email (User-Agent and Crossref) |
 //! | `DOIGET_UNPAYWALL_EMAIL` | (= contact email) | Unpaywall query-string email |

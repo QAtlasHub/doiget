@@ -32,7 +32,7 @@ use super::fetch::CliExit;
 /// read, undocumented `DOIGET_LOG_DIR` has been dropped.
 #[derive(Debug, serde::Serialize)]
 pub struct ResolvedConfig {
-    /// Root of the on-disk paper store. Default: `$HOME/papers`.
+    /// Root of the on-disk paper store. Default: `./papers` (under the cwd).
     pub store_root: Utf8PathBuf,
     /// Directory holding doiget's append-only logs. Derived from
     /// `log_path`'s parent so it always agrees with the writer.
@@ -60,20 +60,19 @@ impl ResolvedConfig {
     /// platform); on every realistic POSIX or Windows host this returns
     /// `Ok` even with no `DOIGET_*` env vars set.
     pub fn from_env() -> Result<Self> {
-        // `dirs::home_dir()` / `dirs::config_dir()` return `std::path::PathBuf`;
-        // hoist them into `Utf8PathBuf` immediately at the OS boundary so the
-        // rest of the function (and the public struct) stays UTF-8-only per
-        // the workspace `disallowed-types` clippy rule. A non-UTF-8 home dir
-        // is exotic and unsupported; surface it as an explicit error.
-        let home =
-            Utf8PathBuf::try_from(dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?)?;
+        // `dirs::config_dir()` returns `std::path::PathBuf`; hoist it into
+        // `Utf8PathBuf` immediately at the OS boundary so the rest of the
+        // function (and the public struct) stays UTF-8-only per the workspace
+        // `disallowed-types` clippy rule.
         let cfg = Utf8PathBuf::try_from(
             dirs::config_dir().ok_or_else(|| anyhow::anyhow!("no config dir"))?,
         )?;
 
-        let store_root = std::env::var("DOIGET_STORE_ROOT")
-            .map(Utf8PathBuf::from)
-            .unwrap_or_else(|_| home.join("papers"));
+        // Store root: identical resolution to where artifacts actually land
+        // (`super::resolve_store_root`) so `config show` / `doctor` never drifts
+        // from the writer — `DOIGET_STORE_ROOT` else `./papers` under the cwd
+        // (#344 / ADR-0036).
+        let store_root = super::resolve_store_root()?;
 
         // Issue #142: resolve the log path the SAME way the writer does
         // (`commands::fetch::resolve_log_path` / `commands::audit_log`):
@@ -330,12 +329,12 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn from_env_uses_home_default_when_unset() {
+    fn from_env_uses_cwd_default_when_unset() {
         let _g = unset_all_doiget_config_env();
-        let cfg = ResolvedConfig::from_env().expect("home dir must resolve on test host");
+        let cfg = ResolvedConfig::from_env().expect("config resolves on test host");
         assert!(
             cfg.store_root.as_str().ends_with("papers"),
-            "store_root should fall back to <home>/papers when DOIGET_STORE_ROOT is unset; got {}",
+            "store_root should fall back to ./papers (cwd) when DOIGET_STORE_ROOT is unset; got {}",
             cfg.store_root
         );
         assert_eq!(cfg.contact_email, None);
