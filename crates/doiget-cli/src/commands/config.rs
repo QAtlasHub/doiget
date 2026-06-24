@@ -55,10 +55,10 @@ pub struct ResolvedConfig {
 impl ResolvedConfig {
     /// Resolve the live config from process environment + platform defaults.
     ///
-    /// Errors only if neither a home directory nor a config directory can
-    /// be determined for the current user (e.g. an unknown / locked-down
-    /// platform); on every realistic POSIX or Windows host this returns
-    /// `Ok` even with no `DOIGET_*` env vars set.
+    /// Errors only if the platform config directory (`dirs::config_dir()`) or
+    /// the current working directory cannot be determined or is non-UTF-8
+    /// (an unknown / locked-down platform); on every realistic POSIX or
+    /// Windows host this returns `Ok` even with no `DOIGET_*` env vars set.
     pub fn from_env() -> Result<Self> {
         // `dirs::config_dir()` returns `std::path::PathBuf`; hoist it into
         // `Utf8PathBuf` immediately at the OS boundary so the rest of the
@@ -356,7 +356,7 @@ mod tests {
         // succeeds on Windows too (where "/tmp/foo" is a relative path on
         // the current drive — still UTF-8, still fine for this assertion).
         let _override = EnvGuard::set("DOIGET_STORE_ROOT", "/tmp/foo");
-        let cfg = ResolvedConfig::from_env().expect("home dir must resolve on test host");
+        let cfg = ResolvedConfig::from_env().expect("config resolves on test host");
         assert_eq!(cfg.store_root.as_str(), "/tmp/foo");
     }
 
@@ -370,7 +370,7 @@ mod tests {
     fn log_path_follows_doiget_log_path_env() {
         let _g = unset_all_doiget_config_env();
         let _override = EnvGuard::set("DOIGET_LOG_PATH", "/var/lib/doiget/access.jsonl");
-        let cfg = ResolvedConfig::from_env().expect("home dir must resolve on test host");
+        let cfg = ResolvedConfig::from_env().expect("config resolves on test host");
         assert_eq!(
             cfg.log_path.as_str(),
             "/var/lib/doiget/access.jsonl",
@@ -406,10 +406,10 @@ mod tests {
     fn doctor_passes_with_contact_email() {
         let _g = unset_all_doiget_config_env();
         let _email = EnvGuard::set("DOIGET_CONTACT_EMAIL", "alice@example.org");
-        // home_dir() / config_dir() resolve to real, existing parents on
-        // every supported test host (CI runners always have $HOME).
+        // config_dir() and the cwd resolve to real, existing parents on every
+        // supported test host (store root defaults to <cwd>/papers, ADR-0036).
         run("doctor".into(), crate::commands::output::OutputMode::Human)
-            .expect("doctor should pass with contact email + real home dir");
+            .expect("doctor should pass with contact email + valid config dir and cwd");
     }
 
     /// ADR-0028 D2: a malformed `<config_dir>/doiget/config.toml`

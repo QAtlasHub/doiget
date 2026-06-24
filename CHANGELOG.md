@@ -10,6 +10,50 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.0-beta.8] - 2026-06-24
+
+Hardening from the `next → main` (0.8.0) promotion review (#352).
+
+### Fixed
+- **[core/security]** Cap arXiv `/src` decompression on the `tex-source` text
+  path (`extract_tex`) against a gzip bomb — it previously passed **no** cap, so
+  a crafted payload within the HTTP compressed-size limit could OOM the process
+  (now reachable via the MCP `doiget_paper_tex_source` tool). Real submissions
+  are far below the 500 MB cap; supersedes ADR-0034 D6's "byte-identical" note
+  for pathological inputs only.
+- **[core]** `extract_from_tar` now runs each entry path through
+  `sanitize_entry_path` (a crafted `../`-name can no longer surface in
+  `main_file`) and logs skipped/unreadable entries instead of dropping them
+  silently — mirroring `extract_bundle`. Scoring uses `saturating_add` (the
+  prior `i64` sum was unsound; its "~1 GB" doc bound was wrong).
+- **[core]** `{arxiv,crossref,unpaywall}_source_from_env` log a `warn` when a
+  `DOIGET_*_BASE` env var is an invalid URL instead of silently using the
+  production base.
+- **[cli]** `doiget frontier` warns when the store root can't be resolved
+  instead of silently skipping the already-fetched exclusion filter.
+
+### Changed
+- **[core]** Narrow the `trust_academic_repos` allowlist entry `*.go.jp`
+  (government-wide) → `*.jst.go.jp` (J-STAGE / JST academic platform) — the
+  intended academic OA host, not the whole Japanese government namespace.
+- **[core]** `SourceFile` and `UserExtensionConfig` gain `#[non_exhaustive]`
+  (additive public-API hygiene before the 0.8.0 stable lock).
+
+### Docs
+- **[store]** STORE.md: MCP `doiget serve` resolves the default store root from
+  the server process's cwd (indeterminate for a daemon) — set
+  `DOIGET_STORE_ROOT`. Scrubbed remaining stale `~/papers` / "HOME/USERPROFILE"
+  comments (config.rs, mcp) and strengthened the MCP `resolve_store_root` test
+  to assert `<cwd>/papers`.
+
+### Notes
+- Deferred to a fast-follow before the `v0.8.0` tag (kept out to keep this PR
+  focused/green): `arxiv_id: String → ArxivId` on `PaperTexSource` /
+  `PdfLegStatus::PreprintFallback`; `#[non_exhaustive]` on `PaperTexSource` /
+  `Metadata` / `DoigetExtension` (need constructors — external struct literals);
+  e2e coverage for `frontier_view`, `tag`/`annotate`, `fetch --link`
+  metadata-only skip, and the arXiv preprint fallback.
+
 ## [0.8.0-beta.7] - 2026-06-24
 
 ### Changed
