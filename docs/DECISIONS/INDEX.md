@@ -20,7 +20,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0001 | MCP transport is stdio only | Accepted | posture-lint + Slice 9 stdout-purity | #4 |
 | 0002 | TDM sources are compile-time feature-gated | Accepted | Slices 17/18/19 | #5 |
 | 0003 | PDF content processing is permanently out of scope | Accepted (Amended by 0032: narrowed to PDF-*blob* processing; structured HTML/XML full-text is in scope) | standing policy (SCOPE.md #1 + posture-lint) | #9 |
-| 0004 | BiblioFetch.jl coexistence — shared store contract | Accepted | Phase 1 store + #121 (`0.1.2`) | #1 / #2 |
+| 0004 | BiblioFetch.jl coexistence — shared store contract | Accepted (Amended by 0036: default root no longer `~/papers`; shared *format* contract unchanged) | Phase 1 store + #121 (`0.1.2`) | #1 / #2 |
 | 0005 | CapabilityProfile gates source invocation at the type level | Accepted | PR #64/#65 (Phase 1) | #16 / #17 |
 | 0006 | Provenance log is JSON Lines + SHA-256 hash chain (fail-closed) | Accepted | PR #61 + Slice 4 | #12 / #17 |
 | 0007 | safekey algorithm with 100 reference test vectors | Accepted | PR #39 + Slice 3 | #1 §Contract 4 / #17 |
@@ -52,6 +52,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0033 | Per-PR version-bump enforcement + strict next→main promotion (amends 0025 §D6) | Proposed (implemented by `chore/version-bump-gate`; flips on merge) | `chore/version-bump-gate` | maintainer review 2026-06-24 (0.7.1 vanishing) |
 | 0034 | arXiv source bundle + individual figure download | Proposed (implemented by `feat/343-source-bundle-figures`; flips on merge) | `feat/343-source-bundle-figures` | #343 / dogfood 2026-06-24 |
 | 0035 | `fetch --link`: surface fetched artifacts into the working tree | Proposed (implemented by `feat/344-fetch-link`; flips on merge) | `feat/344-fetch-link` | #344 / dogfood 2026-06-24 |
+| 0036 | Default store root → `./papers` (cwd); amends 0004 co-location | Proposed (implemented by `feat/344-default-store-cwd`; flips on merge) | `feat/344-default-store-cwd` | #344 problem 1 / dogfood 2026-06-24 |
 
 ## Conventions
 

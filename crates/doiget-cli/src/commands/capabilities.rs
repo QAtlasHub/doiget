@@ -237,7 +237,7 @@ const MODES: &[&str] = &["human", "json", "quiet", "mcp"];
 const ENV_VARS: &[EnvVar] = &[
     EnvVar {
         name: "DOIGET_STORE_ROOT",
-        default: "$HOME/papers",
+        default: "./papers (under the current working dir)",
         help: "Root of the on-disk paper store. CONFIG.md §4.",
     },
     EnvVar {

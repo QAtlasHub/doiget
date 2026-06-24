@@ -10,6 +10,25 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.0-beta.7] - 2026-06-24
+
+### Changed
+- **[store/config]** **Default store root changed from `~/papers` to `./papers`**
+  (`papers/` under the current working directory) — #344 problem 1, ADR-0036.
+  Fetched artifacts now land where you (or an agent) are working, instead of a
+  far-off home directory where they are easy to miss. `DOIGET_STORE_ROOT` /
+  `--store-root` / `config.toml` overrides are unchanged; set
+  `DOIGET_STORE_ROOT=~/papers` to restore the old central library (which also
+  restores BiblioFetch.jl co-location). `ResolvedConfig::from_env` now reuses the
+  CLI store-root resolver, so `config show` / `doctor` cannot drift from where
+  artifacts actually land. **Contract note:** doiget and BiblioFetch.jl no longer
+  co-locate by default; the shared on-disk *format* (STORE.md) is unchanged.
+
+### Docs
+- **[adr]** ADR-0036 (default store root → cwd; amends ADR-0004 co-location) +
+  amended ADR-0004 status + `DECISIONS/INDEX.md`. Updated STORE.md / CONFIG.md /
+  SCOPE.md default-root references.
+
 ## [0.8.0-beta.6] - 2026-06-24
 
 ### Added

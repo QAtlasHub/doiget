@@ -159,7 +159,7 @@ struct Cli {
 
     /// Override the on-disk paper store root. CONFIG.md §5 / #211.
     /// Precedence: this flag > `DOIGET_STORE_ROOT` env > default
-    /// (`$HOME/papers` on POSIX, `%USERPROFILE%\papers` on Windows).
+    /// (`./papers` — `papers/` under the current working directory; ADR-0036).
     /// Wins by overwriting `DOIGET_STORE_ROOT` for the lifetime of
     /// this process before any command resolver reads it. Empty
     /// strings and NUL bytes are rejected at parse time by
