@@ -10,6 +10,30 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-24
+
+Promotes the cumulative `0.8.0-beta.1`–`0.8.0-beta.8` line to a stable release
+(next → main, #352). Highlights since 0.7.0:
+
+- **[fetch]** Agent-observability cluster (#344): identity confirmation on
+  fetch (title / authors / year on stderr + the MCP `doiget_fetch_paper`
+  envelope), `fetch --link <dir>` to surface the stored PDF into the working
+  tree, and the **default store root moved from `~/papers` to `./papers`** (the
+  current working directory) so fetched papers are visible where work happens
+  (ADR-0035 / ADR-0036; 0036 amends the ADR-0004 co-location default — set
+  `DOIGET_STORE_ROOT` to restore a central / BiblioFetch-shared store).
+- **[source]** `doiget source <arxiv-id> --out <dir> [--figures-only]`: arXiv
+  source-bundle / figure download, opaque and zip-slip + gzip-bomb guarded
+  (ADR-0034). New `tex-source`, `frontier`, and `tag`/`annotate` commands plus
+  an automatic arXiv-preprint fallback (#325) also land in this cycle.
+- **[release]** Per-PR `version-bump` gate + strict `next → main` promotion
+  (ADR-0033); `flake.nix` Nix Flakes integration (#247).
+- **[hardening]** Promotion-review (#352) fixes: capped tex-source
+  decompression (gzip-bomb), sanitised + loud tar extraction, a narrowed
+  academic-repo allowlist, and silent-failure diagnostics.
+
+See the `0.8.0-beta.*` sections below for per-change detail.
+
 ## [0.8.0-beta.8] - 2026-06-24
 
 Hardening from the `next → main` (0.8.0) promotion review (#352).

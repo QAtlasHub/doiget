@@ -1,9 +1,8 @@
 # 0034 - arXiv source bundle + individual figure download
 
 - **Date:** 2026-06-24
-- **Status:** Proposed — implemented by `feat/343-source-bundle-figures`
-  (issue #343); flips to `Accepted` on merge per `DECISIONS/INDEX.md`
-  conventions.
+- **Status:** Accepted — implemented by `feat/343-source-bundle-figures`
+  (issue #343); promoted in 0.8.0 (#352).
 - **Relates:** extends the arXiv `/src/` capability introduced with
   `tex-source` ([ADR-0032](0032-fulltext-html-extraction.md) D1/D2). Bounded by
   [`SCOPE.md`](../SCOPE.md) §non-goal 1 (PDF-blob processing), 3 (no
