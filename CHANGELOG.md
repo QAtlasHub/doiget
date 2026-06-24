@@ -10,6 +10,43 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.0-beta.2] - 2026-06-24
+
+### Added
+- **[source]** `doiget source <arxiv-id> --out <dir> [--figures-only]` (#343,
+  ADR-0034) — download an arXiv submission's full **source bundle** (every
+  file) or just its **figures** to a directory. Reuses the same single
+  `/src/<id>` request as `tex-source`; files are written **opaque** (never
+  interpreted). A bare DOI reports `NO_OA_AVAILABLE`; a PDF-only / single-file
+  submission reports `TEXT_UNAVAILABLE` with a `doiget fetch` note. Tier-1 OA,
+  always-on. `--mode json` emits
+  `{ok, arxiv_id, out_dir, figures_only, count, files[]}`.
+- **[core]** `paper_tex_source::{paper_source_bundle, BundleFilter, SourceFile}`
+  — shared fetch + extract for the bundle/figures path. Tar entry paths are
+  sanitised by `sanitize_entry_path` (**zip-slip / path-traversal guard**,
+  ADR-0034 D3): absolute paths, `..`, drive prefixes and backslash traversal
+  are rejected; non-regular (symlink) entries are skipped; the writer re-checks
+  containment under `--out`. The existing `tex-source` text path is unchanged
+  (ADR-0034 D6).
+
+### Hardened (PR #345 review)
+- **[core]** Distinct `FetchError::SourceUnavailable` for `source` (drops the
+  ar5iv-specific message that `TextUnavailable` would have leaked); a
+  decompressed-size cap on the `/src` tarball guards against a gzip bomb (the
+  HTTP layer only caps the *compressed* download); a corrupt/unreadable archive
+  (`SourceSchema`) is now distinguished from genuinely-no-files
+  (`SourceUnavailable`) and a partial extraction is logged — no silent file
+  loss; `SourceFile.path` is `pub(crate)` + a `path()` accessor so an external
+  caller cannot forge an unsafe path (mirrors `Doi`/`ArxivId`). Added a
+  wired-in zip-slip regression test (a malicious `../` tar entry is rejected by
+  `extract_bundle`, not just by the isolated sanitiser).
+
+### Docs
+- **[adr]** ADR-0034 (arXiv source bundle + figure download: scope addition,
+  artifact-not-processing boundary, zip-slip requirement) + `DECISIONS/INDEX.md`.
+- **[meta]** Filed #344 (agent-UX observability gaps: store locality, citation
+  provenance, fetch verification).
+
 ## [0.8.0-beta.1] - 2026-06-24
 
 ### Changed
