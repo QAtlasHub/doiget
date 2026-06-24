@@ -287,7 +287,7 @@ impl Server {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::StoreError,
-                    "store root could not be resolved (set DOIGET_STORE_ROOT or $HOME)",
+                    "store root could not be resolved (set DOIGET_STORE_ROOT, or run from a directory with a valid UTF-8 path)",
                 )));
             }
         };
@@ -552,7 +552,7 @@ impl Server {
                 return Ok(CallToolResult::structured(fetch_paper_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::InternalError,
-                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                    "could not resolve store root (set DOIGET_STORE_ROOT, or run from a directory with a valid UTF-8 path)",
                 )));
             }
         };
@@ -709,7 +709,7 @@ impl Server {
             None => {
                 return Ok(CallToolResult::structured(batch_fetch_error_envelope(
                     ErrorCode::InternalError,
-                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                    "could not resolve store root (set DOIGET_STORE_ROOT, or run from a directory with a valid UTF-8 path)",
                 )));
             }
         };
@@ -966,7 +966,7 @@ impl Server {
             None => {
                 return Ok(CallToolResult::structured(batch_fetch_error_envelope(
                     ErrorCode::InternalError,
-                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                    "could not resolve store root (set DOIGET_STORE_ROOT, or run from a directory with a valid UTF-8 path)",
                 )));
             }
         };
@@ -1081,7 +1081,7 @@ impl Server {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::InternalError,
-                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                    "could not resolve store root (set DOIGET_STORE_ROOT, or run from a directory with a valid UTF-8 path)",
                 )));
             }
         };
@@ -2751,7 +2751,7 @@ impl Server {
                 return CallToolResult::structured(read_path_error_envelope(
                     None,
                     ErrorCode::InternalError,
-                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                    "could not resolve store root (set DOIGET_STORE_ROOT, or run from a directory with a valid UTF-8 path)",
                 ));
             }
         };
@@ -3727,10 +3727,11 @@ impl ServerHandler for Server {
 /// applies (`docs/CONFIG.md` §4):
 ///
 /// 1. `DOIGET_STORE_ROOT` env var (when non-empty).
-/// 2. `$HOME/papers` (POSIX) or `%USERPROFILE%\papers` (Windows).
+/// 2. `./papers` — `papers/` under the current working directory
+///    (#344 / ADR-0036).
 ///
-/// Returns `None` when neither hook resolves — e.g. a locked-down host
-/// with no `HOME` and no `USERPROFILE`. Callers downgrade that to
+/// Returns `None` only when the current working directory can't be
+/// determined or isn't valid UTF-8. Callers downgrade that to
 /// `store_writable: false` rather than erroring the whole tool call.
 ///
 /// # Why duplicate the CLI logic?
@@ -3924,13 +3925,11 @@ mod tests {
 
     #[test]
     fn resolve_store_root_returns_some_on_normal_host() {
-        // On any realistic POSIX or Windows host either HOME or
-        // USERPROFILE is set, so resolve_store_root is `Some(_)` even
-        // without DOIGET_STORE_ROOT. We deliberately don't mutate env
-        // (the test process is shared with other tests).
-        if std::env::var_os("HOME").is_some() || std::env::var_os("USERPROFILE").is_some() {
-            assert!(resolve_store_root().is_some());
-        }
+        // The default is `<cwd>/papers` (ADR-0036): either branch yields a
+        // root on a normal host — `DOIGET_STORE_ROOT` when set, else the cwd
+        // default, since current_dir() is always available. We deliberately
+        // don't mutate env (the test process is shared with other tests).
+        assert!(resolve_store_root().is_some());
     }
 
     /// ADR-0028 D2: `build_http_client_for_fetch` MUST merge user-

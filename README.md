@@ -126,7 +126,10 @@ See [docs/SOURCES.md](docs/SOURCES.md).
 ## Coexistence with BiblioFetch.jl
 
 doiget and BiblioFetch.jl share the same on-disk store format (TOML metadata + PDF files
-under `~/papers/`). The shared schema, locking protocol, and atomic write contract are
+under a configurable store root). doiget defaults to `./papers` (under the current working
+directory; ADR-0036), BiblioFetch.jl to `~/papers/`; point both at the same root (e.g.
+`DOIGET_STORE_ROOT=~/papers`) to share one store. The shared schema, locking protocol, and
+atomic write contract are
 specified in [docs/STORE.md](docs/STORE.md). Reference test vectors for the shared safekey
 algorithm are in [docs/SAFEKEY.md](docs/SAFEKEY.md).
 

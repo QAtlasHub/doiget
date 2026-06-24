@@ -8,16 +8,17 @@
 //!
 //! - [`Store`] — the trait surface implementations expose.
 //! - [`FsStore`] — filesystem-backed implementation rooted at a configurable
-//!   directory (default `~/papers/`).
+//!   directory (default `./papers`, under the cwd; ADR-0036).
 //! - [`Metadata`] / [`DoigetExtension`] — the on-disk schema, mirrored from
 //!   `docs/STORE.md` §2.
 //!
 //! ## Cross-tool coexistence
 //!
-//! `~/papers/` is a shared resource between doiget and BiblioFetch.jl. Both
-//! tools follow the lock protocol in `docs/STORE.md` §4 and the atomic-write
-//! sequence in §5. Per §6, doiget MUST NOT overwrite reserved top-level
-//! fields previously written by another tool — see [`FsStore::write`].
+//! The store can be shared between doiget and BiblioFetch.jl when both are
+//! pointed at the same root (they no longer co-locate by default — ADR-0036).
+//! Both tools follow the lock protocol in `docs/STORE.md` §4 and the
+//! atomic-write sequence in §5. Per §6, doiget MUST NOT overwrite reserved
+//! top-level fields previously written by another tool — see [`FsStore::write`].
 
 mod fs_store;
 pub mod metadata;
