@@ -152,7 +152,7 @@ async fn fetch_doi_oa_pdf_happy_path() {
     env.set("DOIGET_OA_PUBLISHER_BASE", &base_uri);
 
     // Step 3: run the orchestrator end-to-end. No real network traffic.
-    fetch::run_with_options(format!("doi:{}", TEST_DOI), false, OutputMode::Human)
+    fetch::run_with_options(format!("doi:{}", TEST_DOI), false, None, OutputMode::Human)
         .await
         .expect("fetch::run_with_options succeeds");
 
@@ -337,7 +337,7 @@ async fn fetch_doi_oa_pdf_falls_back_to_metadata_when_host_off_allowlist() {
     // assertions below remain (the pre-fetch denial emits the same
     // closed-set `NETWORK_ERROR` provenance row as a redirect-time
     // denial; the process EXIT code is the reclassified value).
-    let err = fetch::run_with_options(format!("doi:{}", TEST_DOI), false, OutputMode::Human)
+    let err = fetch::run_with_options(format!("doi:{}", TEST_DOI), false, None, OutputMode::Human)
         .await
         .expect_err("a blocked OA PDF leg must NOT be a silent success (issue #145)");
     let cli_exit = err
@@ -450,7 +450,7 @@ async fn fetch_doi_crossref_down_unpaywall_oa_still_yields_pdf() {
     env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", base_uri));
     env.set("DOIGET_OA_PUBLISHER_BASE", &base_uri);
 
-    fetch::run_with_options(format!("doi:{}", TEST_DOI), false, OutputMode::Human)
+    fetch::run_with_options(format!("doi:{}", TEST_DOI), false, None, OutputMode::Human)
         .await
         .expect("fetch must succeed via Unpaywall even though Crossref failed");
 
@@ -555,7 +555,7 @@ async fn fetch_doi_oa_chain_falls_back_to_secondary_when_best_returns_403() {
     env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", base_uri));
     env.set("DOIGET_OA_PUBLISHER_BASE", &base_uri);
 
-    fetch::run_with_options(format!("doi:{}", TEST_DOI), false, OutputMode::Human)
+    fetch::run_with_options(format!("doi:{}", TEST_DOI), false, None, OutputMode::Human)
         .await
         .expect("chain walker must succeed on the fallback candidate");
 

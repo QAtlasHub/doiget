@@ -43,7 +43,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 
 #[cfg(feature = "citation")]
 use doiget_core::http::tier_2_allowlist;
@@ -681,6 +681,7 @@ fn emit_identity_line(outcome: &FetchPaperOutcome) {
 pub async fn run_with_options(
     input: String,
     dry_run: bool,
+    link: Option<Utf8PathBuf>,
     _mode: super::output::OutputMode,
 ) -> Result<()> {
     // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression of the
@@ -766,6 +767,12 @@ pub async fn run_with_options(
                 return Err(anyhow::Error::new(CliExit(cli_exit_code(effective))));
             }
             emit_success_line(&ref_, &outcome);
+            // #344 Slice 2: optionally surface the artifact in the user's
+            // working tree via a symlink (copy fallback). A link failure is a
+            // warning, not a fetch failure — the PDF is already in the store.
+            if let Some(dir) = link.as_deref() {
+                emit_link_result(&ref_, &outcome, dir);
+            }
             Ok(())
         }
         Err(e) => {
@@ -774,6 +781,145 @@ pub async fn run_with_options(
             Err(anyhow::Error::new(CliExit(cli_exit_code(code))))
         }
     }
+}
+
+/// `--link` (#344 Slice 2): place a link to the fetched PDF in `dir` so the
+/// artifact is visible in the user's working tree. The central store stays the
+/// single source of truth; this only adds a pointer (or, where symlinks are
+/// unavailable, a copy). Only PDF outcomes are linked — a metadata-only fetch
+/// is reported as skipped. A link failure is a warning (stderr), never a fetch
+/// failure: the artifact is already in the store.
+fn emit_link_result(ref_: &Ref, outcome: &FetchPaperOutcome, dir: &Utf8Path) {
+    let label = match ref_ {
+        Ref::Arxiv(id) => format!("arxiv:{}", id.as_str()),
+        Ref::Doi(doi) => format!("doi:{}", doi.as_str()),
+    };
+    if !matches!(
+        outcome.pdf_leg,
+        PdfLegStatus::Fetched | PdfLegStatus::PreprintFallback { .. }
+    ) {
+        print_success(format_args!(
+            "note: --link skipped for {label} (no PDF — metadata-only fetch)"
+        ));
+        return;
+    }
+    let name = fetch_link_filename(
+        &outcome.title,
+        &outcome.authors,
+        outcome.year,
+        &outcome.safekey,
+    );
+    match link_artifact(dir, &outcome.path, &name) {
+        Ok((path, kind)) => print_success(format_args!("linked {label} -> {path} ({kind})")),
+        Err(e) => print_err(format_args!("warning: --link failed for {label}: {e}")),
+    }
+}
+
+/// Build a human-readable, filesystem-safe PDF filename for `--link`:
+/// `<surname><year>-<title-slug>.pdf`
+/// (e.g. `vaswani2017-attention-is-all-you-need.pdf`), falling back to
+/// `<safekey>.pdf` when no usable metadata is available.
+fn fetch_link_filename(
+    title: &str,
+    authors: &[String],
+    year: Option<i32>,
+    safekey: &str,
+) -> String {
+    let surname = authors
+        .first()
+        .map(|a| slugify(a.split_whitespace().last().unwrap_or(a)))
+        .unwrap_or_default();
+    let year = year.map(|y| y.to_string()).unwrap_or_default();
+    let title_slug: String = slugify(title)
+        .split('-')
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("-");
+    let mut stem = format!("{surname}{year}");
+    if !stem.is_empty() && !title_slug.is_empty() {
+        stem.push('-');
+    }
+    stem.push_str(&title_slug);
+    let stem: String = stem.chars().take(80).collect();
+    let stem = stem.trim_matches('-');
+    if stem.is_empty() {
+        format!("{safekey}.pdf")
+    } else {
+        format!("{stem}.pdf")
+    }
+}
+
+/// Lowercase ASCII-alphanumeric slug: every run of non-alphanumeric characters
+/// collapses to a single `-`, with no leading/trailing dashes. Pure and
+/// filesystem-safe (no path separators, no `..`).
+fn slugify(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Place a link to `src` (the store PDF) at `dir/name`. Tries a symlink first;
+/// on failure (e.g. Windows without privilege, or a cross-device link) falls
+/// back to a copy. Replaces a prior doiget symlink, but refuses to clobber an
+/// unrelated regular file. Returns the written path and the mechanism used
+/// (`"symlink"` | `"copy"`).
+fn link_artifact(
+    dir: &Utf8Path,
+    src: &Utf8Path,
+    name: &str,
+) -> Result<(Utf8PathBuf, &'static str)> {
+    std::fs::create_dir_all(dir.as_std_path())
+        .with_context(|| format!("creating link dir {dir}"))?;
+    let dst = dir.join(name);
+    if let Ok(meta) = std::fs::symlink_metadata(dst.as_std_path()) {
+        if meta.file_type().is_symlink() {
+            std::fs::remove_file(dst.as_std_path())
+                .with_context(|| format!("replacing existing symlink {dst}"))?;
+        } else {
+            anyhow::bail!(
+                "refusing to overwrite existing file {dst} (not a doiget symlink) — \
+                 remove it or choose another --link dir"
+            );
+        }
+    }
+    match make_symlink(src, &dst) {
+        Ok(()) => Ok((dst, "symlink")),
+        Err(_) => {
+            std::fs::copy(src.as_std_path(), dst.as_std_path())
+                .with_context(|| format!("copying {src} -> {dst}"))?;
+            Ok((dst, "copy"))
+        }
+    }
+}
+
+/// Cross-platform file symlink. On platforms without symlink support the caller
+/// falls back to a copy.
+#[cfg(unix)]
+fn make_symlink(src: &Utf8Path, dst: &Utf8Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(src.as_std_path(), dst.as_std_path())
+}
+
+#[cfg(windows)]
+fn make_symlink(src: &Utf8Path, dst: &Utf8Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(src.as_std_path(), dst.as_std_path())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn make_symlink(_src: &Utf8Path, _dst: &Utf8Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "symlinks unsupported on this platform",
+    ))
 }
 
 /// Single-line user-visible success message, written to stderr per ADR-0001
@@ -1289,5 +1435,81 @@ host = "*.uj.edu.pl"
                 "CLI wire token for {r:?} must equal the serde snake_case form"
             );
         }
+    }
+
+    // ── #344 Slice 2: --link helpers ──────────────────────────────────────
+
+    #[test]
+    fn slugify_lowercases_and_collapses_non_alnum() {
+        assert_eq!(
+            slugify("Attention Is All You Need"),
+            "attention-is-all-you-need"
+        );
+        assert_eq!(slugify("Foo/Bar: Baz!!"), "foo-bar-baz");
+        assert_eq!(slugify("  spaced  "), "spaced");
+        assert_eq!(slugify("!!!"), ""); // no alphanumerics → empty
+    }
+
+    #[test]
+    fn fetch_link_filename_builds_readable_name() {
+        let name = fetch_link_filename(
+            "Attention Is All You Need",
+            &["Ashish Vaswani".to_string()],
+            Some(2017),
+            "arxiv_1706.03762",
+        );
+        assert_eq!(name, "vaswani2017-attention-is-all-you-need.pdf");
+    }
+
+    #[test]
+    fn fetch_link_filename_falls_back_to_safekey() {
+        // No usable metadata (empty title, no authors/year) → safekey.pdf.
+        assert_eq!(
+            fetch_link_filename("", &[], None, "doi_10.1234_x"),
+            "doi_10.1234_x.pdf"
+        );
+        // A title that slugifies to nothing also falls back.
+        assert_eq!(
+            fetch_link_filename("…—", &[], None, "doi_10.1234_y"),
+            "doi_10.1234_y.pdf"
+        );
+    }
+
+    #[test]
+    fn link_artifact_creates_readable_artifact() {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8Path::from_path(td.path()).expect("utf8");
+        let src = dir.join("src.pdf");
+        std::fs::write(src.as_std_path(), b"%PDF-DATA").expect("write src");
+
+        let (dst, _kind) = link_artifact(dir, &src, "out.pdf").expect("link");
+        assert!(dst.exists(), "linked artifact must exist: {dst}");
+        assert_eq!(
+            std::fs::read(dst.as_std_path()).expect("read dst"),
+            b"%PDF-DATA",
+            "linked artifact (symlink or copy) must resolve to the source bytes"
+        );
+    }
+
+    #[test]
+    fn link_artifact_refuses_to_clobber_unrelated_file() {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8Path::from_path(td.path()).expect("utf8");
+        let src = dir.join("src.pdf");
+        std::fs::write(src.as_std_path(), b"%PDF-DATA").expect("write src");
+        // A pre-existing, unrelated regular file at the target name.
+        let taken = dir.join("taken.pdf");
+        std::fs::write(taken.as_std_path(), b"USER-DATA").expect("write taken");
+
+        let err = link_artifact(dir, &src, "taken.pdf").expect_err("must refuse");
+        assert!(
+            err.to_string().contains("refusing to overwrite"),
+            "error must explain the refusal: {err}"
+        );
+        assert_eq!(
+            std::fs::read(taken.as_std_path()).expect("read taken"),
+            b"USER-DATA",
+            "the user's file must be left untouched"
+        );
     }
 }
