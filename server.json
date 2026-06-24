@@ -1,0 +1,28 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.sotashimozono/doiget",
+  "title": "doiget",
+  "description": "OA-first academic paper fetcher: DOIs & arXiv IDs to local PDFs + metadata via official Open Access APIs.",
+  "repository": {
+    "url": "https://github.com/sotashimozono/doiget",
+    "source": "github"
+  },
+  "version": "0.8.1",
+  "packages": [
+    {
+      "registryType": "cargo",
+      "registryBaseUrl": "https://crates.io",
+      "identifier": "doiget-cli",
+      "version": "0.8.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "serve"
+        }
+      ]
+    }
+  ]
+}

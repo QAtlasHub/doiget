@@ -9,9 +9,9 @@ same library without coordination.
 ## Install
 
 ```sh
-cargo install doiget                                    # Tier 1 only (default)
-cargo install doiget --features metadata                # +OpenAlex / Semantic Scholar / DOAJ
-cargo install doiget --features metadata,tdm-springer   # add Springer Nature OA TDM
+cargo install doiget-cli                                    # Tier 1 only (default)
+cargo install doiget-cli --features metadata               # +OpenAlex / Semantic Scholar / DOAJ
+cargo install doiget-cli --features metadata,tdm-springer  # add Springer Nature OA TDM
 ```
 
 The default build compiles **Tier 1 (Open Access)** sources only. Tier 2 metadata
@@ -21,16 +21,25 @@ must be opted in at build time. There is no `tdm-all` umbrella feature by design
 See [`docs/SOURCES.md`](https://github.com/sotashimozono/doiget/blob/main/docs/SOURCES.md)
 for the full source matrix, feature names, required env vars, and Terms-of-Service links.
 
-## Status: Phase 0
+## Status
 
-The published crate currently ships the **Phase 0 skeleton**:
+Shipping and fully functional. OA fetch (Crossref / Unpaywall / arXiv), the
+on-disk store, BibTeX / CSL export, the citation graph, and the **stdio MCP
+server** (`doiget serve`) are all implemented. The installed binary is named
+`doiget`. See the
+[CHANGELOG](https://github.com/sotashimozono/doiget/blob/main/CHANGELOG.md) for
+the current version and history.
 
-- `doiget --help` works and lists the full subcommand surface.
-- Every subcommand currently exits with a Phase-0-pending error.
-- Real fetch / store / MCP behavior lands in Phase 1+.
+## Use as an MCP server
 
-See [`docs/PHASES.md`](https://github.com/sotashimozono/doiget/blob/main/docs/PHASES.md)
-for the phase plan and Phase 1 readiness criteria.
+`doiget serve` runs the stdio MCP server. Register it with any MCP host
+(Claude Desktop, Cursor, …):
+
+```json
+{ "mcpServers": { "doiget": { "command": "doiget", "args": ["serve"] } } }
+```
+
+MCP Registry name: `mcp-name: io.github.sotashimozono/doiget`
 
 ## Subcommand surface
 

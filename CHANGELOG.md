@@ -10,6 +10,24 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.1-beta.1] - 2026-06-24
+
+Post-0.8.0 cycle. Discoverability + MCP-registry registration prep.
+
+### Added
+- **[registry]** `server.json` (MCP `server.schema.json` 2025-12-11) describing
+  doiget as a `cargo` package (`doiget-cli`, run via `doiget serve`) for the
+  official MCP registry under `io.github.sotashimozono/doiget`.
+
+### Fixed
+- **[docs]** The `doiget-cli` crate README on crates.io was badly stale — it
+  still announced a "Phase 0 skeleton" where "every subcommand exits with a
+  Phase-0-pending error". Replaced with the real shipping status + an MCP-host
+  setup snippet and the `mcp-name:` ownership marker (registry verification).
+- **[docs]** Corrected the install command `cargo install doiget` →
+  `cargo install doiget-cli` (no `doiget` crate exists; the binary is `doiget`)
+  in both READMEs, and dropped the stale `v0.2.0` status line in the root README.
+
 ## [0.8.0] - 2026-06-24
 
 Promotes the cumulative `0.8.0-beta.1`–`0.8.0-beta.8` line to a stable release
