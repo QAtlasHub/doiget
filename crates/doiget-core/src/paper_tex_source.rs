@@ -409,6 +409,218 @@ pub fn resolve_arxiv_src_base() -> Result<Url, String> {
     Url::parse(&raw).map_err(|e| format!("DOIGET_ARXIV_SRC_BASE is not a valid URL: {e}"))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Source bundle / figures (ADR-0034). The arXiv `/src/<id>` tarball already
+// downloaded for the text path carries EVERY submission file; this section
+// surfaces the full bundle (or figures only) instead of discarding them. Every
+// returned path is sanitised (relative, no `..`, no anchor) so a caller can
+// join it under any output directory without escaping it (zip-slip, ADR-0034 D3).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Image/figure file extensions (lowercase, no dot). Saved opaque — never
+/// interpreted (ADR-0034 D2). Vector `.pdf` figures are included.
+const FIGURE_EXTS: &[&str] = &["pdf", "eps", "ps", "png", "jpg", "jpeg", "gif", "svg"];
+
+/// Which subset of the source tarball to materialise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleFilter {
+    /// Every regular file in the tarball.
+    All,
+    /// Only image/figure files (by the [`FIGURE_EXTS`] allowlist).
+    FiguresOnly,
+}
+
+/// One file extracted from an arXiv source tarball.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceFile {
+    /// Sanitised **relative** path (never absolute, never contains `..`),
+    /// safe to join under any output root (ADR-0034 D3).
+    pub path: Utf8PathBuf,
+    /// Raw file bytes, opaque (never interpreted; ADR-0034 D2).
+    pub bytes: Vec<u8>,
+}
+
+/// Sanitise a raw tar entry path into a safe **relative** path, or `None` to
+/// reject it (zip-slip / path-traversal guard, ADR-0034 D3).
+///
+/// Rejects: absolute / root-anchored paths (leading `/` or `\`, or a Windows
+/// drive prefix like `C:`); any `..` component; any component containing `:`
+/// or a NUL byte; and paths with no normal component. Splits on BOTH `/` and
+/// `\` so a Windows-style traversal in a Unix-produced tar is caught
+/// regardless of the extracting platform. The result is always relative with
+/// no `..`, so `root.join(result)` cannot escape `root`.
+fn sanitize_entry_path(raw: &str) -> Option<Utf8PathBuf> {
+    if raw.is_empty() || raw.contains('\0') {
+        return None;
+    }
+    // Absolute / root-anchored — anomalous in an arXiv source tarball.
+    if raw.starts_with('/') || raw.starts_with('\\') {
+        return None;
+    }
+    let b = raw.as_bytes();
+    // Windows drive prefix `X:` / `X:\`.
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        return None;
+    }
+    let mut out = Utf8PathBuf::new();
+    let mut any = false;
+    for seg in raw.split(|c: char| c == '/' || c == '\\') {
+        match seg {
+            "" | "." => continue, // collapse `//`, drop `.`
+            ".." => return None,  // traversal — reject the whole path
+            s => {
+                if s.contains(':') || s.contains('\0') {
+                    return None;
+                }
+                out.push(s);
+                any = true;
+            }
+        }
+    }
+    if any {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+/// True when `path`'s extension is in the figure allowlist (case-insensitive).
+fn is_figure(path: &Utf8Path) -> bool {
+    match path.extension() {
+        Some(ext) => FIGURE_EXTS.contains(&ext.to_ascii_lowercase().as_str()),
+        None => false,
+    }
+}
+
+/// Decompress + untar an arXiv `/src/` body and collect the selected files.
+///
+/// Mirrors [`extract_tex`]'s magic-byte handling but keeps the existing text
+/// path byte-identical (ADR-0034 D6): a PDF-only response, a bare single file,
+/// or a single gzip'd file all yield [`FetchError::TextUnavailable`] (there is
+/// no multi-file bundle). Only **regular** tar entries are considered —
+/// symlinks / hardlinks / devices are skipped (a symlink is itself a traversal
+/// vector). Every path is run through [`sanitize_entry_path`]; a rejected entry
+/// is skipped with a `tracing::warn!`, never written.
+pub(crate) fn extract_bundle(
+    id: &ArxivId,
+    bytes: &[u8],
+    filter: BundleFilter,
+) -> Result<Vec<SourceFile>, FetchError> {
+    if bytes.starts_with(b"%PDF-") {
+        return Err(FetchError::TextUnavailable {
+            arxiv_id: id.clone(),
+        });
+    }
+    // Not gzip → a bare single file (no tar wrapper): no multi-file bundle.
+    if bytes.len() < 2 || bytes[0..2] != [0x1f, 0x8b] {
+        return Err(FetchError::TextUnavailable {
+            arxiv_id: id.clone(),
+        });
+    }
+    let mut gz = GzDecoder::new(std::io::Cursor::new(bytes));
+    let mut decompressed = Vec::new();
+    gz.read_to_end(&mut decompressed)
+        .map_err(|e| FetchError::SourceSchema {
+            hint: format!("gzip decompress of arXiv src failed: {e}"),
+        })?;
+    let is_tar = decompressed.len() > 262 && &decompressed[257..262] == b"ustar";
+    if !is_tar {
+        // Single gzip'd file (e.g. one .tex) — no bundle / figures.
+        return Err(FetchError::TextUnavailable {
+            arxiv_id: id.clone(),
+        });
+    }
+
+    let mut archive = Archive::new(std::io::Cursor::new(decompressed));
+    let entries = archive.entries().map_err(|e| FetchError::SourceSchema {
+        hint: format!("tar read failed: {e}"),
+    })?;
+
+    let mut files: Vec<SourceFile> = Vec::new();
+    for entry in entries {
+        let Ok(mut entry) = entry else { continue };
+        // Regular files only: a symlink/hardlink entry is a traversal vector
+        // and is never needed for source/figures (ADR-0034 D3).
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let raw_path = match entry.path() {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(_) => continue,
+        };
+        let Some(safe) = sanitize_entry_path(&raw_path) else {
+            tracing::warn!(
+                entry = %raw_path,
+                "arXiv src: rejected unsafe tar entry path (zip-slip guard)"
+            );
+            continue;
+        };
+        if matches!(filter, BundleFilter::FiguresOnly) && !is_figure(&safe) {
+            continue;
+        }
+        let mut buf = Vec::new();
+        if entry.read_to_end(&mut buf).is_ok() {
+            files.push(SourceFile {
+                path: safe,
+                bytes: buf,
+            });
+        }
+    }
+
+    if files.is_empty() {
+        return Err(FetchError::TextUnavailable {
+            arxiv_id: id.clone(),
+        });
+    }
+    Ok(files)
+}
+
+/// Fetch the arXiv source bundle (or figures only) for `id`.
+///
+/// Tier-1 OA, always-on (ADR-0034 D1). Performs the SAME single `/src/<id>`
+/// request as [`paper_tex_source`] and returns the selected files **in
+/// memory**; the caller writes them to disk. Every returned path is sanitised
+/// (ADR-0034 D3). Not cached (ADR-0034 D5).
+///
+/// # Errors
+///
+/// - [`FetchError::Http`] — transport / status failure.
+/// - [`FetchError::TextUnavailable`] — PDF-only / single-file submission, or no
+///   matching files (e.g. `--figures-only` on a figure-less submission).
+/// - [`FetchError::SourceSchema`] — URL construction or gzip/tar parse error.
+/// - [`FetchError::Log`] — provenance append failed (fail-closed).
+pub async fn paper_source_bundle(
+    base: &Url,
+    id: &ArxivId,
+    filter: BundleFilter,
+    ctx: &FetchContext,
+) -> Result<Vec<SourceFile>, FetchError> {
+    let _permit = ctx.rate_limiter.acquire(HTTP_SOURCE_KEY).await;
+
+    let url = src_url(base, id)?;
+    let (body, _final_url) = ctx.http.fetch_bytes(HTTP_SOURCE_KEY, url).await?;
+
+    let files = extract_bundle(id, &body, filter)?;
+
+    let canonical = Ref::Arxiv(id.clone())
+        .promote(PROV_SOURCE_LABEL, None)
+        .digest_hex();
+    ctx.log.append(RowInput {
+        event: LogEvent::Fetch,
+        result: LogResult::Ok,
+        capability: Capability::Oa,
+        ref_: Some(id.as_str()),
+        source: Some(PROV_SOURCE_LABEL),
+        error_code: None,
+        size_bytes: Some(body.len() as u64),
+        license: Some("arxiv-default"),
+        store_path: None,
+        canonical_digest: Some(&canonical),
+    })?;
+
+    Ok(files)
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic, missing_docs)]
 mod tests {
@@ -617,5 +829,118 @@ mod tests {
             cache_read_at(&root, &id, Utc::now()).is_none(),
             "stale schema version must be rejected"
         );
+    }
+
+    // ── sanitize_entry_path: zip-slip / traversal guard (ADR-0034 D3) ─────────
+
+    #[test]
+    fn sanitize_accepts_normal_relative_paths() {
+        assert_eq!(
+            sanitize_entry_path("main.tex").map(|p| p.as_str().replace('\\', "/")),
+            Some("main.tex".to_string())
+        );
+        assert_eq!(
+            sanitize_entry_path("figs/diagram.png").map(|p| p.as_str().replace('\\', "/")),
+            Some("figs/diagram.png".to_string())
+        );
+        // `.` segments dropped, `//` collapsed.
+        assert_eq!(
+            sanitize_entry_path("./a//b.tex").map(|p| p.as_str().replace('\\', "/")),
+            Some("a/b.tex".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_rejects_parent_traversal() {
+        assert_eq!(sanitize_entry_path("../evil.tex"), None);
+        assert_eq!(sanitize_entry_path("a/../../etc/passwd"), None);
+        assert_eq!(sanitize_entry_path("sub/../x"), None);
+    }
+
+    #[test]
+    fn sanitize_rejects_absolute_and_anchored() {
+        assert_eq!(sanitize_entry_path("/etc/passwd"), None);
+        assert_eq!(sanitize_entry_path("\\windows\\system32"), None);
+        assert_eq!(sanitize_entry_path("C:\\Windows\\evil"), None);
+        assert_eq!(sanitize_entry_path("C:/Windows/evil"), None);
+    }
+
+    #[test]
+    fn sanitize_rejects_backslash_traversal_cross_platform() {
+        // A Windows-style traversal in a Unix-produced tar must be caught
+        // regardless of the extracting platform.
+        assert_eq!(sanitize_entry_path("..\\..\\evil"), None);
+        assert_eq!(sanitize_entry_path("a\\..\\..\\b"), None);
+    }
+
+    #[test]
+    fn sanitize_rejects_empty_nul_dot_and_colon() {
+        assert_eq!(sanitize_entry_path(""), None);
+        assert_eq!(sanitize_entry_path("a/\0/b"), None);
+        assert_eq!(sanitize_entry_path("."), None); // no normal component
+        assert_eq!(sanitize_entry_path("a:b/c"), None); // colon in a segment
+    }
+
+    // ── is_figure ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn is_figure_matches_allowlist_case_insensitively() {
+        for f in ["fig.png", "a/b.EPS", "plot.Pdf", "x.svg", "y.JPEG"] {
+            assert!(is_figure(Utf8Path::new(f)), "{f} should be a figure");
+        }
+        for nf in ["main.tex", "refs.bib", "macros.sty", "README"] {
+            assert!(!is_figure(Utf8Path::new(nf)), "{nf} should NOT be a figure");
+        }
+    }
+
+    // ── extract_bundle ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn extract_bundle_all_returns_every_regular_file() {
+        let id = make_id("2401.12345");
+        let payload = tar_gzip(&[
+            ("paper.tex", b"\\documentclass{article}"),
+            ("refs.bib", b"@article{x,title={t}}"),
+            ("figs/plot.png", b"\x89PNG\r\n"),
+        ]);
+        let files = extract_bundle(&id, &payload, BundleFilter::All).expect("bundle");
+        let mut names: Vec<String> = files.iter().map(|f| f.path.as_str().replace('\\', "/")).collect();
+        names.sort();
+        assert_eq!(names, vec!["figs/plot.png", "paper.tex", "refs.bib"]);
+        // Postcondition: every returned path is relative with no traversal.
+        assert!(files
+            .iter()
+            .all(|f| !f.path.as_str().starts_with('/') && !f.path.as_str().contains("..")));
+    }
+
+    #[test]
+    fn extract_bundle_figures_only_keeps_images() {
+        let id = make_id("2401.12345");
+        let payload = tar_gzip(&[
+            ("paper.tex", b"\\documentclass{article}"),
+            ("refs.bib", b"@article{x}"),
+            ("figs/plot.png", b"\x89PNG"),
+            ("diagram.eps", b"%!PS"),
+        ]);
+        let files = extract_bundle(&id, &payload, BundleFilter::FiguresOnly).expect("figs");
+        let mut names: Vec<String> = files.iter().map(|f| f.path.as_str().replace('\\', "/")).collect();
+        names.sort();
+        assert_eq!(names, vec!["diagram.eps", "figs/plot.png"]);
+    }
+
+    #[test]
+    fn extract_bundle_pdf_only_is_text_unavailable() {
+        let id = make_id("2401.12345");
+        let err = extract_bundle(&id, b"%PDF-1.5 x", BundleFilter::All).expect_err("pdf-only");
+        assert!(matches!(err, FetchError::TextUnavailable { .. }));
+    }
+
+    #[test]
+    fn extract_bundle_figures_only_none_present_is_unavailable() {
+        let id = make_id("2401.12345");
+        let payload = tar_gzip(&[("paper.tex", b"\\documentclass{article}")]);
+        let err =
+            extract_bundle(&id, &payload, BundleFilter::FiguresOnly).expect_err("no figures");
+        assert!(matches!(err, FetchError::TextUnavailable { .. }));
     }
 }

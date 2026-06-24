@@ -118,6 +118,7 @@ enum ProvenanceAction {
                   \x20 csl          Export a stored entry as CSL JSON\n\
                   \x20 text         Extract a paper's full text from ar5iv (arXiv id)\n\
                   \x20 tex-source   Fetch raw LaTeX source from arXiv source API (arXiv id)\n\
+                  \x20 source       Download arXiv source bundle / figures to a dir (arXiv id)\n\
                   \x20 link         Resolve a DOI to its arXiv preprint (OpenAlex)\n\
                   \x20 info         Show metadata for a stored entry\n\
                   \x20 search       Search the local store by title / authors / venue\n\
@@ -427,6 +428,23 @@ enum Command {
         /// Bypass the on-disk TeX source cache (always re-fetch).
         #[arg(long)]
         no_cache: bool,
+    },
+    /// Download an arXiv submission's source bundle (every file) or just its
+    /// figures to a directory. Fetches the same `/src/<id>` tarball as
+    /// `tex-source` (one request) and materialises files to `--out`. Files are
+    /// written opaque (never interpreted); tar entry paths are sanitised
+    /// (zip-slip safe, ADR-0034). PDF-only submissions yield `TEXT_UNAVAILABLE`.
+    /// A DOI reports `NO_OA_AVAILABLE`. Tier-1 OA, always-on.
+    Source {
+        /// arXiv id (e.g. "arxiv:2401.12345"). A DOI reports `NO_OA_AVAILABLE`.
+        ref_: String,
+        /// Directory to write the extracted files into (created if missing).
+        #[arg(long = "out", value_name = "DIR", value_parser = parse_utf8_path)]
+        out_dir: Utf8PathBuf,
+        /// Extract only image/figure files (.pdf .eps .ps .png .jpg .jpeg .gif
+        /// .svg), not the full source bundle.
+        #[arg(long)]
+        figures_only: bool,
     },
     /// Resolve a DOI to its arXiv preprint + identity cluster (OpenAlex;
     /// #281 item 5). Reports whether the same work has a free arXiv
@@ -857,6 +875,20 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 ref_,
                 max_chars,
                 no_cache,
+                mode,
+                out.quiet_was_explicit,
+            )
+            .await
+        }
+        Some(Command::Source {
+            ref_,
+            out_dir,
+            figures_only,
+        }) => {
+            doiget_cli::commands::source::run(
+                ref_,
+                out_dir,
+                figures_only,
                 mode,
                 out.quiet_was_explicit,
             )

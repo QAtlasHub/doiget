@@ -38,6 +38,7 @@ pub mod output;
 pub mod provenance;
 pub mod resolve_citation;
 pub mod search;
+pub mod source;
 pub mod tag;
 pub mod tex_source;
 pub mod text;
