@@ -208,58 +208,100 @@ fn src_url(base: &Url, id: &ArxivId) -> Result<Url, FetchError> {
         })
 }
 
-/// Detect content type by magic bytes and extract the main LaTeX source.
+/// The shape of a decompressed arXiv `/src/<id>` response body, classified by
+/// magic bytes. Shared by the text path ([`extract_tex`]) and the bundle path
+/// ([`extract_bundle`]) so the gzip + ustar detection lives in one place
+/// (issue #346); each caller maps the variants to its own result type.
+enum SrcPayload {
+    /// `%PDF-` magic — a PDF-only submission (no source).
+    PdfOnly,
+    /// A single file: a bare uncompressed body, or a single gzip'd non-tar
+    /// file. The bytes are that file's content.
+    SingleFile(Vec<u8>),
+    /// A gzip'd `ustar` tar archive; the bytes are the decompressed tar.
+    Tar(Vec<u8>),
+}
+
+/// Classify + decompress an arXiv `/src/` body by magic bytes.
 ///
-/// Returns an [`ExtractedTex`] with `main_file` and `content`.
-pub(crate) fn extract_tex(id: &ArxivId, bytes: &[u8]) -> Result<ExtractedTex, FetchError> {
-    // PDF-only submission — no TeX source available.
+/// `max_decompressed` caps the gzip OUTPUT size when `Some` (the bundle path,
+/// against a gzip bomb — ADR-0034 I5); `None` leaves the text path's
+/// decompression byte-identical to the pre-refactor inline form (ADR-0034 D6).
+///
+/// # Errors
+///
+/// [`FetchError::SourceSchema`] on a gzip decode failure or an over-cap body.
+fn classify_src(bytes: &[u8], max_decompressed: Option<u64>) -> Result<SrcPayload, FetchError> {
     if bytes.starts_with(b"%PDF-") {
-        return Err(FetchError::TextUnavailable {
-            arxiv_id: id.clone(),
-        });
+        return Ok(SrcPayload::PdfOnly);
     }
-
-    // arXiv occasionally serves a bare uncompressed .tex file for trivial
-    // single-file submissions that were not gzip-compressed by the submitter.
+    // Not gzip (magic `1f 8b`) → a bare uncompressed single file (no tar).
     if bytes.len() < 2 || bytes[0..2] != [0x1f, 0x8b] {
-        let text = String::from_utf8_lossy(bytes).into_owned();
-        if text.trim().is_empty() {
-            return Err(FetchError::TextUnavailable {
-                arxiv_id: id.clone(),
-            });
-        }
-        return Ok(ExtractedTex {
-            main_file: None,
-            content: text,
-        });
+        return Ok(SrcPayload::SingleFile(bytes.to_vec()));
     }
-
-    // Decompress gzip.
-    let mut gz = GzDecoder::new(std::io::Cursor::new(bytes));
     let mut decompressed = Vec::new();
-    gz.read_to_end(&mut decompressed)
-        .map_err(|e| FetchError::SourceSchema {
-            hint: format!("gzip decompress of arXiv src failed: {e}"),
-        })?;
-
+    match max_decompressed {
+        Some(cap) => {
+            // `take(cap + 1)` bounds the decompressed bytes; a result longer
+            // than `cap` means the (capped) stream was truncated → reject.
+            let mut gz = GzDecoder::new(std::io::Cursor::new(bytes)).take(cap + 1);
+            gz.read_to_end(&mut decompressed)
+                .map_err(|e| FetchError::SourceSchema {
+                    hint: format!("gzip decompress of arXiv src failed: {e}"),
+                })?;
+            if decompressed.len() as u64 > cap {
+                return Err(FetchError::SourceSchema {
+                    hint: format!(
+                        "arXiv src decompressed size exceeds {cap} bytes \
+                         (possible gzip bomb); refusing"
+                    ),
+                });
+            }
+        }
+        None => {
+            let mut gz = GzDecoder::new(std::io::Cursor::new(bytes));
+            gz.read_to_end(&mut decompressed)
+                .map_err(|e| FetchError::SourceSchema {
+                    hint: format!("gzip decompress of arXiv src failed: {e}"),
+                })?;
+        }
+    }
     // UStar tar detection: POSIX.1-1988 tar header magic at byte offset 257.
     // A valid tar header is ≥ 512 bytes; the `> 262` guard is conservative
     // (only 262 bytes are needed for the magic slice) and avoids a panic.
     let is_tar = decompressed.len() > 262 && &decompressed[257..262] == b"ustar";
-
     if is_tar {
-        extract_from_tar(id, &decompressed)
+        Ok(SrcPayload::Tar(decompressed))
     } else {
-        let text = String::from_utf8_lossy(&decompressed).into_owned();
-        if text.trim().is_empty() {
-            return Err(FetchError::TextUnavailable {
-                arxiv_id: id.clone(),
-            });
+        Ok(SrcPayload::SingleFile(decompressed))
+    }
+}
+
+/// Detect content type by magic bytes and extract the main LaTeX source.
+///
+/// Returns an [`ExtractedTex`] with `main_file` and `content`.
+pub(crate) fn extract_tex(id: &ArxivId, bytes: &[u8]) -> Result<ExtractedTex, FetchError> {
+    // No size cap on the text path (`None`) — ADR-0034 D6: behaviour stays
+    // byte-identical to the pre-#346 inline form. The single-file arm covers
+    // both a bare uncompressed `.tex` (arXiv occasionally serves one for
+    // trivial submissions) and a single gzip'd `.tex`.
+    match classify_src(bytes, None)? {
+        SrcPayload::PdfOnly => Err(FetchError::TextUnavailable {
+            arxiv_id: id.clone(),
+        }),
+        SrcPayload::SingleFile(data) => {
+            let text = String::from_utf8_lossy(&data).into_owned();
+            if text.trim().is_empty() {
+                return Err(FetchError::TextUnavailable {
+                    arxiv_id: id.clone(),
+                });
+            }
+            Ok(ExtractedTex {
+                main_file: None,
+                content: text,
+            })
         }
-        Ok(ExtractedTex {
-            main_file: None,
-            content: text,
-        })
+        SrcPayload::Tar(decompressed) => extract_from_tar(id, &decompressed),
     }
 }
 
@@ -538,32 +580,13 @@ pub(crate) fn extract_bundle(
     bytes: &[u8],
     filter: BundleFilter,
 ) -> Result<Vec<SourceFile>, FetchError> {
-    // PDF-only / bare single file: no multi-file bundle.
-    if bytes.starts_with(b"%PDF-") || bytes.len() < 2 || bytes[0..2] != [0x1f, 0x8b] {
-        return Err(no_files(id, filter));
-    }
-    // Decompress with a hard cap on the OUTPUT size (ADR-0034 I5): the HTTP
-    // client already bounds the COMPRESSED download (PDF_MAX_BYTES); `take`
-    // bounds the decompressed bytes so a gzip bomb cannot exhaust memory.
-    let mut gz = GzDecoder::new(std::io::Cursor::new(bytes)).take(SRC_MAX_DECOMPRESSED_BYTES + 1);
-    let mut decompressed = Vec::new();
-    gz.read_to_end(&mut decompressed)
-        .map_err(|e| FetchError::SourceSchema {
-            hint: format!("gzip decompress of arXiv src failed: {e}"),
-        })?;
-    if decompressed.len() as u64 > SRC_MAX_DECOMPRESSED_BYTES {
-        return Err(FetchError::SourceSchema {
-            hint: format!(
-                "arXiv src decompressed size exceeds {SRC_MAX_DECOMPRESSED_BYTES} bytes \
-                 (possible gzip bomb); refusing"
-            ),
-        });
-    }
-    let is_tar = decompressed.len() > 262 && &decompressed[257..262] == b"ustar";
-    if !is_tar {
-        // Single gzip'd file (e.g. one .tex) — no bundle / figures.
-        return Err(no_files(id, filter));
-    }
+    // PDF-only / bare single file / single gzip'd file: no multi-file bundle.
+    // Decompression is size-capped against a gzip bomb (ADR-0034 I5); the
+    // shared [`classify_src`] keeps the gzip/ustar detection in one place (#346).
+    let decompressed = match classify_src(bytes, Some(SRC_MAX_DECOMPRESSED_BYTES))? {
+        SrcPayload::Tar(d) => d,
+        SrcPayload::PdfOnly | SrcPayload::SingleFile(_) => return Err(no_files(id, filter)),
+    };
 
     let mut archive = Archive::new(std::io::Cursor::new(decompressed));
     let entries = archive.entries().map_err(|e| FetchError::SourceSchema {

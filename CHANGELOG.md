@@ -10,6 +10,16 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.0-beta.4] - 2026-06-24
+
+### Changed
+- **[core/refactor]** Factor the arXiv `/src` gzip + ustar magic-byte detection
+  into a shared `classify_src` helper used by both `extract_tex` (text path) and
+  `extract_bundle` (bundle path), collapsing the duplicated prologue (#346 /
+  ADR-0034 D6). The `extract_tex` text path stays behaviourally byte-identical
+  (no size cap); `extract_bundle` keeps its gzip-bomb cap via
+  `classify_src(.., Some(SRC_MAX_DECOMPRESSED_BYTES))`. No external API change.
+
 ## [0.8.0-beta.3] - 2026-06-24
 
 ### Fixed
