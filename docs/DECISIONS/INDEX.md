@@ -41,7 +41,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0022 | Dry-run mode for fetch operations | Accepted | Slice 2 | #12 |
 | 0023 | Structured `denial_context` on error envelopes | Accepted | Slices 1/2 | #12 |
 | 0024 | CanonicalRef implementation + provenance log v1 → v2 migration | Accepted | Slice 4 | Slice 4 |
-| 0025 | Tag-driven release with version gate + beta/stable lanes | Accepted (Amend. 5 2026-05-19: D6 `next`-primary; Amend. 6 2026-05-19: advisory `version-check` job, D1 unchanged) | PR #166 / Amend. 5 / Amend. 6 | maintainer review 2026-05-17 |
+| 0025 | Tag-driven release with version gate + beta/stable lanes | Accepted (Amend. 5 2026-05-19: D6 `next`-primary; Amend. 6 2026-05-19: advisory `version-check` job, D1 unchanged; **Amended by 0033** 2026-06-24: per-PR version-bump gate, D6 rule 4 direct hotfix retired) | PR #166 / Amend. 5 / Amend. 6 | maintainer review 2026-05-17 |
 | 0026 | DOI suffix charset extension: permit `:` (SECURITY.md §1.1) | Accepted | #194 | #194 dogfood |
 | 0027 | redirect-allowlist: add physics-society / diamond-OA hosts to `oa-publisher` | Accepted | #193 | #193 dogfood |
 | 0028 | User-extensible capability gate (ToS+verified-curation posture; impersonation out-of-scope) | Accepted (design; slice TBD) | TBD | #220 / #223 |
@@ -49,6 +49,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0030 | Bibliography input adapters (.bib / CSL-JSON) in `doiget-core`; new MCP tool `doiget_batch_from_bibliography` | Accepted (design; slice TBD) | TBD | #222 / Zotero distribution review 2026-05-20 |
 | 0031 | Discovery search is Tier-1 OA metadata (always-on); `doiget search` defaults to external discovery | Accepted (design; PR1 slice) | PR1 (`feat/paper-search`) | #281 / feasibility read 2026-06-04 |
 | 0032 | Structured full-text (HTML/XML) extraction in scope; PDF-blob processing stays out of scope | Accepted (design; PR4 ships ar5iv leg) | PR4 (`feat/paper-text`) | #281 item 3 / scope decision 2026-06-06 |
+| 0033 | Per-PR version-bump enforcement + strict next→main promotion (amends 0025 §D6) | Proposed (implemented by `chore/version-bump-gate`; flips on merge) | `chore/version-bump-gate` | maintainer review 2026-06-24 (0.7.1 vanishing) |
 
 ## Conventions
 
