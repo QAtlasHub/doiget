@@ -10,6 +10,32 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.0-beta.1] - 2026-06-24
+
+### Changed
+- **[release/ci]** Version management is now enforced at PR time (ADR-0033). A
+  new **blocking** `version-bump` check (`.github/workflows/version-bump.yml` +
+  `scripts/version-bump-gate.sh`) requires every PR to advance
+  `[workspace.package].version` per the lane rules: a PR to `next` bumps
+  `beta.N` by exactly +1 (or retargets the base to a valid +1 single-component
+  step over the current stable, resetting the counter to `-beta.1`); a PR to
+  `main` is promotion-only — head MUST be `next` and the version MUST be a clean
+  `X.Y.Z` exactly one major/minor/patch step over `origin/main`, never a skip.
+  The advisory `version-check` job and the tag-time release gate (ADR-0025 D2)
+  are unchanged. There are no label-based exceptions; the automated
+  `main → next` back-merge is the only (structural) carve-out.
+- **[release]** Retarget the active `next` cycle `0.7.2-beta.1 → 0.8.0-beta.1`.
+  The accumulated cycle (tex-source #327, frontier #295, tags/collections #294,
+  auto preprint fallback #325, distribution #247, …) adds new commands → a
+  **minor** bump under the project's 0.x policy. `0.7.2` over the `0.7.0` stable
+  was a +2 patch *skip* (forbidden by ADR-0033's single-step promotion rule);
+  `0.8.0` is the correct, promotable target. No `0.7.1`/`0.7.2` was ever
+  published (crates.io shows only stable `0.7.0`), so nothing is dropped.
+
+### Docs
+- **[adr]** ADR-0033 (per-PR version-bump enforcement; amends ADR-0025 §D6
+  rules 2 and 4) and a `CONTRIBUTING.md` "Version bumps (enforced)" rule.
+
 ## [0.7.2-beta.1] - 2026-06-20
 
 ### Added

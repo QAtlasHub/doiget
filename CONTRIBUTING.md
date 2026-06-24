@@ -117,7 +117,8 @@ The following crates are denied workspace-wide via `deny.toml`:
 
 - **Branch from `next`, not `main`** (ADR-0025 §D6). `next` is the integration
   + beta lane; `main` is the stable lane and advances only via a `next → main`
-  promotion or a stable hotfix. Branch name format: `<type>/<short-slug>`,
+  promotion (stable fixes also flow through `next`; direct-to-`main` hotfix is
+  retired by ADR-0033). Branch name format: `<type>/<short-slug>`,
   e.g. `fix/safekey-collision`, `feat/citation-graph`,
   `docs/clarify-store-spec`.
 - Commit messages follow Conventional Commits: `feat:`, `fix:`, `docs:`, `chore:`,
@@ -128,6 +129,29 @@ The following crates are denied workspace-wide via `deny.toml`:
   signature against `.github/allowed_signers` (ADR-0025 §D2-G7 / Amendment).
 - Each PR has a single, well-scoped purpose. Multi-purpose PRs will be asked to split.
 - The PR description must reference any related ADR, Discussion, or issue.
+
+### Version bumps (enforced — ADR-0033)
+
+Every PR must advance `[workspace.package].version`; the **blocking
+`version-bump` check** (`scripts/version-bump-gate.sh`) verifies it. There are
+**no label-based exceptions**.
+
+- **PR → `next`:** bump `beta.N` by **exactly +1** (e.g. `0.8.0-beta.3 →
+  0.8.0-beta.4`). To raise the cycle's base (a fix-only cycle that grows into a
+  feature/breaking release), set it to a valid **+1 single-component step over
+  the current stable** (`origin/main`) — `patch+1`, `minor+1`, or `major+1`,
+  lower components zeroed — and reset the counter to `-beta.1`. You cannot skip
+  or hold the version, and the base must stay a single step over stable so
+  `next` is always promotable (after a promotion the first PR MUST retarget).
+- **PR → `main`:** promotion only. The PR head **must be `next`** — there is no
+  direct-to-`main` path (stable fixes also go through `next`; ADR-0033 retires
+  ADR-0025 §D6 rule 4). The version must be a **clean `X.Y.Z`** that is exactly
+  **+1 major/minor/patch** over `origin/main`, never a skip.
+- The only exempt PR is the automated **`main → next` back-merge** (it keeps
+  `next`'s `-beta.N`); it is recognised by branch shape, not a label.
+
+This is separate from the advisory `version-check` job (release-readiness
+visibility) and the tag-time release gate (ADR-0025 §D2).
 
 ## Release process
 
