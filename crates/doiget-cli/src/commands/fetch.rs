@@ -873,6 +873,11 @@ fn slugify(s: &str) -> String {
 /// back to a copy. Replaces a prior doiget symlink, but refuses to clobber an
 /// unrelated regular file. Returns the written path and the mechanism used
 /// (`"symlink"` | `"copy"`).
+///
+/// The symlink-vs-file check and the subsequent replace are not atomic: a
+/// concurrent process swapping the entry between the two syscalls is an
+/// accepted, out-of-scope race — the `--link` dir is the user's own working
+/// directory, assumed single-writer (review #352).
 fn link_artifact(
     dir: &Utf8Path,
     src: &Utf8Path,

@@ -281,11 +281,15 @@ fn classify_src(bytes: &[u8], max_decompressed: Option<u64>) -> Result<SrcPayloa
 ///
 /// Returns an [`ExtractedTex`] with `main_file` and `content`.
 pub(crate) fn extract_tex(id: &ArxivId, bytes: &[u8]) -> Result<ExtractedTex, FetchError> {
-    // No size cap on the text path (`None`) — ADR-0034 D6: behaviour stays
-    // byte-identical to the pre-#346 inline form. The single-file arm covers
-    // both a bare uncompressed `.tex` (arXiv occasionally serves one for
-    // trivial submissions) and a single gzip'd `.tex`.
-    match classify_src(bytes, None)? {
+    // Cap decompression against a gzip bomb (review #352): the HTTP layer only
+    // bounds the *compressed* body, so an unbounded `read_to_end` here could
+    // OOM on a crafted `/src` payload — now reachable via the MCP
+    // `doiget_paper_tex_source` tool. Real arXiv sources are far below the cap,
+    // so this supersedes ADR-0034 D6's "byte-identical" note for pathological
+    // inputs only. The single-file arm covers both a bare uncompressed `.tex`
+    // (arXiv occasionally serves one for trivial submissions) and a single
+    // gzip'd `.tex`.
+    match classify_src(bytes, Some(SRC_MAX_DECOMPRESSED_BYTES))? {
         SrcPayload::PdfOnly => Err(FetchError::TextUnavailable {
             arxiv_id: id.clone(),
         }),
@@ -312,11 +316,13 @@ pub(crate) fn extract_tex(id: &ArxivId, bytes: &[u8]) -> Result<ExtractedTex, Fe
 ///         + (1 if filename ends with `main.tex`) × 100_000
 ///         + byte_count_of_file
 ///
-/// The weights are sized to dominate any realistic file size: a `.tex` file
-/// with `\documentclass` always beats one without it unless the file exceeds
-/// ~1 GB (byte count overflows `i64`), which is not a realistic `.tex` size.
-/// Within tied `\documentclass` files, `main.tex` always wins unless the
-/// competing file exceeds 100 KB — also not a realistic sub-file size.
+/// The weights dominate realistic file sizes: a `\documentclass` file beats a
+/// non-`\documentclass` one unless the latter is ~1 MB larger, and within
+/// `\documentclass` files `main.tex` wins unless a rival is ~100 KB larger —
+/// neither happens for real sub-files. The sum uses `saturating_add` so it
+/// stays total-order-safe even for a pathological size the decompression cap
+/// would already reject (the previous note claiming "~1 GB overflows i64" was
+/// wrong — `i64::MAX` is ~9.2 EB; review #352).
 fn extract_from_tar(id: &ArxivId, bytes: &[u8]) -> Result<ExtractedTex, FetchError> {
     let mut archive = Archive::new(std::io::Cursor::new(bytes));
     let entries = archive.entries().map_err(|e| FetchError::SourceSchema {
@@ -327,20 +333,47 @@ fn extract_from_tar(id: &ArxivId, bytes: &[u8]) -> Result<ExtractedTex, FetchErr
     // Track .tex entries attempted (even if read failed) so that a corrupt
     // archive is distinguishable from a PDF-only submission.
     let mut tex_attempted: usize = 0;
+    // Entries skipped because the header/path could not be parsed, the path was
+    // unsafe, or the body failed to read. Logged below so a partial extraction
+    // is never silent (mirrors `extract_bundle`'s discipline; review #352).
+    let mut unreadable: usize = 0;
     for entry in entries {
-        let Ok(mut entry) = entry else { continue };
-        let path = match entry.path() {
+        let Ok(mut entry) = entry else {
+            unreadable += 1;
+            continue;
+        };
+        let raw = match entry.path() {
             Ok(p) => p.to_string_lossy().to_string(),
-            Err(_) => continue,
+            Err(_) => {
+                unreadable += 1;
+                continue;
+            }
+        };
+        // Use the sanitised relative path for `main_file`: the text path never
+        // writes files, but the name flows into the CLI output / MCP envelope,
+        // so a crafted `../`-style entry name must never be surfaced to a
+        // caller (review #352).
+        let Some(path) = sanitize_entry_path(&raw).map(|p| p.to_string()) else {
+            tracing::warn!(arxiv_id = %id.as_str(), entry = %raw, "skipping unsafe arXiv src entry path");
+            continue;
         };
         if !path.ends_with(".tex") {
             continue;
         }
         tex_attempted += 1;
         let mut content = String::new();
-        if entry.read_to_string(&mut content).is_ok() && !content.trim().is_empty() {
-            tex_files.push((path, content));
+        match entry.read_to_string(&mut content) {
+            Ok(_) if !content.trim().is_empty() => tex_files.push((path, content)),
+            Ok(_) => {} // empty .tex — legitimately skipped, not a failure
+            Err(_) => unreadable += 1,
         }
+    }
+    if unreadable > 0 {
+        tracing::warn!(
+            arxiv_id = %id.as_str(),
+            unreadable,
+            "some arXiv src tar entries were unreadable/unsafe and were skipped"
+        );
     }
 
     if tex_files.is_empty() {
@@ -363,7 +396,7 @@ fn extract_from_tar(id: &ArxivId, bytes: &[u8]) -> Result<ExtractedTex, FetchErr
         let docclass = i64::from(content.contains(r"\documentclass")) * 1_000_000;
         let is_main = i64::from(name.ends_with("main.tex") || name == "main.tex") * 100_000;
         let size = i64::try_from(content.len()).unwrap_or(i64::MAX);
-        docclass + is_main + size
+        docclass.saturating_add(is_main).saturating_add(size)
     });
 
     match best {
@@ -486,6 +519,7 @@ pub enum BundleFilter {
 
 /// One file extracted from an arXiv source tarball.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SourceFile {
     /// Sanitised **relative** path (never absolute, never contains `..`),
     /// safe to join under any output root (ADR-0034 D3). The field is
@@ -826,6 +860,32 @@ mod tests {
         let ext = extract_tex(&id, &gz).expect("extract");
         assert!(ext.main_file.is_none(), "single gzip has no tar filename");
         assert!(ext.content.contains("\\documentclass"));
+    }
+
+    // ── classify_src: gzip-bomb decompression cap (review #352) ───────────────
+
+    #[test]
+    fn classify_src_rejects_decompression_over_cap() {
+        // A body decompressing to more than the cap MUST be rejected
+        // (`SourceSchema`), never silently accepted — this is the gzip-bomb
+        // guard. Pins the wiring so a regression that drops the cap (e.g.
+        // passes `None` on the text path again) fails loudly. Uses a tiny cap
+        // so the test needs no large allocation.
+        let big = vec![b'x'; 10_000];
+        let gz = gzip_bytes(&big);
+        let err = classify_src(&gz, Some(1_000)).expect_err("over-cap must be rejected");
+        assert!(
+            matches!(err, FetchError::SourceSchema { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn classify_src_accepts_decompression_within_cap() {
+        let small = vec![b'x'; 500];
+        let gz = gzip_bytes(&small);
+        let payload = classify_src(&gz, Some(1_000)).expect("within cap");
+        assert!(matches!(payload, SrcPayload::SingleFile(_)));
     }
 
     // ── extract_from_tar: selection heuristic ────────────────────────────────

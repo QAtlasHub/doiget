@@ -19,6 +19,12 @@ implementation-specific — doiget defaults to `./papers` (under the current wor
 directory; [ADR-0036](DECISIONS/0036-default-store-cwd.md)), BiblioFetch.jl to
 `~/papers/`. The layout *under* the root, specified in this document, is identical for
 both; point them at the same root (e.g. `DOIGET_STORE_ROOT=~/papers`) to share one store.
+
+> **MCP `doiget serve`:** the default is resolved relative to the *server process's*
+> working directory, which is indeterminate for a long-running daemon (e.g. a service
+> manager may launch it in `/`). MCP users SHOULD set `DOIGET_STORE_ROOT` explicitly so
+> the store does not silently vary by launch directory.
+
 The `<safekey>` is computed from the DOI / arXiv id by the algorithm in
 [`SAFEKEY.md`](SAFEKEY.md).
 

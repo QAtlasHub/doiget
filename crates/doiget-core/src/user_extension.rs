@@ -310,6 +310,7 @@ struct RawHost {
 /// allowlist unconditionally, and optionally merge [`academic_repo_hosts`]
 /// when [`Self::trust_academic_repos`] is `true`.
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct UserExtensionConfig {
     /// Hosts from `[[network.additional_hosts]]`.
     pub additional_hosts: Vec<UserExtensionHost>,
@@ -333,7 +334,7 @@ pub fn academic_repo_hosts() -> Vec<UserExtensionHost> {
     const PATTERNS: &[(&str, &str)] = &[
         ("*.ac.uk", "UK academic institutions (Universities UK)"),
         ("*.ac.jp", "Japanese academic institutions (NII)"),
-        ("*.go.jp", "Japanese government repositories"),
+        ("*.jst.go.jp", "J-STAGE / JST academic platform (Japan)"),
         ("*.edu.au", "Australian universities (TEQSA)"),
         ("*.edu.cn", "Chinese universities (MoE)"),
         ("*.ac.cn", "Chinese academic institutions"),

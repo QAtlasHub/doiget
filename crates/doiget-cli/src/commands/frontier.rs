@@ -74,19 +74,29 @@ pub async fn run(
     };
 
     // Filter out papers already in the local store.
-    if let Ok(store_root) = resolve_store_root() {
-        results.hits.retain(|hit| {
-            let Some(ref doi_s) = hit.doi else {
-                return true;
-            };
-            let Ok(d) = doiget_core::Doi::parse(doi_s) else {
-                return true;
-            };
-            let safekey = doiget_core::Ref::Doi(d).safekey();
-            !store_root
-                .join(format!("{}.pdf", safekey.as_str()))
-                .exists()
-        });
+    match resolve_store_root() {
+        Ok(store_root) => {
+            results.hits.retain(|hit| {
+                let Some(ref doi_s) = hit.doi else {
+                    return true;
+                };
+                let Ok(d) = doiget_core::Doi::parse(doi_s) else {
+                    return true;
+                };
+                let safekey = doiget_core::Ref::Doi(d).safekey();
+                !store_root
+                    .join(format!("{}.pdf", safekey.as_str()))
+                    .exists()
+            });
+        }
+        Err(e) => {
+            // Don't silently present already-fetched papers as "frontier":
+            // tell the user the store-exclusion filter was skipped (review #352).
+            eprintln!(
+                "warning: could not resolve the local store root ({e}); \
+                 frontier results are NOT filtered against already-fetched papers"
+            );
+        }
     }
 
     if mode == OutputMode::Quiet && quiet_was_explicit {

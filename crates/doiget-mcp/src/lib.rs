@@ -245,9 +245,9 @@ impl Server {
         if input.dry_run {
             // Use the same store-root resolver as `doiget_health` so the
             // path projections in `plan.target_*` match what the live
-            // fetch would write to. When neither HOME nor USERPROFILE
-            // resolves (locked-down hosts), fall back to a sentinel
-            // path so the preview still has a complete shape — the
+            // fetch would write to. When the cwd can't be resolved (the
+            // `None` case — e.g. a non-UTF-8 working directory), fall back to
+            // `./papers` so the preview still has a complete shape — the
             // dry-run is a preview, not a writability probe.
             let store_root = resolve_store_root().unwrap_or_else(|| Utf8PathBuf::from("./papers"));
             let plan = build_fetch_plan(&ref_, &store_root);
@@ -3929,7 +3929,21 @@ mod tests {
         // root on a normal host — `DOIGET_STORE_ROOT` when set, else the cwd
         // default, since current_dir() is always available. We deliberately
         // don't mutate env (the test process is shared with other tests).
-        assert!(resolve_store_root().is_some());
+        let got = resolve_store_root();
+        assert!(
+            got.is_some(),
+            "resolve_store_root must resolve on a normal host"
+        );
+        // When DOIGET_STORE_ROOT is unset, the default MUST be `<cwd>/papers`
+        // (not a `~/papers` home fallback) — a read-only env check (no
+        // mutation) that catches a regression to the old default (review #352).
+        if std::env::var_os("DOIGET_STORE_ROOT").is_none() {
+            let expected =
+                camino::Utf8PathBuf::from_path_buf(std::env::current_dir().expect("cwd available"))
+                    .expect("cwd is valid UTF-8")
+                    .join("papers");
+            assert_eq!(got, Some(expected));
+        }
     }
 
     /// ADR-0028 D2: `build_http_client_for_fetch` MUST merge user-

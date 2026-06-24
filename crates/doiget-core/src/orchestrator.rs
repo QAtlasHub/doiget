@@ -563,8 +563,13 @@ fn contact_email_from_env() -> String {
 
 fn arxiv_source_from_env() -> ArxivSource {
     if let Ok(s) = std::env::var("DOIGET_ARXIV_BASE") {
-        if let Ok(url) = url::Url::parse(&s) {
-            return ArxivSource::with_base(url);
+        match url::Url::parse(&s) {
+            Ok(url) => return ArxivSource::with_base(url),
+            Err(e) => tracing::warn!(
+                value = %s,
+                error = %e,
+                "DOIGET_ARXIV_BASE is not a valid URL; using the default arXiv base"
+            ),
         }
     }
     ArxivSource::new()
@@ -572,8 +577,13 @@ fn arxiv_source_from_env() -> ArxivSource {
 
 fn crossref_source_from_env(contact: &str) -> CrossrefSource {
     if let Ok(s) = std::env::var("DOIGET_CROSSREF_BASE") {
-        if let Ok(url) = url::Url::parse(&s) {
-            return CrossrefSource::with_base(url, contact.to_string());
+        match url::Url::parse(&s) {
+            Ok(url) => return CrossrefSource::with_base(url, contact.to_string()),
+            Err(e) => tracing::warn!(
+                value = %s,
+                error = %e,
+                "DOIGET_CROSSREF_BASE is not a valid URL; using the default Crossref base"
+            ),
         }
     }
     CrossrefSource::new(contact.to_string())
@@ -581,8 +591,13 @@ fn crossref_source_from_env(contact: &str) -> CrossrefSource {
 
 fn unpaywall_source_from_env(contact: &str) -> UnpaywallSource {
     if let Ok(s) = std::env::var("DOIGET_UNPAYWALL_BASE") {
-        if let Ok(url) = url::Url::parse(&s) {
-            return UnpaywallSource::with_base(url, contact.to_string());
+        match url::Url::parse(&s) {
+            Ok(url) => return UnpaywallSource::with_base(url, contact.to_string()),
+            Err(e) => tracing::warn!(
+                value = %s,
+                error = %e,
+                "DOIGET_UNPAYWALL_BASE is not a valid URL; using the default Unpaywall base"
+            ),
         }
     }
     UnpaywallSource::new(contact.to_string())
