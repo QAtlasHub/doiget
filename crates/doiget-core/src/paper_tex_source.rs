@@ -438,7 +438,7 @@ const SRC_MAX_DECOMPRESSED_BYTES: u64 = 500_000_000;
 pub enum BundleFilter {
     /// Every regular file in the tarball.
     All,
-    /// Only image/figure files (by the [`FIGURE_EXTS`] allowlist).
+    /// Only image/figure files (by the `FIGURE_EXTS` extension allowlist).
     FiguresOnly,
 }
 
@@ -447,8 +447,8 @@ pub enum BundleFilter {
 pub struct SourceFile {
     /// Sanitised **relative** path (never absolute, never contains `..`),
     /// safe to join under any output root (ADR-0034 D3). The field is
-    /// `pub(crate)` so it can only be set by [`extract_bundle`] — which runs
-    /// every path through [`sanitize_entry_path`] — and an external caller
+    /// `pub(crate)` so it can only be set by `extract_bundle` — which runs
+    /// every path through `sanitize_entry_path` — and an external caller
     /// cannot forge a `SourceFile` carrying an unsafe path. This mirrors the
     /// checked-construction pattern of `Doi` / `ArxivId`. Read it via
     /// [`SourceFile::path`].
@@ -489,7 +489,7 @@ fn sanitize_entry_path(raw: &str) -> Option<Utf8PathBuf> {
     }
     let mut out = Utf8PathBuf::new();
     let mut any = false;
-    for seg in raw.split(|c: char| c == '/' || c == '\\') {
+    for seg in raw.split(['/', '\\']) {
         match seg {
             "" | "." => continue, // collapse `//`, drop `.`
             ".." => return None,  // traversal — reject the whole path
@@ -1050,17 +1050,41 @@ mod tests {
     }
 
     #[test]
-    fn extract_bundle_rejects_traversal_entry_but_keeps_safe() {
-        // ADR-0034 I1: prove sanitize_entry_path is actually WIRED INTO
-        // extract_bundle — a malicious `../evil.tex` entry must be absent from
-        // the result while a benign sibling survives. If a refactor dropped
-        // the sanitize call, this fails.
+    fn extract_bundle_drops_traversal_entry_via_sanitizer() {
+        // ADR-0034 I1: prove sanitize_entry_path is WIRED INTO extract_bundle.
+        // The `tar` *writer* refuses to create a `..` entry, and colon/
+        // backslash names parse inconsistently across OS tar writers, so we
+        // hand-build a raw USTAR archive carrying a genuine `../evil.tex` entry
+        // beside a benign file, then assert the traversal entry is absent from
+        // the result. If a refactor dropped the sanitize call, this fails.
+        // (The `..`/absolute/etc. rejections themselves are unit-tested
+        // directly on `sanitize_entry_path` above.)
+        fn ustar_block(name: &str, data: &[u8]) -> Vec<u8> {
+            let mut h = vec![0u8; 512];
+            h[..name.len()].copy_from_slice(name.as_bytes());
+            h[100..108].copy_from_slice(b"0000644\0");
+            h[108..116].copy_from_slice(b"0000000\0");
+            h[116..124].copy_from_slice(b"0000000\0");
+            h[124..136].copy_from_slice(format!("{:011o}\0", data.len()).as_bytes());
+            h[136..148].copy_from_slice(b"00000000000\0");
+            h[148..156].copy_from_slice(b"        "); // checksum field = 8 spaces
+            h[156] = b'0'; // typeflag: regular file
+            h[257..263].copy_from_slice(b"ustar\0");
+            h[263..265].copy_from_slice(b"00");
+            let sum: u32 = h.iter().map(|&b| u32::from(b)).sum();
+            h[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+            h.extend_from_slice(data);
+            let pad = (512 - data.len() % 512) % 512;
+            h.resize(h.len() + pad, 0u8);
+            h
+        }
         let id = make_id("2401.12345");
-        let payload = tar_gzip(&[
-            ("../evil.tex", b"evil"),
-            ("safe.tex", b"\\documentclass{article}"),
-        ]);
-        let files = extract_bundle(&id, &payload, BundleFilter::All).expect("bundle");
+        let mut tar = ustar_block("../evil.tex", b"evil");
+        tar.extend(ustar_block("safe.tex", b"\\documentclass{article}"));
+        tar.resize(tar.len() + 1024, 0u8); // two zero end-of-archive blocks
+        let gz = gzip_bytes(&tar);
+
+        let files = extract_bundle(&id, &gz, BundleFilter::All).expect("bundle");
         let names: Vec<String> = files
             .iter()
             .map(|f| f.path.as_str().replace('\\', "/"))
