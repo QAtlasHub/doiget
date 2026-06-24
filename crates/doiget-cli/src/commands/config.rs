@@ -332,9 +332,16 @@ mod tests {
     fn from_env_uses_cwd_default_when_unset() {
         let _g = unset_all_doiget_config_env();
         let cfg = ResolvedConfig::from_env().expect("config resolves on test host");
-        assert!(
-            cfg.store_root.as_str().ends_with("papers"),
-            "store_root should fall back to ./papers (cwd) when DOIGET_STORE_ROOT is unset; got {}",
+        // The default must be `<cwd>/papers` (ADR-0036), NOT `<home>/papers` —
+        // assert the full path so a regression back to the home directory is
+        // actually caught (a bare `ends_with("papers")` passes for both).
+        let cwd =
+            camino::Utf8PathBuf::from_path_buf(std::env::current_dir().expect("cwd is available"))
+                .expect("cwd is valid UTF-8");
+        assert_eq!(
+            cfg.store_root,
+            cwd.join("papers"),
+            "store_root should default to <cwd>/papers when DOIGET_STORE_ROOT is unset; got {}",
             cfg.store_root
         );
         assert_eq!(cfg.contact_email, None);
