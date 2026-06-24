@@ -63,6 +63,11 @@ const HTTP_SOURCE_KEY: &str = "arxiv";
 /// Provenance audit label for TeX-source fetches.
 const PROV_SOURCE_LABEL: &str = "arxiv-src";
 
+/// Provenance audit label for source-bundle / figure fetches (ADR-0034 I4),
+/// distinct from [`PROV_SOURCE_LABEL`] so the audit log tells a `tex-source`
+/// text fetch apart from a `source` bundle/figures fetch.
+const PROV_SOURCE_BUNDLE_LABEL: &str = "arxiv-src-bundle";
+
 /// Production arXiv source API base. Overridable via
 /// `DOIGET_ARXIV_SRC_BASE` for tests.
 pub const ARXIV_SRC_DEFAULT_BASE: &str = "https://export.arxiv.org";
@@ -421,8 +426,15 @@ pub fn resolve_arxiv_src_base() -> Result<Url, String> {
 /// interpreted (ADR-0034 D2). Vector `.pdf` figures are included.
 const FIGURE_EXTS: &[&str] = &["pdf", "eps", "ps", "png", "jpg", "jpeg", "gif", "svg"];
 
+/// Cap on the DECOMPRESSED size of an arXiv `/src/` tarball (ADR-0034 I5).
+/// The HTTP client already caps the *compressed* download at `PDF_MAX_BYTES`
+/// (100 MB), but a small gzip can expand to many GB; this bounds the
+/// decompressed bytes held in memory to refuse a gzip bomb. Generous vs real
+/// arXiv sources (rarely > 100 MB decompressed), strict vs a multi-GB bomb.
+const SRC_MAX_DECOMPRESSED_BYTES: u64 = 500_000_000;
+
 /// Which subset of the source tarball to materialise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BundleFilter {
     /// Every regular file in the tarball.
     All,
@@ -434,10 +446,23 @@ pub enum BundleFilter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceFile {
     /// Sanitised **relative** path (never absolute, never contains `..`),
-    /// safe to join under any output root (ADR-0034 D3).
-    pub path: Utf8PathBuf,
+    /// safe to join under any output root (ADR-0034 D3). The field is
+    /// `pub(crate)` so it can only be set by [`extract_bundle`] — which runs
+    /// every path through [`sanitize_entry_path`] — and an external caller
+    /// cannot forge a `SourceFile` carrying an unsafe path. This mirrors the
+    /// checked-construction pattern of `Doi` / `ArxivId`. Read it via
+    /// [`SourceFile::path`].
+    pub(crate) path: Utf8PathBuf,
     /// Raw file bytes, opaque (never interpreted; ADR-0034 D2).
     pub bytes: Vec<u8>,
+}
+
+impl SourceFile {
+    /// The sanitised relative path of this file (never absolute, no `..`).
+    #[must_use]
+    pub fn path(&self) -> &Utf8Path {
+        &self.path
+    }
 }
 
 /// Sanitise a raw tar entry path into a safe **relative** path, or `None` to
@@ -494,41 +519,51 @@ fn is_figure(path: &Utf8Path) -> bool {
 
 /// Decompress + untar an arXiv `/src/` body and collect the selected files.
 ///
-/// Mirrors [`extract_tex`]'s magic-byte handling but keeps the existing text
-/// path byte-identical (ADR-0034 D6): a PDF-only response, a bare single file,
-/// or a single gzip'd file all yield [`FetchError::TextUnavailable`] (there is
-/// no multi-file bundle). Only **regular** tar entries are considered —
-/// symlinks / hardlinks / devices are skipped (a symlink is itself a traversal
-/// vector). Every path is run through [`sanitize_entry_path`]; a rejected entry
-/// is skipped with a `tracing::warn!`, never written.
+/// Applies the same PDF / gzip / ustar magic-byte checks as [`extract_tex`],
+/// but a PDF-only response, a bare uncompressed file, or a single gzip'd file
+/// yields [`FetchError::SourceUnavailable`] — there is no multi-file bundle in
+/// a single-file response (unlike the text path, which passes a bare `.tex`
+/// through; the existing `extract_tex` text path is left byte-identical,
+/// ADR-0034 D6). Decompression is size-capped against a gzip bomb (ADR-0034
+/// I5). Only **regular** tar entries are considered — symlinks / hardlinks /
+/// devices are skipped (a symlink is itself a traversal vector, ADR-0034 D3).
+/// Every path is run through [`sanitize_entry_path`]; a path-rejected entry is
+/// skipped with a `tracing::warn!`. Entries that fail to read (malformed
+/// header, non-decodable path, or `read_to_end` error) are skipped, logged,
+/// and counted, so an empty result distinguishes a corrupt archive
+/// ([`FetchError::SourceSchema`]) from genuinely no matching files
+/// ([`FetchError::SourceUnavailable`]) (ADR-0034 C1).
 pub(crate) fn extract_bundle(
     id: &ArxivId,
     bytes: &[u8],
     filter: BundleFilter,
 ) -> Result<Vec<SourceFile>, FetchError> {
-    if bytes.starts_with(b"%PDF-") {
-        return Err(FetchError::TextUnavailable {
-            arxiv_id: id.clone(),
-        });
+    // PDF-only / bare single file: no multi-file bundle.
+    if bytes.starts_with(b"%PDF-") || bytes.len() < 2 || bytes[0..2] != [0x1f, 0x8b] {
+        return Err(no_files(id, filter));
     }
-    // Not gzip → a bare single file (no tar wrapper): no multi-file bundle.
-    if bytes.len() < 2 || bytes[0..2] != [0x1f, 0x8b] {
-        return Err(FetchError::TextUnavailable {
-            arxiv_id: id.clone(),
-        });
-    }
-    let mut gz = GzDecoder::new(std::io::Cursor::new(bytes));
+    // Decompress with a hard cap on the OUTPUT size (ADR-0034 I5): the HTTP
+    // client already bounds the COMPRESSED download (PDF_MAX_BYTES); `take`
+    // bounds the decompressed bytes so a gzip bomb cannot exhaust memory.
+    let mut gz =
+        GzDecoder::new(std::io::Cursor::new(bytes)).take(SRC_MAX_DECOMPRESSED_BYTES + 1);
     let mut decompressed = Vec::new();
     gz.read_to_end(&mut decompressed)
         .map_err(|e| FetchError::SourceSchema {
             hint: format!("gzip decompress of arXiv src failed: {e}"),
         })?;
+    if decompressed.len() as u64 > SRC_MAX_DECOMPRESSED_BYTES {
+        return Err(FetchError::SourceSchema {
+            hint: format!(
+                "arXiv src decompressed size exceeds {SRC_MAX_DECOMPRESSED_BYTES} bytes \
+                 (possible gzip bomb); refusing"
+            ),
+        });
+    }
     let is_tar = decompressed.len() > 262 && &decompressed[257..262] == b"ustar";
     if !is_tar {
         // Single gzip'd file (e.g. one .tex) — no bundle / figures.
-        return Err(FetchError::TextUnavailable {
-            arxiv_id: id.clone(),
-        });
+        return Err(no_files(id, filter));
     }
 
     let mut archive = Archive::new(std::io::Cursor::new(decompressed));
@@ -537,8 +572,21 @@ pub(crate) fn extract_bundle(
     })?;
 
     let mut files: Vec<SourceFile> = Vec::new();
+    // Count entries we matched but could not materialise, so an empty result
+    // distinguishes a corrupt/unreadable archive (SourceSchema) from a
+    // genuinely absent bundle (SourceUnavailable) — mirrors
+    // extract_from_tar's tex_attempted (ADR-0034 C1). Path-rejected
+    // (zip-slip) and filtered-out entries are deliberate skips, NOT counted.
+    let mut unreadable: usize = 0;
     for entry in entries {
-        let Ok(mut entry) = entry else { continue };
+        let mut entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                unreadable += 1;
+                tracing::warn!(arxiv_id = %id.as_str(), error = %e, "arXiv src: skipping malformed tar entry");
+                continue;
+            }
+        };
         // Regular files only: a symlink/hardlink entry is a traversal vector
         // and is never needed for source/figures (ADR-0034 D3).
         if !entry.header().entry_type().is_file() {
@@ -546,7 +594,11 @@ pub(crate) fn extract_bundle(
         }
         let raw_path = match entry.path() {
             Ok(p) => p.to_string_lossy().into_owned(),
-            Err(_) => continue,
+            Err(e) => {
+                unreadable += 1;
+                tracing::warn!(arxiv_id = %id.as_str(), error = %e, "arXiv src: tar entry has a non-decodable path; skipping");
+                continue;
+            }
         };
         let Some(safe) = sanitize_entry_path(&raw_path) else {
             tracing::warn!(
@@ -555,24 +607,56 @@ pub(crate) fn extract_bundle(
             );
             continue;
         };
-        if matches!(filter, BundleFilter::FiguresOnly) && !is_figure(&safe) {
+        if filter == BundleFilter::FiguresOnly && !is_figure(&safe) {
             continue;
         }
         let mut buf = Vec::new();
-        if entry.read_to_end(&mut buf).is_ok() {
-            files.push(SourceFile {
+        match entry.read_to_end(&mut buf) {
+            Ok(_) => files.push(SourceFile {
                 path: safe,
                 bytes: buf,
-            });
+            }),
+            Err(e) => {
+                unreadable += 1;
+                tracing::warn!(arxiv_id = %id.as_str(), entry = %safe, error = %e, "arXiv src: failed to read tar entry; skipping");
+            }
         }
     }
 
     if files.is_empty() {
-        return Err(FetchError::TextUnavailable {
-            arxiv_id: id.clone(),
+        // Corrupt/unreadable archive vs genuinely no matching files (ADR-0034 C1).
+        return Err(if unreadable > 0 {
+            FetchError::SourceSchema {
+                hint: format!(
+                    "arXiv src tar had {unreadable} unreadable entr(y/ies) and no usable files"
+                ),
+            }
+        } else {
+            no_files(id, filter)
         });
     }
+    if unreadable > 0 {
+        tracing::warn!(
+            arxiv_id = %id.as_str(),
+            unreadable,
+            extracted = files.len(),
+            "arXiv src: bundle is partial — some entries were unreadable and skipped"
+        );
+    }
     Ok(files)
+}
+
+/// The "no usable files" error for a `source` fetch, labelled with the
+/// requested representation so the message is accurate (not ar5iv-specific;
+/// ADR-0034 I2).
+fn no_files(id: &ArxivId, filter: BundleFilter) -> FetchError {
+    FetchError::SourceUnavailable {
+        arxiv_id: id.clone(),
+        kind: match filter {
+            BundleFilter::All => "source bundle",
+            BundleFilter::FiguresOnly => "figures",
+        },
+    }
 }
 
 /// Fetch the arXiv source bundle (or figures only) for `id`.
@@ -603,14 +687,14 @@ pub async fn paper_source_bundle(
     let files = extract_bundle(id, &body, filter)?;
 
     let canonical = Ref::Arxiv(id.clone())
-        .promote(PROV_SOURCE_LABEL, None)
+        .promote(PROV_SOURCE_BUNDLE_LABEL, None)
         .digest_hex();
     ctx.log.append(RowInput {
         event: LogEvent::Fetch,
         result: LogResult::Ok,
         capability: Capability::Oa,
         ref_: Some(id.as_str()),
-        source: Some(PROV_SOURCE_LABEL),
+        source: Some(PROV_SOURCE_BUNDLE_LABEL),
         error_code: None,
         size_bytes: Some(body.len() as u64),
         license: Some("arxiv-default"),
@@ -879,6 +963,12 @@ mod tests {
         assert_eq!(sanitize_entry_path("a/\0/b"), None);
         assert_eq!(sanitize_entry_path("."), None); // no normal component
         assert_eq!(sanitize_entry_path("a:b/c"), None); // colon in a segment
+        // ADR-0034 A2 — additional real-world vectors.
+        assert_eq!(sanitize_entry_path("foo/../../bar"), None); // mid-path escape
+        assert_eq!(sanitize_entry_path("./.."), None); // leading dot then traversal
+        assert_eq!(sanitize_entry_path("///"), None); // only separators
+        assert_eq!(sanitize_entry_path("\\\\"), None); // only backslashes
+        assert_eq!(sanitize_entry_path("C:evil"), None); // bare drive prefix
     }
 
     // ── is_figure ─────────────────────────────────────────────────────────────
@@ -929,18 +1019,55 @@ mod tests {
     }
 
     #[test]
-    fn extract_bundle_pdf_only_is_text_unavailable() {
+    fn extract_bundle_pdf_only_is_source_unavailable() {
         let id = make_id("2401.12345");
         let err = extract_bundle(&id, b"%PDF-1.5 x", BundleFilter::All).expect_err("pdf-only");
-        assert!(matches!(err, FetchError::TextUnavailable { .. }));
+        assert!(matches!(err, FetchError::SourceUnavailable { .. }));
     }
 
     #[test]
-    fn extract_bundle_figures_only_none_present_is_unavailable() {
+    fn extract_bundle_bare_file_is_source_unavailable() {
+        // A bare (non-gzip, non-PDF) single file is not a bundle (ADR-0034 I6):
+        // unlike extract_tex (which passes a bare .tex through), the bundle
+        // path returns SourceUnavailable.
+        let id = make_id("2401.12345");
+        let err = extract_bundle(&id, b"\\documentclass{article}\nhi", BundleFilter::All)
+            .expect_err("bare file is not a bundle");
+        assert!(matches!(err, FetchError::SourceUnavailable { .. }));
+    }
+
+    #[test]
+    fn extract_bundle_figures_only_none_present_is_source_unavailable() {
         let id = make_id("2401.12345");
         let payload = tar_gzip(&[("paper.tex", b"\\documentclass{article}")]);
         let err =
             extract_bundle(&id, &payload, BundleFilter::FiguresOnly).expect_err("no figures");
-        assert!(matches!(err, FetchError::TextUnavailable { .. }));
+        assert!(matches!(err, FetchError::SourceUnavailable { .. }));
+    }
+
+    #[test]
+    fn extract_bundle_rejects_traversal_entry_but_keeps_safe() {
+        // ADR-0034 I1: prove sanitize_entry_path is actually WIRED INTO
+        // extract_bundle — a malicious `../evil.tex` entry must be absent from
+        // the result while a benign sibling survives. If a refactor dropped
+        // the sanitize call, this fails.
+        let id = make_id("2401.12345");
+        let payload = tar_gzip(&[
+            ("../evil.tex", b"evil"),
+            ("safe.tex", b"\\documentclass{article}"),
+        ]);
+        let files = extract_bundle(&id, &payload, BundleFilter::All).expect("bundle");
+        let names: Vec<String> = files
+            .iter()
+            .map(|f| f.path.as_str().replace('\\', "/"))
+            .collect();
+        assert!(
+            names.iter().all(|n| !n.contains("..")),
+            "traversal entry must be rejected; got {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n == "safe.tex"),
+            "benign sibling must survive; got {names:?}"
+        );
     }
 }

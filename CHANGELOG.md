@@ -29,6 +29,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   containment under `--out`. The existing `tex-source` text path is unchanged
   (ADR-0034 D6).
 
+### Hardened (PR #345 review)
+- **[core]** Distinct `FetchError::SourceUnavailable` for `source` (drops the
+  ar5iv-specific message that `TextUnavailable` would have leaked); a
+  decompressed-size cap on the `/src` tarball guards against a gzip bomb (the
+  HTTP layer only caps the *compressed* download); a corrupt/unreadable archive
+  (`SourceSchema`) is now distinguished from genuinely-no-files
+  (`SourceUnavailable`) and a partial extraction is logged — no silent file
+  loss; `SourceFile.path` is `pub(crate)` + a `path()` accessor so an external
+  caller cannot forge an unsafe path (mirrors `Doi`/`ArxivId`). Added a
+  wired-in zip-slip regression test (a malicious `../` tar entry is rejected by
+  `extract_bundle`, not just by the isolated sanitiser).
+
 ### Docs
 - **[adr]** ADR-0034 (arXiv source bundle + figure download: scope addition,
   artifact-not-processing boundary, zip-slip requirement) + `DECISIONS/INDEX.md`.

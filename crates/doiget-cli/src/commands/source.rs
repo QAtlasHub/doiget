@@ -14,8 +14,11 @@
 //! malicious archive cannot write outside the output directory (zip-slip).
 //!
 //! - **arXiv id** → files under `--out`.
-//! - **DOI** → structured `NO_OA_AVAILABLE` (pass the arXiv id).
-//! - **PDF-only / single-file submission** → `TEXT_UNAVAILABLE` with a note.
+//! - **DOI** → `NO_OA_AVAILABLE` (pass the arXiv id).
+//! - **PDF-only / single-file / figure-less submission** → `TEXT_UNAVAILABLE`
+//!   (wire) with an actionable `doiget fetch` note.
+//!
+//! `--mode json` emits `{ok, arxiv_id, out_dir, figures_only, count, files[]}`.
 
 use std::io::Write;
 
@@ -78,8 +81,8 @@ pub async fn run(
             print_err(format_args!("error[{}]: {e}", code.as_wire()));
             if code == ErrorCode::TextUnavailable {
                 print_err(format_args!(
-                    "  = note: no {} available (PDF-only submission or single-file source). \
-                     Fetch the PDF instead: `doiget fetch arxiv:{}`",
+                    "  = note: no {} found (no matching files, PDF-only, or single-file \
+                     submission). Fetch the PDF instead: `doiget fetch arxiv:{}`",
                     if figures_only {
                         "figures"
                     } else {
@@ -138,19 +141,26 @@ fn write_files(out_dir: &Utf8Path, files: &[SourceFile]) -> Result<Vec<Utf8PathB
 
     let mut written: Vec<Utf8PathBuf> = Vec::with_capacity(files.len());
     for f in files {
-        let dest = out_dir.join(&f.path);
+        let rel = f.path();
+        let dest = out_dir.join(rel);
+        // Defence-in-depth: `rel` is already relative with no `..` (a
+        // `SourceFile` can only be built via `sanitize_entry_path` in the core,
+        // ADR-0034 D3/I3), so this can never fire for a real value — but a
+        // regression in the core sanitiser must not become a write outside
+        // out_dir.
         if !dest.starts_with(out_dir) {
-            anyhow::bail!(
-                "refusing to write outside the output dir (zip-slip guard): {}",
-                f.path
-            );
+            anyhow::bail!("refusing to write outside the output dir (zip-slip guard): {rel}");
         }
+        // Create the file's parent only when it is a real subdirectory; a flat
+        // entry's parent is out_dir, already created above.
         if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent.as_std_path())
-                .with_context(|| format!("creating {parent}"))?;
+            if parent != out_dir {
+                std::fs::create_dir_all(parent.as_std_path())
+                    .with_context(|| format!("creating {parent}"))?;
+            }
         }
         std::fs::write(dest.as_std_path(), &f.bytes).with_context(|| format!("writing {dest}"))?;
-        written.push(f.path.clone());
+        written.push(rel.to_owned());
     }
     written.sort();
     Ok(written)

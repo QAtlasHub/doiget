@@ -434,7 +434,8 @@ enum Command {
     /// `tex-source` (one request) and materialises files to `--out`. Files are
     /// written opaque (never interpreted); tar entry paths are sanitised
     /// (zip-slip safe, ADR-0034). PDF-only submissions yield `TEXT_UNAVAILABLE`.
-    /// A DOI reports `NO_OA_AVAILABLE`. Tier-1 OA, always-on.
+    /// A DOI reports `NO_OA_AVAILABLE`. Tier-1 OA, always-on. `--mode json`
+    /// emits `{ok, arxiv_id, out_dir, figures_only, count, files[]}`.
     Source {
         /// arXiv id (e.g. "arxiv:2401.12345"). A DOI reports `NO_OA_AVAILABLE`.
         ref_: String,
