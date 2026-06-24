@@ -10,6 +10,14 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.0-beta.3] - 2026-06-24
+
+### Fixed
+- **[supply-chain]** Bump `cargo vet` exemptions to match the current lockfile —
+  `bytes 1.11.1 → 1.12.0`, `camino 1.2.2 → 1.2.3` — which had drifted after a
+  dependency bump (the `cargo vet` job was red: "2 unvetted dependencies"). No
+  code change.
+
 ## [0.8.0-beta.2] - 2026-06-24
 
 ### Added
