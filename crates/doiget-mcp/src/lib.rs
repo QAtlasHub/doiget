@@ -245,9 +245,9 @@ impl Server {
         if input.dry_run {
             // Use the same store-root resolver as `doiget_health` so the
             // path projections in `plan.target_*` match what the live
-            // fetch would write to. When neither HOME nor USERPROFILE
-            // resolves (locked-down hosts), fall back to a sentinel
-            // path so the preview still has a complete shape — the
+            // fetch would write to. When the cwd can't be resolved (the
+            // `None` case — e.g. a non-UTF-8 working directory), fall back to
+            // `./papers` so the preview still has a complete shape — the
             // dry-run is a preview, not a writability probe.
             let store_root = resolve_store_root().unwrap_or_else(|| Utf8PathBuf::from("./papers"));
             let plan = build_fetch_plan(&ref_, &store_root);
@@ -287,7 +287,7 @@ impl Server {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::StoreError,
-                    "store root could not be resolved (set DOIGET_STORE_ROOT or $HOME)",
+                    "store root could not be resolved (set DOIGET_STORE_ROOT, or run from a directory with a valid UTF-8 path)",
                 )));
             }
         };
@@ -552,7 +552,7 @@ impl Server {
                 return Ok(CallToolResult::structured(fetch_paper_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::InternalError,
-                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                    "could not resolve store root (set DOIGET_STORE_ROOT, or run from a directory with a valid UTF-8 path)",
                 )));
             }
         };
@@ -709,7 +709,7 @@ impl Server {
             None => {
                 return Ok(CallToolResult::structured(batch_fetch_error_envelope(
                     ErrorCode::InternalError,
-                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                    "could not resolve store root (set DOIGET_STORE_ROOT, or run from a directory with a valid UTF-8 path)",
                 )));
             }
         };
@@ -966,7 +966,7 @@ impl Server {
             None => {
                 return Ok(CallToolResult::structured(batch_fetch_error_envelope(
                     ErrorCode::InternalError,
-                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                    "could not resolve store root (set DOIGET_STORE_ROOT, or run from a directory with a valid UTF-8 path)",
                 )));
             }
         };
@@ -1081,7 +1081,7 @@ impl Server {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::InternalError,
-                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                    "could not resolve store root (set DOIGET_STORE_ROOT, or run from a directory with a valid UTF-8 path)",
                 )));
             }
         };
@@ -1143,7 +1143,7 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: Find stored entries whose title / authors / venue / publisher contain a query substring (case-insensitive).\n\
                        INPUTS: query (string), limit (optional integer, default 50, max 200).\n\
-                       OUTPUTS: { ok: true, query, entries: [{ safekey, title, year, fetched_at }] } OR { ok:false, error }.\n\
+                       OUTPUTS: { ok: true, scope: \"local\", query, count, results: [{ safekey, title, year, fetched_at }] } OR { ok:false, error }.\n\
                        COSTS: O(N) over the local store; <100 ms for a few thousand entries.\n\
                        SIDE EFFECTS: none.\n\
                        LIMITS: Returns at most `limit` entries (capped at 200)."
@@ -1176,8 +1176,10 @@ impl Server {
         match store.search(&input.query, limit) {
             Ok(entries) => Ok(CallToolResult::structured(json!({
                 "ok": true,
+                "scope": "local",
                 "query": input.query,
-                "entries": entries.iter().map(entry_info_to_json).collect::<Vec<_>>(),
+                "count": entries.len(),
+                "results": entries.iter().map(entry_info_to_json).collect::<Vec<_>>(),
             }))),
             Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
                 None,
@@ -1438,6 +1440,130 @@ impl Server {
         }
     }
 
+    /// `doiget_paper_tex_source` — fetch the raw LaTeX source of an arXiv
+    /// paper from the arXiv source API (`export.arxiv.org/src/<id>`).
+    ///
+    /// This is the structured-text complement to [`Self::doiget_paper_text`]
+    /// (ar5iv HTML extraction). More reliable for papers that ar5iv has not
+    /// yet processed through LaTeXML. LLMs handle LaTeX well — `\section{}`
+    /// and equation environments provide explicit structure. PDF-only
+    /// submissions return `TEXT_UNAVAILABLE`. Tier-1 OA, always-on.
+    #[tool(
+        description = "WHEN TO USE: Fetch the raw LaTeX source of an arXiv paper — more reliable than `doiget_paper_text` (ar5iv) for papers not yet processed by LaTeXML.\n\
+                       INPUTS: ref (arXiv id, e.g. \"arxiv:2401.12345\"); optional max_chars (cap; omit for full source).\n\
+                       OUTPUTS: { ok: true, arxiv_id, main_file, tex_source, char_count, truncated, retrieved_from } OR { ok:false, error }.\n\
+                       COSTS: 1 arXiv source API request (gzip'd tar download); large papers can be sizeable — use max_chars to bound.\n\
+                       SIDE EFFECTS: Emits an OA provenance row. NEVER writes the store; NEVER opens a PDF blob.\n\
+                       LIMITS: arXiv only (a DOI → NO_OA_AVAILABLE; pass the arXiv id). PDF-only submissions → TEXT_UNAVAILABLE."
+    )]
+    async fn doiget_paper_tex_source(
+        &self,
+        Parameters(input): Parameters<PaperTexSourceInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let id = match doiget_core::Ref::parse(&input.ref_) {
+            Ok(doiget_core::Ref::Arxiv(a)) => a,
+            Ok(doiget_core::Ref::Doi(_)) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::NoOaAvailable,
+                    "no TeX source for a DOI — pass the arXiv id if a preprint exists",
+                )));
+            }
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &e.to_string(),
+                )));
+            }
+        };
+
+        let base = match arxiv_src_base() {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(id.as_str()),
+                    ErrorCode::InternalError,
+                    &e,
+                )));
+            }
+        };
+
+        let ctx = match build_fetch_context() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(id.as_str()),
+                    ErrorCode::InternalError,
+                    &format!("paper-tex-source context init failed: {e}"),
+                )));
+            }
+        };
+
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionStart,
+            result: LogResult::Ok,
+            capability: Capability::Oa,
+            ref_: Some(id.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        }) {
+            return Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(id.as_str()),
+                ErrorCode::LogError,
+                &format!("SessionStart append failed: {e}"),
+            )));
+        }
+
+        let max_chars = input.max_chars.map(|m| m as usize);
+        let outcome =
+            doiget_core::paper_tex_source::paper_tex_source(&base, &id, max_chars, &ctx).await;
+
+        if let Err(e) = ctx.log.append(RowInput {
+            event: LogEvent::SessionEnd,
+            result: if outcome.is_ok() {
+                LogResult::Ok
+            } else {
+                LogResult::Err
+            },
+            capability: Capability::Oa,
+            ref_: Some(id.as_str()),
+            source: None,
+            error_code: None,
+            size_bytes: None,
+            license: None,
+            store_path: None,
+            canonical_digest: None,
+        }) {
+            tracing::warn!(
+                arxiv_id = %id.as_str(),
+                error = %e,
+                "SessionEnd append failed; session bookend missing from provenance log"
+            );
+        }
+
+        match outcome {
+            Ok(t) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "arxiv_id": t.arxiv_id,
+                "main_file": t.main_file,
+                "tex_source": t.tex_source,
+                "char_count": t.char_count,
+                "truncated": t.truncated,
+                "retrieved_from": t.retrieved_from,
+            }))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(id.as_str()),
+                ErrorCode::from(&e),
+                &e.to_string(),
+            ))),
+        }
+    }
+
     /// `doiget_link` — resolve a **DOI** to its arXiv preprint + identity
     /// cluster over OpenAlex (#281 item 5). Reports whether the same work
     /// has a free arXiv preprint so an agent can read the free full text or
@@ -1566,7 +1692,7 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: List the most-recently fetched entries in the local store.\n\
                        INPUTS: limit (optional integer, default 50, max 200).\n\
-                       OUTPUTS: { ok: true, entries: [{ safekey, title, year, fetched_at }] } OR { ok:false, error }.\n\
+                       OUTPUTS: { ok: true, count, entries: [{ safekey, title, year, fetched_at }] } OR { ok:false, error }.\n\
                        COSTS: <100 ms for a few thousand entries.\n\
                        SIDE EFFECTS: none.\n\
                        LIMITS: Returns at most `limit` entries (capped at 200)."
@@ -1599,6 +1725,7 @@ impl Server {
         match store.list_recent(limit) {
             Ok(entries) => Ok(CallToolResult::structured(json!({
                 "ok": true,
+                "count": entries.len(),
                 "entries": entries.iter().map(entry_info_to_json).collect::<Vec<_>>(),
             }))),
             Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
@@ -2016,6 +2143,229 @@ impl Server {
             "results": results,
         })))
     }
+
+    /// `doiget_tag` — add / remove tags and collection membership on a stored
+    /// entry. Mutates `[doiget].tags` and `[doiget].collections` in the
+    /// metadata TOML (issue #294). All mutations are idempotent.
+    ///
+    /// The entry must already be in the store (fetched via `doiget_fetch_paper`
+    /// or equivalent). No network I/O is performed.
+    #[tool(
+        description = "WHEN TO USE: Add or remove tags / collections on a stored paper entry for local knowledge-base organisation (#294).\n\
+                       INPUTS: ref (DOI or arXiv id); add (array of tags to add, optional); remove (array of tags to remove, optional); collection_add (array of collections to join, optional); collection_remove (array of collections to leave, optional).\n\
+                       OUTPUTS: { ok: true, ref, tags, collections } OR { ok: false, error }.\n\
+                       COSTS: 0 network requests; one store read + write.\n\
+                       SIDE EFFECTS: Overwrites [doiget].tags / [doiget].collections in <store>/.metadata/<safekey>.toml.\n\
+                       LIMITS: Entry must already exist in the store. Tags are case-sensitive; idempotent add/remove."
+    )]
+    async fn doiget_tag(
+        &self,
+        Parameters(input): Parameters<TagInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let ref_ = match Ref::parse(&input.ref_) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &format!("invalid ref: {e}"),
+                )));
+            }
+        };
+        let safekey = ref_.safekey();
+
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InternalError,
+                    "could not resolve store root",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+
+        let mut metadata = match store.read(&safekey) {
+            Ok(Some(m)) => m,
+            Ok(None) => {
+                return Ok(CallToolResult::structured(json!({
+                    "ok": false,
+                    "error": format!("no store entry for {}; fetch the paper first", input.ref_),
+                })));
+            }
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    &format!("store read failed: {e}"),
+                )));
+            }
+        };
+
+        let ext = match metadata.doiget.as_mut() {
+            Some(d) => d,
+            None => {
+                return Ok(CallToolResult::structured(json!({
+                    "ok": false,
+                    "error": format!("entry {} has no [doiget] table; fetch it first", input.ref_),
+                })));
+            }
+        };
+
+        for t in &input.add {
+            if !ext.tags.contains(t) {
+                ext.tags.push(t.clone());
+            }
+        }
+        for t in &input.remove {
+            ext.tags.retain(|x| x != t);
+        }
+        for c in &input.collection_add {
+            if !ext.collections.contains(c) {
+                ext.collections.push(c.clone());
+            }
+        }
+        for c in &input.collection_remove {
+            ext.collections.retain(|x| x != c);
+        }
+
+        let tags = ext.tags.clone();
+        let collections = ext.collections.clone();
+
+        match store.write(&safekey, &metadata, None) {
+            Ok(()) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "ref": input.ref_,
+                "tags": tags,
+                "collections": collections,
+            }))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(&input.ref_),
+                ErrorCode::StoreError,
+                &format!("store write failed: {e}"),
+            ))),
+        }
+    }
+
+    /// `doiget_annotate` — set or clear the freeform annotation on a stored
+    /// paper entry. Mutates `[doiget].annotation` in the metadata TOML
+    /// (issue #294).
+    ///
+    /// The entry must already be in the store. No network I/O is performed.
+    #[tool(
+        description = "WHEN TO USE: Attach or clear a freeform annotation / note on a stored paper for local knowledge-base organisation (#294).\n\
+                       INPUTS: ref (DOI or arXiv id); text (string — the annotation; omit or set to null to clear); clear (bool, default false — explicitly clear the annotation).\n\
+                       OUTPUTS: { ok: true, ref, annotation } OR { ok: false, error }.\n\
+                       COSTS: 0 network requests; one store read + write.\n\
+                       SIDE EFFECTS: Overwrites [doiget].annotation in <store>/.metadata/<safekey>.toml.\n\
+                       LIMITS: Entry must already exist in the store. Setting text overrides any existing annotation."
+    )]
+    async fn doiget_annotate(
+        &self,
+        Parameters(input): Parameters<AnnotateInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let ref_ = match Ref::parse(&input.ref_) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InvalidRef,
+                    &format!("invalid ref: {e}"),
+                )));
+            }
+        };
+        let safekey = ref_.safekey();
+
+        let store_root = match resolve_store_root() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::InternalError,
+                    "could not resolve store root",
+                )));
+            }
+        };
+        let store = match FsStore::new(store_root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    &format!("opening store at {store_root}: {e}"),
+                )));
+            }
+        };
+
+        let mut metadata = match store.read(&safekey) {
+            Ok(Some(m)) => m,
+            Ok(None) => {
+                return Ok(CallToolResult::structured(json!({
+                    "ok": false,
+                    "error": format!("no store entry for {}; fetch the paper first", input.ref_),
+                })));
+            }
+            Err(e) => {
+                return Ok(CallToolResult::structured(read_path_error_envelope(
+                    Some(&input.ref_),
+                    ErrorCode::StoreError,
+                    &format!("store read failed: {e}"),
+                )));
+            }
+        };
+
+        let ext = match metadata.doiget.as_mut() {
+            Some(d) => d,
+            None => {
+                return Ok(CallToolResult::structured(json!({
+                    "ok": false,
+                    "error": format!("entry {} has no [doiget] table; fetch it first", input.ref_),
+                })));
+            }
+        };
+
+        if input.clear.unwrap_or(false) {
+            ext.annotation = None;
+        } else if let Some(ref text) = input.text {
+            if text.is_empty() {
+                return Ok(CallToolResult::structured(json!({
+                    "ok": false,
+                    "error": "annotation text must not be empty; set clear:true to remove it",
+                })));
+            }
+            ext.annotation = Some(text.clone());
+        } else {
+            return Ok(CallToolResult::structured(json!({
+                "ok": false,
+                "error": "provide 'text' to set an annotation, or 'clear: true' to remove it",
+            })));
+        }
+
+        let annotation = ext.annotation.clone();
+
+        match store.write(&safekey, &metadata, None) {
+            Ok(()) => Ok(CallToolResult::structured(json!({
+                "ok": true,
+                "ref": input.ref_,
+                "annotation": annotation,
+            }))),
+            Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
+                Some(&input.ref_),
+                ErrorCode::StoreError,
+                &format!("store write failed: {e}"),
+            ))),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2187,6 +2537,22 @@ pub struct PaperTextInput {
     pub max_chars: Option<u32>,
 }
 
+/// JSON-schema-derived input for the `doiget_paper_tex_source` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PaperTexSourceInput {
+    /// arXiv id (e.g. "arxiv:2401.12345"), validated via `Ref::parse`. A
+    /// bare DOI returns `NO_OA_AVAILABLE` (pass the arXiv id).
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+    /// Cap the returned LaTeX source to this many characters (truncation is
+    /// flagged on `truncated`). Omit for the full source.
+    #[serde(default)]
+    pub max_chars: Option<u32>,
+}
+
 /// JSON-schema-derived input for the `doiget_link` MCP tool (DOI → arXiv
 /// preprint linking; #281 item 5).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -2306,6 +2672,49 @@ fn default_resolve_limit() -> u8 {
     5
 }
 
+/// JSON-schema-derived input for the `doiget_tag` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct TagInput {
+    /// DOI or arXiv id. Validated via `Ref::parse`; failures surface as
+    /// `INVALID_REF`.
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+    /// Tags to add (idempotent, case-sensitive).
+    #[serde(default)]
+    pub add: Vec<String>,
+    /// Tags to remove.
+    #[serde(default)]
+    pub remove: Vec<String>,
+    /// Collections to join (idempotent, case-sensitive).
+    #[serde(default)]
+    pub collection_add: Vec<String>,
+    /// Collections to leave.
+    #[serde(default)]
+    pub collection_remove: Vec<String>,
+}
+
+/// JSON-schema-derived input for the `doiget_annotate` MCP tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct AnnotateInput {
+    /// DOI or arXiv id. Validated via `Ref::parse`; failures surface as
+    /// `INVALID_REF`.
+    #[serde(rename = "ref")]
+    #[schemars(rename = "ref")]
+    pub ref_: String,
+    /// Annotation text. Replaces any existing annotation. Omit or set to
+    /// null together with `clear: true` to remove the annotation.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Set to `true` to clear (remove) the annotation instead of setting it.
+    #[serde(default)]
+    pub clear: Option<bool>,
+}
+
 /// Hard cap on refs accepted by a single `doiget_bibtex_export` /
 /// `doiget_csl_export` call. Mirrors the 200-entry ceiling used by the
 /// read-path list tools.
@@ -2342,7 +2751,7 @@ impl Server {
                 return CallToolResult::structured(read_path_error_envelope(
                     None,
                     ErrorCode::InternalError,
-                    "could not resolve store root (neither DOIGET_STORE_ROOT, HOME, nor USERPROFILE is set)",
+                    "could not resolve store root (set DOIGET_STORE_ROOT, or run from a directory with a valid UTF-8 path)",
                 ));
             }
         };
@@ -2654,6 +3063,15 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             }
             Value::Object(o)
         }
+        // Issue #325: publisher blocked but arXiv preprint auto-fetched.
+        PdfLegStatus::PreprintFallback {
+            arxiv_id,
+            original_block,
+        } => json!({
+            "status": "preprint_fallback",
+            "arxiv_id": arxiv_id,
+            "original_block": original_block,
+        }),
         // `PdfLegStatus` is `#[non_exhaustive]`; a future variant
         // surfaces as a forward-compatible neutral status rather than
         // failing the build in this downstream crate.
@@ -2678,6 +3096,12 @@ fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> V
         "path": outcome.path,
         "size_bytes": outcome.size_bytes,
         "schema_version": outcome.schema_version,
+        // #344 identity confirmation: title / authors / year mirrored from the
+        // stored metadata so an agent can verify the RIGHT paper in one call,
+        // without a follow-up `doiget_info`.
+        "title": outcome.title,
+        "authors": outcome.authors,
+        "year": outcome.year,
         // Issue #118: never a silent metadata-only success.
         "pdf": pdf_leg_json(&outcome.pdf_leg),
     })
@@ -3001,6 +3425,14 @@ fn ar5iv_base() -> Result<url::Url, String> {
     url::Url::parse(&raw).map_err(|e| format!("DOIGET_AR5IV_BASE is not a URL: {e}"))
 }
 
+/// Resolve the arXiv source API base URL for `doiget_paper_tex_source`:
+/// the `DOIGET_ARXIV_SRC_BASE` override (tests) or the production default.
+fn arxiv_src_base() -> Result<url::Url, String> {
+    let raw = std::env::var("DOIGET_ARXIV_SRC_BASE")
+        .unwrap_or_else(|_| doiget_core::paper_tex_source::ARXIV_SRC_DEFAULT_BASE.to_string());
+    url::Url::parse(&raw).map_err(|e| format!("DOIGET_ARXIV_SRC_BASE is not a URL: {e}"))
+}
+
 /// Build the `{ ok:true, arxiv_id, source, title, sections, char_count,
 /// truncated, retrieved_from }` success envelope for `doiget_paper_text`
 /// (the `PaperText` shape plus the `ok` discriminant).
@@ -3094,8 +3526,15 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     let openalex_base = std::env::var("DOIGET_OPENALEX_BASE").ok();
     // ADR-0032: ar5iv full-text base override (test wiremock origin).
     let ar5iv_base = std::env::var("DOIGET_AR5IV_BASE").ok();
+    // `doiget_paper_tex_source` uses the `"arxiv"` HTTP source key (same key
+    // as `DOIGET_ARXIV_BASE`). MCP integration tests that override only the
+    // source API can set `DOIGET_ARXIV_SRC_BASE`; in the test-mode path below
+    // it is treated as a fallback for the `"arxiv"` source entry when
+    // `DOIGET_ARXIV_BASE` is absent.
+    let arxiv_src = std::env::var("DOIGET_ARXIV_SRC_BASE").ok();
 
     if arxiv.is_none()
+        && arxiv_src.is_none()
         && crossref.is_none()
         && unpaywall.is_none()
         && oa_publisher.is_none()
@@ -3129,18 +3568,24 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
             Ok(cfg_dir) => {
                 let path = cfg_dir.join("doiget").join("config.toml");
                 match doiget_core::user_extension::load(&path) {
-                    Ok(user_hosts) if !user_hosts.is_empty() => {
-                        tracing::info!(
-                            count = user_hosts.len(),
-                            path = %path,
-                            "merging user-extension allowlist hosts (ADR-0028 D2)"
-                        );
-                        doiget_core::user_extension::merge_into_allowlists(
-                            &mut allowlists,
-                            &user_hosts,
-                        );
+                    Ok(cfg) => {
+                        let mut hosts = cfg.additional_hosts;
+                        if cfg.trust_academic_repos {
+                            hosts.extend(doiget_core::user_extension::academic_repo_hosts());
+                        }
+                        if !hosts.is_empty() {
+                            tracing::info!(
+                                count = hosts.len(),
+                                trust_academic_repos = cfg.trust_academic_repos,
+                                path = %path,
+                                "merging user-extension allowlist hosts (ADR-0028 D2)"
+                            );
+                            doiget_core::user_extension::merge_into_allowlists(
+                                &mut allowlists,
+                                &hosts,
+                            );
+                        }
                     }
-                    Ok(_) => {}
                     Err(e) => {
                         tracing::warn!(
                             error = %e,
@@ -3165,8 +3610,11 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     }
 
     let mut owned: Vec<(String, String)> = Vec::new();
+    // When DOIGET_ARXIV_BASE is set use it; otherwise fall back to
+    // DOIGET_ARXIV_SRC_BASE (they share the "arxiv" HTTP source key).
+    let arxiv_entry = arxiv.as_deref().or(arxiv_src.as_deref());
     for (source, base) in [
-        ("arxiv", arxiv.as_deref()),
+        ("arxiv", arxiv_entry),
         ("crossref", crossref.as_deref()),
         ("unpaywall", unpaywall.as_deref()),
         ("oa-publisher", oa_publisher.as_deref()),
@@ -3279,10 +3727,11 @@ impl ServerHandler for Server {
 /// applies (`docs/CONFIG.md` §4):
 ///
 /// 1. `DOIGET_STORE_ROOT` env var (when non-empty).
-/// 2. `$HOME/papers` (POSIX) or `%USERPROFILE%\papers` (Windows).
+/// 2. `./papers` — `papers/` under the current working directory
+///    (#344 / ADR-0036).
 ///
-/// Returns `None` when neither hook resolves — e.g. a locked-down host
-/// with no `HOME` and no `USERPROFILE`. Callers downgrade that to
+/// Returns `None` only when the current working directory can't be
+/// determined or isn't valid UTF-8. Callers downgrade that to
 /// `store_writable: false` rather than erroring the whole tool call.
 ///
 /// # Why duplicate the CLI logic?
@@ -3297,10 +3746,13 @@ fn resolve_store_root() -> Option<Utf8PathBuf> {
             return Some(Utf8PathBuf::from(s));
         }
     }
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()?;
-    Some(Utf8PathBuf::from(home).join("papers"))
+    // Default: `papers/` under the current working directory (#344 / ADR-0036),
+    // so an agent's fetches land where the work is; set DOIGET_STORE_ROOT for a
+    // central library.
+    let cwd = std::env::current_dir().ok()?;
+    Utf8PathBuf::from_path_buf(cwd)
+        .ok()
+        .map(|d| d.join("papers"))
 }
 
 /// Best-effort writability probe for the resolved store root.
@@ -3473,12 +3925,24 @@ mod tests {
 
     #[test]
     fn resolve_store_root_returns_some_on_normal_host() {
-        // On any realistic POSIX or Windows host either HOME or
-        // USERPROFILE is set, so resolve_store_root is `Some(_)` even
-        // without DOIGET_STORE_ROOT. We deliberately don't mutate env
-        // (the test process is shared with other tests).
-        if std::env::var_os("HOME").is_some() || std::env::var_os("USERPROFILE").is_some() {
-            assert!(resolve_store_root().is_some());
+        // The default is `<cwd>/papers` (ADR-0036): either branch yields a
+        // root on a normal host — `DOIGET_STORE_ROOT` when set, else the cwd
+        // default, since current_dir() is always available. We deliberately
+        // don't mutate env (the test process is shared with other tests).
+        let got = resolve_store_root();
+        assert!(
+            got.is_some(),
+            "resolve_store_root must resolve on a normal host"
+        );
+        // When DOIGET_STORE_ROOT is unset, the default MUST be `<cwd>/papers`
+        // (not a `~/papers` home fallback) — a read-only env check (no
+        // mutation) that catches a regression to the old default (review #352).
+        if std::env::var_os("DOIGET_STORE_ROOT").is_none() {
+            let expected =
+                camino::Utf8PathBuf::from_path_buf(std::env::current_dir().expect("cwd available"))
+                    .expect("cwd is valid UTF-8")
+                    .join("papers");
+            assert_eq!(got, Some(expected));
         }
     }
 

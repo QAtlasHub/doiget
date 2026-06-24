@@ -367,6 +367,9 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
             oa_status: outcome.oa_status.clone(),
             size_bytes: 0,
             mcp_call_id: None,
+            tags: Vec::new(),
+            collections: Vec::new(),
+            annotation: None,
         }),
         other: BTreeMap::new(),
     }
@@ -560,8 +563,13 @@ fn contact_email_from_env() -> String {
 
 fn arxiv_source_from_env() -> ArxivSource {
     if let Ok(s) = std::env::var("DOIGET_ARXIV_BASE") {
-        if let Ok(url) = url::Url::parse(&s) {
-            return ArxivSource::with_base(url);
+        match url::Url::parse(&s) {
+            Ok(url) => return ArxivSource::with_base(url),
+            Err(e) => tracing::warn!(
+                value = %s,
+                error = %e,
+                "DOIGET_ARXIV_BASE is not a valid URL; using the default arXiv base"
+            ),
         }
     }
     ArxivSource::new()
@@ -569,8 +577,13 @@ fn arxiv_source_from_env() -> ArxivSource {
 
 fn crossref_source_from_env(contact: &str) -> CrossrefSource {
     if let Ok(s) = std::env::var("DOIGET_CROSSREF_BASE") {
-        if let Ok(url) = url::Url::parse(&s) {
-            return CrossrefSource::with_base(url, contact.to_string());
+        match url::Url::parse(&s) {
+            Ok(url) => return CrossrefSource::with_base(url, contact.to_string()),
+            Err(e) => tracing::warn!(
+                value = %s,
+                error = %e,
+                "DOIGET_CROSSREF_BASE is not a valid URL; using the default Crossref base"
+            ),
         }
     }
     CrossrefSource::new(contact.to_string())
@@ -578,8 +591,13 @@ fn crossref_source_from_env(contact: &str) -> CrossrefSource {
 
 fn unpaywall_source_from_env(contact: &str) -> UnpaywallSource {
     if let Ok(s) = std::env::var("DOIGET_UNPAYWALL_BASE") {
-        if let Ok(url) = url::Url::parse(&s) {
-            return UnpaywallSource::with_base(url, contact.to_string());
+        match url::Url::parse(&s) {
+            Ok(url) => return UnpaywallSource::with_base(url, contact.to_string()),
+            Err(e) => tracing::warn!(
+                value = %s,
+                error = %e,
+                "DOIGET_UNPAYWALL_BASE is not a valid URL; using the default Unpaywall base"
+            ),
         }
     }
     UnpaywallSource::new(contact.to_string())
@@ -740,6 +758,18 @@ pub enum PdfLegStatus {
         /// metadata includes an arXiv alternative but the PDF leg was blocked.
         suggested_arxiv_id: Option<String>,
     },
+    /// The OA publisher PDF was blocked (403, allowlist denial, etc.) but
+    /// the `suggested_arxiv_id` pointed to an arXiv preprint that was
+    /// successfully fetched and stored under the DOI entry (issue #325).
+    /// The stored PDF came from arXiv, not the publisher; callers SHOULD
+    /// surface a note so the user knows the file is a preprint.
+    PreprintFallback {
+        /// The arXiv ID that was successfully fetched as fallback.
+        arxiv_id: String,
+        /// The OA-publisher error that triggered the fallback (for logs
+        /// and audit trail context).
+        original_block: String,
+    },
 }
 
 /// What `fetch_paper` wrote to disk and how.
@@ -805,6 +835,14 @@ pub struct FetchPaperOutcome {
     /// metadata-only fallback this is under the metadata source key
     /// (`"crossref"` / `"unpaywall"`). Always populated.
     pub canonical_digest: String,
+    /// Title of the fetched work, mirrored from the resolved metadata so a
+    /// caller can confirm the RIGHT paper landed in one call (#344). A ref-id
+    /// placeholder when the resolver supplied no title.
+    pub title: String,
+    /// Authors of the fetched work (empty when the resolver supplied none).
+    pub authors: Vec<String>,
+    /// Publication year, when known (#344 identity confirmation).
+    pub year: Option<i32>,
 }
 
 impl FetchPaperOutcome {
@@ -840,6 +878,9 @@ impl FetchPaperOutcome {
             // 32 bytes of `0x00` → a stable, non-secret digest stub
             // that's still 64 chars of lowercase hex.
             canonical_digest: "00".repeat(32),
+            title: String::new(),
+            authors: Vec::new(),
+            year: None,
         }
     }
 }
@@ -1001,6 +1042,9 @@ async fn fetch_paper_arxiv(
             oa_status: Some("green".to_string()),
             size_bytes,
             mcp_call_id: None,
+            tags: Vec::new(),
+            collections: Vec::new(),
+            annotation: None,
         }),
         other: BTreeMap::new(),
     };
@@ -1030,6 +1074,9 @@ async fn fetch_paper_arxiv(
         pdf_leg: PdfLegStatus::Fetched,
         safekey: safekey.as_str().to_string(),
         canonical_digest,
+        title: metadata.title.clone(),
+        authors: metadata.authors.clone(),
+        year: metadata.year,
     })
 }
 
@@ -1074,7 +1121,7 @@ async fn fetch_paper_doi(
     // derived metadata.
     let unpaywall = unpaywall_source_from_env(&unpaywall_contact);
     let upw_result = unpaywall.fetch(ref_, profile, ctx).await;
-    let (license, source_label, oa_chain, oa_status) = match upw_result {
+    let (mut license, source_label, oa_chain, oa_status) = match upw_result {
         Ok(r) => {
             let chain = extract_oa_url_chain(r.metadata_json.as_ref());
             // OA status describes the WORK (gold/green/closed/…), not the
@@ -1222,6 +1269,15 @@ async fn fetch_paper_doi(
         }
     };
 
+    // Issue #325: auto preprint fallback. If the OA chain was blocked but
+    // Unpaywall hinted at an arXiv preprint, attempt that fetch and store
+    // it under the DOI safekey instead of returning Blocked.
+    let (pdf_leg, pdf_bytes, arxiv_id_for_metadata, fallback_license) =
+        try_arxiv_preprint_fallback(doi, pdf_leg, pdf_bytes, profile, ctx).await;
+    if let Some(fl) = fallback_license {
+        license = fl;
+    }
+
     // Issue #120: Crossref is non-fatal, but if it failed AND the OA
     // PDF leg produced nothing, writing a DOI-only stub entry would
     // mask a total failure and violate the "explain why" promise.
@@ -1232,11 +1288,17 @@ async fn fetch_paper_doi(
         }
     }
 
+    let is_preprint_fallback = matches!(pdf_leg, PdfLegStatus::PreprintFallback { .. });
     let (final_source_label, size_bytes, pdf_path_relative, pdf_staged) = match &pdf_bytes {
         Some(bytes) => {
             let staged = stage_pdf_to_tempfile(bytes)?;
+            let label = if is_preprint_fallback {
+                "arxiv".to_string()
+            } else {
+                "oa-publisher".to_string()
+            };
             (
-                "oa-publisher".to_string(),
+                label,
                 bytes.len() as u64,
                 Some(format!("{}.pdf", safekey.as_str())),
                 Some(staged),
@@ -1251,7 +1313,7 @@ async fn fetch_paper_doi(
         authors: extracted.authors,
         year: extracted.year,
         doi: Some(doi.clone()),
-        arxiv_id: None,
+        arxiv_id: arxiv_id_for_metadata,
         // DOI-fetch path: no arXiv id, so no arXiv categories.
         arxiv_categories: Vec::new(),
         abstract_: None,
@@ -1276,6 +1338,9 @@ async fn fetch_paper_doi(
             oa_status: oa_status.clone(),
             size_bytes,
             mcp_call_id: None,
+            tags: Vec::new(),
+            collections: Vec::new(),
+            annotation: None,
         }),
         other: BTreeMap::new(),
     };
@@ -1311,7 +1376,103 @@ async fn fetch_paper_doi(
         pdf_leg,
         safekey: safekey.as_str().to_string(),
         canonical_digest,
+        title: metadata.title.clone(),
+        authors: metadata.authors.clone(),
+        year: metadata.year,
     })
+}
+
+/// Auto preprint fallback (issue #325). Called after the DOI OA PDF chain
+/// walk. When `pdf_leg` is `PdfLegStatus::Blocked` with a
+/// `suggested_arxiv_id`, the arXiv source is tried; on success the caller
+/// receives the PDF bytes, the parsed [`ArxivId`], the arXiv license, and
+/// a [`PdfLegStatus::PreprintFallback`] leg status so the PDF is stored
+/// under the DOI safekey with full audit provenance.
+///
+/// When no fallback is applicable (leg is not `Blocked`, or no
+/// `suggested_arxiv_id`), `pdf_leg` and `oa_pdf_bytes` are returned
+/// unchanged. On any fetch failure the original `Blocked` leg is kept.
+async fn try_arxiv_preprint_fallback(
+    doi: &Doi,
+    pdf_leg: PdfLegStatus,
+    oa_pdf_bytes: Option<Vec<u8>>,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+) -> (
+    PdfLegStatus,
+    Option<Vec<u8>>,
+    Option<ArxivId>,
+    Option<String>,
+) {
+    let (arxiv_id_str, original_block) = match &pdf_leg {
+        PdfLegStatus::Blocked {
+            suggested_arxiv_id: Some(s),
+            message,
+            ..
+        } => (s.clone(), message.clone()),
+        _ => return (pdf_leg, oa_pdf_bytes, None, None),
+    };
+
+    let arxiv_id = match ArxivId::parse(&arxiv_id_str) {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                arxiv_id = %arxiv_id_str,
+                doi = %doi.as_str(),
+                "preprint fallback: could not parse suggested_arxiv_id; keeping Blocked"
+            );
+            return (pdf_leg, oa_pdf_bytes, None, None);
+        }
+    };
+
+    tracing::info!(
+        doi = %doi.as_str(),
+        arxiv_id = %arxiv_id.as_str(),
+        "OA PDF blocked; attempting arXiv preprint fallback (issue #325)"
+    );
+
+    let arxiv_ref = Ref::Arxiv(arxiv_id.clone());
+    let arxiv_source = arxiv_source_from_env();
+    match arxiv_source.fetch(&arxiv_ref, profile, ctx).await {
+        Ok(result) => match result.pdf_bytes {
+            Some(bytes) => {
+                tracing::info!(
+                    doi = %doi.as_str(),
+                    arxiv_id = %arxiv_id.as_str(),
+                    size = bytes.len(),
+                    "arXiv preprint fallback succeeded; storing under DOI safekey (issue #325)"
+                );
+                let license = result.license;
+                (
+                    PdfLegStatus::PreprintFallback {
+                        arxiv_id: arxiv_id.as_str().to_string(),
+                        original_block,
+                    },
+                    Some(bytes.to_vec()),
+                    Some(arxiv_id),
+                    Some(license),
+                )
+            }
+            None => {
+                tracing::warn!(
+                    doi = %doi.as_str(),
+                    arxiv_id = %arxiv_id.as_str(),
+                    "preprint fallback: arXiv source returned no PDF bytes; keeping Blocked"
+                );
+                (pdf_leg, oa_pdf_bytes, None, None)
+            }
+        },
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                doi = %doi.as_str(),
+                arxiv_id = %arxiv_id.as_str(),
+                "preprint fallback: arXiv fetch also failed; keeping Blocked"
+            );
+            (pdf_leg, oa_pdf_bytes, None, None)
+        }
+    }
 }
 
 /// Stage PDF bytes to a tempfile so the existing `Store::write` atomic-

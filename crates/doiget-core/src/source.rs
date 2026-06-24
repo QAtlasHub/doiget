@@ -176,6 +176,22 @@ pub enum FetchError {
         /// string into the actionable `doiget fetch <id>` hint.
         arxiv_id: crate::ArxivId,
     },
+    /// A source returned a successful response that contained no file of the
+    /// requested kind for `doiget source` — a PDF-only / single-file
+    /// submission (no multi-file bundle), or `--figures-only` on a submission
+    /// with no image files. The identifier is valid; only the bundle / figure
+    /// representation is absent. Surfaces as
+    /// [`crate::ErrorCode::TextUnavailable`] (same "this representation is
+    /// missing; the PDF may be fetchable" class as [`Self::TextUnavailable`]),
+    /// but as a DISTINCT variant so the message is not ar5iv-specific
+    /// (issue #343 / ADR-0034; PR review).
+    #[error("no source files for arXiv:{arxiv_id} ({kind}); the PDF may be fetchable instead")]
+    SourceUnavailable {
+        /// The arXiv id whose source bundle / figures were absent.
+        arxiv_id: crate::ArxivId,
+        /// Which representation was requested: `"source bundle"` or `"figures"`.
+        kind: &'static str,
+    },
 }
 
 /// Map [`FetchError`] to the closed [`crate::ErrorCode`] set surfaced at
@@ -202,13 +218,19 @@ impl From<&FetchError> for crate::ErrorCode {
             // code so agents can distinguish "narrow the name" from
             // "does not exist" (ADR-0031 D5).
             FetchError::Ambiguous { .. } => crate::ErrorCode::Ambiguous,
-            // 404 / 410 / 451 are authoritative, reproducible "this id is
-            // not (and will not be) here" signals → `NotFound`; see
-            // `ErrorCode::NotFound`. Everything else is transient.
+            // 404 / 410 / 451 are authoritative "this id does not exist"
+            // signals → `NotFound` (not retriable). 401 / 403 mean the
+            // server understood the request but denied access (IP block, auth
+            // required) — `CapabilityDenied` lets agents distinguish access
+            // denial from a transient connectivity failure. Everything else
+            // is treated as transient.
             FetchError::Http(HttpError::HttpStatus {
                 status: 404 | 410 | 451,
                 ..
             }) => crate::ErrorCode::NotFound,
+            FetchError::Http(HttpError::HttpStatus {
+                status: 401 | 403, ..
+            }) => crate::ErrorCode::CapabilityDenied,
             FetchError::Http(_) => crate::ErrorCode::NetworkError,
             FetchError::Log(_) => crate::ErrorCode::LogError,
             FetchError::InvalidRef(_) => crate::ErrorCode::InvalidRef,
@@ -222,6 +244,10 @@ impl From<&FetchError> for crate::ErrorCode {
             // missing. Its own code so an agent fetches the PDF rather
             // than conclude the reference is wrong (issue #302).
             FetchError::TextUnavailable { .. } => crate::ErrorCode::TextUnavailable,
+            // The id resolved; only the source-bundle / figure representation
+            // is absent. Same wire code as TextUnavailable (representation
+            // missing → fetch the PDF), distinct variant for a correct message.
+            FetchError::SourceUnavailable { .. } => crate::ErrorCode::TextUnavailable,
         }
     }
 }
@@ -262,7 +288,8 @@ impl From<&FetchError> for Option<crate::DenialContext> {
             | FetchError::InvalidRef(_)
             | FetchError::SourceSchema { .. }
             | FetchError::TooManyRefs { .. }
-            | FetchError::TextUnavailable { .. } => None,
+            | FetchError::TextUnavailable { .. }
+            | FetchError::SourceUnavailable { .. } => None,
         }
     }
 }
@@ -479,6 +506,20 @@ mod tests {
         // otherwise misroute this to InternalError).
         let e: ErrorCode = FetchError::TooManyRefs { got: 101, max: 100 }.into();
         assert_eq!(e, ErrorCode::InvalidRef);
+
+        // #343 / ADR-0034 — SourceUnavailable shares the TextUnavailable wire
+        // code (representation missing; the PDF may be fetchable), distinct
+        // variant for a non-ar5iv message.
+        let arxiv = match Ref::parse("arxiv:2401.12345").expect("parse arxiv id") {
+            Ref::Arxiv(a) => a,
+            Ref::Doi(_) => unreachable!("parsed an arxiv id"),
+        };
+        let e: ErrorCode = FetchError::SourceUnavailable {
+            arxiv_id: arxiv,
+            kind: "figures",
+        }
+        .into();
+        assert_eq!(e, ErrorCode::TextUnavailable);
     }
 
     #[test]

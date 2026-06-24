@@ -23,7 +23,7 @@ A value set higher in the chain overrides any value set lower.
 
 | Key | Default |
 |---|---|
-| `store.root` | POSIX: `$HOME/papers`. Windows: `%USERPROFILE%\papers`. |
+| `store.root` | `./papers` — `papers/` under the current working directory (ADR-0036). Set `DOIGET_STORE_ROOT` for a central library. |
 | `cache.root` | POSIX: `$HOME/.cache/doiget`. Windows: `%LOCALAPPDATA%\doiget\cache`. |
 | `log.path` | POSIX: `$HOME/.config/doiget/access.log`. Windows: `%APPDATA%\doiget\access.log`. |
 | `log.retention_days` | `90` |

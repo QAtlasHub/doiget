@@ -90,6 +90,9 @@ fn seed_store() -> (tempfile::TempDir, camino::Utf8PathBuf) {
             oa_status: None,
             size_bytes: 1234,
             mcp_call_id: None,
+            tags: Vec::new(),
+            collections: Vec::new(),
+            annotation: None,
         }),
         other: BTreeMap::new(),
     };

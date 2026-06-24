@@ -29,6 +29,7 @@ pub mod cite;
 pub mod config;
 pub mod csl;
 pub mod fetch;
+pub mod frontier;
 pub mod info;
 pub mod link;
 pub mod lint;
@@ -37,6 +38,9 @@ pub mod output;
 pub mod provenance;
 pub mod resolve_citation;
 pub mod search;
+pub mod source;
+pub mod tag;
+pub mod tex_source;
 pub mod text;
 pub mod verify;
 pub mod version;
@@ -55,22 +59,27 @@ use camino::Utf8PathBuf;
 /// config-file resolution lands with the `config` subcommand):
 ///
 /// 1. `DOIGET_STORE_ROOT` environment variable, if set and non-empty.
-/// 2. Fallback to `$HOME/papers` (POSIX) or `%USERPROFILE%\papers` (Windows).
+/// 2. Fallback to `./papers` — `papers/` directly under the current working
+///    directory (#344 / ADR-0036), so fetched artifacts are visible where the
+///    user (or an LLM agent) is working rather than hidden in a far-off home
+///    directory. For a central, shared library set `DOIGET_STORE_ROOT`
+///    (e.g. `~/papers`, which also restores BiblioFetch.jl co-location —
+///    ADR-0004).
 ///
 /// The env-var hook is sufficient for both real use and integration tests
 /// — tests set `DOIGET_STORE_ROOT` to a `tempfile::TempDir` to keep the
-/// real `~/papers/` untouched.
+/// real working directory untouched.
 pub(crate) fn resolve_store_root() -> Result<Utf8PathBuf> {
     if let Ok(s) = std::env::var("DOIGET_STORE_ROOT") {
         if !s.is_empty() {
             return Ok(Utf8PathBuf::from(s));
         }
     }
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .context(
-            "could not determine home directory: \
-             neither HOME nor USERPROFILE is set, and DOIGET_STORE_ROOT was not provided",
-        )?;
-    Ok(Utf8PathBuf::from(home).join("papers"))
+    let cwd = std::env::current_dir().context(
+        "could not determine the current working directory for the default store root \
+         (set DOIGET_STORE_ROOT to choose an explicit store location)",
+    )?;
+    Utf8PathBuf::from_path_buf(cwd)
+        .map(|d| d.join("papers"))
+        .map_err(|p| anyhow::anyhow!("current directory path is not UTF-8: {}", p.display()))
 }

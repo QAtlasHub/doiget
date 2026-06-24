@@ -114,6 +114,7 @@ async fn external_search_runs_and_logs_openalex_fetch() {
     let res = run(
         "tropical tensor networks".to_string(),
         false, // local = false → external discovery
+        None,
         ext,
         OutputMode::Quiet,
         true,
@@ -189,6 +190,7 @@ async fn external_search_min_fwci_and_percentile_become_filter_clauses() {
     let res = run(
         "tropical tensor networks".to_string(),
         false,
+        None,
         ext,
         OutputMode::Quiet,
         true,

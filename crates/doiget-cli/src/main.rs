@@ -117,6 +117,8 @@ enum ProvenanceAction {
                   \x20 cite         Resolve a ref live and print clean BibTeX (doi2bib-style)\n\
                   \x20 csl          Export a stored entry as CSL JSON\n\
                   \x20 text         Extract a paper's full text from ar5iv (arXiv id)\n\
+                  \x20 tex-source   Fetch raw LaTeX source from arXiv source API (arXiv id)\n\
+                  \x20 source       Download arXiv source bundle / figures to a dir (arXiv id)\n\
                   \x20 link         Resolve a DOI to its arXiv preprint (OpenAlex)\n\
                   \x20 info         Show metadata for a stored entry\n\
                   \x20 search       Search the local store by title / authors / venue\n\
@@ -157,7 +159,7 @@ struct Cli {
 
     /// Override the on-disk paper store root. CONFIG.md §5 / #211.
     /// Precedence: this flag > `DOIGET_STORE_ROOT` env > default
-    /// (`$HOME/papers` on POSIX, `%USERPROFILE%\papers` on Windows).
+    /// (`./papers` — `papers/` under the current working directory; ADR-0036).
     /// Wins by overwriting `DOIGET_STORE_ROOT` for the lifetime of
     /// this process before any command resolver reads it. Empty
     /// strings and NUL bytes are rejected at parse time by
@@ -241,6 +243,14 @@ enum Command {
         /// the single host the real fetch would hit (ADR-0022 §4).
         #[arg(long)]
         dry_run: bool,
+        /// After fetching, also place a link to the PDF in DIR (created if
+        /// missing) so it is visible in your working tree. Uses a symlink,
+        /// falling back to a copy where symlinks are unavailable (e.g. Windows
+        /// without privilege). Named from the paper's metadata (e.g.
+        /// `vaswani2017-attention-is-all-you-need.pdf`), or the safekey when
+        /// metadata is absent. Metadata-only fetches (no PDF) are skipped. (#344)
+        #[arg(long, value_name = "DIR", value_parser = parse_utf8_path)]
+        link: Option<Utf8PathBuf>,
     },
     /// Fetch many refs from a newline-separated text file.
     Batch {
@@ -252,6 +262,22 @@ enum Command {
         /// exit so a malformed batch is visible.
         #[arg(long)]
         dry_run: bool,
+        /// Skip refs that already have a PDF in the store
+        /// (`<store>/<safekey>.pdf` exists). Metadata-only entries are
+        /// NOT skipped — they may now succeed via the preprint fallback
+        /// or allowlist updates. Use after a partial batch run to
+        /// re-attempt only failures without wasting API budget on
+        /// already-fetched refs (issue #324).
+        #[arg(long)]
+        only_failed: bool,
+        /// Seconds to sleep between individual fetches. Useful for hosts
+        /// that throttle below the HTTP 429 threshold (issue #326).
+        #[arg(long, value_name = "SECS")]
+        delay: Option<f64>,
+        /// Override the User-Agent header for every HTTP request in this
+        /// batch. Default: `doiget/<version> (+https://github.com/sotashimozono/doiget)`.
+        #[arg(long, value_name = "STRING")]
+        user_agent: Option<String>,
     },
     /// Show metadata for a stored entry.
     Info {
@@ -270,6 +296,7 @@ enum Command {
     /// (title / authors / venue) instead.
     Search {
         /// Query string (a topic for discovery, or a substring for `--local`).
+        /// May be empty when `--local --tag` is given (matches all tagged entries).
         query: String,
         /// Scan the local store instead of external discovery.
         #[arg(long, conflicts_with = "external")]
@@ -278,6 +305,10 @@ enum Command {
         /// exclusive with `--local`).
         #[arg(long, conflicts_with = "local")]
         external: bool,
+        /// Filter local-store results to entries tagged with this tag
+        /// (case-sensitive). Requires `--local`.
+        #[arg(long, requires = "local")]
+        tag: Option<String>,
         /// External: maximum results. Must be 1..=200 (OpenAlex's per-page
         /// cap); an out-of-range value is rejected, not clamped.
         #[arg(long, default_value_t = 25)]
@@ -378,6 +409,52 @@ enum Command {
         #[arg(long)]
         no_cache: bool,
     },
+    /// Discover the frontier neighbourhood of a seed paper: surfaces papers
+    /// that **cite the seed**, ranked by age-normalized impact (fwci),
+    /// excluding papers already in the local store (#295).
+    Frontier {
+        /// Seed DOI (e.g. "10.1103/PhysRevB.1").
+        doi: String,
+        /// Maximum results to return (1–200; default 25).
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+        /// Only include works published on or after this year.
+        #[arg(long)]
+        from_year: Option<i32>,
+    },
+    /// Fetch the raw LaTeX source of an arXiv paper directly from the arXiv
+    /// source API (`export.arxiv.org/src/<id>`). More reliable than `text`
+    /// (ar5iv HTML) for papers not yet processed by LaTeXML. PDF-only
+    /// submissions yield `TEXT_UNAVAILABLE`. Tier-1 OA, always-on.
+    TexSource {
+        /// arXiv id (e.g. "arxiv:2401.12345"). A DOI reports `NO_OA_AVAILABLE`.
+        ref_: String,
+        /// Cap the returned LaTeX source to this many characters (truncation is
+        /// flagged, never silent). Omit for the full source.
+        #[arg(long)]
+        max_chars: Option<usize>,
+        /// Bypass the on-disk TeX source cache (always re-fetch).
+        #[arg(long)]
+        no_cache: bool,
+    },
+    /// Download an arXiv submission's source bundle (every file) or just its
+    /// figures to a directory. Fetches the same `/src/<id>` tarball as
+    /// `tex-source` (one request) and materialises files to `--out`. Files are
+    /// written opaque (never interpreted); tar entry paths are sanitised
+    /// (zip-slip safe, ADR-0034). PDF-only submissions yield `TEXT_UNAVAILABLE`.
+    /// A DOI reports `NO_OA_AVAILABLE`. Tier-1 OA, always-on. `--mode json`
+    /// emits `{ok, arxiv_id, out_dir, figures_only, count, files[]}`.
+    Source {
+        /// arXiv id (e.g. "arxiv:2401.12345"). A DOI reports `NO_OA_AVAILABLE`.
+        ref_: String,
+        /// Directory to write the extracted files into (created if missing).
+        #[arg(long = "out", value_name = "DIR", value_parser = parse_utf8_path)]
+        out_dir: Utf8PathBuf,
+        /// Extract only image/figure files (.pdf .eps .ps .png .jpg .jpeg .gif
+        /// .svg), not the full source bundle.
+        #[arg(long)]
+        figures_only: bool,
+    },
     /// Resolve a DOI to its arXiv preprint + identity cluster (OpenAlex;
     /// #281 item 5). Reports whether the same work has a free arXiv
     /// preprint, for reading or dedup. arXiv → DOI is a follow-up.
@@ -429,6 +506,40 @@ enum Command {
         /// Promote warnings to errors so any finding fails the run.
         #[arg(long)]
         strict: bool,
+    },
+    /// Assign or remove tags and collections on a stored entry (#294).
+    ///
+    /// Positional `<tag>...` arguments add tags. Use `--remove` to remove.
+    /// Use `--collection` / `--remove-collection` for collection membership.
+    /// Use `--list` to show current tags, collections, and annotation.
+    Tag {
+        /// DOI or arXiv id.
+        ref_: String,
+        /// Tags to add (idempotent). Positional — may repeat.
+        #[arg(value_name = "TAG")]
+        tags: Vec<String>,
+        /// Tags to remove.
+        #[arg(long = "remove", value_name = "TAG")]
+        remove: Vec<String>,
+        /// Collections to join (idempotent).
+        #[arg(long = "collection", value_name = "COL")]
+        collection: Vec<String>,
+        /// Collections to leave.
+        #[arg(long = "remove-collection", value_name = "COL")]
+        remove_collection: Vec<String>,
+        /// Show current tags, collections, and annotation; no mutation.
+        #[arg(long)]
+        list: bool,
+    },
+    /// Set or clear the freeform annotation for a stored entry (#294).
+    Annotate {
+        /// DOI or arXiv id.
+        ref_: String,
+        /// Annotation text (replaces any previous annotation).
+        text: Option<String>,
+        /// Clear the annotation (remove it from the TOML).
+        #[arg(long)]
+        clear: bool,
     },
     /// Resolve a bibliographic citation string to ranked DOI candidates.
     #[command(name = "resolve-citation")]
@@ -653,6 +764,7 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             query,
             local,
             external: _,
+            tag,
             limit,
             from_year,
             to_year,
@@ -678,7 +790,8 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 publisher,
                 sort,
             };
-            doiget_cli::commands::search::run(query, local, ext, mode, out.quiet_was_explicit).await
+            doiget_cli::commands::search::run(query, local, tag, ext, mode, out.quiet_was_explicit)
+                .await
         }
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
         Some(Command::Verify {
@@ -687,17 +800,53 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             strict,
         }) => doiget_cli::commands::verify::run(path, format, strict, mode).await,
         Some(Command::Lint { path, strict }) => doiget_cli::commands::lint::run(path, strict, mode),
+        Some(Command::Tag {
+            ref_,
+            tags,
+            remove,
+            collection,
+            remove_collection,
+            list,
+        }) => doiget_cli::commands::tag::run(
+            ref_,
+            tags,
+            remove,
+            collection,
+            remove_collection,
+            list,
+            mode,
+            out.quiet_was_explicit,
+        ),
+        Some(Command::Annotate { ref_, text, clear }) => {
+            doiget_cli::commands::tag::run_annotate(ref_, text, clear)
+        }
         Some(Command::ResolveCitation { query, limit }) => {
             doiget_cli::commands::resolve_citation::run(query, limit, mode).await
         }
         Some(Command::BatchResolveCitations { limit }) => {
             doiget_cli::commands::resolve_citation::run_batch(limit, mode).await
         }
-        Some(Command::Fetch { ref_, dry_run }) => {
-            doiget_cli::commands::fetch::run_with_options(ref_, dry_run, mode).await
-        }
-        Some(Command::Batch { path, dry_run }) => {
-            doiget_cli::commands::batch::run_with_options(path, dry_run, mode).await
+        Some(Command::Fetch {
+            ref_,
+            dry_run,
+            link,
+        }) => doiget_cli::commands::fetch::run_with_options(ref_, dry_run, link, mode).await,
+        Some(Command::Batch {
+            path,
+            dry_run,
+            only_failed,
+            delay,
+            user_agent,
+        }) => {
+            doiget_cli::commands::batch::run_with_options(
+                path,
+                dry_run,
+                only_failed,
+                delay,
+                user_agent,
+                mode,
+            )
+            .await
         }
         Some(Command::Bib {
             ref_,
@@ -719,6 +868,42 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         }) => {
             doiget_cli::commands::text::run(ref_, max_chars, no_cache, mode, out.quiet_was_explicit)
                 .await
+        }
+        Some(Command::Frontier {
+            doi,
+            limit,
+            from_year,
+        }) => {
+            doiget_cli::commands::frontier::run(doi, limit, from_year, mode, out.quiet_was_explicit)
+                .await
+        }
+        Some(Command::TexSource {
+            ref_,
+            max_chars,
+            no_cache,
+        }) => {
+            doiget_cli::commands::tex_source::run(
+                ref_,
+                max_chars,
+                no_cache,
+                mode,
+                out.quiet_was_explicit,
+            )
+            .await
+        }
+        Some(Command::Source {
+            ref_,
+            out_dir,
+            figures_only,
+        }) => {
+            doiget_cli::commands::source::run(
+                ref_,
+                out_dir,
+                figures_only,
+                mode,
+                out.quiet_was_explicit,
+            )
+            .await
         }
         Some(Command::Link { ref_ }) => {
             doiget_cli::commands::link::run(ref_, mode, out.quiet_was_explicit).await

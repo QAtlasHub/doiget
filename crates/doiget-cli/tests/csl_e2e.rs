@@ -82,6 +82,9 @@ fn journal_article_fixture() -> (Safekey, Metadata) {
             oa_status: None,
             size_bytes: 1234,
             mcp_call_id: None,
+            tags: Vec::new(),
+            collections: Vec::new(),
+            annotation: None,
         }),
         other: BTreeMap::new(),
     };
@@ -126,6 +129,9 @@ fn comma_form_fixture() -> (Safekey, Metadata) {
             oa_status: None,
             size_bytes: 0,
             mcp_call_id: None,
+            tags: Vec::new(),
+            collections: Vec::new(),
+            annotation: None,
         }),
         other: BTreeMap::new(),
     };

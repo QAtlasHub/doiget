@@ -1,0 +1,63 @@
+name: version-bump
+
+# ADR-0033 — PR-time version-bump gate (BLOCKING; intended as a required check).
+#
+# Complements, and is distinct from, the other two version layers:
+#   * scripts/release-version-gate.sh — TAG time (ADR-0025 D2): is this tag
+#     releasable? Runs only on a pushed signed tag.
+#   * version-check.yml — ADVISORY (ADR-0025 Amendment 6): "would tagging the
+#     current version release?" Non-blocking; intentionally red on `main`
+#     between releases, so it can NEVER be a required check.
+#
+# This job enforces that EVERY PR *advances* [workspace.package].version per the
+# lane cadence, and unlike version-check.yml it is ALWAYS green-able by a correct
+# PR — so it is safe to mark as a required status check on `next` and `main`.
+# All logic lives in scripts/version-bump-gate.sh (one source of truth, locally
+# runnable). Rules (no labels, no exceptions):
+#   * PR → next : X.Y.Z-beta.N, strict beta.N+1 (same base) or a retarget to a
+#                 valid +1 single-step over stable with the counter reset to .1;
+#                 the base is always a +1 step over origin/main (always
+#                 promotable). The automated main → next back-merge is the only
+#                 exempt PR (it keeps -beta.N), recognised by branch shape.
+#   * PR → main : promotion only — head MUST be `next` (same repo), a clean
+#                 X.Y.Z that is exactly +1 (major|minor|patch) over origin/main.
+#
+# Third-party Actions are SHA-pinned (repo invariant / ADR-0013 supply-chain).
+
+on:
+  pull_request:
+    branches: [next, main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-bump-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  version-bump:
+    name: version-bump (ADR-0033 — did this PR advance the version correctly?)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head (full history for lane-branch reads)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          fetch-depth: 0
+      - name: Fetch lane branches (origin/next, origin/main)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The gate reads the current lane versions via `git show origin/<lane>`.
+          # On a PR checkout these remote refs are not guaranteed present, so
+          # fetch them explicitly (same pattern as release-plz.yml's G7 step).
+          git fetch --no-tags origin '+refs/heads/next:refs/remotes/origin/next' || true
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main' || true
+      - name: Run the version-bump gate
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          CROSS_REPO: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        run: bash scripts/version-bump-gate.sh

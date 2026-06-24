@@ -20,7 +20,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0001 | MCP transport is stdio only | Accepted | posture-lint + Slice 9 stdout-purity | #4 |
 | 0002 | TDM sources are compile-time feature-gated | Accepted | Slices 17/18/19 | #5 |
 | 0003 | PDF content processing is permanently out of scope | Accepted (Amended by 0032: narrowed to PDF-*blob* processing; structured HTML/XML full-text is in scope) | standing policy (SCOPE.md #1 + posture-lint) | #9 |
-| 0004 | BiblioFetch.jl coexistence — shared store contract | Accepted | Phase 1 store + #121 (`0.1.2`) | #1 / #2 |
+| 0004 | BiblioFetch.jl coexistence — shared store contract | Accepted (Amended by 0036: default root no longer `~/papers`; shared *format* contract unchanged) | Phase 1 store + #121 (`0.1.2`) | #1 / #2 |
 | 0005 | CapabilityProfile gates source invocation at the type level | Accepted | PR #64/#65 (Phase 1) | #16 / #17 |
 | 0006 | Provenance log is JSON Lines + SHA-256 hash chain (fail-closed) | Accepted | PR #61 + Slice 4 | #12 / #17 |
 | 0007 | safekey algorithm with 100 reference test vectors | Accepted | PR #39 + Slice 3 | #1 §Contract 4 / #17 |
@@ -41,7 +41,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0022 | Dry-run mode for fetch operations | Accepted | Slice 2 | #12 |
 | 0023 | Structured `denial_context` on error envelopes | Accepted | Slices 1/2 | #12 |
 | 0024 | CanonicalRef implementation + provenance log v1 → v2 migration | Accepted | Slice 4 | Slice 4 |
-| 0025 | Tag-driven release with version gate + beta/stable lanes | Accepted (Amend. 5 2026-05-19: D6 `next`-primary; Amend. 6 2026-05-19: advisory `version-check` job, D1 unchanged) | PR #166 / Amend. 5 / Amend. 6 | maintainer review 2026-05-17 |
+| 0025 | Tag-driven release with version gate + beta/stable lanes | Accepted (Amend. 5 2026-05-19: D6 `next`-primary; Amend. 6 2026-05-19: advisory `version-check` job, D1 unchanged; **Amended by 0033** 2026-06-24: per-PR version-bump gate, D6 rule 4 direct hotfix retired) | PR #166 / Amend. 5 / Amend. 6 | maintainer review 2026-05-17 |
 | 0026 | DOI suffix charset extension: permit `:` (SECURITY.md §1.1) | Accepted | #194 | #194 dogfood |
 | 0027 | redirect-allowlist: add physics-society / diamond-OA hosts to `oa-publisher` | Accepted | #193 | #193 dogfood |
 | 0028 | User-extensible capability gate (ToS+verified-curation posture; impersonation out-of-scope) | Accepted (design; slice TBD) | TBD | #220 / #223 |
@@ -49,6 +49,10 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0030 | Bibliography input adapters (.bib / CSL-JSON) in `doiget-core`; new MCP tool `doiget_batch_from_bibliography` | Accepted (design; slice TBD) | TBD | #222 / Zotero distribution review 2026-05-20 |
 | 0031 | Discovery search is Tier-1 OA metadata (always-on); `doiget search` defaults to external discovery | Accepted (design; PR1 slice) | PR1 (`feat/paper-search`) | #281 / feasibility read 2026-06-04 |
 | 0032 | Structured full-text (HTML/XML) extraction in scope; PDF-blob processing stays out of scope | Accepted (design; PR4 ships ar5iv leg) | PR4 (`feat/paper-text`) | #281 item 3 / scope decision 2026-06-06 |
+| 0033 | Per-PR version-bump enforcement + strict next→main promotion (amends 0025 §D6) | Accepted (0.8.0, #352) | `chore/version-bump-gate` | maintainer review 2026-06-24 (0.7.1 vanishing) |
+| 0034 | arXiv source bundle + individual figure download | Accepted (0.8.0, #352) | `feat/343-source-bundle-figures` | #343 / dogfood 2026-06-24 |
+| 0035 | `fetch --link`: surface fetched artifacts into the working tree | Accepted (0.8.0, #352) | `feat/344-fetch-link` | #344 / dogfood 2026-06-24 |
+| 0036 | Default store root → `./papers` (cwd); amends 0004 co-location | Accepted (0.8.0, #352) | `feat/344-default-store-cwd` | #344 problem 1 / dogfood 2026-06-24 |
 
 ## Conventions
 

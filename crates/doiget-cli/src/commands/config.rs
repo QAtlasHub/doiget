@@ -32,7 +32,7 @@ use super::fetch::CliExit;
 /// read, undocumented `DOIGET_LOG_DIR` has been dropped.
 #[derive(Debug, serde::Serialize)]
 pub struct ResolvedConfig {
-    /// Root of the on-disk paper store. Default: `$HOME/papers`.
+    /// Root of the on-disk paper store. Default: `./papers` (under the cwd).
     pub store_root: Utf8PathBuf,
     /// Directory holding doiget's append-only logs. Derived from
     /// `log_path`'s parent so it always agrees with the writer.
@@ -55,25 +55,24 @@ pub struct ResolvedConfig {
 impl ResolvedConfig {
     /// Resolve the live config from process environment + platform defaults.
     ///
-    /// Errors only if neither a home directory nor a config directory can
-    /// be determined for the current user (e.g. an unknown / locked-down
-    /// platform); on every realistic POSIX or Windows host this returns
-    /// `Ok` even with no `DOIGET_*` env vars set.
+    /// Errors only if the platform config directory (`dirs::config_dir()`) or
+    /// the current working directory cannot be determined or is non-UTF-8
+    /// (an unknown / locked-down platform); on every realistic POSIX or
+    /// Windows host this returns `Ok` even with no `DOIGET_*` env vars set.
     pub fn from_env() -> Result<Self> {
-        // `dirs::home_dir()` / `dirs::config_dir()` return `std::path::PathBuf`;
-        // hoist them into `Utf8PathBuf` immediately at the OS boundary so the
-        // rest of the function (and the public struct) stays UTF-8-only per
-        // the workspace `disallowed-types` clippy rule. A non-UTF-8 home dir
-        // is exotic and unsupported; surface it as an explicit error.
-        let home =
-            Utf8PathBuf::try_from(dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?)?;
+        // `dirs::config_dir()` returns `std::path::PathBuf`; hoist it into
+        // `Utf8PathBuf` immediately at the OS boundary so the rest of the
+        // function (and the public struct) stays UTF-8-only per the workspace
+        // `disallowed-types` clippy rule.
         let cfg = Utf8PathBuf::try_from(
             dirs::config_dir().ok_or_else(|| anyhow::anyhow!("no config dir"))?,
         )?;
 
-        let store_root = std::env::var("DOIGET_STORE_ROOT")
-            .map(Utf8PathBuf::from)
-            .unwrap_or_else(|_| home.join("papers"));
+        // Store root: identical resolution to where artifacts actually land
+        // (`super::resolve_store_root`) so `config show` / `doctor` never drifts
+        // from the writer — `DOIGET_STORE_ROOT` else `./papers` under the cwd
+        // (#344 / ADR-0036).
+        let store_root = super::resolve_store_root()?;
 
         // Issue #142: resolve the log path the SAME way the writer does
         // (`commands::fetch::resolve_log_path` / `commands::audit_log`):
@@ -158,19 +157,36 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
         },
         "doctor" => {
             let mut all_ok = true;
+            let store_parent = cfg.store_root.parent().map(|p| p.as_str()).unwrap_or("");
             check(
                 "store_root parent exists",
                 cfg.store_root.parent().map(|p| p.exists()).unwrap_or(true),
+                Some(&format!(
+                    "create the parent directory or override via \
+                     DOIGET_STORE_ROOT\n               \
+                     missing parent: {store_parent}"
+                )),
                 &mut all_ok,
             );
+            let log_parent = cfg.log_dir.parent().map(|p| p.as_str()).unwrap_or("");
             check(
                 "log_dir parent exists",
                 cfg.log_dir.parent().map(|p| p.exists()).unwrap_or(true),
+                Some(&format!(
+                    "create the parent directory or override via \
+                     DOIGET_LOG_PATH\n               \
+                     missing parent: {log_parent}"
+                )),
                 &mut all_ok,
             );
             check(
                 "contact_email set",
                 cfg.contact_email.is_some(),
+                Some(
+                    "set DOIGET_CONTACT_EMAIL to your email address\n               \
+                     e.g. export DOIGET_CONTACT_EMAIL=you@institution.edu\n               \
+                     (required for the polite User-Agent header and Unpaywall API)",
+                ),
                 &mut all_ok,
             );
             // ADR-0028 D2: surface user-extension allowlist health. A
@@ -181,14 +197,24 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
             // `Ok(vec![])` for not-found, so the OK arm always reports
             // a count.
             match doiget_core::user_extension::load(&cfg.config_path) {
-                Ok(hosts) => check(
-                    &format!("user-extension hosts loaded: {}", hosts.len()),
+                Ok(cfg_ext) => check(
+                    &format!(
+                        "user-extension hosts loaded: {} (trust_academic_repos={})",
+                        cfg_ext.additional_hosts.len(),
+                        cfg_ext.trust_academic_repos
+                    ),
                     true,
+                    None,
                     &mut all_ok,
                 ),
                 Err(e) => check(
                     &format!("user-extension config invalid: {e}"),
                     false,
+                    Some(&format!(
+                        "fix {} — see docs/CONFIG.md §3 for the \
+                         [[network.additional_hosts]] schema",
+                        cfg.config_path
+                    )),
                     &mut all_ok,
                 ),
             }
@@ -227,11 +253,18 @@ fn eprintln_err(msg: &str) {
 /// Emit one `[ ok ]` / `[FAIL]` checklist line to stderr and update the
 /// running pass/fail flag. Stderr is used so that `doiget config doctor`
 /// stdout stays empty for green runs (script-friendly).
+///
+/// When `ok` is `false` and `tip` is `Some`, a remediation tip is printed
+/// on the next line, indented so it is visually attached to the failed
+/// check (issue #322).
 #[allow(clippy::print_stderr)]
-fn check(label: &str, ok: bool, all_ok: &mut bool) {
+fn check(label: &str, ok: bool, tip: Option<&str>, all_ok: &mut bool) {
     let mark = if ok { "[ ok ]" } else { "[FAIL]" };
     eprintln!("{mark} {label}");
     if !ok {
+        if let Some(t) = tip {
+            eprintln!("       tip: {t}");
+        }
         *all_ok = false;
     }
 }
@@ -296,12 +329,19 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn from_env_uses_home_default_when_unset() {
+    fn from_env_uses_cwd_default_when_unset() {
         let _g = unset_all_doiget_config_env();
-        let cfg = ResolvedConfig::from_env().expect("home dir must resolve on test host");
-        assert!(
-            cfg.store_root.as_str().ends_with("papers"),
-            "store_root should fall back to <home>/papers when DOIGET_STORE_ROOT is unset; got {}",
+        let cfg = ResolvedConfig::from_env().expect("config resolves on test host");
+        // The default must be `<cwd>/papers` (ADR-0036), NOT `<home>/papers` —
+        // assert the full path so a regression back to the home directory is
+        // actually caught (a bare `ends_with("papers")` passes for both).
+        let cwd =
+            camino::Utf8PathBuf::from_path_buf(std::env::current_dir().expect("cwd is available"))
+                .expect("cwd is valid UTF-8");
+        assert_eq!(
+            cfg.store_root,
+            cwd.join("papers"),
+            "store_root should default to <cwd>/papers when DOIGET_STORE_ROOT is unset; got {}",
             cfg.store_root
         );
         assert_eq!(cfg.contact_email, None);
@@ -316,7 +356,7 @@ mod tests {
         // succeeds on Windows too (where "/tmp/foo" is a relative path on
         // the current drive — still UTF-8, still fine for this assertion).
         let _override = EnvGuard::set("DOIGET_STORE_ROOT", "/tmp/foo");
-        let cfg = ResolvedConfig::from_env().expect("home dir must resolve on test host");
+        let cfg = ResolvedConfig::from_env().expect("config resolves on test host");
         assert_eq!(cfg.store_root.as_str(), "/tmp/foo");
     }
 
@@ -330,7 +370,7 @@ mod tests {
     fn log_path_follows_doiget_log_path_env() {
         let _g = unset_all_doiget_config_env();
         let _override = EnvGuard::set("DOIGET_LOG_PATH", "/var/lib/doiget/access.jsonl");
-        let cfg = ResolvedConfig::from_env().expect("home dir must resolve on test host");
+        let cfg = ResolvedConfig::from_env().expect("config resolves on test host");
         assert_eq!(
             cfg.log_path.as_str(),
             "/var/lib/doiget/access.jsonl",
@@ -366,10 +406,10 @@ mod tests {
     fn doctor_passes_with_contact_email() {
         let _g = unset_all_doiget_config_env();
         let _email = EnvGuard::set("DOIGET_CONTACT_EMAIL", "alice@example.org");
-        // home_dir() / config_dir() resolve to real, existing parents on
-        // every supported test host (CI runners always have $HOME).
+        // config_dir() and the cwd resolve to real, existing parents on every
+        // supported test host (store root defaults to <cwd>/papers, ADR-0036).
         run("doctor".into(), crate::commands::output::OutputMode::Human)
-            .expect("doctor should pass with contact email + real home dir");
+            .expect("doctor should pass with contact email + valid config dir and cwd");
     }
 
     /// ADR-0028 D2: a malformed `<config_dir>/doiget/config.toml`
@@ -420,6 +460,26 @@ mod tests {
             .downcast_ref::<CliExit>()
             .expect("failing doctor must carry a CliExit");
         assert_eq!(cli_exit.0, 2);
+    }
+
+    /// Issue #322: `check` must emit a `tip:` line to stderr when the
+    /// check fails and a tip is provided. Passing `ok=true` must NOT
+    /// emit the tip line even when one is supplied.
+    #[test]
+    fn check_emits_tip_on_failure_only() {
+        let mut flag = true;
+        // Passing check — tip must be swallowed.
+        check("passing check", true, Some("should not appear"), &mut flag);
+        assert!(flag, "all_ok must stay true for a passing check");
+
+        // Failing check with tip — all_ok must flip.
+        check(
+            "failing check",
+            false,
+            Some("set DOIGET_CONTACT_EMAIL"),
+            &mut flag,
+        );
+        assert!(!flag, "all_ok must flip to false on a failing check");
     }
 
     #[test]

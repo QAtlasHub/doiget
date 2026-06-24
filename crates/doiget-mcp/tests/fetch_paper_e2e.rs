@@ -205,6 +205,23 @@ async fn fetch_paper_arxiv_happy_path_writes_pdf_and_returns_envelope() -> anyho
     let bytes = std::fs::read(on_disk).expect("read PDF");
     assert_eq!(bytes, SAMPLE_PDF_BODY);
 
+    // #344 (Slice 1): identity fields are surfaced on the success envelope so
+    // an agent can confirm the RIGHT paper in one call (no follow-up
+    // doiget_info). Values depend on the resolver's metadata (no Atom mock
+    // here), so assert the keys are present and well-typed.
+    assert!(
+        structured.get("title").is_some(),
+        "title key present: {structured:?}"
+    );
+    assert!(
+        structured["authors"].is_array(),
+        "authors is an array: {structured:?}"
+    );
+    assert!(
+        structured.get("year").is_some(),
+        "year key present (may be null): {structured:?}"
+    );
+
     client.cancel().await?;
     server_handle.await??;
     drop(env);

@@ -13,14 +13,24 @@ weight = 210
 ## 1. Layout
 
 ```
-~/papers/
+<store-root>/
 ├── <safekey>.pdf                    # PDF blob (immutable after write)
 └── .metadata/
     ├── <safekey>.toml               # metadata
     └── <safekey>.toml.lock          # advisory lock file (see §3)
 ```
 
-Store root path is configurable per [`CONFIG.md`](CONFIG.md). Default: `~/papers/`.
+Store root path is configurable per [`CONFIG.md`](CONFIG.md). The default root is
+implementation-specific — doiget defaults to `./papers` (under the current working
+directory; [ADR-0036](DECISIONS/0036-default-store-cwd.md)), BiblioFetch.jl to
+`~/papers/`. The layout *under* the root, specified in this document, is identical for
+both; point them at the same root (e.g. `DOIGET_STORE_ROOT=~/papers`) to share one store.
+
+> **MCP `doiget serve`:** the default is resolved relative to the *server process's*
+> working directory, which is indeterminate for a long-running daemon (e.g. a service
+> manager may launch it in `/`). MCP users SHOULD set `DOIGET_STORE_ROOT` explicitly so
+> the store does not silently vary by launch directory.
+
 The `<safekey>` is computed from the DOI / arXiv id by the algorithm in
 [`SAFEKEY.md`](SAFEKEY.md).
 
@@ -94,7 +104,7 @@ Lock acquisition timeout: **5 seconds**. On timeout, return `StoreError::LockTim
 
 Locks are advisory; a third-party process that ignores the lock can corrupt the store.
 Both doiget and BiblioFetch.jl honor the lock. Anyone integrating a third tool with
-`~/papers/` is expected to follow the same contract.
+the shared store is expected to follow the same contract.
 
 The lock file itself is created on demand (`O_CREAT | O_RDWR`) and is never deleted
 during normal operation. It may be safely deleted when no process holds it.

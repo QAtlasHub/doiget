@@ -252,10 +252,12 @@ impl std::fmt::Display for InvalidPatternIssue {
 /// - [`UserExtensionError::InvalidPatterns`] for invalid patterns;
 ///   the variant carries *every* offending entry, not just the first
 ///   (review pass I6).
-pub fn load(config_path: &Utf8Path) -> Result<Vec<UserExtensionHost>, UserExtensionError> {
+pub fn load(config_path: &Utf8Path) -> Result<UserExtensionConfig, UserExtensionError> {
     let text = match std::fs::read_to_string(config_path.as_std_path()) {
         Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(UserExtensionConfig::default())
+        }
         Err(e) => {
             return Err(UserExtensionError::Io {
                 path: config_path.to_string(),
@@ -283,6 +285,10 @@ struct RawConfig {
 struct RawNetwork {
     #[serde(default)]
     additional_hosts: Vec<RawHost>,
+    /// `[network] trust_academic_repos = true` — activates the built-in curated
+    /// academic institution allowlist (issue #323). See [`academic_repo_hosts`].
+    #[serde(default)]
+    trust_academic_repos: bool,
     #[serde(flatten)]
     _other: serde::de::IgnoredAny,
 }
@@ -298,17 +304,74 @@ struct RawHost {
     note: Option<String>,
 }
 
+/// Parsed result from a `config.toml` user-extension section (issue #323).
+///
+/// Returned by [`load`]; callers merge [`Self::additional_hosts`] into the
+/// allowlist unconditionally, and optionally merge [`academic_repo_hosts`]
+/// when [`Self::trust_academic_repos`] is `true`.
+#[derive(Debug, Default)]
+#[non_exhaustive]
+pub struct UserExtensionConfig {
+    /// Hosts from `[[network.additional_hosts]]`.
+    pub additional_hosts: Vec<UserExtensionHost>,
+    /// `true` when `[network] trust_academic_repos = true` is set in
+    /// `config.toml`. Callers that respect this flag SHOULD merge
+    /// [`academic_repo_hosts`] into their allowlist.
+    pub trust_academic_repos: bool,
+}
+
+/// Returns the built-in curated set of academic institution host patterns.
+///
+/// Activated via `[network] trust_academic_repos = true` in `config.toml`
+/// (issue #323). Each entry is a single-suffix wildcard matching the
+/// TLD-style registration block used by institutions in that country.
+///
+/// All patterns are valid per [`validate_pattern`] (single-suffix wildcards
+/// only; no multi-segment globs). The set is intentionally conservative —
+/// covering major national academic TLD patterns used for institutional
+/// Green OA repositories — while keeping the security posture minimal.
+pub fn academic_repo_hosts() -> Vec<UserExtensionHost> {
+    const PATTERNS: &[(&str, &str)] = &[
+        ("*.ac.uk", "UK academic institutions (Universities UK)"),
+        ("*.ac.jp", "Japanese academic institutions (NII)"),
+        ("*.jst.go.jp", "J-STAGE / JST academic platform (Japan)"),
+        ("*.edu.au", "Australian universities (TEQSA)"),
+        ("*.edu.cn", "Chinese universities (MoE)"),
+        ("*.ac.cn", "Chinese academic institutions"),
+        ("*.edu.pl", "Polish universities (MEiN)"),
+        ("*.ac.nz", "New Zealand universities"),
+        ("*.ac.za", "South African universities (DHET)"),
+        ("*.ac.in", "Indian academic institutions"),
+        ("*.edu.br", "Brazilian universities (CAPES)"),
+        ("*.edu.tw", "Taiwanese universities (MoE)"),
+        ("*.edu.tr", "Turkish universities (YÖK)"),
+        ("*.edu.ar", "Argentine universities (SPU)"),
+        ("*.edu.mx", "Mexican universities (SEP)"),
+    ];
+    PATTERNS
+        .iter()
+        .filter_map(|(pat, note)| {
+            HostPattern::new(*pat).ok().map(|host| UserExtensionHost {
+                host,
+                note: Some(note.to_string()),
+            })
+        })
+        .collect()
+}
+
 /// Parse a `config.toml` body string. Pure function; the path is used
 /// only for error messages.
 fn parse_str(
     text: &str,
     config_path: &Utf8Path,
-) -> Result<Vec<UserExtensionHost>, UserExtensionError> {
+) -> Result<UserExtensionConfig, UserExtensionError> {
     let raw: RawConfig = toml::from_str(text).map_err(|e| UserExtensionError::Parse {
         path: config_path.to_string(),
         source: e,
     })?;
-    let raw_hosts = raw.network.unwrap_or_default().additional_hosts;
+    let raw_net = raw.network.unwrap_or_default();
+    let trust_academic_repos = raw_net.trust_academic_repos;
+    let raw_hosts = raw_net.additional_hosts;
 
     // Two-phase: collect ALL invalid patterns rather than failing on
     // the first. Saves the user an iterative edit-run-error cycle
@@ -333,7 +396,10 @@ fn parse_str(
             issues,
         });
     }
-    Ok(validated)
+    Ok(UserExtensionConfig {
+        additional_hosts: validated,
+        trust_academic_repos,
+    })
 }
 
 /// Validate a host pattern per ADR-0028 D2-1.
@@ -591,7 +657,9 @@ mod tests {
 
     #[test]
     fn parse_empty_config_returns_no_hosts() {
-        assert_eq!(parse_str("", p("config.toml")).unwrap(), vec![]);
+        let cfg = parse_str("", p("config.toml")).unwrap();
+        assert_eq!(cfg.additional_hosts, vec![]);
+        assert!(!cfg.trust_academic_repos);
     }
 
     #[test]
@@ -600,7 +668,9 @@ mod tests {
             [store]
             root = "/tmp"
         "#;
-        assert_eq!(parse_str(toml, p("config.toml")).unwrap(), vec![]);
+        let cfg = parse_str(toml, p("config.toml")).unwrap();
+        assert_eq!(cfg.additional_hosts, vec![]);
+        assert!(!cfg.trust_academic_repos);
     }
 
     #[test]
@@ -614,7 +684,9 @@ mod tests {
             contact_email = "x@y.org"
             cooldown_ms = 250
         "#;
-        assert_eq!(parse_str(toml, p("config.toml")).unwrap(), vec![]);
+        let cfg = parse_str(toml, p("config.toml")).unwrap();
+        assert_eq!(cfg.additional_hosts, vec![]);
+        assert!(!cfg.trust_academic_repos);
     }
 
     #[test]
@@ -642,10 +714,10 @@ mod tests {
             note = "Jagiellonian University Repository"
         "#;
         let got = parse_str(toml, p("config.toml")).unwrap();
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].host.as_str(), "ruj.uj.edu.pl");
+        assert_eq!(got.additional_hosts.len(), 1);
+        assert_eq!(got.additional_hosts[0].host.as_str(), "ruj.uj.edu.pl");
         assert_eq!(
-            got[0].note.as_deref(),
+            got.additional_hosts[0].note.as_deref(),
             Some("Jagiellonian University Repository")
         );
     }
@@ -661,11 +733,14 @@ mod tests {
             note = "user override"
         "#;
         let got = parse_str(toml, p("config.toml")).unwrap();
-        assert_eq!(got.len(), 2);
-        assert_eq!(got[0].host.as_str(), "ruj.uj.edu.pl");
-        assert!(got[0].note.is_none());
-        assert_eq!(got[1].host.as_str(), "*.aps.org");
-        assert_eq!(got[1].note.as_deref(), Some("user override"));
+        assert_eq!(got.additional_hosts.len(), 2);
+        assert_eq!(got.additional_hosts[0].host.as_str(), "ruj.uj.edu.pl");
+        assert!(got.additional_hosts[0].note.is_none());
+        assert_eq!(got.additional_hosts[1].host.as_str(), "*.aps.org");
+        assert_eq!(
+            got.additional_hosts[1].note.as_deref(),
+            Some("user override")
+        );
     }
 
     #[test]
@@ -713,7 +788,8 @@ mod tests {
         let td = tempfile::TempDir::new().unwrap();
         let path = Utf8Path::from_path(td.path()).unwrap().join("missing.toml");
         let got = load(&path).expect("missing file MUST be Ok(empty)");
-        assert_eq!(got, vec![]);
+        assert_eq!(got.additional_hosts, vec![]);
+        assert!(!got.trust_academic_repos);
     }
 
     #[test]
@@ -731,8 +807,8 @@ note = "Jagiellonian"
         )
         .unwrap();
         let got = load(&path).expect("ok");
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].host.as_str(), "ruj.uj.edu.pl");
+        assert_eq!(got.additional_hosts.len(), 1);
+        assert_eq!(got.additional_hosts[0].host.as_str(), "ruj.uj.edu.pl");
     }
 
     // ---- merge_into_allowlists -------------------------------------
@@ -840,7 +916,7 @@ host = "*.uj.edu.pl"
         )
         .unwrap();
         let mut allowlists = vec![SourceAllowlist::new("oa-publisher", vec![])];
-        merge_into_allowlists(&mut allowlists, &parsed);
+        merge_into_allowlists(&mut allowlists, &parsed.additional_hosts);
         let oa = allowlists
             .iter()
             .find(|a| a.source == "oa-publisher")
@@ -848,5 +924,50 @@ host = "*.uj.edu.pl"
         assert!(oa.matches("ruj.uj.edu.pl"));
         assert!(oa.matches("alpha.uj.edu.pl"));
         assert!(!oa.matches("ruj.uj.edu.ru"));
+    }
+
+    // ---- trust_academic_repos ----------------------------------------
+
+    #[test]
+    fn parse_trust_academic_repos_false_by_default() {
+        let cfg = parse_str("[network]\ncooldown_ms = 100", p("config.toml")).unwrap();
+        assert!(!cfg.trust_academic_repos);
+    }
+
+    #[test]
+    fn parse_trust_academic_repos_true_when_set() {
+        let toml = "[network]\ntrust_academic_repos = true";
+        let cfg = parse_str(toml, p("config.toml")).unwrap();
+        assert!(cfg.trust_academic_repos);
+        assert_eq!(cfg.additional_hosts, vec![]);
+    }
+
+    #[test]
+    fn academic_repo_hosts_are_valid_patterns() {
+        let hosts = academic_repo_hosts();
+        assert!(
+            !hosts.is_empty(),
+            "at least one academic host pattern expected"
+        );
+        // Every returned entry must round-trip through HostPattern::new
+        for h in &hosts {
+            assert!(
+                h.host.as_str().starts_with("*."),
+                "academic patterns are single-suffix wildcards: {}",
+                h.host.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn academic_repo_hosts_match_expected_domains() {
+        let hosts = academic_repo_hosts();
+        let patterns: Vec<&str> = hosts.iter().map(|h| h.host.as_str()).collect();
+        for expected in &["*.ac.uk", "*.ac.jp", "*.edu.au", "*.edu.cn", "*.edu.br"] {
+            assert!(
+                patterns.contains(expected),
+                "expected academic pattern {expected} not found"
+            );
+        }
     }
 }

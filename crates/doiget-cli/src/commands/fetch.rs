@@ -31,7 +31,7 @@
 //!
 //! | Env var | Default | Purpose |
 //! |---|---|---|
-//! | `DOIGET_STORE_ROOT` | `$HOME/papers` (or `%USERPROFILE%\papers` on Windows) | Filesystem store root |
+//! | `DOIGET_STORE_ROOT` | `./papers` (under the current working dir) | Filesystem store root |
 //! | `DOIGET_LOG_PATH` | `<config>/doiget/access.jsonl` | Provenance log file |
 //! | `DOIGET_CONTACT_EMAIL` | `doiget@localhost` | Polite-pool contact email (User-Agent and Crossref) |
 //! | `DOIGET_UNPAYWALL_EMAIL` | (= contact email) | Unpaywall query-string email |
@@ -43,7 +43,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 
 #[cfg(feature = "citation")]
 use doiget_core::http::tier_2_allowlist;
@@ -184,7 +184,7 @@ pub(crate) fn cache_dir_utf8() -> Result<Utf8PathBuf> {
 pub(crate) fn build_resolve_context() -> Result<FetchContext> {
     let session_id = new_session_id();
     let log_path = resolve_log_path()?;
-    let http = Arc::new(build_http_client()?);
+    let http = Arc::new(build_http_client(None)?);
     let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
     let log = Arc::new(
         ProvenanceLog::open(log_path, session_id.clone())
@@ -217,7 +217,7 @@ pub(crate) fn build_resolve_context() -> Result<FetchContext> {
 /// when `DOIGET_OA_PUBLISHER_BASE` is set — this lets the integration tests
 /// under `tests/fetch_doi_oa_pdf_e2e.rs` exercise the full PDF leg without
 /// touching the real network.
-pub(crate) fn build_http_client() -> Result<HttpClient> {
+pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> {
     let arxiv = std::env::var("DOIGET_ARXIV_BASE").ok();
     let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
     let unpaywall = std::env::var("DOIGET_UNPAYWALL_BASE").ok();
@@ -279,18 +279,24 @@ pub(crate) fn build_http_client() -> Result<HttpClient> {
             Ok(cfg_dir) => {
                 let path = cfg_dir.join("doiget").join("config.toml");
                 match doiget_core::user_extension::load(&path) {
-                    Ok(user_hosts) if !user_hosts.is_empty() => {
-                        tracing::info!(
-                            count = user_hosts.len(),
-                            path = %path,
-                            "merging user-extension allowlist hosts (ADR-0028 D2)"
-                        );
-                        doiget_core::user_extension::merge_into_allowlists(
-                            &mut allowlists,
-                            &user_hosts,
-                        );
+                    Ok(cfg) => {
+                        let mut hosts = cfg.additional_hosts;
+                        if cfg.trust_academic_repos {
+                            hosts.extend(doiget_core::user_extension::academic_repo_hosts());
+                        }
+                        if !hosts.is_empty() {
+                            tracing::info!(
+                                count = hosts.len(),
+                                trust_academic_repos = cfg.trust_academic_repos,
+                                path = %path,
+                                "merging user-extension allowlist hosts (ADR-0028 D2)"
+                            );
+                            doiget_core::user_extension::merge_into_allowlists(
+                                &mut allowlists,
+                                &hosts,
+                            );
+                        }
                     }
-                    Ok(_) => {}
                     Err(e) => {
                         tracing::warn!(
                             error = %e,
@@ -310,7 +316,11 @@ pub(crate) fn build_http_client() -> Result<HttpClient> {
             }
         }
 
-        return HttpClient::new(allowlists).context("building HTTP client");
+        return match user_agent {
+            Some(ua) => HttpClient::new_with_user_agent(allowlists, ua),
+            None => HttpClient::new(allowlists),
+        }
+        .context("building HTTP client");
     }
 
     // Test-base mode: build a relaxed client per overridden source.
@@ -412,6 +422,12 @@ impl FetchHarness {
     /// the provenance log (allocating a fresh `session_id`), and constructs
     /// the HTTP client honoring `DOIGET_*_BASE` overrides for tests.
     pub(crate) fn from_env() -> Result<Self> {
+        Self::from_env_with_ua(None)
+    }
+
+    /// Like [`from_env`](Self::from_env) but overrides the `User-Agent` on
+    /// every HTTP request. Used by `doiget batch --user-agent`.
+    pub(crate) fn from_env_with_ua(user_agent: Option<&str>) -> Result<Self> {
         let cfg = OrchestratorConfig::from_env()?;
         if let Some(parent) = cfg.log_path.parent() {
             if !parent.as_str().is_empty() {
@@ -424,7 +440,7 @@ impl FetchHarness {
             ProvenanceLog::open(cfg.log_path.clone(), session_id.clone())
                 .context("opening provenance log")?,
         );
-        let http = Arc::new(build_http_client()?);
+        let http = Arc::new(build_http_client(user_agent)?);
         let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
         let store = FsStore::new(cfg.store_root.clone()).context("opening store")?;
         let profile = CapabilityProfile::from_env().context("resolving capability profile")?;
@@ -524,11 +540,11 @@ impl FetchHarness {
 }
 
 /// `true` iff the outcome represents a clean fetch: `Fetched` (full
-/// PDF) or `NoOaUrl` (metadata-only by design). A `Blocked` PDF leg
-/// is a failure for SessionEnd / exit-code purposes — an OA PDF was
-/// discovered but could not be retrieved — even though the metadata
-/// TOML did land on disk. Pulled out so both `run_with_options` and
-/// `commands::batch` agree on the failure boundary.
+/// PDF), `NoOaUrl` (metadata-only by design), or `PreprintFallback`
+/// (OA blocked but arXiv preprint auto-fetched — issue #325).
+/// A `Blocked` PDF leg is a failure for SessionEnd / exit-code purposes.
+/// Pulled out so both `run_with_options` and `commands::batch` agree on
+/// the failure boundary.
 pub(crate) fn outcome_is_clean_success(outcome: &FetchPaperOutcome) -> bool {
     !matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. })
 }
@@ -554,6 +570,13 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
             print_success(format_args!(
                 "fetched {} (metadata-only: no OA PDF available) -> {}",
                 label, outcome.path
+            ));
+        }
+        // Issue #325: publisher PDF was blocked, arXiv preprint auto-fetched.
+        PdfLegStatus::PreprintFallback { arxiv_id, .. } => {
+            print_success(format_args!(
+                "fetched {} ({} bytes) via arXiv preprint arxiv:{} -> {}",
+                label, outcome.size_bytes, arxiv_id, outcome.path
             ));
         }
         // Issue #145: `Blocked` is NO LONGER a success outcome. It is
@@ -598,6 +621,34 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
             }
         }
     }
+
+    // #344: an identity-confirmation line so a caller can verify the RIGHT
+    // paper landed without a second `doiget info` call. Skipped for the
+    // Blocked fail-closed arm (it rendered an `error[CODE]:` line above, not
+    // a success).
+    if !matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. }) {
+        emit_identity_line(outcome);
+    }
+}
+
+/// Render the #344 identity line on stderr:
+/// `     "<title>" by <author> et al. (<year>)  [<source>/<oa>]`.
+/// Empty pieces are omitted; an unknown OA status renders as `?`.
+fn emit_identity_line(outcome: &FetchPaperOutcome) {
+    let by = match outcome.authors.as_slice() {
+        [] => String::new(),
+        [a] => format!(" by {a}"),
+        [a, ..] => format!(" by {a} et al."),
+    };
+    let year = match outcome.year {
+        Some(y) => format!(" ({y})"),
+        None => String::new(),
+    };
+    let oa = outcome.oa_status.as_deref().unwrap_or("?");
+    print_success(format_args!(
+        "     \"{}\"{}{}  [{}/{}]",
+        outcome.title, by, year, outcome.source, oa
+    ));
 }
 
 /// Run the `doiget fetch <ref>` subcommand.
@@ -630,6 +681,7 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
 pub async fn run_with_options(
     input: String,
     dry_run: bool,
+    link: Option<Utf8PathBuf>,
     _mode: super::output::OutputMode,
 ) -> Result<()> {
     // `_mode` is threaded per ADR-0017 / #144. Quiet-suppression of the
@@ -715,6 +767,12 @@ pub async fn run_with_options(
                 return Err(anyhow::Error::new(CliExit(cli_exit_code(effective))));
             }
             emit_success_line(&ref_, &outcome);
+            // #344 Slice 2: optionally surface the artifact in the user's
+            // working tree via a symlink (copy fallback). A link failure is a
+            // warning, not a fetch failure — the PDF is already in the store.
+            if let Some(dir) = link.as_deref() {
+                emit_link_result(&ref_, &outcome, dir);
+            }
             Ok(())
         }
         Err(e) => {
@@ -723,6 +781,150 @@ pub async fn run_with_options(
             Err(anyhow::Error::new(CliExit(cli_exit_code(code))))
         }
     }
+}
+
+/// `--link` (#344 Slice 2): place a link to the fetched PDF in `dir` so the
+/// artifact is visible in the user's working tree. The central store stays the
+/// single source of truth; this only adds a pointer (or, where symlinks are
+/// unavailable, a copy). Only PDF outcomes are linked — a metadata-only fetch
+/// is reported as skipped. A link failure is a warning (stderr), never a fetch
+/// failure: the artifact is already in the store.
+fn emit_link_result(ref_: &Ref, outcome: &FetchPaperOutcome, dir: &Utf8Path) {
+    let label = match ref_ {
+        Ref::Arxiv(id) => format!("arxiv:{}", id.as_str()),
+        Ref::Doi(doi) => format!("doi:{}", doi.as_str()),
+    };
+    if !matches!(
+        outcome.pdf_leg,
+        PdfLegStatus::Fetched | PdfLegStatus::PreprintFallback { .. }
+    ) {
+        print_success(format_args!(
+            "note: --link skipped for {label} (no PDF — metadata-only fetch)"
+        ));
+        return;
+    }
+    let name = fetch_link_filename(
+        &outcome.title,
+        &outcome.authors,
+        outcome.year,
+        &outcome.safekey,
+    );
+    match link_artifact(dir, &outcome.path, &name) {
+        Ok((path, kind)) => print_success(format_args!("linked {label} -> {path} ({kind})")),
+        Err(e) => print_err(format_args!("warning: --link failed for {label}: {e}")),
+    }
+}
+
+/// Build a human-readable, filesystem-safe PDF filename for `--link`:
+/// `<surname><year>-<title-slug>.pdf`
+/// (e.g. `vaswani2017-attention-is-all-you-need.pdf`), falling back to
+/// `<safekey>.pdf` when no usable metadata is available.
+fn fetch_link_filename(
+    title: &str,
+    authors: &[String],
+    year: Option<i32>,
+    safekey: &str,
+) -> String {
+    let surname = authors
+        .first()
+        .map(|a| slugify(a.split_whitespace().last().unwrap_or(a)))
+        .unwrap_or_default();
+    let year = year.map(|y| y.to_string()).unwrap_or_default();
+    let title_slug: String = slugify(title)
+        .split('-')
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("-");
+    let mut stem = format!("{surname}{year}");
+    if !stem.is_empty() && !title_slug.is_empty() {
+        stem.push('-');
+    }
+    stem.push_str(&title_slug);
+    let stem: String = stem.chars().take(80).collect();
+    let stem = stem.trim_matches('-');
+    if stem.is_empty() {
+        format!("{safekey}.pdf")
+    } else {
+        format!("{stem}.pdf")
+    }
+}
+
+/// Lowercase ASCII-alphanumeric slug: every run of non-alphanumeric characters
+/// collapses to a single `-`, with no leading/trailing dashes. Pure and
+/// filesystem-safe (no path separators, no `..`).
+fn slugify(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Place a link to `src` (the store PDF) at `dir/name`. Tries a symlink first;
+/// on failure (e.g. Windows without privilege, or a cross-device link) falls
+/// back to a copy. Replaces a prior doiget symlink, but refuses to clobber an
+/// unrelated regular file. Returns the written path and the mechanism used
+/// (`"symlink"` | `"copy"`).
+///
+/// The symlink-vs-file check and the subsequent replace are not atomic: a
+/// concurrent process swapping the entry between the two syscalls is an
+/// accepted, out-of-scope race — the `--link` dir is the user's own working
+/// directory, assumed single-writer (review #352).
+fn link_artifact(
+    dir: &Utf8Path,
+    src: &Utf8Path,
+    name: &str,
+) -> Result<(Utf8PathBuf, &'static str)> {
+    std::fs::create_dir_all(dir.as_std_path())
+        .with_context(|| format!("creating link dir {dir}"))?;
+    let dst = dir.join(name);
+    if let Ok(meta) = std::fs::symlink_metadata(dst.as_std_path()) {
+        if meta.file_type().is_symlink() {
+            std::fs::remove_file(dst.as_std_path())
+                .with_context(|| format!("replacing existing symlink {dst}"))?;
+        } else {
+            anyhow::bail!(
+                "refusing to overwrite existing file {dst} (not a doiget symlink) — \
+                 remove it or choose another --link dir"
+            );
+        }
+    }
+    match make_symlink(src, &dst) {
+        Ok(()) => Ok((dst, "symlink")),
+        Err(_) => {
+            std::fs::copy(src.as_std_path(), dst.as_std_path())
+                .with_context(|| format!("copying {src} -> {dst}"))?;
+            Ok((dst, "copy"))
+        }
+    }
+}
+
+/// Cross-platform file symlink. On platforms without symlink support the caller
+/// falls back to a copy.
+#[cfg(unix)]
+fn make_symlink(src: &Utf8Path, dst: &Utf8Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(src.as_std_path(), dst.as_std_path())
+}
+
+#[cfg(windows)]
+fn make_symlink(src: &Utf8Path, dst: &Utf8Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(src.as_std_path(), dst.as_std_path())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn make_symlink(_src: &Utf8Path, _dst: &Utf8Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "symlinks unsupported on this platform",
+    ))
 }
 
 /// Single-line user-visible success message, written to stderr per ADR-0001
@@ -1031,7 +1233,7 @@ host = "*.uj.edu.pl"
         std::env::remove_var("DOIGET_OA_PUBLISHER_BASE");
         std::env::remove_var("DOIGET_OPENALEX_BASE");
 
-        let client = build_http_client().expect("HttpClient builds");
+        let client = build_http_client(None).expect("HttpClient builds");
         let oa = client
             .source_allowlist("oa-publisher")
             .expect("oa-publisher source registered");
@@ -1113,7 +1315,7 @@ host = "*.uj.edu.pl"
         std::env::remove_var("DOIGET_OA_PUBLISHER_BASE");
         std::env::remove_var("DOIGET_OPENALEX_BASE");
 
-        let client = build_http_client().expect("HttpClient builds");
+        let client = build_http_client(None).expect("HttpClient builds");
         let oa = client
             .source_allowlist("openalex")
             .expect("openalex source registered for discovery (ADR-0031 D2)");
@@ -1238,5 +1440,81 @@ host = "*.uj.edu.pl"
                 "CLI wire token for {r:?} must equal the serde snake_case form"
             );
         }
+    }
+
+    // ── #344 Slice 2: --link helpers ──────────────────────────────────────
+
+    #[test]
+    fn slugify_lowercases_and_collapses_non_alnum() {
+        assert_eq!(
+            slugify("Attention Is All You Need"),
+            "attention-is-all-you-need"
+        );
+        assert_eq!(slugify("Foo/Bar: Baz!!"), "foo-bar-baz");
+        assert_eq!(slugify("  spaced  "), "spaced");
+        assert_eq!(slugify("!!!"), ""); // no alphanumerics → empty
+    }
+
+    #[test]
+    fn fetch_link_filename_builds_readable_name() {
+        let name = fetch_link_filename(
+            "Attention Is All You Need",
+            &["Ashish Vaswani".to_string()],
+            Some(2017),
+            "arxiv_1706.03762",
+        );
+        assert_eq!(name, "vaswani2017-attention-is-all-you-need.pdf");
+    }
+
+    #[test]
+    fn fetch_link_filename_falls_back_to_safekey() {
+        // No usable metadata (empty title, no authors/year) → safekey.pdf.
+        assert_eq!(
+            fetch_link_filename("", &[], None, "doi_10.1234_x"),
+            "doi_10.1234_x.pdf"
+        );
+        // A title that slugifies to nothing also falls back.
+        assert_eq!(
+            fetch_link_filename("…—", &[], None, "doi_10.1234_y"),
+            "doi_10.1234_y.pdf"
+        );
+    }
+
+    #[test]
+    fn link_artifact_creates_readable_artifact() {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8Path::from_path(td.path()).expect("utf8");
+        let src = dir.join("src.pdf");
+        std::fs::write(src.as_std_path(), b"%PDF-DATA").expect("write src");
+
+        let (dst, _kind) = link_artifact(dir, &src, "out.pdf").expect("link");
+        assert!(dst.exists(), "linked artifact must exist: {dst}");
+        assert_eq!(
+            std::fs::read(dst.as_std_path()).expect("read dst"),
+            b"%PDF-DATA",
+            "linked artifact (symlink or copy) must resolve to the source bytes"
+        );
+    }
+
+    #[test]
+    fn link_artifact_refuses_to_clobber_unrelated_file() {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8Path::from_path(td.path()).expect("utf8");
+        let src = dir.join("src.pdf");
+        std::fs::write(src.as_std_path(), b"%PDF-DATA").expect("write src");
+        // A pre-existing, unrelated regular file at the target name.
+        let taken = dir.join("taken.pdf");
+        std::fs::write(taken.as_std_path(), b"USER-DATA").expect("write taken");
+
+        let err = link_artifact(dir, &src, "taken.pdf").expect_err("must refuse");
+        assert!(
+            err.to_string().contains("refusing to overwrite"),
+            "error must explain the refusal: {err}"
+        );
+        assert_eq!(
+            std::fs::read(taken.as_std_path()).expect("read taken"),
+            b"USER-DATA",
+            "the user's file must be left untouched"
+        );
     }
 }

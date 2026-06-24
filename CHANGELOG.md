@@ -10,6 +10,348 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-24
+
+Promotes the cumulative `0.8.0-beta.1`–`0.8.0-beta.8` line to a stable release
+(next → main, #352). Highlights since 0.7.0:
+
+- **[fetch]** Agent-observability cluster (#344): identity confirmation on
+  fetch (title / authors / year on stderr + the MCP `doiget_fetch_paper`
+  envelope), `fetch --link <dir>` to surface the stored PDF into the working
+  tree, and the **default store root moved from `~/papers` to `./papers`** (the
+  current working directory) so fetched papers are visible where work happens
+  (ADR-0035 / ADR-0036; 0036 amends the ADR-0004 co-location default — set
+  `DOIGET_STORE_ROOT` to restore a central / BiblioFetch-shared store).
+- **[source]** `doiget source <arxiv-id> --out <dir> [--figures-only]`: arXiv
+  source-bundle / figure download, opaque and zip-slip + gzip-bomb guarded
+  (ADR-0034). New `tex-source`, `frontier`, and `tag`/`annotate` commands plus
+  an automatic arXiv-preprint fallback (#325) also land in this cycle.
+- **[release]** Per-PR `version-bump` gate + strict `next → main` promotion
+  (ADR-0033); `flake.nix` Nix Flakes integration (#247).
+- **[hardening]** Promotion-review (#352) fixes: capped tex-source
+  decompression (gzip-bomb), sanitised + loud tar extraction, a narrowed
+  academic-repo allowlist, and silent-failure diagnostics.
+
+See the `0.8.0-beta.*` sections below for per-change detail.
+
+## [0.8.0-beta.8] - 2026-06-24
+
+Hardening from the `next → main` (0.8.0) promotion review (#352).
+
+### Fixed
+- **[core/security]** Cap arXiv `/src` decompression on the `tex-source` text
+  path (`extract_tex`) against a gzip bomb — it previously passed **no** cap, so
+  a crafted payload within the HTTP compressed-size limit could OOM the process
+  (now reachable via the MCP `doiget_paper_tex_source` tool). Real submissions
+  are far below the 500 MB cap; supersedes ADR-0034 D6's "byte-identical" note
+  for pathological inputs only.
+- **[core]** `extract_from_tar` now runs each entry path through
+  `sanitize_entry_path` (a crafted `../`-name can no longer surface in
+  `main_file`) and logs skipped/unreadable entries instead of dropping them
+  silently — mirroring `extract_bundle`. Scoring uses `saturating_add` (the
+  prior `i64` sum was unsound; its "~1 GB" doc bound was wrong).
+- **[core]** `{arxiv,crossref,unpaywall}_source_from_env` log a `warn` when a
+  `DOIGET_*_BASE` env var is an invalid URL instead of silently using the
+  production base.
+- **[cli]** `doiget frontier` warns when the store root can't be resolved
+  instead of silently skipping the already-fetched exclusion filter.
+
+### Changed
+- **[core]** Narrow the `trust_academic_repos` allowlist entry `*.go.jp`
+  (government-wide) → `*.jst.go.jp` (J-STAGE / JST academic platform) — the
+  intended academic OA host, not the whole Japanese government namespace.
+- **[core]** `SourceFile` and `UserExtensionConfig` gain `#[non_exhaustive]`
+  (additive public-API hygiene before the 0.8.0 stable lock).
+
+### Docs
+- **[store]** STORE.md: MCP `doiget serve` resolves the default store root from
+  the server process's cwd (indeterminate for a daemon) — set
+  `DOIGET_STORE_ROOT`. Scrubbed remaining stale `~/papers` / "HOME/USERPROFILE"
+  comments (config.rs, mcp) and strengthened the MCP `resolve_store_root` test
+  to assert `<cwd>/papers`.
+
+### Notes
+- Deferred to a fast-follow before the `v0.8.0` tag (kept out to keep this PR
+  focused/green): `arxiv_id: String → ArxivId` on `PaperTexSource` /
+  `PdfLegStatus::PreprintFallback`; `#[non_exhaustive]` on `PaperTexSource` /
+  `Metadata` / `DoigetExtension` (need constructors — external struct literals);
+  e2e coverage for `frontier_view`, `tag`/`annotate`, `fetch --link`
+  metadata-only skip, and the arXiv preprint fallback.
+
+## [0.8.0-beta.7] - 2026-06-24
+
+### Changed
+- **[store/config]** **Default store root changed from `~/papers` to `./papers`**
+  (`papers/` under the current working directory) — #344 problem 1, ADR-0036.
+  Fetched artifacts now land where you (or an agent) are working, instead of a
+  far-off home directory where they are easy to miss. `DOIGET_STORE_ROOT` /
+  `--store-root` / `config.toml` overrides are unchanged; set
+  `DOIGET_STORE_ROOT=~/papers` to restore the old central library (which also
+  restores BiblioFetch.jl co-location). `ResolvedConfig::from_env` now reuses the
+  CLI store-root resolver, so `config show` / `doctor` cannot drift from where
+  artifacts actually land. **Contract note:** doiget and BiblioFetch.jl no longer
+  co-locate by default; the shared on-disk *format* (STORE.md) is unchanged.
+
+### Docs
+- **[adr]** ADR-0036 (default store root → cwd; amends ADR-0004 co-location) +
+  amended ADR-0004 status + `DECISIONS/INDEX.md`. Updated STORE.md / CONFIG.md /
+  SCOPE.md default-root references.
+
+## [0.8.0-beta.6] - 2026-06-24
+
+### Added
+- **[fetch]** `doiget fetch <ref> --link <dir>` (#344 Slice 2, ADR-0035): after
+  fetching, place a link to the stored PDF in `<dir>` so it is visible in your
+  working tree. Symlink by default, copy fallback where symlinks are
+  unavailable (e.g. Windows without privilege); the central store stays the
+  single source of truth. Named from the paper's metadata
+  (`<surname><year>-<title-slug>.pdf`), or the safekey when absent. Refuses to
+  clobber an unrelated file; metadata-only fetches are skipped; a link failure
+  is a warning, not a fetch failure.
+
+### Docs
+- **[adr]** ADR-0035 (`fetch --link`; #344 problem 1) + `DECISIONS/INDEX.md`.
+
+## [0.8.0-beta.5] - 2026-06-24
+
+### Added
+- **[fetch]** Identity confirmation on fetch (#344 Slice 1): `doiget fetch` now
+  prints a second stderr line — `     "<title>" by <author> et al. (<year>)
+  [<source>/<oa_status>]` — and the MCP `doiget_fetch_paper` success envelope
+  gains `title` / `authors` / `year`. Lets an agent (or human) confirm the
+  RIGHT paper landed in one call, without a follow-up `doiget info`. Mirrored
+  from the already-resolved/stored metadata — no extra fetch. Applies to
+  metadata-only fetches too.
+- **[core]** `FetchPaperOutcome` gains `title` / `authors` / `year`
+  (`#[non_exhaustive]`; additive).
+
+## [0.8.0-beta.4] - 2026-06-24
+
+### Changed
+- **[core/refactor]** Factor the arXiv `/src` gzip + ustar magic-byte detection
+  into a shared `classify_src` helper used by both `extract_tex` (text path) and
+  `extract_bundle` (bundle path), collapsing the duplicated prologue (#346 /
+  ADR-0034 D6). The `extract_tex` text path stays behaviourally byte-identical
+  (no size cap); `extract_bundle` keeps its gzip-bomb cap via
+  `classify_src(.., Some(SRC_MAX_DECOMPRESSED_BYTES))`. No external API change.
+
+## [0.8.0-beta.3] - 2026-06-24
+
+### Fixed
+- **[supply-chain]** Bump `cargo vet` exemptions to match the current lockfile —
+  `bytes 1.11.1 → 1.12.0`, `camino 1.2.2 → 1.2.3` — which had drifted after a
+  dependency bump (the `cargo vet` job was red: "2 unvetted dependencies"). No
+  code change.
+
+## [0.8.0-beta.2] - 2026-06-24
+
+### Added
+- **[source]** `doiget source <arxiv-id> --out <dir> [--figures-only]` (#343,
+  ADR-0034) — download an arXiv submission's full **source bundle** (every
+  file) or just its **figures** to a directory. Reuses the same single
+  `/src/<id>` request as `tex-source`; files are written **opaque** (never
+  interpreted). A bare DOI reports `NO_OA_AVAILABLE`; a PDF-only / single-file
+  submission reports `TEXT_UNAVAILABLE` with a `doiget fetch` note. Tier-1 OA,
+  always-on. `--mode json` emits
+  `{ok, arxiv_id, out_dir, figures_only, count, files[]}`.
+- **[core]** `paper_tex_source::{paper_source_bundle, BundleFilter, SourceFile}`
+  — shared fetch + extract for the bundle/figures path. Tar entry paths are
+  sanitised by `sanitize_entry_path` (**zip-slip / path-traversal guard**,
+  ADR-0034 D3): absolute paths, `..`, drive prefixes and backslash traversal
+  are rejected; non-regular (symlink) entries are skipped; the writer re-checks
+  containment under `--out`. The existing `tex-source` text path is unchanged
+  (ADR-0034 D6).
+
+### Hardened (PR #345 review)
+- **[core]** Distinct `FetchError::SourceUnavailable` for `source` (drops the
+  ar5iv-specific message that `TextUnavailable` would have leaked); a
+  decompressed-size cap on the `/src` tarball guards against a gzip bomb (the
+  HTTP layer only caps the *compressed* download); a corrupt/unreadable archive
+  (`SourceSchema`) is now distinguished from genuinely-no-files
+  (`SourceUnavailable`) and a partial extraction is logged — no silent file
+  loss; `SourceFile.path` is `pub(crate)` + a `path()` accessor so an external
+  caller cannot forge an unsafe path (mirrors `Doi`/`ArxivId`). Added a
+  wired-in zip-slip regression test (a malicious `../` tar entry is rejected by
+  `extract_bundle`, not just by the isolated sanitiser).
+
+### Docs
+- **[adr]** ADR-0034 (arXiv source bundle + figure download: scope addition,
+  artifact-not-processing boundary, zip-slip requirement) + `DECISIONS/INDEX.md`.
+- **[meta]** Filed #344 (agent-UX observability gaps: store locality, citation
+  provenance, fetch verification).
+
+## [0.8.0-beta.1] - 2026-06-24
+
+### Changed
+- **[release/ci]** Version management is now enforced at PR time (ADR-0033). A
+  new **blocking** `version-bump` check (`.github/workflows/version-bump.yml` +
+  `scripts/version-bump-gate.sh`) requires every PR to advance
+  `[workspace.package].version` per the lane rules: a PR to `next` bumps
+  `beta.N` by exactly +1 (or retargets the base to a valid +1 single-component
+  step over the current stable, resetting the counter to `-beta.1`); a PR to
+  `main` is promotion-only — head MUST be `next` and the version MUST be a clean
+  `X.Y.Z` exactly one major/minor/patch step over `origin/main`, never a skip.
+  The advisory `version-check` job and the tag-time release gate (ADR-0025 D2)
+  are unchanged. There are no label-based exceptions; the automated
+  `main → next` back-merge is the only (structural) carve-out.
+- **[release]** Retarget the active `next` cycle `0.7.2-beta.1 → 0.8.0-beta.1`.
+  The accumulated cycle (tex-source #327, frontier #295, tags/collections #294,
+  auto preprint fallback #325, distribution #247, …) adds new commands → a
+  **minor** bump under the project's 0.x policy. `0.7.2` over the `0.7.0` stable
+  was a +2 patch *skip* (forbidden by ADR-0033's single-step promotion rule);
+  `0.8.0` is the correct, promotable target. No `0.7.1`/`0.7.2` was ever
+  published (crates.io shows only stable `0.7.0`), so nothing is dropped.
+
+### Docs
+- **[adr]** ADR-0033 (per-PR version-bump enforcement; amends ADR-0025 §D6
+  rules 2 and 4) and a `CONTRIBUTING.md` "Version bumps (enforced)" rule.
+
+## [0.7.2-beta.1] - 2026-06-20
+
+### Added
+- **[distribution]** `flake.nix` — Nix Flakes integration (#247). Provides
+  `packages.doiget` (built with `rustPlatform.buildRustPackage`, `oa-only`
+  feature, Rust 1.86 toolchain), `apps.doiget` for `nix run`, and
+  `devShells.default` with `cargo-deny`, `cargo-nextest`, `cargo-llvm-cov`,
+  and `taplo`. Uses `rust-overlay` to pin the toolchain; `doCheck = false` in
+  the Nix sandbox (network tests skipped).
+- **[distribution]** macOS Intel (`doiget-macos-x86_64`) added to the release
+  CI matrix (#247). The `macos-13` GitHub Actions runner builds natively for
+  `x86_64-apple-darwin`; the signed binary and `.sha256` sidecar are uploaded
+  to every GitHub Release.
+- **[distribution]** `scripts/install.sh` now supports macOS Intel (#247).
+  `uname -m == x86_64` on Darwin downloads `doiget-macos-x86_64` instead of
+  erroring.
+- **[batch]** `--delay <SECS>` (#326): sleep between individual fetches to avoid
+  tripping per-host rate limits below the HTTP 429 threshold (APS, Springer, etc.).
+  No delay before the first fetch; `<SECS>` is a float (e.g. `--delay 1.5`).
+- **[batch]** `--user-agent <STRING>` (#326): override the default
+  `doiget/<version>` User-Agent for every HTTP request in the batch. Useful when
+  a publisher's WAF classifies the default string as a bot.
+- **[core]** `HttpClient::new_with_user_agent(allowlists, ua)` — new public
+  constructor that takes an explicit User-Agent string; `HttpClient::new` delegates
+  to it using the default `doiget/<version>` UA.
+### Changed
+- **[mcp/cli]** Aligned `--mode json` output shapes with MCP tool envelopes (#212):
+  - `doiget info --mode json` now emits `{ok, ref, safekey, metadata}` instead
+    of bare `Metadata` JSON, matching `doiget_info`'s MCP envelope.
+  - `doiget list-recent --mode json` now emits `{ok, count, entries: [EntryInfo]}`
+    instead of a bare JSON array; MCP `doiget_list_recent` gains the `count` field.
+  - `doiget search --local --mode json` and `--mode json` (external) both gain
+    `"ok": true` at the top level.
+  - MCP `doiget_search_local` now emits `{ok, scope:"local", query, count, results}`
+    (was `{ok, query, entries}`) — `scope` and `count` added, `entries` renamed to
+    `results` — matching the CLI's local search envelope.
+
+## [0.7.2-beta.0] - 2026-06-20
+
+### Added
+- **[fetch]** Auto preprint fallback (issue #325): when a DOI OA PDF fetch is
+  blocked (403, allowlist denial, magic-byte mismatch) and Unpaywall's response
+  includes an arXiv preprint URL, `doiget fetch` now automatically retrieves
+  the arXiv PDF and stores it under the DOI entry instead of returning an error.
+  The stored metadata includes both `doi` and `arxiv_id`; `[doiget].source` is
+  set to `"arxiv"`. Observable: `tracing::info!` at fallback attempt and
+  success; the CLI success line names the arXiv ID used; the MCP
+  `pdf_leg.status` wire value is `"preprint_fallback"`.
+- **[core]** `PdfLegStatus::PreprintFallback { arxiv_id, original_block }` — new
+  variant signalling that the stored PDF came from arXiv, not the publisher.
+  `outcome_is_clean_success` treats it as success; `Blocked` semantics
+  (exit ≠ 0) are preserved when arXiv also fails.
+- **[batch]** `--only-failed` flag (issue #324): re-run a batch file and skip
+  refs whose PDF already exists in the store (`<store>/<safekey>.pdf`).
+  Metadata-only entries (`.metadata/<safekey>.toml`) are NOT skipped — they
+  represent prior `NoOaUrl` or `Blocked` outcomes that may now succeed.
+  In `--mode json`, skipped refs emit `{"ok": true, "ref": "...", "already_fetched": true}`.
+  Summary line gains a `skipped-already-fetched` count when non-zero.
+- **[core]** `trust_academic_repos` config flag (`[network] trust_academic_repos = true`
+  in `config.toml`) that activates a curated set of 15 single-suffix academic host
+  wildcards (`.ac.uk`, `.ac.jp`, `.edu.au`, `.edu.cn`, `.edu.br`, etc.) without
+  requiring manual `[[network.additional_hosts]]` entries (#323).
+- **[core]** `academic_repo_hosts()` public function in `doiget_core::user_extension`
+  returning the built-in academic patterns; callers can compose or extend the set.
+- **[core]** `UserExtensionConfig` struct (replaces the bare `Vec<UserExtensionHost>`
+  previously returned by `load()`) exposing `additional_hosts` and
+  `trust_academic_repos` fields.
+- **[cli]** `config doctor` check now reports `trust_academic_repos` status alongside
+  the user-extension host count.
+
+### Changed
+- **[core]** `user_extension::load()` return type changed from
+  `Result<Vec<UserExtensionHost>, _>` to `Result<UserExtensionConfig, _>` (semver
+  minor bump). Callers access hosts via `cfg.additional_hosts`.
+
+### Changed
+- **[cli]** `doiget config doctor` now prints a `tip:` remediation line on
+  stderr for each failed check, naming the exact env var to set or the
+  config file path to fix (#322). Stdout remains clean (no change to the
+  empty-stdout-on-pass contract). Tips cover: missing `store_root` / `log_dir`
+  parents (`DOIGET_STORE_ROOT`, `DOIGET_LOG_PATH`), unset contact email
+  (`DOIGET_CONTACT_EMAIL`), and malformed `config.toml` (resolved path shown).
+- **[cli]** `doiget frontier <doi>` — gap-spotting frontier view that surfaces
+  papers citing the seed DOI, ranked by age-normalized impact (`fwci`
+  descending), with papers already in the local store filtered out (#295).
+  Flags: `--limit N` (1–200, default 25), `--from-year YYYY`.
+  `--mode json` emits `{ seed_doi, seed_title, seed_openalex_id,
+  total_citing, count, results: [PaperHit…] }`.
+- **[core]** `FrontierQuery` and `FrontierResults` types in
+  `doiget_core::discovery`.
+- **[core]** `frontier_view()` async function in `doiget_core::discovery`:
+  resolves the seed DOI via OpenAlex, queries `filter=cites:<seed_id>` with
+  `sort=fwci:desc`, and returns hits sorted by `fwci` → `year` → `cited_by_count`.
+- **[core]** `PaperHit` now carries `fwci: Option<f64>` and
+  `cited_by_percentile_year_min: Option<u8>` (both already in the OpenAlex
+  `select=` field list; now parsed and surfaced). These fields are emitted in
+  all `search` and `frontier` JSON output.
+
+### Changed
+- **[core]** `PaperHit` and `PaperSearchResults` drop the `Eq` derive
+  (retained `PartialEq`); `f64` fields preclude a total equality relation.
+- **[store / tags]** `DoigetExtension` gains three additive optional fields:
+  `tags: Vec<String>`, `collections: Vec<String>`, `annotation: Option<String>`
+  (#294). Stored in `[doiget].tags`, `[doiget].collections`, and
+  `[doiget].annotation`; omitted from the TOML when empty / absent (no schema
+  bump per `docs/STORE.md` §7 additive policy). Existing metadata is read
+  transparently by older builds (unknown fields are tolerated per §8).
+- **[cli / tag]** `doiget tag <ref> [<tag>...]` — add one or more tags to a
+  stored entry (idempotent). `--remove <tag>` removes. `--collection <col>`
+  joins a collection; `--remove-collection <col>` leaves. `--list` prints
+  current tags, collections, and annotation (#294).
+- **[cli / annotate]** `doiget annotate <ref> <text>` — attach a freeform
+  note to a stored entry; replaces any previous annotation. `--clear` removes
+  it (#294).
+- **[cli / search]** `doiget search --local --tag <t>` — filter local-store
+  results to entries tagged with `<t>` (case-sensitive). Empty query matches
+  all tagged entries (#294).
+- **[mcp / tag]** `doiget_tag` MCP tool — add / remove tags and collections
+  on a stored entry. Inputs: `ref`, `add[]`, `remove[]`, `collection_add[]`,
+  `collection_remove[]`. Output: `{ ok, ref, tags, collections }` (#294).
+- **[mcp / annotate]** `doiget_annotate` MCP tool — set or clear the
+  freeform annotation on a stored entry. Inputs: `ref`, `text`, `clear`
+  (bool). Output: `{ ok, ref, annotation }` (#294).
+- **[core]** `FsStore::search_by_tag(tag, query, limit)` — scan
+  `.metadata/*.toml` for entries whose `[doiget].tags` contains `tag`,
+  optionally also filtering by substring query (#294).
+
+## [0.7.1-beta.0] - 2026-06-20
+
+### Added
+- **[tex-source]** `doiget tex-source <arxiv-id>` — Tier-1 OA command that
+  fetches the raw LaTeX source for an arXiv preprint from the arXiv source API
+  (`export.arxiv.org/src/<id>`) (#327). Supports gzip+tar archives (picks the
+  longest `.tex` file by content length) and single-file gzip; detects
+  PDF-only responses and emits an actionable `doiget fetch` note. The source
+  text is the artifact (ADR-0017 Amendment 2): implicit Quiet does not suppress
+  it, enabling `doiget tex-source arxiv:2401.12345 > paper.tex`. Results are
+  cached under `<cache_root>/tex-src/` with a 7-day TTL. The MCP
+  `get_paper_tex_source` tool follows the same fetch/cache path and emits
+  provenance log `SessionStart`/`SessionEnd` bookends.
+- **[core]** `paper_tex_source` module with `paper_tex_source()`, `PaperTexSource`,
+  and `resolve_arxiv_src_base()` — the shared fetch/cache/extract logic used by
+  both CLI and MCP.
+- **[error]** HTTP 401/403 from the arXiv source endpoint maps to
+  `ErrorCode::CapabilityDenied` in the `source` module.
+
 ## [0.7.0] - 2026-06-16
 
 Promotes the cumulative `0.7.0-beta.0`–`0.7.0-beta.6` line to a stable release

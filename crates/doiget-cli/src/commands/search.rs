@@ -110,38 +110,54 @@ fn print_err(args: std::fmt::Arguments<'_>) {
 ///
 /// `local` selects the store scan; otherwise external discovery runs
 /// (the default; `--external` is its explicit form and is already
-/// resolved away by clap's `conflicts_with`). `ext` carries the
-/// external-only flags and is ignored on the local path.
+/// resolved away by clap's `conflicts_with`). `tag` is a local-only
+/// filter; `ext` carries the external-only flags and is ignored on the
+/// local path.
 ///
 /// # Errors
 ///
 /// Propagates store-open / scan failures (local) or surfaces a typed
 /// [`ErrorCode`] as a process exit code (external); an empty query is a
-/// usage error.
+/// usage error unless `--local --tag` is given.
 pub async fn run(
     query: String,
     local: bool,
+    tag: Option<String>,
     ext: ExternalArgs,
     mode: OutputMode,
     quiet_was_explicit: bool,
 ) -> Result<()> {
-    if query.trim().is_empty() {
+    let tag_filter = tag.as_deref();
+    if query.trim().is_empty() && !(local && tag_filter.is_some()) {
         anyhow::bail!("search query is empty");
     }
     if local {
-        run_local(&query, mode, quiet_was_explicit)
+        run_local(&query, tag_filter, mode, quiet_was_explicit)
     } else {
         run_external(&query, ext, mode, quiet_was_explicit).await
     }
 }
 
-/// Local-store substring scan (legacy behaviour, now behind `--local`).
-fn run_local(query: &str, mode: OutputMode, quiet_was_explicit: bool) -> Result<()> {
+/// Local-store substring scan. When `tag_filter` is `Some(t)` the scan is
+/// delegated to `FsStore::search_by_tag` which matches on `[doiget].tags`
+/// first; an empty `query` matches all tagged entries in that case.
+fn run_local(
+    query: &str,
+    tag_filter: Option<&str>,
+    mode: OutputMode,
+    quiet_was_explicit: bool,
+) -> Result<()> {
     let store_root = resolve_store_root()?;
     let store = FsStore::new(store_root)?;
-    let entries = store
-        .search(query, LOCAL_DEFAULT_LIMIT)
-        .with_context(|| format!("search failed for query {query:?}"))?;
+    let entries = if let Some(tag) = tag_filter {
+        store
+            .search_by_tag(tag, query, LOCAL_DEFAULT_LIMIT)
+            .with_context(|| format!("tag search failed for tag {tag:?}"))?
+    } else {
+        store
+            .search(query, LOCAL_DEFAULT_LIMIT)
+            .with_context(|| format!("search failed for query {query:?}"))?
+    };
 
     // Artifact-class (ADR-0017 Amendment 2 / #301): suppress only on
     // explicit Quiet; the non-TTY implicit fallback still emits.
@@ -264,11 +280,12 @@ fn resolve_openalex_base() -> Result<url::Url> {
     url::Url::parse(&raw).with_context(|| format!("DOIGET_OPENALEX_BASE is not a URL: {raw}"))
 }
 
-/// Build the local-scan `--mode json` envelope (ADR-0031 D5):
-/// `{ scope: "local", query, count, results }`. The `results[]` element is
+/// Build the local-scan `--mode json` envelope (ADR-0031 D5, #212):
+/// `{ ok, scope: "local", query, count, results }`. The `results[]` element is
 /// the legacy `EntryInfo` shape, unchanged.
 fn local_envelope(query: &str, entries: &[EntryInfo]) -> serde_json::Value {
     serde_json::json!({
+        "ok": true,
         "scope": "local",
         "query": query,
         "count": entries.len(),
@@ -276,11 +293,12 @@ fn local_envelope(query: &str, entries: &[EntryInfo]) -> serde_json::Value {
     })
 }
 
-/// Build the external-discovery `--mode json` envelope (ADR-0031 D5):
-/// `{ scope, query, total_results, count, results }`. Extracted as a pure
+/// Build the external-discovery `--mode json` envelope (ADR-0031 D5, #212):
+/// `{ ok, scope, query, total_results, count, results }`. Extracted as a pure
 /// function so the wire shape is unit-testable without capturing stdout.
 fn external_envelope(query: &str, results: &PaperSearchResults) -> serde_json::Value {
     serde_json::json!({
+        "ok": true,
         "scope": "external",
         "query": query,
         "total_results": results.total_results,
@@ -319,6 +337,8 @@ mod tests {
             abstract_: Some("abs".to_string()),
             cited_by_count: 3,
             oa_status: Some("gold".to_string()),
+            fwci: Some(2.5),
+            cited_by_percentile_year_min: Some(85),
             source: DiscoverySource::OpenAlex,
         }
     }
@@ -330,6 +350,7 @@ mod tests {
             total_results: Some(4012),
         };
         let v = external_envelope("spin glass", &results);
+        assert_eq!(v["ok"], true);
         assert_eq!(v["scope"], "external");
         assert_eq!(v["query"], "spin glass");
         assert_eq!(v["total_results"], 4012);
@@ -347,6 +368,7 @@ mod tests {
     #[test]
     fn local_envelope_has_local_scope_and_count() {
         let v = local_envelope("quantum", &[]);
+        assert_eq!(v["ok"], true);
         assert_eq!(v["scope"], "local");
         assert_eq!(v["query"], "quantum");
         assert_eq!(v["count"], 0);
@@ -380,6 +402,7 @@ mod tests {
         let err = run(
             "q".into(),
             false,
+            None,
             ext(0, None, None),
             OutputMode::Quiet,
             true,
@@ -394,6 +417,7 @@ mod tests {
         let err = run(
             "q".into(),
             false,
+            None,
             ext(201, None, None),
             OutputMode::Quiet,
             true,
@@ -408,6 +432,7 @@ mod tests {
         let err = run(
             "q".into(),
             false,
+            None,
             ext(25, Some(2025), Some(2010)),
             OutputMode::Quiet,
             true,

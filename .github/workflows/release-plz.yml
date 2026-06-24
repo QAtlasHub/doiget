@@ -93,7 +93,7 @@ jobs:
       contents: read   # only reads the repo + git tag object
     steps:
       - name: Checkout full history (gate needs tags + lane branches)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           fetch-depth: 0          # G4 (published history) + G7 (branch reachability)
           ref: ${{ env.TAG }}     # the tagged commit
@@ -131,7 +131,7 @@ jobs:
       id-token: write   # OIDC: exchange GitHub token for short-lived crates.io token
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           ref: ${{ env.TAG }}
       - name: Install Rust toolchain (stable)
@@ -145,7 +145,7 @@ jobs:
         # removed release-plz.yml's `release` job authenticated (release-plz
         # did this exchange inside its own action). Each crate must be
         # registered as a Trusted Publisher on crates.io before the first run.
-        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe  # v1.0.4
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18  # v1.0.5
         id: auth
       - name: Publish doiget-core, then doiget-mcp, then doiget-cli (idempotent)
         shell: bash
@@ -205,7 +205,7 @@ jobs:
       contents: write   # create the GitHub Release + tag association
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           ref: ${{ env.TAG }}
       - name: Extract the CHANGELOG section + decide prerelease
@@ -309,13 +309,18 @@ jobs:
             artifact: doiget-macos-aarch64
             ext: ""
             target: ""
+          # Intel macOS runner (last GitHub-hosted x86_64 macOS runner, ADR-0025).
+          - os: macos-13
+            artifact: doiget-macos-x86_64
+            ext: ""
+            target: ""
           - os: windows-latest
             artifact: doiget-windows-x86_64
             ext: ".exe"
             target: ""
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           ref: ${{ env.TAG }}
       - name: Install Rust toolchain (stable)
@@ -414,7 +419,7 @@ jobs:
       id-token: write   # cosign keyless: mint Fulcio cert from OIDC token
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           ref: ${{ env.TAG }}
       - name: Install Rust toolchain (stable)

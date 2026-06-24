@@ -122,4 +122,17 @@ pub struct DoigetExtension {
     /// ULID of the originating MCP call, if the fetch came in via MCP.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mcp_call_id: Option<String>,
+    /// User-assigned tags for this paper (e.g. `["ml", "gw-physics"]`).
+    /// Additive optional field — does not bump `schema_version`
+    /// (`docs/STORE.md` §7 additive policy). Set via `doiget tag` (#294).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tags: Vec<String>,
+    /// Collection membership (e.g. `["project-A", "reading-list"]`).
+    /// Additive optional field. Set via `doiget tag --collection` (#294).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub collections: Vec<String>,
+    /// Freeform agent annotation note for this paper.
+    /// Additive optional field. Set via `doiget annotate` (#294).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub annotation: Option<String>,
 }

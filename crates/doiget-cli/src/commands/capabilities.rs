@@ -237,7 +237,7 @@ const MODES: &[&str] = &["human", "json", "quiet", "mcp"];
 const ENV_VARS: &[EnvVar] = &[
     EnvVar {
         name: "DOIGET_STORE_ROOT",
-        default: "$HOME/papers",
+        default: "./papers (under the current working dir)",
         help: "Root of the on-disk paper store. CONFIG.md §4.",
     },
     EnvVar {
@@ -614,7 +614,7 @@ fn user_extension_count() -> usize {
     };
     let path = cfg_dir.join("doiget").join("config.toml");
     match doiget_core::user_extension::load(&path) {
-        Ok(hosts) => hosts.len(),
+        Ok(cfg) => cfg.additional_hosts.len(),
         Err(_) => 0,
     }
 }
