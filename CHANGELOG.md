@@ -10,6 +10,21 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.0-beta.6] - 2026-06-24
+
+### Added
+- **[fetch]** `doiget fetch <ref> --link <dir>` (#344 Slice 2, ADR-0035): after
+  fetching, place a link to the stored PDF in `<dir>` so it is visible in your
+  working tree. Symlink by default, copy fallback where symlinks are
+  unavailable (e.g. Windows without privilege); the central store stays the
+  single source of truth. Named from the paper's metadata
+  (`<surname><year>-<title-slug>.pdf`), or the safekey when absent. Refuses to
+  clobber an unrelated file; metadata-only fetches are skipped; a link failure
+  is a warning, not a fetch failure.
+
+### Docs
+- **[adr]** ADR-0035 (`fetch --link`; #344 problem 1) + `DECISIONS/INDEX.md`.
+
 ## [0.8.0-beta.5] - 2026-06-24
 
 ### Added

@@ -243,6 +243,14 @@ enum Command {
         /// the single host the real fetch would hit (ADR-0022 §4).
         #[arg(long)]
         dry_run: bool,
+        /// After fetching, also place a link to the PDF in DIR (created if
+        /// missing) so it is visible in your working tree. Uses a symlink,
+        /// falling back to a copy where symlinks are unavailable (e.g. Windows
+        /// without privilege). Named from the paper's metadata (e.g.
+        /// `vaswani2017-attention-is-all-you-need.pdf`), or the safekey when
+        /// metadata is absent. Metadata-only fetches (no PDF) are skipped. (#344)
+        #[arg(long, value_name = "DIR", value_parser = parse_utf8_path)]
+        link: Option<Utf8PathBuf>,
     },
     /// Fetch many refs from a newline-separated text file.
     Batch {
@@ -818,9 +826,11 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::BatchResolveCitations { limit }) => {
             doiget_cli::commands::resolve_citation::run_batch(limit, mode).await
         }
-        Some(Command::Fetch { ref_, dry_run }) => {
-            doiget_cli::commands::fetch::run_with_options(ref_, dry_run, mode).await
-        }
+        Some(Command::Fetch {
+            ref_,
+            dry_run,
+            link,
+        }) => doiget_cli::commands::fetch::run_with_options(ref_, dry_run, link, mode).await,
         Some(Command::Batch {
             path,
             dry_run,

@@ -81,9 +81,14 @@ async fn arxiv_2401_12345_end_to_end() {
 
     // Step 3: run the orchestrator end-to-end. No child binary; no real
     // network traffic.
-    fetch::run_with_options("arxiv:2401.12345".to_string(), false, OutputMode::Human)
-        .await
-        .expect("fetch::run_with_options succeeds");
+    fetch::run_with_options(
+        "arxiv:2401.12345".to_string(),
+        false,
+        None,
+        OutputMode::Human,
+    )
+    .await
+    .expect("fetch::run_with_options succeeds");
 
     // Step 4: assert the on-disk PDF.
     let pdf_path = store_root.join("arxiv_2401.12345.pdf");
@@ -203,9 +208,14 @@ async fn arxiv_fetch_stores_real_atom_metadata() {
     env.set("DOIGET_LOG_PATH", temp_root.join("log.jsonl").as_str());
     env.set("DOIGET_ARXIV_BASE", &server.uri());
 
-    fetch::run_with_options("arxiv:2401.12345".to_string(), false, OutputMode::Human)
-        .await
-        .expect("fetch succeeds");
+    fetch::run_with_options(
+        "arxiv:2401.12345".to_string(),
+        false,
+        None,
+        OutputMode::Human,
+    )
+    .await
+    .expect("fetch succeeds");
 
     let meta_path = store_root.join(".metadata").join("arxiv_2401.12345.toml");
     let meta_raw = std::fs::read_to_string(meta_path.as_std_path()).expect("read metadata toml");

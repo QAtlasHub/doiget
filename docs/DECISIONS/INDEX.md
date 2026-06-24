@@ -51,6 +51,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0032 | Structured full-text (HTML/XML) extraction in scope; PDF-blob processing stays out of scope | Accepted (design; PR4 ships ar5iv leg) | PR4 (`feat/paper-text`) | #281 item 3 / scope decision 2026-06-06 |
 | 0033 | Per-PR version-bump enforcement + strict next→main promotion (amends 0025 §D6) | Proposed (implemented by `chore/version-bump-gate`; flips on merge) | `chore/version-bump-gate` | maintainer review 2026-06-24 (0.7.1 vanishing) |
 | 0034 | arXiv source bundle + individual figure download | Proposed (implemented by `feat/343-source-bundle-figures`; flips on merge) | `feat/343-source-bundle-figures` | #343 / dogfood 2026-06-24 |
+| 0035 | `fetch --link`: surface fetched artifacts into the working tree | Proposed (implemented by `feat/344-fetch-link`; flips on merge) | `feat/344-fetch-link` | #344 / dogfood 2026-06-24 |
 
 ## Conventions
 
