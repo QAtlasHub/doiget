@@ -212,6 +212,7 @@ fn src_url(base: &Url, id: &ArxivId) -> Result<Url, FetchError> {
 /// magic bytes. Shared by the text path ([`extract_tex`]) and the bundle path
 /// ([`extract_bundle`]) so the gzip + ustar detection lives in one place
 /// (issue #346); each caller maps the variants to its own result type.
+#[derive(Debug)]
 enum SrcPayload {
     /// `%PDF-` magic — a PDF-only submission (no source).
     PdfOnly,
