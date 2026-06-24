@@ -820,6 +820,14 @@ pub struct FetchPaperOutcome {
     /// metadata-only fallback this is under the metadata source key
     /// (`"crossref"` / `"unpaywall"`). Always populated.
     pub canonical_digest: String,
+    /// Title of the fetched work, mirrored from the resolved metadata so a
+    /// caller can confirm the RIGHT paper landed in one call (#344). A ref-id
+    /// placeholder when the resolver supplied no title.
+    pub title: String,
+    /// Authors of the fetched work (empty when the resolver supplied none).
+    pub authors: Vec<String>,
+    /// Publication year, when known (#344 identity confirmation).
+    pub year: Option<i32>,
 }
 
 impl FetchPaperOutcome {
@@ -855,6 +863,9 @@ impl FetchPaperOutcome {
             // 32 bytes of `0x00` → a stable, non-secret digest stub
             // that's still 64 chars of lowercase hex.
             canonical_digest: "00".repeat(32),
+            title: String::new(),
+            authors: Vec::new(),
+            year: None,
         }
     }
 }
@@ -1048,6 +1059,9 @@ async fn fetch_paper_arxiv(
         pdf_leg: PdfLegStatus::Fetched,
         safekey: safekey.as_str().to_string(),
         canonical_digest,
+        title: metadata.title.clone(),
+        authors: metadata.authors.clone(),
+        year: metadata.year,
     })
 }
 
@@ -1347,6 +1361,9 @@ async fn fetch_paper_doi(
         pdf_leg,
         safekey: safekey.as_str().to_string(),
         canonical_digest,
+        title: metadata.title.clone(),
+        authors: metadata.authors.clone(),
+        year: metadata.year,
     })
 }
 

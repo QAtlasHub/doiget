@@ -10,6 +10,19 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.0-beta.5] - 2026-06-24
+
+### Added
+- **[fetch]** Identity confirmation on fetch (#344 Slice 1): `doiget fetch` now
+  prints a second stderr line — `     "<title>" by <author> et al. (<year>)
+  [<source>/<oa_status>]` — and the MCP `doiget_fetch_paper` success envelope
+  gains `title` / `authors` / `year`. Lets an agent (or human) confirm the
+  RIGHT paper landed in one call, without a follow-up `doiget info`. Mirrored
+  from the already-resolved/stored metadata — no extra fetch. Applies to
+  metadata-only fetches too.
+- **[core]** `FetchPaperOutcome` gains `title` / `authors` / `year`
+  (`#[non_exhaustive]`; additive).
+
 ## [0.8.0-beta.4] - 2026-06-24
 
 ### Changed
