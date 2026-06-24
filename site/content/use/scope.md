@@ -18,8 +18,9 @@ A single-binary CLI plus stdio MCP server that:
 2. Fetches PDFs through Open Access sources by default; opens additional metadata sources
    and gated TDM sources only when the user has explicitly opted in
    at build time and runtime.
-3. Stores fetched papers in a `~/papers/` layout that is bit-compatible with BiblioFetch.jl
-   (see [`STORE.md`](STORE.md)).
+3. Stores fetched papers in a layout that is bit-compatible with BiblioFetch.jl
+   (see [`STORE.md`](STORE.md)); the default store root is `./papers` under the current
+   working directory (ADR-0036), overridable via `DOIGET_STORE_ROOT` / `--store-root`.
 4. Exposes a stdio MCP server with a fixed set of structured tools to agent hosts (see
    [`MCP_TOOLS.md`](MCP_TOOLS.md)).
 5. Verifies that the DOI / arXiv references in a bibliography file (`.bib` / CSL-JSON /
@@ -167,7 +168,9 @@ doiget composes with content-processing tools rather than incorporating them:
   [marker](https://github.com/VikParuchuri/marker), or other dedicated tools. See
   `INTEGRATION/chain-with-paperqa.md`.
 - For Julia REPL workflows: use BiblioFetch.jl directly; doiget and BiblioFetch.jl share
-  the on-disk store format ([`STORE.md`](STORE.md)).
+  the on-disk store format ([`STORE.md`](STORE.md)). The *format* is shared; since
+  ADR-0036 the default *root* differs per tool, so point both at the same root (e.g.
+  `DOIGET_STORE_ROOT=~/papers`) to co-locate one store.
 
 ## Why these are non-goals
 

@@ -43,7 +43,7 @@ flowchart TB
     TDM -.-> Fetcher
 
     Fetcher --> Log[Provenance Log<br/>JSON Lines + SHA256 hash chain<br/>fail-closed]
-    Fetcher --> Store[Store<br/>~/papers/ + TOML metadata<br/>BiblioFetch.jl 互換]
+    Fetcher --> Store[Store<br/>./papers default + TOML metadata<br/>BiblioFetch.jl 互換]
 
     classDef hot fill:#fbb,stroke:#900
     classDef oa fill:#bfb,stroke:#060
