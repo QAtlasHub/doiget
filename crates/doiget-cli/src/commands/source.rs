@@ -113,7 +113,7 @@ pub async fn run(
             "out_dir": out_dir.as_str(),
             "figures_only": figures_only,
             "count": written.len(),
-            "files": written.iter().map(Utf8PathBuf::as_str).collect::<Vec<_>>(),
+            "files": written.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
         });
         let s = serde_json::to_string_pretty(&payload).context("serializing source JSON")?;
         writeln!(out, "{s}").context("writing source JSON to stdout")?;

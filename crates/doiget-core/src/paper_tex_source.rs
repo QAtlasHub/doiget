@@ -545,8 +545,7 @@ pub(crate) fn extract_bundle(
     // Decompress with a hard cap on the OUTPUT size (ADR-0034 I5): the HTTP
     // client already bounds the COMPRESSED download (PDF_MAX_BYTES); `take`
     // bounds the decompressed bytes so a gzip bomb cannot exhaust memory.
-    let mut gz =
-        GzDecoder::new(std::io::Cursor::new(bytes)).take(SRC_MAX_DECOMPRESSED_BYTES + 1);
+    let mut gz = GzDecoder::new(std::io::Cursor::new(bytes)).take(SRC_MAX_DECOMPRESSED_BYTES + 1);
     let mut decompressed = Vec::new();
     gz.read_to_end(&mut decompressed)
         .map_err(|e| FetchError::SourceSchema {
@@ -963,7 +962,7 @@ mod tests {
         assert_eq!(sanitize_entry_path("a/\0/b"), None);
         assert_eq!(sanitize_entry_path("."), None); // no normal component
         assert_eq!(sanitize_entry_path("a:b/c"), None); // colon in a segment
-        // ADR-0034 A2 — additional real-world vectors.
+                                                        // ADR-0034 A2 — additional real-world vectors.
         assert_eq!(sanitize_entry_path("foo/../../bar"), None); // mid-path escape
         assert_eq!(sanitize_entry_path("./.."), None); // leading dot then traversal
         assert_eq!(sanitize_entry_path("///"), None); // only separators
@@ -994,7 +993,10 @@ mod tests {
             ("figs/plot.png", b"\x89PNG\r\n"),
         ]);
         let files = extract_bundle(&id, &payload, BundleFilter::All).expect("bundle");
-        let mut names: Vec<String> = files.iter().map(|f| f.path.as_str().replace('\\', "/")).collect();
+        let mut names: Vec<String> = files
+            .iter()
+            .map(|f| f.path.as_str().replace('\\', "/"))
+            .collect();
         names.sort();
         assert_eq!(names, vec!["figs/plot.png", "paper.tex", "refs.bib"]);
         // Postcondition: every returned path is relative with no traversal.
@@ -1013,7 +1015,10 @@ mod tests {
             ("diagram.eps", b"%!PS"),
         ]);
         let files = extract_bundle(&id, &payload, BundleFilter::FiguresOnly).expect("figs");
-        let mut names: Vec<String> = files.iter().map(|f| f.path.as_str().replace('\\', "/")).collect();
+        let mut names: Vec<String> = files
+            .iter()
+            .map(|f| f.path.as_str().replace('\\', "/"))
+            .collect();
         names.sort();
         assert_eq!(names, vec!["diagram.eps", "figs/plot.png"]);
     }
@@ -1040,8 +1045,7 @@ mod tests {
     fn extract_bundle_figures_only_none_present_is_source_unavailable() {
         let id = make_id("2401.12345");
         let payload = tar_gzip(&[("paper.tex", b"\\documentclass{article}")]);
-        let err =
-            extract_bundle(&id, &payload, BundleFilter::FiguresOnly).expect_err("no figures");
+        let err = extract_bundle(&id, &payload, BundleFilter::FiguresOnly).expect_err("no figures");
         assert!(matches!(err, FetchError::SourceUnavailable { .. }));
     }
 
