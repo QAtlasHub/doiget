@@ -3096,6 +3096,12 @@ fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> V
         "path": outcome.path,
         "size_bytes": outcome.size_bytes,
         "schema_version": outcome.schema_version,
+        // #344 identity confirmation: title / authors / year mirrored from the
+        // stored metadata so an agent can verify the RIGHT paper in one call,
+        // without a follow-up `doiget_info`.
+        "title": outcome.title,
+        "authors": outcome.authors,
+        "year": outcome.year,
         // Issue #118: never a silent metadata-only success.
         "pdf": pdf_leg_json(&outcome.pdf_leg),
     })

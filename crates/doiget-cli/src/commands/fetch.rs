@@ -621,6 +621,34 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
             }
         }
     }
+
+    // #344: an identity-confirmation line so a caller can verify the RIGHT
+    // paper landed without a second `doiget info` call. Skipped for the
+    // Blocked fail-closed arm (it rendered an `error[CODE]:` line above, not
+    // a success).
+    if !matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. }) {
+        emit_identity_line(outcome);
+    }
+}
+
+/// Render the #344 identity line on stderr:
+/// `     "<title>" by <author> et al. (<year>)  [<source>/<oa>]`.
+/// Empty pieces are omitted; an unknown OA status renders as `?`.
+fn emit_identity_line(outcome: &FetchPaperOutcome) {
+    let by = match outcome.authors.as_slice() {
+        [] => String::new(),
+        [a] => format!(" by {a}"),
+        [a, ..] => format!(" by {a} et al."),
+    };
+    let year = match outcome.year {
+        Some(y) => format!(" ({y})"),
+        None => String::new(),
+    };
+    let oa = outcome.oa_status.as_deref().unwrap_or("?");
+    print_success(format_args!(
+        "     \"{}\"{}{}  [{}/{}]",
+        outcome.title, by, year, outcome.source, oa
+    ));
 }
 
 /// Run the `doiget fetch <ref>` subcommand.
