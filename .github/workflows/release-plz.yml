@@ -17,7 +17,7 @@ name: release
 # Job order — each gates the next; the entire reversible gate precedes the
 # first irreversible action (`cargo publish`), per ADR-0025 D5:
 #
-#   version-gate  -> publish -> (sign, sbom, github-release, mcp-registry)
+#   version-gate  -> publish -> (sign, sbom, github-release, mcp-registry, desktop-extension)
 #
 #   * version-gate : scripts/release-version-gate.sh (ADR-0025 D2, G0–G7).
 #                    If it fails NOTHING else runs (nothing external happens).
@@ -566,3 +566,49 @@ jobs:
           done
           echo "::error::mcp-publisher publish did not succeed after retries" >&2
           exit 1
+
+  # -------------------------------------------------------------------------
+  # f. desktop-extension — build the Claude Desktop Extension (.mcpb) and
+  #    attach it to the Release, so doiget is one-click-installable from Claude
+  #    Desktop (Settings > Extensions) — a separate channel from the MCP
+  #    Registry. STABLE tags only, BEST-EFFORT (continue-on-error). Runs on
+  #    macOS for `lipo` (universal macOS binary). Reuses the signed release
+  #    binaries the `sign` job uploaded.
+  # -------------------------------------------------------------------------
+  desktop-extension:
+    name: build Claude Desktop Extension (.mcpb)
+    runs-on: macos-latest
+    needs: [github-release, sign]
+    if: ${{ !contains(github.event.inputs.tag || github.ref_name, '-') }}
+    continue-on-error: true
+    permissions:
+      contents: write   # download release binaries + upload the .mcpb
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ env.TAG }}
+      - name: Install the mcpb CLI
+        shell: bash
+        # node/npm are preinstalled on the GitHub-hosted macOS runner.
+        run: npm install -g @anthropic-ai/mcpb
+      - name: Download the signed release binaries
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          gh release download "$TAG" -D bin \
+            -p 'doiget-linux-x86_64' \
+            -p 'doiget-macos-aarch64' \
+            -p 'doiget-macos-x86_64' \
+            -p 'doiget-windows-x86_64.exe'
+      - name: Build the .mcpb bundle
+        shell: bash
+        run: bash scripts/build-mcpb.sh "${TAG#v}" bin "doiget-${TAG#v}.mcpb"
+      - name: Upload the .mcpb to the Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" "doiget-${TAG#v}.mcpb" --clobber
