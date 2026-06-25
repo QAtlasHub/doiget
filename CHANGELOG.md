@@ -10,7 +10,9 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
-## [0.8.3-beta.1] - 2026-06-25
+## [0.8.3] - 2026-06-25
+
+CI / release-infrastructure fixes (no library or CLI behavior change).
 
 ### Fixed
 - **[registry]** The live MCP Registry rejects `registryType: cargo` (HTTP 400
