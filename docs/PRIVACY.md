@@ -12,16 +12,39 @@ not the direct result of a paper you (or your agent) ask it to fetch**.
 
 ## What leaves your machine
 
-Only the API requests required to fulfil a fetch you initiate:
+doiget stores nothing about you, but **fulfilling a fetch sends the identifier
+you request** — a DOI or arXiv id, and (only if you set it) your contact email —
+to the upstream provider for that source. Nothing else leaves your machine:
+doiget transmits no document content, saves PDFs and metadata **to your local
+store**, and never redistributes them.
 
-- DOI / arXiv id lookups to **Crossref, Unpaywall, arXiv, and OpenAlex**
-  (Open-Access metadata and PDF sources).
-- An optional contact email in the `User-Agent` header **only if you set**
-  `DOIGET_UNPAYWALL_EMAIL` / `DOIGET_CONTACT_EMAIL` (used for the providers'
-  polite API pool; never sent otherwise).
+### Third-party services doiget contacts
 
-doiget transmits no document content anywhere. It downloads PDFs and metadata
-**to your local store** and never redistributes them.
+Each request is governed by **that provider's own Terms of Service and privacy
+policy**. doiget operates within those terms, and — because doiget holds no
+credentials and runs locally — **you are the contracting party** for every
+source you use (see [`LEGAL.md`](LEGAL.md) and [`SOURCES.md`](SOURCES.md) for the
+full matrix and ToS links). doiget enforces a hard 5 requests/second cap to keep
+its use of these APIs polite.
+
+**Default build — Open Access, always on:**
+
+- **Crossref** — DOI → metadata.
+  <https://www.crossref.org/services/metadata-retrieval/rest-api/>
+- **Unpaywall** — Open-Access PDF locations (the polite pool uses your email if
+  you set it). <https://unpaywall.org/products/api>
+- **arXiv** (export API + **ar5iv** for full text) — preprint metadata, PDF,
+  text. <https://info.arxiv.org/help/api/index.html>
+- **OpenAlex** — literature discovery, identity resolution, and citation graph
+  (the search / frontier / link / citation tools).
+  <https://docs.openalex.org/how-to-use-the-api/api-overview>
+
+**Opt-in only — compile-time feature flag + your own configuration:**
+
+- `--features metadata`: **Semantic Scholar**, **DOAJ** (extra metadata).
+- `--features tdm-springer | tdm-aps | tdm-elsevier`: the respective publisher
+  text-and-data-mining APIs, used **only with your own API key and explicit
+  agreement**. doiget bundles no keys and shares none.
 
 ## What is stored locally
 
