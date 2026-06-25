@@ -10,6 +10,20 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.3-beta.1] - 2026-06-25
+
+### Fixed
+- **[registry]** The live MCP Registry rejects `registryType: cargo` (HTTP 400
+  "unsupported registry type", even though the 2025-12-11 schema lists it), so
+  the `mcp-registry` job failed on the v0.8.2 release. Make `server.json` a
+  **source-only** entry (drop the `packages` array) so doiget is listed /
+  discoverable in the registry; the CI version-pin no longer touches
+  `packages`. A `cargo` package can be re-added once the registry deploys cargo
+  support. (Install is unchanged: `cargo install doiget-cli`, per the README.)
+- **[ci]** Re-pin `rustsec/audit-check` from `v2.0.0` (node20, GitHub-deprecated)
+  to its node24 `master` commit, silencing the "Node 20 is deprecated" warning
+  in the `cargo audit` job.
+
 ## [0.8.2] - 2026-06-25
 
 CI / release-infrastructure fixes from the v0.8.1 release (no library or CLI
