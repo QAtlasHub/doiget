@@ -10,7 +10,10 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
-## [0.8.2-beta.1] - 2026-06-25
+## [0.8.2] - 2026-06-25
+
+CI / release-infrastructure fixes from the v0.8.1 release (no library or CLI
+behavior change).
 
 ### Fixed
 - **[release/ci]** The `release-plz.yml` binary-signing matrix requested the
