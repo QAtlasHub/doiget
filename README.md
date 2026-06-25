@@ -18,7 +18,7 @@
 
 **Docs:** stable = the Zola site (built from `main`); dev = rustdoc built from `next`; API = `docs.rs` (latest published release).
 
-**Status:** Shipping — **v0.2.0** on crates.io (`doiget-core`, `doiget-cli`,
+**Status:** Shipping on crates.io (`doiget-core`, `doiget-cli`,
 `doiget-mcp`), with sigstore-signed binaries + an SBOM attached to the GitHub
 Release. Tier 1 + Tier 2 sources, the stdio MCP server, citation-graph
 expansion, and gated TDM sources are all implemented. Releases are cut by a
@@ -85,7 +85,7 @@ irm https://raw.githubusercontent.com/sotashimozono/doiget/main/scripts/install.
 ### From crates.io (Rust toolchain)
 
 ```sh
-cargo install doiget
+cargo install doiget-cli   # installs the `doiget` binary
 ```
 
 Further prebuilt-binary channels (Homebrew tap, `cargo binstall`, npm/npx, Nix flake,

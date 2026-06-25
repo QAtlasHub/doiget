@@ -17,7 +17,7 @@ name: release
 # Job order — each gates the next; the entire reversible gate precedes the
 # first irreversible action (`cargo publish`), per ADR-0025 D5:
 #
-#   version-gate  -> publish -> (sign, sbom, github-release)
+#   version-gate  -> publish -> (sign, sbom, github-release, mcp-registry)
 #
 #   * version-gate : scripts/release-version-gate.sh (ADR-0025 D2, G0–G7).
 #                    If it fails NOTHING else runs (nothing external happens).
@@ -486,3 +486,69 @@ jobs:
             "${SBOM}.sha256" \
             "${SBOM}.cosign.bundle" \
             --clobber
+
+  # -------------------------------------------------------------------------
+  # e. mcp-registry — publish / refresh the official MCP Registry entry
+  #    (io.github.sotashimozono/doiget) via GitHub OIDC. STABLE tags only (the
+  #    registry should point at a stable crate version; betas are pre-release).
+  #    BEST-EFFORT (continue-on-error): a registry hiccup must never fail the
+  #    crates.io / GitHub release. NO secret — the `id-token: write` OIDC token
+  #    authorizes the `io.github.sotashimozono/*` namespace because this Action
+  #    runs in that org's repo. The registry verifies the `mcp-name:` marker on
+  #    the doiget-cli crate README the `publish` job just uploaded, so a short
+  #    retry loop absorbs crates.io indexing lag. mcp-publisher is version-pinned
+  #    (the repo pins third-party deps; ADR-0013 supply-chain posture).
+  # -------------------------------------------------------------------------
+  mcp-registry:
+    name: publish to MCP registry (OIDC)
+    runs-on: ubuntu-latest
+    needs: publish
+    if: ${{ !contains(github.event.inputs.tag || github.ref_name, '-') }}
+    continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write   # OIDC: mint the MCP registry token (no secret)
+    env:
+      MCP_PUBLISHER_VERSION: v1.7.9
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ env.TAG }}
+      - name: Install mcp-publisher (pinned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+          test -x ./mcp-publisher && echo "mcp-publisher ${MCP_PUBLISHER_VERSION} installed"
+      - name: Pin server.json version to the released tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="${TAG#v}"
+          # Keep server.json's top-level + cargo-package versions in lockstep
+          # with the crate version this release just published to crates.io.
+          jq --arg v "$ver" '.version = $v | .packages[0].version = $v' server.json > server.tmp
+          mv server.tmp server.json
+          echo "---- server.json ----"; cat server.json
+      - name: Authenticate to the MCP registry (GitHub OIDC)
+        shell: bash
+        run: ./mcp-publisher login github-oidc
+      - name: Publish server.json (retry for crates.io indexing)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The registry verifies the `mcp-name:` marker on the doiget-cli
+          # crates.io README; retry while crates.io indexes the version the
+          # `publish` job just uploaded.
+          for i in $(seq 1 6); do
+            if ./mcp-publisher publish; then
+              echo "::notice::published io.github.sotashimozono/doiget@${TAG#v} to the MCP registry"
+              exit 0
+            fi
+            echo "publish attempt $i/6 failed (crate may not be indexed yet); waiting 30s"
+            sleep 30
+          done
+          echo "::error::mcp-publisher publish did not succeed after retries" >&2
+          exit 1

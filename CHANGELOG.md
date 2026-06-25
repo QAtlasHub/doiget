@@ -10,6 +10,49 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-06-25
+
+Discoverability / MCP-registry release. Promotes the `0.8.1-beta.1`–`beta.2`
+cycle to stable.
+
+### Added
+- **[registry]** `server.json` (MCP `server.schema.json` 2025-12-11) describing
+  doiget as a `cargo` package (`doiget-cli`, run via `doiget serve`) for the
+  official MCP Registry (`io.github.sotashimozono/doiget`), plus a
+  `release-plz.yml` `mcp-registry` job that auto-publishes / refreshes the
+  registry entry on each **stable** tag via GitHub OIDC (no secret; the
+  `id-token` authorizes the `io.github.sotashimozono/*` namespace; best-effort
+  `continue-on-error`). `mcp-publisher` pinned to `v1.7.9`.
+
+### Fixed
+- **[docs]** The `doiget-cli` crates.io README was stale — it announced a
+  "Phase 0 skeleton" where "every subcommand exits with a Phase-0-pending
+  error". Replaced with the real shipping status + an MCP-host setup snippet
+  and the `mcp-name:` registry ownership marker. Corrected `cargo install
+  doiget` → `cargo install doiget-cli` (no `doiget` crate exists; the binary is
+  `doiget`) in both READMEs, and dropped the stale `v0.2.0` status line in the
+  root README.
+
+See `0.8.1-beta.*` below for per-change detail.
+
+## [0.8.1-beta.1] - 2026-06-24
+
+Post-0.8.0 cycle. Discoverability + MCP-registry registration prep.
+
+### Added
+- **[registry]** `server.json` (MCP `server.schema.json` 2025-12-11) describing
+  doiget as a `cargo` package (`doiget-cli`, run via `doiget serve`) for the
+  official MCP registry under `io.github.sotashimozono/doiget`.
+
+### Fixed
+- **[docs]** The `doiget-cli` crate README on crates.io was badly stale — it
+  still announced a "Phase 0 skeleton" where "every subcommand exits with a
+  Phase-0-pending error". Replaced with the real shipping status + an MCP-host
+  setup snippet and the `mcp-name:` ownership marker (registry verification).
+- **[docs]** Corrected the install command `cargo install doiget` →
+  `cargo install doiget-cli` (no `doiget` crate exists; the binary is `doiget`)
+  in both READMEs, and dropped the stale `v0.2.0` status line in the root README.
+
 ## [0.8.0] - 2026-06-24
 
 Promotes the cumulative `0.8.0-beta.1`–`0.8.0-beta.8` line to a stable release
