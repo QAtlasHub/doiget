@@ -10,17 +10,30 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
-## [0.8.1-beta.2] - 2026-06-25
+## [0.8.1] - 2026-06-25
+
+Discoverability / MCP-registry release. Promotes the `0.8.1-beta.1`–`beta.2`
+cycle to stable.
 
 ### Added
-- **[release/ci]** `release-plz.yml` gains an `mcp-registry` job: on a **stable**
-  tag it publishes / refreshes the official MCP Registry entry
-  (`io.github.sotashimozono/doiget`) via GitHub OIDC (no secret; the
-  `id-token` authorizes the `io.github.sotashimozono/*` namespace), pinning
-  `server.json`'s version to the tag and retrying for crates.io indexing. It is
-  best-effort (`continue-on-error`) so a registry hiccup never fails the
-  crates.io / GitHub release, and runs on stable tags only. `mcp-publisher`
-  pinned to `v1.7.9`.
+- **[registry]** `server.json` (MCP `server.schema.json` 2025-12-11) describing
+  doiget as a `cargo` package (`doiget-cli`, run via `doiget serve`) for the
+  official MCP Registry (`io.github.sotashimozono/doiget`), plus a
+  `release-plz.yml` `mcp-registry` job that auto-publishes / refreshes the
+  registry entry on each **stable** tag via GitHub OIDC (no secret; the
+  `id-token` authorizes the `io.github.sotashimozono/*` namespace; best-effort
+  `continue-on-error`). `mcp-publisher` pinned to `v1.7.9`.
+
+### Fixed
+- **[docs]** The `doiget-cli` crates.io README was stale — it announced a
+  "Phase 0 skeleton" where "every subcommand exits with a Phase-0-pending
+  error". Replaced with the real shipping status + an MCP-host setup snippet
+  and the `mcp-name:` registry ownership marker. Corrected `cargo install
+  doiget` → `cargo install doiget-cli` (no `doiget` crate exists; the binary is
+  `doiget`) in both READMEs, and dropped the stale `v0.2.0` status line in the
+  root README.
+
+See `0.8.1-beta.*` below for per-change detail.
 
 ## [0.8.1-beta.1] - 2026-06-24
 
