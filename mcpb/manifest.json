@@ -1,0 +1,73 @@
+{
+  "manifest_version": "0.3",
+  "name": "doiget",
+  "display_name": "doiget",
+  "version": "0.8.3",
+  "description": "OA-first paper fetcher: DOIs/arXiv IDs to local PDFs + metadata via Open Access APIs.",
+  "long_description": "doiget is a single-binary, stdio MCP server that turns DOIs and arXiv IDs into local PDFs and structured metadata through official Open-Access APIs (Crossref, Unpaywall, arXiv, OpenAlex). It never bypasses paywalls and makes no network call that is not the direct result of a fetch you ask for. PDFs and metadata are saved to a local store; nothing is redistributed or phoned home. It is the agent-facing companion to BiblioFetch.jl and shares the same on-disk paper store.",
+  "author": {
+    "name": "Sota Shimozono",
+    "url": "https://github.com/sotashimozono"
+  },
+  "homepage": "https://github.com/sotashimozono/doiget",
+  "documentation": "https://github.com/sotashimozono/doiget/blob/main/docs/MCP_TOOLS.md",
+  "support": "https://github.com/sotashimozono/doiget/issues",
+  "license": "MIT",
+  "keywords": ["doi", "arxiv", "open-access", "academic", "bibliography", "crossref", "unpaywall", "research", "papers", "mcp"],
+  "privacy_policies": ["https://github.com/sotashimozono/doiget/blob/main/docs/PRIVACY.md"],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/doiget-linux",
+    "mcp_config": {
+      "command": "${__dirname}/server/doiget-linux",
+      "args": ["serve"],
+      "env": {
+        "DOIGET_STORE_ROOT": "${user_config.store_root}"
+      },
+      "platform_overrides": {
+        "darwin": {
+          "command": "${__dirname}/server/doiget-darwin"
+        },
+        "win32": {
+          "command": "${__dirname}/server/doiget-windows.exe"
+        }
+      }
+    }
+  },
+  "user_config": {
+    "store_root": {
+      "type": "directory",
+      "title": "Paper store location",
+      "description": "Directory where fetched PDFs and metadata are saved. Leave empty to use ./papers under the server's working directory.",
+      "required": false
+    }
+  },
+  "tools": [
+    { "name": "doiget_fetch_paper", "description": "Resolve a DOI or arXiv id and download its Open-Access PDF to the local store." },
+    { "name": "doiget_resolve_paper", "description": "Resolve a DOI or arXiv id to authoritative metadata (no download)." },
+    { "name": "doiget_metadata_only", "description": "Resolve a ref to metadata only — guarantees no PDF or publisher fetch." },
+    { "name": "doiget_batch_fetch", "description": "Fetch up to 100 DOIs / arXiv ids in one rate-limited call." },
+    { "name": "doiget_batch_from_bibliography", "description": "Fetch every resolvable reference from a .bib / CSL-JSON bibliography file." },
+    { "name": "doiget_info", "description": "Return a stored entry's metadata." },
+    { "name": "doiget_search_local", "description": "Search the local store by title / authors / venue." },
+    { "name": "doiget_paper_search", "description": "Discover literature via OpenAlex full-text search (abstract-bearing candidates; never fetches a PDF)." },
+    { "name": "doiget_paper_text", "description": "Extract an arXiv paper's full text from ar5iv as sectioned plain text (never opens the PDF blob)." },
+    { "name": "doiget_paper_tex_source", "description": "Fetch an arXiv paper's LaTeX source as structured text." },
+    { "name": "doiget_link", "description": "Resolve a DOI to its arXiv preprint + cross-id identity cluster (DOI / arXiv / OpenAlex / title) over OpenAlex." },
+    { "name": "doiget_list_recent", "description": "List the most recently fetched entries." },
+    { "name": "doiget_paper_pdf_path", "description": "Return the local path of a cached PDF (does not read, parse, or transmit content)." },
+    { "name": "doiget_capability_profile", "description": "Report which sources this instance is allowed to use." },
+    { "name": "doiget_health", "description": "Operational health: store writable, version, schema." },
+    { "name": "doiget_expand_citation_graph", "description": "Breadth-first expansion of a paper's citation graph (hard-capped)." },
+    { "name": "doiget_bibtex_export", "description": "Export one or many stored entries as BibTeX." },
+    { "name": "doiget_csl_export", "description": "Export one or many stored entries as CSL-JSON." },
+    { "name": "doiget_resolve_citation", "description": "Resolve a free-form bibliographic citation string to ranked DOI candidates." },
+    { "name": "doiget_batch_resolve_citations", "description": "Batch-resolve bibliographic citation strings to ranked DOI candidates." },
+    { "name": "doiget_tag", "description": "Add or remove tags on a stored entry." },
+    { "name": "doiget_annotate", "description": "Add or clear a note on a stored entry." }
+  ],
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"]
+  }
+}

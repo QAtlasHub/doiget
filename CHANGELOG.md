@@ -10,6 +10,19 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.4-beta.1] - 2026-06-25
+
+### Added
+- **[distribution]** Claude **Desktop Extension** (`.mcpb`): doiget can be
+  one-click-installed from Claude Desktop (Settings > Extensions) — a separate,
+  more discoverable channel than the MCP Registry. Adds `mcpb/manifest.json`
+  (binary server, all 22 tools, a `store_root` user-config, per-platform
+  binaries via `platform_overrides`), `scripts/build-mcpb.sh` (assembles the
+  bundle; fuses the two macOS arches with `lipo` into a universal binary), a
+  release-pipeline `desktop-extension` job that builds + attaches
+  `doiget-<ver>.mcpb` to each stable Release, and `docs/PRIVACY.md` (required
+  for the Extensions directory).
+
 ## [0.8.3] - 2026-06-25
 
 CI / release-infrastructure fixes (no library or CLI behavior change).
