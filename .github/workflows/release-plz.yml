@@ -538,9 +538,12 @@ jobs:
         run: |
           set -euo pipefail
           ver="${TAG#v}"
-          # Keep server.json's top-level + cargo-package versions in lockstep
-          # with the crate version this release just published to crates.io.
-          jq --arg v "$ver" '.version = $v | .packages[0].version = $v' server.json > server.tmp
+          # Pin server.json's version to the released tag. Source-only entry
+          # (no `packages` array): the live MCP Registry does not yet accept the
+          # `cargo` registry type (400 "unsupported registry type: cargo"),
+          # though the 2025-12-11 schema lists it. Re-add a cargo package once
+          # the registry deploys cargo support.
+          jq --arg v "$ver" '.version = $v' server.json > server.tmp
           mv server.tmp server.json
           echo "---- server.json ----"; cat server.json
       - name: Authenticate to the MCP registry (GitHub OIDC)
