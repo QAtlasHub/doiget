@@ -10,6 +10,22 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-06-25
+
+CI / release-infrastructure fixes from the v0.8.1 release (no library or CLI
+behavior change).
+
+### Fixed
+- **[release/ci]** The `release-plz.yml` binary-signing matrix requested the
+  deprecated `macos-13` (Intel) runner, which GitHub no longer allocates — it
+  hung the v0.8.1 release until cancelled. Build the x86_64 macOS binary by
+  cross-compiling `x86_64-apple-darwin` on the arm64 `macos-latest` runner
+  (Apple's clang is universal); `macos-13` is removed.
+- **[registry]** `server.json`'s `description` exceeded the MCP Registry's
+  100-char limit, so the new `mcp-registry` job failed with HTTP 422 on the
+  v0.8.1 release. Shortened it (≤100). doiget can now be published to the
+  registry (manually for 0.8.1, or automatically on the next stable tag).
+
 ## [0.8.1] - 2026-06-25
 
 Discoverability / MCP-registry release. Promotes the `0.8.1-beta.1`–`beta.2`
