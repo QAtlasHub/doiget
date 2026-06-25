@@ -10,7 +10,9 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
-## [0.8.4-beta.1] - 2026-06-25
+## [0.8.4] - 2026-06-25
+
+doiget joins the Claude Desktop Extensions distribution channel.
 
 ### Added
 - **[distribution]** Claude **Desktop Extension** (`.mcpb`): doiget can be
@@ -18,10 +20,14 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   more discoverable channel than the MCP Registry. Adds `mcpb/manifest.json`
   (binary server, all 22 tools, a `store_root` user-config, per-platform
   binaries via `platform_overrides`), `scripts/build-mcpb.sh` (assembles the
-  bundle; fuses the two macOS arches with `lipo` into a universal binary), a
+  bundle; fuses the two macOS arches with `lipo` into a universal binary), and a
   release-pipeline `desktop-extension` job that builds + attaches
-  `doiget-<ver>.mcpb` to each stable Release, and `docs/PRIVACY.md` (required
-  for the Extensions directory).
+  `doiget-<ver>.mcpb` to each stable Release.
+- **[docs]** `docs/PRIVACY.md` — privacy policy (required for the Extensions
+  directory) that also enumerates every upstream API doiget contacts (Crossref /
+  Unpaywall / arXiv+ar5iv / OpenAlex, plus opt-in Semantic Scholar / DOAJ /
+  publisher TDM) and states each request is governed by that provider's ToS,
+  with the user as the contracting party.
 
 ## [0.8.3] - 2026-06-25
 
