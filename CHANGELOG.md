@@ -10,6 +10,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.1-beta.2] - 2026-06-25
+
+### Added
+- **[release/ci]** `release-plz.yml` gains an `mcp-registry` job: on a **stable**
+  tag it publishes / refreshes the official MCP Registry entry
+  (`io.github.sotashimozono/doiget`) via GitHub OIDC (no secret; the
+  `id-token` authorizes the `io.github.sotashimozono/*` namespace), pinning
+  `server.json`'s version to the tag and retrying for crates.io indexing. It is
+  best-effort (`continue-on-error`) so a registry hiccup never fails the
+  crates.io / GitHub release, and runs on stable tags only. `mcp-publisher`
+  pinned to `v1.7.9`.
+
 ## [0.8.1-beta.1] - 2026-06-24
 
 Post-0.8.0 cycle. Discoverability + MCP-registry registration prep.
