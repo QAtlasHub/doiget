@@ -7,22 +7,5 @@
     "url": "https://github.com/sotashimozono/doiget",
     "source": "github"
   },
-  "version": "0.8.2",
-  "packages": [
-    {
-      "registryType": "cargo",
-      "registryBaseUrl": "https://crates.io",
-      "identifier": "doiget-cli",
-      "version": "0.8.2",
-      "transport": {
-        "type": "stdio"
-      },
-      "packageArguments": [
-        {
-          "type": "positional",
-          "value": "serve"
-        }
-      ]
-    }
-  ]
+  "version": "0.8.3"
 }
