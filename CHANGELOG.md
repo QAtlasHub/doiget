@@ -10,6 +10,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Fixed
+- **[mcp]** Numeric tool parameters now accept a **stringified number**
+  (`"10"`) as well as a JSON number (`10`). Several MCP clients / LLMs emit
+  numeric arguments as strings, which previously failed deserialization for
+  `limit` (`search_local` / `paper_search` / `list_recent` /
+  `resolve_citation` / `batch_resolve_citations`), `max_chars` (`paper_text`
+  / `paper_tex_source`), `depth` / `total` / `per_paper`
+  (`expand_citation_graph`), and `from_year` / `to_year` / `min_citations` /
+  `min_percentile` / `min_fwci` (`paper_search`). The published input schema
+  is unchanged (still `integer` / `number`); only the runtime is lenient.
+  (#370)
+
 ## [0.8.4] - 2026-06-25
 
 doiget joins the Claude Desktop Extensions distribution channel.
