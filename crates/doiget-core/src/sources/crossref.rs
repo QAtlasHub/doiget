@@ -156,7 +156,10 @@ impl CrossrefSource {
                 candidate_text.push_str(&t.to_lowercase());
                 candidate_text.push(' ');
             }
-            if let Some(author) = fields.authors.first() {
+            // Score against ALL authors, not just the first, so a citation
+            // naming several authors (e.g. "Bulla Costi Pruschke 2008") still
+            // matches instead of being dropped below the threshold — #372.
+            for author in &fields.authors {
                 candidate_text.push_str(&author.to_lowercase());
                 candidate_text.push(' ');
             }
@@ -578,5 +581,51 @@ mod tests {
         assert_eq!(cand.author, "Onsager, Lars");
         assert_eq!(cand.year, Some(1944));
         assert_eq!(cand.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn resolve_citation_matches_non_first_authors() {
+        // #372: candidate scoring text must include ALL authors, not just the
+        // first. With the old first-author-only text, "Costi Pruschke 2008"
+        // (2nd / 3rd authors + year) matched only the year (1/3 = 0.33) and was
+        // filtered out; now all authors match (3/3 = 1.0).
+        let server = MockServer::start().await;
+        let mock_body = serde_json::json!({
+            "status": "ok",
+            "message": {
+                "items": [
+                    {
+                        "DOI": "10.1103/RevModPhys.80.395",
+                        "title": ["Numerical renormalization group method for quantum impurity systems"],
+                        "author": [
+                            {"family": "Bulla", "given": "Ralf"},
+                            {"family": "Costi", "given": "Theo A."},
+                            {"family": "Pruschke", "given": "Thomas"}
+                        ],
+                        "issued": { "date-parts": [[2008, 4, 2]] },
+                        "container-title": ["Reviews of Modern Physics"]
+                    }
+                ]
+            }
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_body))
+            .mount(&server)
+            .await;
+
+        let host = server_host(&server);
+        let s = crossref_for(&server);
+        let (_td, ctx) = build_test_context(&host);
+
+        let candidates = s
+            .resolve_citation("Costi Pruschke 2008", 5, &ctx)
+            .await
+            .expect("resolve ok");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].doi, "10.1103/RevModPhys.80.395");
+        assert_eq!(candidates[0].score, 1.0);
     }
 }
