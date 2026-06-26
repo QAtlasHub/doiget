@@ -2716,7 +2716,10 @@ where
             if trimmed.is_empty() {
                 Ok(None)
             } else {
-                trimmed.parse::<T>().map(Some).map_err(serde::de::Error::custom)
+                trimmed
+                    .parse::<T>()
+                    .map(Some)
+                    .map_err(serde::de::Error::custom)
             }
         }
     }
@@ -3924,7 +3927,10 @@ mod tests {
         let g: ExpandCitationGraphInput =
             from_value(json!({"ref": "10.1/x", "depth": "2", "total": "50", "per_paper": "5"}))
                 .unwrap();
-        assert_eq!((g.depth, g.total, g.per_paper), (Some(2), Some(50), Some(5)));
+        assert_eq!(
+            (g.depth, g.total, g.per_paper),
+            (Some(2), Some(50), Some(5))
+        );
 
         let t: PaperTextInput =
             from_value(json!({"ref": "arxiv:2401.00001", "max_chars": "2000"})).unwrap();
