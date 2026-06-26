@@ -28,6 +28,12 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   Fixes a `.mcpb` install leaving the store unwritable (`os error 5`) when the
   config was left blank (the literal `${user_config.store_root}` leaked
   through). (#369)
+- **[discovery]** `doiget_link` / discovery now return **old-style arXiv ids**
+  intact (e.g. `cond-mat/0701105`). The OpenAlex `arxiv.org/abs/<id>`
+  extractor stopped at the `/` separator, truncating pre-2007 ids to just the
+  archive (`cond-mat`); it now keeps the full id and validates it via
+  `ArxivId::parse` (a malformed URL yields no id rather than a garbage one).
+  (#371)
 
 ## [0.8.4] - 2026-06-25
 
