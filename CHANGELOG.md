@@ -10,6 +10,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-06-29
+
+MCP tool safety annotations — the `.mcpb` is now ready for the Claude Desktop Extensions directory.
+
+### Added
+- **[mcp]** All 22 MCP tools now carry **safety annotations**
+  (`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`), so
+  a host or agent can tell at a glance which tools read vs. write the local
+  store and which reach the network. No tool is `destructive` (doiget has no
+  delete / overwrite-data operation — `docs/SCOPE.md` non-goals). Prepares the
+  `.mcpb` for the Claude Desktop Extensions directory.
+
 ## [0.8.5] - 2026-06-29
 
 Reliability pass from Claude Desktop (`.mcpb`) dogfooding — the local store, numeric tool parameters, arXiv-id linking, and citation matching, plus a now-working citation-graph tool in the Desktop Extension.
