@@ -2444,7 +2444,7 @@ pub struct SearchLocalInput {
     pub query: String,
     /// Maximum number of results to return. `None` means default (50);
     /// values >200 are clamped to 200.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub limit: Option<u32>,
 }
 
@@ -2481,28 +2481,28 @@ pub struct PaperSearchInput {
     /// Free-text topic query (e.g. "tropical tensor networks for spin glasses").
     pub query: String,
     /// Maximum results (1..=200; default 25). Out-of-range is rejected.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub limit: Option<u32>,
     /// Inclusive lower publication-year bound.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub from_year: Option<i32>,
     /// Inclusive upper publication-year bound.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub to_year: Option<i32>,
     /// Restrict to open-access works.
     #[serde(default)]
     pub oa_only: Option<bool>,
     /// Only works cited strictly more than this many times.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub min_citations: Option<u64>,
     /// Minimum field-and-year-normalized impact (FWCI) — a quality filter
     /// (#290).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub min_fwci: Option<f64>,
     /// Minimum within-cohort citation percentile (0–100): top-X% among
     /// same-year works; combine with `from_year` for "recent and standing
     /// out" (#290).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub min_percentile: Option<u8>,
     /// Author name (resolved to an OpenAlex author id).
     #[serde(default)]
@@ -2533,7 +2533,7 @@ pub struct PaperTextInput {
     pub ref_: String,
     /// Cap the returned text to this many characters (truncation is
     /// flagged on `truncated`). Omit for the full text.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub max_chars: Option<u32>,
 }
 
@@ -2549,7 +2549,7 @@ pub struct PaperTexSourceInput {
     pub ref_: String,
     /// Cap the returned LaTeX source to this many characters (truncation is
     /// flagged on `truncated`). Omit for the full source.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub max_chars: Option<u32>,
 }
 
@@ -2574,7 +2574,7 @@ pub struct LinkInput {
 pub struct ListRecentInput {
     /// Maximum number of results to return. `None` means default (50);
     /// values >200 are clamped to 200.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub limit: Option<u32>,
 }
 
@@ -2609,16 +2609,16 @@ pub struct ExpandCitationGraphInput {
     #[schemars(rename = "ref")]
     pub ref_: String,
     /// Max BFS depth (1..=3). Default is the ADR-0010 maximum (3).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub depth: Option<u32>,
     /// Max total nodes (1..=100). Default is the ADR-0010 maximum
     /// (100). `truncated: true` is set on the response when this
     /// cap is hit.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub total: Option<u32>,
     /// Max children expanded per parent (1..=20). Default is the
     /// ADR-0010 maximum (20).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_num")]
     pub per_paper: Option<u32>,
 }
 
@@ -2652,7 +2652,7 @@ pub struct ResolveCitationInput {
     /// Bibliographic citation query string (e.g. "Onsager 1944").
     pub query: String,
     /// Maximum number of candidates to return (default: 5).
-    #[serde(default = "default_resolve_limit")]
+    #[serde(default = "default_resolve_limit", deserialize_with = "de_lenient_num")]
     pub limit: u8,
 }
 
@@ -2664,12 +2664,65 @@ pub struct BatchResolveCitationsInput {
     /// Bibliographic citation query strings.
     pub queries: Vec<String>,
     /// Maximum number of candidates to return per query (default: 5).
-    #[serde(default = "default_resolve_limit")]
+    #[serde(default = "default_resolve_limit", deserialize_with = "de_lenient_num")]
     pub limit: u8,
 }
 
 fn default_resolve_limit() -> u8 {
     5
+}
+
+/// A numeric value that may arrive as a JSON number (`10`) or a JSON string
+/// (`"10"`). Some MCP clients / LLMs stringify numeric arguments; doiget
+/// accepts either form. Private helper for the lenient numeric deserializers.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum NumOrStr<T> {
+    Num(T),
+    Str(String),
+}
+
+/// Deserialize a required number leniently: accepts a JSON number or a
+/// stringified number (`"10"`); a non-numeric string is rejected. The
+/// published input schema is unchanged — schemars derives it from the field's
+/// concrete type, so the tool still advertises `integer` / `number`; only the
+/// runtime is lenient (Postel's law, #370).
+fn de_lenient_num<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: std::str::FromStr + serde::Deserialize<'de>,
+    <T as std::str::FromStr>::Err: std::fmt::Display,
+{
+    match NumOrStr::<T>::deserialize(deserializer)? {
+        NumOrStr::Num(n) => Ok(n),
+        NumOrStr::Str(s) => s.trim().parse::<T>().map_err(serde::de::Error::custom),
+    }
+}
+
+/// `Option` variant of [`de_lenient_num`]: accepts a number, a stringified
+/// number, JSON `null`, or (with `#[serde(default)]`) an absent field. An
+/// empty / whitespace-only string is treated as absent (`None`).
+fn de_lenient_opt_num<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: std::str::FromStr + serde::Deserialize<'de>,
+    <T as std::str::FromStr>::Err: std::fmt::Display,
+{
+    match Option::<NumOrStr<T>>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(NumOrStr::Num(n)) => Ok(Some(n)),
+        Some(NumOrStr::Str(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                trimmed
+                    .parse::<T>()
+                    .map(Some)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+    }
 }
 
 /// JSON-schema-derived input for the `doiget_tag` MCP tool.
@@ -3740,10 +3793,19 @@ impl ServerHandler for Server {
 /// `doiget-cli -> doiget-mcp` wiring established by this PR and pull
 /// `clap` etc. into the MCP crate. Lifting this helper into `doiget-core`
 /// is a viable Phase-3 follow-up but is out of scope for this foundation.
+/// Whether a `DOIGET_STORE_ROOT` value is usable as a path: non-empty and not
+/// an unexpanded `${...}` placeholder. A Desktop-Extension config left blank
+/// passes the literal `${user_config.store_root}`, which must never become a
+/// filesystem path (it produced `os error 5` access-denied). See #369.
+fn store_root_env_is_usable(value: &str) -> bool {
+    let v = value.trim();
+    !v.is_empty() && !v.contains("${")
+}
+
 fn resolve_store_root() -> Option<Utf8PathBuf> {
     if let Ok(s) = std::env::var("DOIGET_STORE_ROOT") {
-        if !s.is_empty() {
-            return Some(Utf8PathBuf::from(s));
+        if store_root_env_is_usable(&s) {
+            return Some(Utf8PathBuf::from(s.trim()));
         }
     }
     // Default: `papers/` under the current working directory (#344 / ADR-0036),
@@ -3835,6 +3897,81 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
 mod tests {
     use super::*;
 
+    /// #370: numeric tool params accept a JSON number OR a stringified
+    /// number (`"10"`); absent / `null` / empty-string stay `None`.
+    #[test]
+    fn lenient_numbers_accept_string_or_number() {
+        use serde_json::{from_value, json};
+
+        let s: SearchLocalInput = from_value(json!({"query": "x", "limit": "10"})).unwrap();
+        assert_eq!(s.limit, Some(10));
+        let n: SearchLocalInput = from_value(json!({"query": "x", "limit": 10})).unwrap();
+        assert_eq!(n.limit, Some(10));
+        let a: SearchLocalInput = from_value(json!({"query": "x"})).unwrap();
+        assert_eq!(a.limit, None);
+        let z: SearchLocalInput = from_value(json!({"query": "x", "limit": null})).unwrap();
+        assert_eq!(z.limit, None);
+        let e: SearchLocalInput = from_value(json!({"query": "x", "limit": ""})).unwrap();
+        assert_eq!(e.limit, None);
+    }
+
+    /// #370: a non-numeric or out-of-range string is still rejected — the
+    /// deserializer is lenient about *form*, not *validity*.
+    #[test]
+    fn lenient_numbers_reject_non_numeric_string() {
+        use serde_json::{from_value, json};
+        assert!(from_value::<SearchLocalInput>(json!({"query": "x", "limit": "abc"})).is_err());
+        // 300 overflows u8 (min_percentile) -> parse error.
+        assert!(
+            from_value::<PaperSearchInput>(json!({"query": "x", "min_percentile": "300"})).is_err()
+        );
+    }
+
+    /// #370: every numeric input field across the tool surface (u32 / i32 /
+    /// u64 / u8 / f64, `Option` + required) tolerates stringified numbers.
+    #[test]
+    fn lenient_numbers_cover_every_numeric_input() {
+        use serde_json::{from_value, json};
+
+        let g: ExpandCitationGraphInput =
+            from_value(json!({"ref": "10.1/x", "depth": "2", "total": "50", "per_paper": "5"}))
+                .unwrap();
+        assert_eq!(
+            (g.depth, g.total, g.per_paper),
+            (Some(2), Some(50), Some(5))
+        );
+
+        let t: PaperTextInput =
+            from_value(json!({"ref": "arxiv:2401.00001", "max_chars": "2000"})).unwrap();
+        assert_eq!(t.max_chars, Some(2000));
+        let x: PaperTexSourceInput =
+            from_value(json!({"ref": "arxiv:2401.00001", "max_chars": "2000"})).unwrap();
+        assert_eq!(x.max_chars, Some(2000));
+
+        let p: PaperSearchInput = from_value(json!({
+            "query": "x", "limit": "7", "from_year": "2010", "to_year": "2020",
+            "min_citations": "100", "min_percentile": "90", "min_fwci": "1.5"
+        }))
+        .unwrap();
+        assert_eq!(p.limit, Some(7));
+        assert_eq!(p.from_year, Some(2010));
+        assert_eq!(p.to_year, Some(2020));
+        assert_eq!(p.min_citations, Some(100));
+        assert_eq!(p.min_percentile, Some(90));
+        assert_eq!(p.min_fwci, Some(1.5));
+
+        let l: ListRecentInput = from_value(json!({"limit": "25"})).unwrap();
+        assert_eq!(l.limit, Some(25));
+
+        let r: ResolveCitationInput = from_value(json!({"query": "x", "limit": "3"})).unwrap();
+        assert_eq!(r.limit, 3);
+        let d: ResolveCitationInput = from_value(json!({"query": "x"})).unwrap();
+        assert_eq!(d.limit, 5);
+        let b: BatchResolveCitationsInput =
+            from_value(json!({"queries": ["x"], "limit": "8"})).unwrap();
+        assert_eq!(b.limit, 8);
+    }
+
     #[test]
     fn capability_profile_to_json_clean_env_shape() {
         // A clean (no env) profile reports Tier 1 only. We can't construct
@@ -3921,6 +4058,18 @@ mod tests {
             err.contains("rdf") && err.contains("auto"),
             "error must name the offending token AND the accepted set: {err}"
         );
+    }
+
+    #[test]
+    fn store_root_env_usable_rejects_placeholder_and_empty() {
+        // Real paths are usable.
+        assert!(store_root_env_is_usable("/home/u/papers"));
+        assert!(store_root_env_is_usable(r"C:\Users\u\papers"));
+        // Empty / whitespace and an unexpanded placeholder are not (#369).
+        assert!(!store_root_env_is_usable(""));
+        assert!(!store_root_env_is_usable("   "));
+        assert!(!store_root_env_is_usable("${user_config.store_root}"));
+        assert!(!store_root_env_is_usable("${HOME}/papers"));
     }
 
     #[test]

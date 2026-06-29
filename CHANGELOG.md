@@ -10,6 +10,48 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-06-29
+
+Reliability pass from Claude Desktop (`.mcpb`) dogfooding — the local store, numeric tool parameters, arXiv-id linking, and citation matching, plus a now-working citation-graph tool in the Desktop Extension.
+
+### Fixed
+- **[mcp]** Numeric tool parameters now accept a **stringified number**
+  (`"10"`) as well as a JSON number (`10`). Several MCP clients / LLMs emit
+  numeric arguments as strings, which previously failed deserialization for
+  `limit` (`search_local` / `paper_search` / `list_recent` /
+  `resolve_citation` / `batch_resolve_citations`), `max_chars` (`paper_text`
+  / `paper_tex_source`), `depth` / `total` / `per_paper`
+  (`expand_citation_graph`), and `from_year` / `to_year` / `min_citations` /
+  `min_percentile` / `min_fwci` (`paper_search`). The published input schema
+  is unchanged (still `integer` / `number`); only the runtime is lenient.
+  (#370)
+- **[mcp/distribution]** The Claude Desktop Extension now ships a writable
+  **default store location** (`${HOME}/Documents/doiget-papers`), and
+  `resolve_store_root` (MCP + CLI) ignores an empty or unexpanded `${...}`
+  placeholder value of `DOIGET_STORE_ROOT` rather than using it as a path.
+  Fixes a `.mcpb` install leaving the store unwritable (`os error 5`) when the
+  config was left blank (the literal `${user_config.store_root}` leaked
+  through). (#369)
+- **[discovery]** `doiget_link` / discovery now return **old-style arXiv ids**
+  intact (e.g. `cond-mat/0701105`). The OpenAlex `arxiv.org/abs/<id>`
+  extractor stopped at the `/` separator, truncating pre-2007 ids to just the
+  archive (`cond-mat`); it now keeps the full id and validates it via
+  `ArxivId::parse` (a malformed URL yields no id rather than a garbage one).
+  (#371)
+- **[discovery]** `doiget_resolve_citation` / `doiget_batch_resolve_citations`
+  now score candidates against **all** authors of a work, not just the first,
+  so a citation string naming several authors (e.g. "Bulla Costi Pruschke
+  2008") is no longer dropped below the confidence threshold. (#372)
+- **[mcp/distribution]** The **released binaries and the `.mcpb` are now built
+  with `--features citation`**, and the `.mcpb` presets
+  `DOIGET_ENABLE_OPENALEX=1`, so `doiget_expand_citation_graph` actually works
+  in Claude Desktop (ADR-0010 hard caps depth≤3 / ≤100 nodes apply). CI now
+  builds and tests the `citation` feature (previously `oa-only` only). A
+  feature-off `cargo install` build still advertises the tool and returns
+  `NOT_IMPLEMENTED`; cleanly hiding it is blocked by rmcp's `#[tool_router]`
+  (it references tool methods unconditionally, so cfg-gating the method fails
+  to compile) and is tracked as a follow-up. (#373)
+
 ## [0.8.4] - 2026-06-25
 
 doiget joins the Claude Desktop Extensions distribution channel.

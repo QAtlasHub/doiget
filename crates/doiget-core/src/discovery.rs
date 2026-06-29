@@ -832,20 +832,25 @@ fn reconstruct_abstract(inv: &serde_json::Value) -> Option<String> {
 }
 
 /// Best-effort arXiv id extraction from a single OpenAlex location's
-/// `landing_page_url` / `pdf_url`. Looks for `arxiv.org/abs/<id>` and
-/// returns `<id>` (a trailing `vN` version is kept — the downstream
-/// parser accepts it).
+/// `landing_page_url` / `pdf_url`. Looks for `arxiv.org/abs/<id>` and returns
+/// the validated `<id>`. Old-style (pre-2007) ids embed a `/`
+/// (`archive/number`, e.g. `cond-mat/0701105`), so the capture must NOT stop
+/// at `/`; a trailing `vN` version is kept. The capture is validated via
+/// [`ArxivId::parse`], so a malformed URL yields `None` rather than a
+/// truncated / garbage id. (#371)
 fn extract_arxiv_from_location(loc: &serde_json::Value) -> Option<String> {
     for key in ["landing_page_url", "pdf_url"] {
         if let Some(u) = loc.get(key).and_then(serde_json::Value::as_str) {
             if let Some(idx) = u.find("arxiv.org/abs/") {
                 let after = &u[idx + "arxiv.org/abs/".len()..];
-                let id: String = after
+                // Stop at a query / fragment / whitespace — but NOT at '/',
+                // which separates `archive` from `number` in old-style ids.
+                let raw: String = after
                     .chars()
-                    .take_while(|c| !matches!(c, '?' | '#' | '/' | ' '))
+                    .take_while(|c| !matches!(c, '?' | '#' | ' ' | '\t' | '\n' | '\r'))
                     .collect();
-                if !id.is_empty() {
-                    return Some(id);
+                if let Ok(id) = crate::ArxivId::parse(raw.trim_end_matches('/')) {
+                    return Some(id.as_str().to_string());
                 }
             }
         }
@@ -1908,6 +1913,33 @@ mod tests {
             extract_arxiv_from_location(&loc).as_deref(),
             Some("2101.12345")
         );
+    }
+
+    #[test]
+    fn arxiv_extracted_old_style_id_not_truncated() {
+        // Pre-2007 ids embed a '/'; the capture must keep it (#371).
+        let loc =
+            serde_json::json!({ "landing_page_url": "https://arxiv.org/abs/cond-mat/0701105" });
+        assert_eq!(
+            extract_arxiv_from_location(&loc).as_deref(),
+            Some("cond-mat/0701105")
+        );
+        // Old-style with subclass + version + a trailing query string.
+        let loc2 = serde_json::json!({
+            "pdf_url": "http://arxiv.org/abs/astro-ph.CO/0703123v2?foo=bar"
+        });
+        assert_eq!(
+            extract_arxiv_from_location(&loc2).as_deref(),
+            Some("astro-ph.CO/0703123v2")
+        );
+    }
+
+    #[test]
+    fn arxiv_extraction_rejects_garbage() {
+        // A non-arXiv capture under abs/ fails ArxivId::parse -> None, rather
+        // than a truncated / garbage id (#371).
+        let loc = serde_json::json!({ "landing_page_url": "https://arxiv.org/abs/not an id!" });
+        assert_eq!(extract_arxiv_from_location(&loc), None);
     }
 
     #[test]
