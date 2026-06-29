@@ -10,6 +10,10 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-06-29
+
+Reliability pass from Claude Desktop (`.mcpb`) dogfooding — the local store, numeric tool parameters, arXiv-id linking, and citation matching, plus a now-working citation-graph tool in the Desktop Extension.
+
 ### Fixed
 - **[mcp]** Numeric tool parameters now accept a **stringified number**
   (`"10"`) as well as a JSON number (`10`). Several MCP clients / LLMs emit
