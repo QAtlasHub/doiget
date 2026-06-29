@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "doiget-cli"
-version = "0.8.5-beta.1"
+version = "0.8.5-beta.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "doiget-core"
-version = "0.8.5-beta.1"
+version = "0.8.5-beta.2"
 dependencies = [
  "async-trait",
  "biblatex",
@@ -580,7 +580,7 @@ dependencies = [
 
 [[package]]
 name = "doiget-mcp"
-version = "0.8.5-beta.1"
+version = "0.8.5-beta.2"
 dependencies = [
  "anyhow",
  "assert_cmd",

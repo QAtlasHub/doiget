@@ -71,7 +71,11 @@ use camino::Utf8PathBuf;
 /// real working directory untouched.
 pub(crate) fn resolve_store_root() -> Result<Utf8PathBuf> {
     if let Ok(s) = std::env::var("DOIGET_STORE_ROOT") {
-        if !s.is_empty() {
+        // Ignore an empty value or an unexpanded "${...}" placeholder — a
+        // Desktop-Extension config left blank can pass the literal
+        // "${user_config.store_root}", which must not become a path (#369).
+        let s = s.trim();
+        if !s.is_empty() && !s.contains("${") {
             return Ok(Utf8PathBuf::from(s));
         }
     }

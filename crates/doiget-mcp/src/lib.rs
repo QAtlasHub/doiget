@@ -3793,10 +3793,19 @@ impl ServerHandler for Server {
 /// `doiget-cli -> doiget-mcp` wiring established by this PR and pull
 /// `clap` etc. into the MCP crate. Lifting this helper into `doiget-core`
 /// is a viable Phase-3 follow-up but is out of scope for this foundation.
+/// Whether a `DOIGET_STORE_ROOT` value is usable as a path: non-empty and not
+/// an unexpanded `${...}` placeholder. A Desktop-Extension config left blank
+/// passes the literal `${user_config.store_root}`, which must never become a
+/// filesystem path (it produced `os error 5` access-denied). See #369.
+fn store_root_env_is_usable(value: &str) -> bool {
+    let v = value.trim();
+    !v.is_empty() && !v.contains("${")
+}
+
 fn resolve_store_root() -> Option<Utf8PathBuf> {
     if let Ok(s) = std::env::var("DOIGET_STORE_ROOT") {
-        if !s.is_empty() {
-            return Some(Utf8PathBuf::from(s));
+        if store_root_env_is_usable(&s) {
+            return Some(Utf8PathBuf::from(s.trim()));
         }
     }
     // Default: `papers/` under the current working directory (#344 / ADR-0036),
@@ -4049,6 +4058,18 @@ mod tests {
             err.contains("rdf") && err.contains("auto"),
             "error must name the offending token AND the accepted set: {err}"
         );
+    }
+
+    #[test]
+    fn store_root_env_usable_rejects_placeholder_and_empty() {
+        // Real paths are usable.
+        assert!(store_root_env_is_usable("/home/u/papers"));
+        assert!(store_root_env_is_usable(r"C:\Users\u\papers"));
+        // Empty / whitespace and an unexpanded placeholder are not (#369).
+        assert!(!store_root_env_is_usable(""));
+        assert!(!store_root_env_is_usable("   "));
+        assert!(!store_root_env_is_usable("${user_config.store_root}"));
+        assert!(!store_root_env_is_usable("${HOME}/papers"));
     }
 
     #[test]

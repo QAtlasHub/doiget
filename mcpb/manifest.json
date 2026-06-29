@@ -38,7 +38,8 @@
     "store_root": {
       "type": "directory",
       "title": "Paper store location",
-      "description": "Directory where fetched PDFs and metadata are saved. Leave empty to use ./papers under the server's working directory.",
+      "description": "Directory where fetched PDFs and metadata are saved. Defaults to a doiget-papers folder under your home directory.",
+      "default": "${HOME}/Documents/doiget-papers",
       "required": false
     }
   },

@@ -21,6 +21,13 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   `min_percentile` / `min_fwci` (`paper_search`). The published input schema
   is unchanged (still `integer` / `number`); only the runtime is lenient.
   (#370)
+- **[mcp/distribution]** The Claude Desktop Extension now ships a writable
+  **default store location** (`${HOME}/Documents/doiget-papers`), and
+  `resolve_store_root` (MCP + CLI) ignores an empty or unexpanded `${...}`
+  placeholder value of `DOIGET_STORE_ROOT` rather than using it as a path.
+  Fixes a `.mcpb` install leaving the store unwritable (`os error 5`) when the
+  config was left blank (the literal `${user_config.store_root}` leaked
+  through). (#369)
 
 ## [0.8.4] - 2026-06-25
 
