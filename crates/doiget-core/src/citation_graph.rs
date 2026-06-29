@@ -127,17 +127,25 @@ pub struct GraphNode {
 /// One edge: `from` cites `to`.
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphEdge {
+    /// The citing Work (OpenAlex Work ID).
     pub from: String,
+    /// The cited Work (OpenAlex Work ID).
     pub to: String,
 }
 
 /// Result of [`expand`].
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphResult {
+    /// OpenAlex Work ID the expansion started from.
     pub seed_work_id: String,
+    /// Every Work visited, including the seed (`depth == 0`).
     pub nodes: Vec<GraphNode>,
+    /// Directed `from` cites `to` relationships discovered during the walk.
     pub edges: Vec<GraphEdge>,
+    /// `true` if an ADR-0010 hard cap (depth / total / per-paper) stopped the
+    /// walk before the graph was exhausted.
     pub truncated: bool,
+    /// Number of Works visited (equals `nodes.len()`).
     pub total_visited: usize,
 }
 
@@ -145,6 +153,7 @@ pub struct GraphResult {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum GraphError {
+    /// An OpenAlex fetch failed during the walk.
     #[error("openalex source error: {0}")]
     Source(#[from] FetchError),
     /// Provenance log write failed — fail-closed (the expansion is
@@ -152,8 +161,11 @@ pub enum GraphError {
     /// posture per `docs/PROVENANCE_LOG.md` §5.
     #[error("provenance log error during graph expansion: {0}")]
     Log(#[from] LogError),
+    /// The seed DOI is not indexed by OpenAlex (no `id` field in the response).
     #[error("seed DOI not indexed by OpenAlex (no `id` field in response)")]
     SeedNotIndexed,
+    /// Citation expansion is not enabled (requires `DOIGET_ENABLE_OPENALEX`
+    /// and `--features metadata`).
     #[error("citation graph requires DOIGET_ENABLE_OPENALEX + --features metadata")]
     CapabilityDenied,
 }

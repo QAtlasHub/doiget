@@ -38,6 +38,15 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   now score candidates against **all** authors of a work, not just the first,
   so a citation string naming several authors (e.g. "Bulla Costi Pruschke
   2008") is no longer dropped below the confidence threshold. (#372)
+- **[mcp/distribution]** The **released binaries and the `.mcpb` are now built
+  with `--features citation`**, and the `.mcpb` presets
+  `DOIGET_ENABLE_OPENALEX=1`, so `doiget_expand_citation_graph` actually works
+  in Claude Desktop (ADR-0010 hard caps depth≤3 / ≤100 nodes apply). CI now
+  builds and tests the `citation` feature (previously `oa-only` only). A
+  feature-off `cargo install` build still advertises the tool and returns
+  `NOT_IMPLEMENTED`; cleanly hiding it is blocked by rmcp's `#[tool_router]`
+  (it references tool methods unconditionally, so cfg-gating the method fails
+  to compile) and is tracked as a follow-up. (#373)
 
 ## [0.8.4] - 2026-06-25
 
