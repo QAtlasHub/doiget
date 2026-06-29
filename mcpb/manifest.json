@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "doiget",
   "display_name": "doiget",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "OA-first paper fetcher: DOIs/arXiv IDs to local PDFs + metadata via Open Access APIs.",
   "long_description": "doiget is a single-binary, stdio MCP server that turns DOIs and arXiv IDs into local PDFs and structured metadata through official Open-Access APIs (Crossref, Unpaywall, arXiv, OpenAlex). It never bypasses paywalls and makes no network call that is not the direct result of a fetch you ask for. PDFs and metadata are saved to a local store; nothing is redistributed or phoned home. It is the agent-facing companion to BiblioFetch.jl and shares the same on-disk paper store.",
   "author": {
