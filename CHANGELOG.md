@@ -10,6 +10,10 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-06-29
+
+MCP tool safety annotations — the `.mcpb` is now ready for the Claude Desktop Extensions directory.
+
 ### Added
 - **[mcp]** All 22 MCP tools now carry **safety annotations**
   (`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`), so
