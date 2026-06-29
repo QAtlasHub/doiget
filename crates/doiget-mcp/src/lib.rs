@@ -148,7 +148,13 @@ impl Server {
                        OUTPUTS: { ok: true, version, schema_version, store_writable }.\n\
                        COSTS: <1 ms.\n\
                        SIDE EFFECTS: idempotent mkdir of the store root.\n\
-                       LIMITS: none."
+                       LIMITS: none.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn doiget_health(&self) -> Result<CallToolResult, ErrorData> {
         let store_root = resolve_store_root();
@@ -180,7 +186,13 @@ impl Server {
                        OUTPUTS: { oa_enabled, metadata_sources, tdm_enabled, tdm_elsevier, tdm_aps, tdm_springer, rate_limit_per_sec } (plus additive ok, tier_1, tier_2, tier_3).\n\
                        COSTS: <1 ms.\n\
                        SIDE EFFECTS: none.\n\
-                       LIMITS: none."
+                       LIMITS: none.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn doiget_capability_profile(&self) -> Result<CallToolResult, ErrorData> {
         let payload = capability_profile_to_json(&self.profile);
@@ -220,7 +232,13 @@ impl Server {
                        OUTPUTS: { ok: true, ref, source, license?, oa_url, metadata } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, error }.\n\
                        COSTS: 1-2 s metadata round-trip (or 0 when dry_run).\n\
                        SIDE EFFECTS: Appends a 'metadata-only' provenance row (unless dry_run). Writes the metadata TOML to the store. Never fetches PDF.\n\
-                       LIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed."
+                       LIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn doiget_metadata_only(
         &self,
@@ -400,7 +418,13 @@ impl Server {
                        OUTPUTS: { ok: true, ref, source, resolver_profile, license?, oa_url, metadata, schema_version } OR { ok:false, ref, error }.\n\
                        COSTS: 1-2 s metadata round-trip.\n\
                        SIDE EFFECTS: Appends one provenance row per consulted resolver. NEVER writes a metadata TOML to the store. NEVER fetches PDF.\n\
-                       LIMITS: Subject to the same rate cap as metadata_only (5/sec). The OA URL is reported but never followed. dry_run is not supported; use metadata_only with dry_run for a preview."
+                       LIMITS: Subject to the same rate cap as metadata_only (5/sec). The OA URL is reported but never followed. dry_run is not supported; use metadata_only with dry_run for a preview.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn doiget_resolve_paper(
         &self,
@@ -507,7 +531,13 @@ impl Server {
                        OUTPUTS: { ok: true, ref, source, path, license, size_bytes, schema_version } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, ref, error }.\n\
                        COSTS: 1-3 s network call (or 0 when dry_run). May fail if not Open Access.\n\
                        SIDE EFFECTS: Writes PDF (or metadata-only TOML) to the store. Appends a row to the provenance log (unless dry_run).\n\
-                       LIMITS: Max 5 fetches/sec (global). Use doiget_batch_fetch for >5 refs."
+                       LIMITS: Max 5 fetches/sec (global). Use doiget_batch_fetch for >5 refs.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn doiget_fetch_paper(
         &self,
@@ -642,7 +672,13 @@ impl Server {
                        OUTPUTS: { ok: true, results: [{ref, ok, ...}] } OR { ok: true, dry_run: true, plans: [{ref, plan, rate_limit_budget}] } OR { ok:false, error }.\n\
                        COSTS: 1-3 s per ref, bounded by the 5/sec global rate cap.\n\
                        SIDE EFFECTS: Writes PDFs / metadata TOMLs to the store (unless dry_run). Appends one provenance row per attempt.\n\
-                       LIMITS: Max 100 refs per call (TOO_MANY_REFS otherwise). Per-ref errors are reported in `results` and do NOT fail the whole call."
+                       LIMITS: Max 100 refs per call (TOO_MANY_REFS otherwise). Per-ref errors are reported in `results` and do NOT fail the whole call.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn doiget_batch_fetch(
         &self,
@@ -815,7 +851,13 @@ impl Server {
                        OUTPUTS: { ok: true, summary:{total,ok,failed,parse_errors}, results: [{entry_key, ref, ok, ...}] } OR { ok:false, error }.\n\
                        COSTS: Same as batch_fetch — 1-3 s per entry, bounded by the 5/sec global rate cap.\n\
                        SIDE EFFECTS: Writes PDFs / metadata TOMLs to the store. Appends one provenance row per attempt.\n\
-                       LIMITS: bibtex parsing is not yet shipped (re-export as CSL-JSON). Per-entry parse errors are reported in results unless strict=true."
+                       LIMITS: bibtex parsing is not yet shipped (re-export as CSL-JSON). Per-entry parse errors are reported in results unless strict=true.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn doiget_batch_from_bibliography(
         &self,
@@ -1058,7 +1100,13 @@ impl Server {
                        OUTPUTS: { ok: true, ref, safekey, metadata: <object>|null } OR { ok:false, ref, error }.\n\
                        COSTS: <10 ms local read.\n\
                        SIDE EFFECTS: none.\n\
-                       LIMITS: A missing entry surfaces as { ok: true, metadata: null } — NOT an error envelope. Check `metadata !== null` to confirm presence; call doiget_fetch_paper first when `metadata` is null."
+                       LIMITS: A missing entry surfaces as { ok: true, metadata: null } — NOT an error envelope. Check `metadata !== null` to confirm presence; call doiget_fetch_paper first when `metadata` is null.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn doiget_info(
         &self,
@@ -1146,7 +1194,13 @@ impl Server {
                        OUTPUTS: { ok: true, scope: \"local\", query, count, results: [{ safekey, title, year, fetched_at }] } OR { ok:false, error }.\n\
                        COSTS: O(N) over the local store; <100 ms for a few thousand entries.\n\
                        SIDE EFFECTS: none.\n\
-                       LIMITS: Returns at most `limit` entries (capped at 200)."
+                       LIMITS: Returns at most `limit` entries (capped at 200).",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn doiget_search_local(
         &self,
@@ -1205,7 +1259,13 @@ impl Server {
                        OUTPUTS: { ok: true, scope: \"external\", query, total_results, count, results: [{ doi, openalex_id, arxiv, title, authors, year, venue, abstract, cited_by_count, oa_status, source }] } OR { ok:false, error }.\n\
                        COSTS: 1 OpenAlex request, plus 1 per supplied author/venue/publisher name to resolve.\n\
                        SIDE EFFECTS: Emits Metadata provenance rows. NEVER writes the store. NEVER fetches a PDF.\n\
-                       LIMITS: Tier-1, always-on (no DOIGET_ENABLE_OPENALEX gate). An ambiguous author/venue/publisher name → AMBIGUOUS (candidates listed); no match → NOT_FOUND."
+                       LIMITS: Tier-1, always-on (no DOIGET_ENABLE_OPENALEX gate). An ambiguous author/venue/publisher name → AMBIGUOUS (candidates listed); no match → NOT_FOUND.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn doiget_paper_search(
         &self,
@@ -1339,7 +1399,13 @@ impl Server {
                        OUTPUTS: { ok: true, arxiv_id, source: \"ar5iv\", title, sections: [{ heading, text }], char_count, truncated, retrieved_from } OR { ok:false, error }.\n\
                        COSTS: 1 ar5iv HTTP request (HTML), then parse; large papers can be sizeable — use max_chars to bound.\n\
                        SIDE EFFECTS: Emits an OA provenance row. NEVER opens the PDF blob; NEVER writes the store.\n\
-                       LIMITS: arXiv only (a DOI → NO_OA_AVAILABLE; pass the arXiv id). A paper not converted by ar5iv → NOT_FOUND. Best-effort extraction (truncation flagged on `truncated`)."
+                       LIMITS: arXiv only (a DOI → NO_OA_AVAILABLE; pass the arXiv id). A paper not converted by ar5iv → NOT_FOUND. Best-effort extraction (truncation flagged on `truncated`).",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn doiget_paper_text(
         &self,
@@ -1454,7 +1520,13 @@ impl Server {
                        OUTPUTS: { ok: true, arxiv_id, main_file, tex_source, char_count, truncated, retrieved_from } OR { ok:false, error }.\n\
                        COSTS: 1 arXiv source API request (gzip'd tar download); large papers can be sizeable — use max_chars to bound.\n\
                        SIDE EFFECTS: Emits an OA provenance row. NEVER writes the store; NEVER opens a PDF blob.\n\
-                       LIMITS: arXiv only (a DOI → NO_OA_AVAILABLE; pass the arXiv id). PDF-only submissions → TEXT_UNAVAILABLE."
+                       LIMITS: arXiv only (a DOI → NO_OA_AVAILABLE; pass the arXiv id). PDF-only submissions → TEXT_UNAVAILABLE.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn doiget_paper_tex_source(
         &self,
@@ -1575,7 +1647,13 @@ impl Server {
                        OUTPUTS: { ok: true, doi, arxiv, openalex_id, title } (arxiv is null when no preprint) OR { ok:false, error }.\n\
                        COSTS: 1 OpenAlex request.\n\
                        SIDE EFFECTS: Emits a Metadata provenance row. NEVER writes the store; NEVER fetches a PDF.\n\
-                       LIMITS: DOI input only (arXiv → DOI is a follow-up; an arXiv/invalid ref → INVALID_REF). A DOI with no OpenAlex work → NOT_FOUND."
+                       LIMITS: DOI input only (arXiv → DOI is a follow-up; an arXiv/invalid ref → INVALID_REF). A DOI with no OpenAlex work → NOT_FOUND.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn doiget_link(
         &self,
@@ -1695,7 +1773,13 @@ impl Server {
                        OUTPUTS: { ok: true, count, entries: [{ safekey, title, year, fetched_at }] } OR { ok:false, error }.\n\
                        COSTS: <100 ms for a few thousand entries.\n\
                        SIDE EFFECTS: none.\n\
-                       LIMITS: Returns at most `limit` entries (capped at 200)."
+                       LIMITS: Returns at most `limit` entries (capped at 200).",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn doiget_list_recent(
         &self,
@@ -1751,7 +1835,13 @@ impl Server {
                        OUTPUTS: { ok: true, ref, safekey, path: string|null, pdf_exists: bool } OR { ok:false, ref, error }.\n\
                        COSTS: <10 ms local read.\n\
                        SIDE EFFECTS: none. NEVER reads or transmits PDF bytes.\n\
-                       LIMITS: Both 'no metadata entry' and 'metadata exists but PDF file missing' surface as { ok: true, path: null, pdf_exists: false } — call doiget_info to distinguish the two cases. Returns an ok:false envelope only on invalid ref / store-open failure."
+                       LIMITS: Both 'no metadata entry' and 'metadata exists but PDF file missing' surface as { ok: true, path: null, pdf_exists: false } — call doiget_info to distinguish the two cases. Returns an ok:false envelope only on invalid ref / store-open failure.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn doiget_paper_pdf_path(
         &self,
@@ -1835,7 +1925,13 @@ impl Server {
                        OUTPUTS: { ok: true, ref, seed_work_id, nodes, edges, truncated, total_visited } OR { ok:false, ref, error }.\n\
                        COSTS: O(total) OpenAlex requests; expect 1-30 s for a depth-3 walk.\n\
                        SIDE EFFECTS: Emits one provenance row per consulted Work under Capability::Metadata. NEVER writes to the store. NEVER fetches PDF.\n\
-                       LIMITS: ADR-0010 hard caps applied regardless of inputs: depth<=3, total<=100, per_paper<=20. Requires DOIGET_ENABLE_OPENALEX in env. Returns NOT_IMPLEMENTED when this binary was built without the `citation` Cargo feature."
+                       LIMITS: ADR-0010 hard caps applied regardless of inputs: depth<=3, total<=100, per_paper<=20. Requires DOIGET_ENABLE_OPENALEX in env. Returns NOT_IMPLEMENTED when this binary was built without the `citation` Cargo feature.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn doiget_expand_citation_graph(
         &self,
@@ -2002,7 +2098,13 @@ impl Server {
                        OUTPUTS: { ok: true, entries: [{ ref, safekey, bibtex }] } — bibtex is null when the entry is not in the store; a per-ref { ref, error } element is emitted for an invalid ref or a store read error. OR { ok:false, error } for a store-open failure.\n\
                        COSTS: <10 ms per entry, local read.\n\
                        SIDE EFFECTS: none.\n\
-                       LIMITS: Entry must already have been fetched (bibtex:null otherwise — NOT an error). At most 200 refs per call."
+                       LIMITS: Entry must already have been fetched (bibtex:null otherwise — NOT an error). At most 200 refs per call.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn doiget_bibtex_export(
         &self,
@@ -2022,7 +2124,13 @@ impl Server {
                        OUTPUTS: { ok: true, entries: [{ ref, safekey, csl }] } — csl is a 1-element CSL JSON array, or null when the entry is not in the store; a per-ref { ref, error } element is emitted for an invalid ref or a store read error. OR { ok:false, error } for a store-open failure.\n\
                        COSTS: <10 ms per entry, local read.\n\
                        SIDE EFFECTS: none.\n\
-                       LIMITS: Entry must already have been fetched (csl:null otherwise — NOT an error). At most 200 refs per call."
+                       LIMITS: Entry must already have been fetched (csl:null otherwise — NOT an error). At most 200 refs per call.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn doiget_csl_export(
         &self,
@@ -2038,7 +2146,13 @@ impl Server {
                        OUTPUTS: { ok: true, query, candidates: [ { doi, title, author, year, score, source } ] } OR { ok: false, error }.\n\
                        COSTS: 1-2 s round-trip.\n\
                        SIDE EFFECTS: none.\n\
-                       LIMITS: Returns candidates with similarity score >= 0.5."
+                       LIMITS: Returns candidates with similarity score >= 0.5.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn doiget_resolve_citation(
         &self,
@@ -2087,7 +2201,13 @@ impl Server {
                        OUTPUTS: { ok: true, results: [ { query, candidates: [ { doi, title, author, year, score, source } ] } ] } OR { ok: false, error }.\n\
                        COSTS: 1-2 s round-trip per query.\n\
                        SIDE EFFECTS: none.\n\
-                       LIMITS: Returns candidates with similarity score >= 0.5. At most 50 queries per call."
+                       LIMITS: Returns candidates with similarity score >= 0.5. At most 50 queries per call.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn doiget_batch_resolve_citations(
         &self,
@@ -2156,7 +2276,13 @@ impl Server {
                        OUTPUTS: { ok: true, ref, tags, collections } OR { ok: false, error }.\n\
                        COSTS: 0 network requests; one store read + write.\n\
                        SIDE EFFECTS: Overwrites [doiget].tags / [doiget].collections in <store>/.metadata/<safekey>.toml.\n\
-                       LIMITS: Entry must already exist in the store. Tags are case-sensitive; idempotent add/remove."
+                       LIMITS: Entry must already exist in the store. Tags are case-sensitive; idempotent add/remove.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn doiget_tag(
         &self,
@@ -2268,7 +2394,13 @@ impl Server {
                        OUTPUTS: { ok: true, ref, annotation } OR { ok: false, error }.\n\
                        COSTS: 0 network requests; one store read + write.\n\
                        SIDE EFFECTS: Overwrites [doiget].annotation in <store>/.metadata/<safekey>.toml.\n\
-                       LIMITS: Entry must already exist in the store. Setting text overrides any existing annotation."
+                       LIMITS: Entry must already exist in the store. Setting text overrides any existing annotation.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn doiget_annotate(
         &self,
