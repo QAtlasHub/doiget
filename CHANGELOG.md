@@ -34,6 +34,10 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   archive (`cond-mat`); it now keeps the full id and validates it via
   `ArxivId::parse` (a malformed URL yields no id rather than a garbage one).
   (#371)
+- **[discovery]** `doiget_resolve_citation` / `doiget_batch_resolve_citations`
+  now score candidates against **all** authors of a work, not just the first,
+  so a citation string naming several authors (e.g. "Bulla Costi Pruschke
+  2008") is no longer dropped below the confidence threshold. (#372)
 
 ## [0.8.4] - 2026-06-25
 
