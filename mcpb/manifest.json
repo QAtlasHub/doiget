@@ -22,7 +22,8 @@
       "command": "${__dirname}/server/doiget-linux",
       "args": ["serve"],
       "env": {
-        "DOIGET_STORE_ROOT": "${user_config.store_root}"
+        "DOIGET_STORE_ROOT": "${user_config.store_root}",
+        "DOIGET_ENABLE_OPENALEX": "1"
       },
       "platform_overrides": {
         "darwin": {

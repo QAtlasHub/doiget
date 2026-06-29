@@ -88,7 +88,7 @@ jobs:
           # Native target per runner — no cross-compilation, so the
           # produced binary's arch matches the runner. `oa-only` matches
           # the feature surface CI tests/clippy already gate on.
-          cargo build --release -p doiget-cli --no-default-features --features oa-only
+          cargo build --release -p doiget-cli --no-default-features --features oa-only,citation
 
       - name: Stage binary + checksum
         shell: bash

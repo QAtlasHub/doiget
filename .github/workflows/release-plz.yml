@@ -357,16 +357,16 @@ jobs:
           set -euo pipefail
           # Linux builds a fully static musl binary (runs on old glibc);
           # macOS/Windows build native (dynamic libc is fine there — no
-          # cross-compile). `oa-only` matches the feature surface CI
-          # tests/clippy already gate on.
+          # cross-compile). `oa-only,citation` matches the feature surface CI
+          # gates on; the citation graph tool ships in release binaries (#373).
           if [ -n "${{ matrix.target }}" ]; then
             cargo build --release -p doiget-cli \
-              --no-default-features --features oa-only \
+              --no-default-features --features oa-only,citation \
               --target "${{ matrix.target }}"
             echo "BIN_DIR=target/${{ matrix.target }}/release" >> "$GITHUB_ENV"
           else
             cargo build --release -p doiget-cli \
-              --no-default-features --features oa-only
+              --no-default-features --features oa-only,citation
             echo "BIN_DIR=target/release" >> "$GITHUB_ENV"
           fi
       - name: Stage binary + checksum
