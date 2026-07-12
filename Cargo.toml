@@ -143,7 +143,7 @@ tar = "0.4"
 
 # UUIDs / ULIDs (mcp_call_id, session_id)
 uuid = { version = "1", features = ["v4", "serde"] }
-ulid = { version = "1", features = ["serde"] }
+ulid = { version = "2", features = ["serde"] }
 
 # URL parsing — required, see docs/SECURITY.md §1.4
 url = "2"
