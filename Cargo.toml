@@ -201,7 +201,7 @@ petgraph = "0.6"
 # `deny.toml` bans `axum` / `hyper::Server` / `openssl` / `native-tls`.
 # A `cargo tree -p doiget-mcp` after the edit must NOT show any of those
 # crates; `cargo deny check` enforces this in CI.
-rmcp = { version = "1.7", default-features = false, features = [
+rmcp = { version = "2.2", default-features = false, features = [
     "server", "macros", "transport-io", "schemars",
 ] }
 
