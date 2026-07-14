@@ -683,10 +683,7 @@ impl HttpClient {
     /// Returns the underlying `reqwest::Error` if `ClientBuilder::build`
     /// fails (typically a TLS-backend init failure).
     pub fn new(allowlists: Vec<SourceAllowlist>) -> Result<Self, reqwest::Error> {
-        let ua = format!(
-            "doiget/{} (+https://github.com/QAtlasHub/doiget)",
-            VERSION
-        );
+        let ua = format!("doiget/{} (+https://github.com/QAtlasHub/doiget)", VERSION);
         Self::new_with_user_agent(allowlists, &ua)
     }
 
