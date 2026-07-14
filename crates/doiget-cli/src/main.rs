@@ -275,7 +275,7 @@ enum Command {
         #[arg(long, value_name = "SECS")]
         delay: Option<f64>,
         /// Override the User-Agent header for every HTTP request in this
-        /// batch. Default: `doiget/<version> (+https://github.com/sotashimozono/doiget)`.
+        /// batch. Default: `doiget/<version> (+https://github.com/QAtlasHub/doiget)`.
         #[arg(long, value_name = "STRING")]
         user_agent: Option<String>,
     },

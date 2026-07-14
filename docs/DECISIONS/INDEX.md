@@ -69,7 +69,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 
 ## Why ADRs
 
-If [GitHub Discussions](https://github.com/sotashimozono/doiget/discussions) is ever
+If [GitHub Discussions](https://github.com/QAtlasHub/doiget/discussions) is ever
 deleted (the maintainer's stated worst-case for this repo), the ADRs preserve the
 binding decisions in the source tree itself. The Discussions link is for historical
 context only.

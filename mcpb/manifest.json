@@ -9,12 +9,12 @@
     "name": "Sota Shimozono",
     "url": "https://github.com/sotashimozono"
   },
-  "homepage": "https://github.com/sotashimozono/doiget",
-  "documentation": "https://github.com/sotashimozono/doiget/blob/main/docs/MCP_TOOLS.md",
-  "support": "https://github.com/sotashimozono/doiget/issues",
+  "homepage": "https://github.com/QAtlasHub/doiget",
+  "documentation": "https://github.com/QAtlasHub/doiget/blob/main/docs/MCP_TOOLS.md",
+  "support": "https://github.com/QAtlasHub/doiget/issues",
   "license": "MIT",
   "keywords": ["doi", "arxiv", "open-access", "academic", "bibliography", "crossref", "unpaywall", "research", "papers", "mcp"],
-  "privacy_policies": ["https://github.com/sotashimozono/doiget/blob/main/docs/PRIVACY.md"],
+  "privacy_policies": ["https://github.com/QAtlasHub/doiget/blob/main/docs/PRIVACY.md"],
   "server": {
     "type": "binary",
     "entry_point": "server/doiget-linux",

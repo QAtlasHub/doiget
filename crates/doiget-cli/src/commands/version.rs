@@ -31,7 +31,7 @@ use super::output::OutputMode;
 
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
-const RELEASES_API: &str = "https://api.github.com/repos/sotashimozono/doiget/releases";
+const RELEASES_API: &str = "https://api.github.com/repos/QAtlasHub/doiget/releases";
 
 /// Connect + read timeout for the version check HTTP request.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -46,7 +46,7 @@ fn releases_url() -> anyhow::Result<String> {
             url::Url::parse(&base)
                 .map_err(|e| anyhow::anyhow!("invalid DOIGET_GITHUB_BASE: {e}"))?;
             Ok(format!(
-                "{}/repos/sotashimozono/doiget/releases",
+                "{}/repos/QAtlasHub/doiget/releases",
                 base.trim_end_matches('/')
             ))
         }

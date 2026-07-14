@@ -4,7 +4,7 @@
 # toolchain or compilation required.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/sotashimozono/doiget/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/QAtlasHub/doiget/main/scripts/install.sh | sh
 #
 # Environment overrides:
 #   DOIGET_VERSION      version to install WITHOUT the leading 'v' (default: latest stable)
@@ -16,7 +16,7 @@
 # the README for optional keyless signature verification.
 set -eu
 
-REPO="sotashimozono/doiget"
+REPO="QAtlasHub/doiget"
 VERSION="${DOIGET_VERSION:-latest}"
 INSTALL_DIR="${DOIGET_INSTALL_DIR:-$HOME/.local/bin}"
 

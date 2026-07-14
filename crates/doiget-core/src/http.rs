@@ -8,7 +8,7 @@
 //!   - Body size cap ([`crate::PDF_MAX_BYTES`] = 100 MB)
 //!   - Per-request timeouts (connect 10s, read 60s, total 300s)
 //!   - PDF magic-byte check on the first 5 bytes (`%PDF-`)
-//!   - User-Agent: `doiget/<version> (+https://github.com/sotashimozono/doiget)`
+//!   - User-Agent: `doiget/<version> (+https://github.com/QAtlasHub/doiget)`
 //!
 //! See `docs/SECURITY.md` §1.2-1.3 / §1.10 and `docs/REDIRECT_ALLOWLIST.md`.
 //!
@@ -684,7 +684,7 @@ impl HttpClient {
     /// fails (typically a TLS-backend init failure).
     pub fn new(allowlists: Vec<SourceAllowlist>) -> Result<Self, reqwest::Error> {
         let ua = format!(
-            "doiget/{} (+https://github.com/sotashimozono/doiget)",
+            "doiget/{} (+https://github.com/QAtlasHub/doiget)",
             VERSION
         );
         Self::new_with_user_agent(allowlists, &ua)
@@ -1081,7 +1081,7 @@ fn build_client_allow_http(allowlist: SourceAllowlist) -> Result<Client, reqwest
         .timeout(TOTAL_TIMEOUT)
         .read_timeout(READ_TIMEOUT)
         .user_agent(format!(
-            "doiget/{} (+https://github.com/sotashimozono/doiget)",
+            "doiget/{} (+https://github.com/QAtlasHub/doiget)",
             VERSION
         ))
         .tls_backend_rustls()

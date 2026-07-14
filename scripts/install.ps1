@@ -6,7 +6,7 @@
 
 .DESCRIPTION
     Usage:
-      irm https://raw.githubusercontent.com/sotashimozono/doiget/main/scripts/install.ps1 | iex
+      irm https://raw.githubusercontent.com/QAtlasHub/doiget/main/scripts/install.ps1 | iex
 
     Environment overrides:
       $env:DOIGET_VERSION      version WITHOUT the leading 'v' (default: latest stable)
@@ -20,7 +20,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$repo = 'sotashimozono/doiget'
+$repo = 'QAtlasHub/doiget'
 $version = if ($env:DOIGET_VERSION) { $env:DOIGET_VERSION } else { 'latest' }
 $installDir = if ($env:DOIGET_INSTALL_DIR) { $env:DOIGET_INSTALL_DIR } else { "$env:LOCALAPPDATA\Programs\doiget" }
 

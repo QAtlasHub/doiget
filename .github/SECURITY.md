@@ -10,7 +10,7 @@ Security tab can find the disclosure path. The full normative security policy
 
 Please use **GitHub Private Vulnerability Reporting**:
 
-  https://github.com/sotashimozono/doiget/security/advisories/new
+  https://github.com/QAtlasHub/doiget/security/advisories/new
 
 Public issues, public discussions, and public pull requests are **not** the
 right channel for security reports. If GitHub PVR is unavailable to you, see

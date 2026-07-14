@@ -27,7 +27,7 @@ A value set higher in the chain overrides any value set lower.
 | `cache.root` | POSIX: `$HOME/.cache/doiget`. Windows: `%LOCALAPPDATA%\doiget\cache`. |
 | `log.path` | POSIX: `$HOME/.config/doiget/access.log`. Windows: `%APPDATA%\doiget\access.log`. |
 | `log.retention_days` | `90` |
-| `network.user_agent` | `doiget/<version> (+https://github.com/sotashimozono/doiget)` |
+| `network.user_agent` | `doiget/<version> (+https://github.com/QAtlasHub/doiget)` |
 | `network.unpaywall_email` | unset; if unset, Unpaywall calls go to non-polite pool |
 | `network.connect_timeout_sec` | `10` |
 | `network.read_timeout_sec` | `60` |
@@ -55,7 +55,7 @@ path = "/home/alice/.config/doiget/access.log"
 retention_days = 90
 
 [network]
-user_agent = "doiget/0.1.0 (+https://github.com/sotashimozono/doiget; user=alice@example.org)"
+user_agent = "doiget/0.1.0 (+https://github.com/QAtlasHub/doiget; user=alice@example.org)"
 unpaywall_email = "alice@example.org"
 connect_timeout_sec = 10
 read_timeout_sec = 60

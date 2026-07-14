@@ -18,7 +18,7 @@ The default build compiles **Tier 1 (Open Access)** sources only. Tier 2 metadat
 enrichment and Tier 3 institutional TDM connectors are individually feature-flagged and
 must be opted in at build time. There is no `tdm-all` umbrella feature by design.
 
-See [`docs/SOURCES.md`](https://github.com/sotashimozono/doiget/blob/main/docs/SOURCES.md)
+See [`docs/SOURCES.md`](https://github.com/QAtlasHub/doiget/blob/main/docs/SOURCES.md)
 for the full source matrix, feature names, required env vars, and Terms-of-Service links.
 
 ## Status
@@ -27,7 +27,7 @@ Shipping and fully functional. OA fetch (Crossref / Unpaywall / arXiv), the
 on-disk store, BibTeX / CSL export, the citation graph, and the **stdio MCP
 server** (`doiget serve`) are all implemented. The installed binary is named
 `doiget`. See the
-[CHANGELOG](https://github.com/sotashimozono/doiget/blob/main/CHANGELOG.md) for
+[CHANGELOG](https://github.com/QAtlasHub/doiget/blob/main/CHANGELOG.md) for
 the current version and history.
 
 ## Use as an MCP server
@@ -39,7 +39,7 @@ the current version and history.
 { "mcpServers": { "doiget": { "command": "doiget", "args": ["serve"] } } }
 ```
 
-MCP Registry name: `mcp-name: io.github.sotashimozono/doiget`
+MCP Registry name: `mcp-name: io.github.QAtlasHub/doiget`
 
 ## Subcommand surface
 
@@ -67,9 +67,9 @@ credentials file. Network politeness defaults (5 fetches/sec global cap, per-sou
 backoff, `User-Agent` with maintainer contact) are enforced by the binary, not by config.
 
 - Config schema, search paths, and `doiget config doctor` semantics:
-  [`docs/CONFIG.md`](https://github.com/sotashimozono/doiget/blob/main/docs/CONFIG.md).
+  [`docs/CONFIG.md`](https://github.com/QAtlasHub/doiget/blob/main/docs/CONFIG.md).
 - Per-source feature flags, env vars, and ToS pointers:
-  [`docs/SOURCES.md`](https://github.com/sotashimozono/doiget/blob/main/docs/SOURCES.md).
+  [`docs/SOURCES.md`](https://github.com/QAtlasHub/doiget/blob/main/docs/SOURCES.md).
 
 ## Open Access by default
 
@@ -88,5 +88,5 @@ each source's Terms of Service.
 MIT. The license under which doiget *retrieves* papers is separate and is determined by
 each paper's own license, the publisher's API Terms of Service, and the user's own access
 rights. doiget does not relicense fetched content. See
-[`LICENSE`](https://github.com/sotashimozono/doiget/blob/main/LICENSE) and
-[`docs/LEGAL.md`](https://github.com/sotashimozono/doiget/blob/main/docs/LEGAL.md).
+[`LICENSE`](https://github.com/QAtlasHub/doiget/blob/main/LICENSE) and
+[`docs/LEGAL.md`](https://github.com/QAtlasHub/doiget/blob/main/docs/LEGAL.md).

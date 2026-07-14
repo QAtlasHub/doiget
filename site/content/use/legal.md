@@ -231,4 +231,4 @@ For takedown requests, formal legal correspondence, or security disclosures, see
 [`../CONTACT.md`](../CONTACT.md).
 
 For general questions and discussion, please use
-[GitHub Discussions](https://github.com/sotashimozono/doiget/discussions).
+[GitHub Discussions](https://github.com/QAtlasHub/doiget/discussions).

@@ -9,7 +9,7 @@ store.
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: sotashimozono/doiget/.github/actions/verify@v0
+- uses: QAtlasHub/doiget/.github/actions/verify@v0
   with:
     path: docs/references.bib
     strict: "true"
