@@ -10,6 +10,19 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.7-beta.1] - 2026-07-14
+
+Dependency maintenance — first beta of the 0.8.7 line (retargeted off the 0.8.6 stable).
+
+### Changed
+- **[deps]** Bump `rustls` 0.23.41 → 0.23.42 (patch release; no API change, no
+  advisory — `cargo audit` / `cargo deny` stay green).
+- **[supply-chain]** Refresh the `cargo vet` exemptions in
+  `supply-chain/config.toml` to match the current lockfile (`rustls` 0.23.42,
+  plus `bytes` 1.12.1, `quick-xml` 0.41.0, `rmcp` / `rmcp-macros` 2.2.0 and
+  `uuid` 1.23.5, which had already landed on `next`), so `cargo vet --locked`
+  is green again.
+
 ## [0.8.6] - 2026-06-29
 
 MCP tool safety annotations — the `.mcpb` is now ready for the Claude Desktop Extensions directory.

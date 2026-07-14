@@ -99,7 +99,7 @@ version = "5.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.bytes]]
-version = "1.12.0"
+version = "1.12.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.camino]]
@@ -491,7 +491,7 @@ version = "0.36.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.quick-xml]]
-version = "0.40.1"
+version = "0.41.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.quinn]]
@@ -555,7 +555,7 @@ version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmcp]]
-version = "1.8.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmcp-macros]]
@@ -563,7 +563,7 @@ version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmcp-macros]]
-version = "1.8.0"
+version = "2.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.roman-numerals-rs]]
@@ -579,7 +579,7 @@ version = "1.1.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls]]
-version = "0.23.41"
+version = "0.23.42"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-native-certs]]
@@ -859,7 +859,7 @@ version = "2.5.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.uuid]]
-version = "1.23.4"
+version = "1.23.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.walkdir]]
