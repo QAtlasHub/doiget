@@ -12,7 +12,7 @@
 # dev docs). PRs build only (no deploy) — the docs-build invariant from the
 # team's standing feedback. The site is SERVED at the custom domain
 # `https://codes.sota-shimozono.com/doiget/` (GitHub Pages canonical URL;
-# the `sotashimozono.github.io/doiget/` URL 301s to it over http). The
+# the `qatlashub.github.io/doiget/` URL 301s to it over http). The
 # Zola `--base-url` MUST equal the serving domain or the baked-in absolute
 # CSS/JS URLs downgrade to http and browsers block them (mixed content =
 # unstyled site). The `codes.sota-shimozono.com` CNAME is managed at the

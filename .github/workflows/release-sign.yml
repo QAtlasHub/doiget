@@ -21,7 +21,7 @@ name: release-sign
 #   cosign verify-blob \
 #     --bundle doiget-linux-x86_64.cosign.bundle \
 #     --certificate-identity-regexp \
-#       'https://github.com/sotashimozono/doiget/.github/workflows/release-sign.yml@.*' \
+#       'https://github.com/QAtlasHub/doiget/.github/workflows/release-sign.yml@.*' \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
 #     doiget-linux-x86_64
 

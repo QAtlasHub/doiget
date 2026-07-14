@@ -2,7 +2,7 @@
 
 Public-docs Zola site for doiget.
 
-Hosting target: GitHub Pages on `https://sotashimozono.github.io/doiget/`.
+Hosting target: GitHub Pages on `https://qatlashub.github.io/doiget/`.
 
 ## What's in here
 
@@ -43,7 +43,7 @@ For a one-shot production-style build:
 
 ```sh
 cd site
-zola build --base-url "https://sotashimozono.github.io/doiget/"
+zola build --base-url "https://qatlashub.github.io/doiget/"
 # output lands in site/public/
 ```
 

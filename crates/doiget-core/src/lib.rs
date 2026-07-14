@@ -1,6 +1,6 @@
 //! # doiget-core
 //!
-//! Core library for [doiget](https://github.com/sotashimozono/doiget): an Open Access
+//! Core library for [doiget](https://github.com/QAtlasHub/doiget): an Open Access
 //! first paper-fetcher with strict capability gating, fail-closed provenance logging,
 //! and a BiblioFetch.jl-compatible store layout.
 //!

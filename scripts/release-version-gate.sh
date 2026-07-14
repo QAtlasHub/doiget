@@ -247,7 +247,7 @@ else
     # exact "num":"X.Y.Z" pair (no jq, house style). A 404 => crate never
     # published yet (treated as "not present").
     body="$(curl -fsSL --max-time 30 \
-      -H 'User-Agent: doiget-release-version-gate (https://github.com/sotashimozono/doiget)' \
+      -H 'User-Agent: doiget-release-version-gate (https://github.com/QAtlasHub/doiget)' \
       "https://crates.io/api/v1/crates/${crate}" 2>/dev/null || true)"
     if [ -z "$body" ]; then
       echo "note: crates.io returned no body for '$crate' (likely never published yet) — new publish, G3/G4 OK for this crate"

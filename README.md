@@ -7,9 +7,9 @@
 [![downloads](https://img.shields.io/crates/d/doiget-core.svg)](https://crates.io/crates/doiget-core)
 [![MSRV](https://img.shields.io/crates/msrv/doiget-core.svg)](https://crates.io/crates/doiget-core)
 [![docs.rs](https://img.shields.io/docsrs/doiget-core)](https://docs.rs/doiget-core)
-[![CI](https://github.com/sotashimozono/doiget/actions/workflows/ci.yml/badge.svg)](https://github.com/sotashimozono/doiget/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/sotashimozono/doiget/branch/main/graph/badge.svg)](https://codecov.io/gh/sotashimozono/doiget)
-[![issues](https://img.shields.io/github/issues/sotashimozono/doiget)](https://github.com/sotashimozono/doiget/issues)
+[![CI](https://github.com/QAtlasHub/doiget/actions/workflows/ci.yml/badge.svg)](https://github.com/QAtlasHub/doiget/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/QAtlasHub/doiget/branch/main/graph/badge.svg)](https://codecov.io/gh/QAtlasHub/doiget)
+[![issues](https://img.shields.io/github/issues/QAtlasHub/doiget)](https://github.com/QAtlasHub/doiget/issues)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [![docs (stable)](https://img.shields.io/badge/docs-stable-blue)](https://codes.sota-shimozono.com/doiget/)
@@ -67,10 +67,16 @@ doiget ships a single self-contained binary — the Linux build is fully static
 (musl), so it runs on old glibc / HPC boxes too. Every channel installs the
 **same checksum-verified binary** from the signed GitHub Release.
 
+> **Recommended: use a prebuilt binary (no Rust toolchain, no compiler).** The
+> shell / PowerShell installers below download the signed release binary
+> directly. `cargo install` (further down) instead *compiles from source* and
+> therefore needs a working C/C++ build toolchain — see that section for the
+> per-platform requirements.
+
 ### Shell installer (Linux / macOS)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sotashimozono/doiget/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/QAtlasHub/doiget/main/scripts/install.sh | sh
 ```
 
 Installs to `~/.local/bin` (override with `DOIGET_INSTALL_DIR`); pin a version with
@@ -79,17 +85,34 @@ Installs to `~/.local/bin` (override with `DOIGET_INSTALL_DIR`); pin a version w
 ### PowerShell installer (Windows)
 
 ```powershell
-irm https://raw.githubusercontent.com/sotashimozono/doiget/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/QAtlasHub/doiget/main/scripts/install.ps1 | iex
 ```
 
-### From crates.io (Rust toolchain)
+### From crates.io (Rust toolchain — compiles from source)
+
+The published crate is **`doiget-cli`** (it produces the `doiget` binary).
+`cargo install doiget` does **not** work — there is no crate by that bare name:
 
 ```sh
 cargo install doiget-cli   # installs the `doiget` binary
 ```
 
+Because this **compiles from source**, you need a C/C++ build toolchain (a
+linker is mandatory — `cargo install` cannot link a binary without one):
+
+- **Linux:** `gcc`/`clang` + `make` (e.g. `build-essential`).
+- **macOS:** Xcode Command Line Tools (`xcode-select --install`).
+- **Windows:** either the **Visual Studio Build Tools** with the *"Desktop
+  development with C++"* workload (provides `link.exe`), **or** a MinGW-w64
+  toolchain used via the GNU target
+  (`rustup toolchain install stable-x86_64-pc-windows-gnu` +
+  `cargo +stable-x86_64-pc-windows-gnu install doiget-cli`).
+
+If you don't have (or don't want) a build toolchain, use one of the prebuilt
+installers above — they need no compiler.
+
 Further prebuilt-binary channels (Homebrew tap, `cargo binstall`, npm/npx, Nix flake,
-`.deb`) are tracked in [#247](https://github.com/sotashimozono/doiget/issues/247). Every
+`.deb`) are tracked in [#247](https://github.com/QAtlasHub/doiget/issues/247). Every
 release asset is cosign-keyless signed (`<asset>.cosign.bundle`) for optional verification.
 
 ## Quick start

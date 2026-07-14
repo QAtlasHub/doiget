@@ -500,11 +500,11 @@ jobs:
 
   # -------------------------------------------------------------------------
   # e. mcp-registry — publish / refresh the official MCP Registry entry
-  #    (io.github.sotashimozono/doiget) via GitHub OIDC. STABLE tags only (the
+  #    (io.github.QAtlasHub/doiget) via GitHub OIDC. STABLE tags only (the
   #    registry should point at a stable crate version; betas are pre-release).
   #    BEST-EFFORT (continue-on-error): a registry hiccup must never fail the
   #    crates.io / GitHub release. NO secret — the `id-token: write` OIDC token
-  #    authorizes the `io.github.sotashimozono/*` namespace because this Action
+  #    authorizes the `io.github.QAtlasHub/*` namespace because this Action
   #    runs in that org's repo. The registry verifies the `mcp-name:` marker on
   #    the doiget-cli crate README the `publish` job just uploaded, so a short
   #    retry loop absorbs crates.io indexing lag. mcp-publisher is version-pinned
@@ -558,7 +558,7 @@ jobs:
           # `publish` job just uploaded.
           for i in $(seq 1 6); do
             if ./mcp-publisher publish; then
-              echo "::notice::published io.github.sotashimozono/doiget@${TAG#v} to the MCP registry"
+              echo "::notice::published io.github.QAtlasHub/doiget@${TAG#v} to the MCP registry"
               exit 0
             fi
             echo "publish attempt $i/6 failed (crate may not be indexed yet); waiting 30s"

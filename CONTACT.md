@@ -5,8 +5,8 @@ This document is the formal contact channel for **takedown requests**, **publish
 timeline.
 
 For general questions, feature requests, or community discussion, please use
-[GitHub Issues](https://github.com/sotashimozono/doiget/issues) or
-[GitHub Discussions](https://github.com/sotashimozono/doiget/discussions).
+[GitHub Issues](https://github.com/QAtlasHub/doiget/issues) or
+[GitHub Discussions](https://github.com/QAtlasHub/doiget/discussions).
 
 ## Primary contact
 
@@ -32,7 +32,7 @@ README will carry an "Out of office" notice in such cases when feasible.
 
 If the primary contact is unreachable for more than 14 days, you may file a public issue
 with the title prefix `[CONTACT-FALLBACK]` on the
-[doiget issue tracker](https://github.com/sotashimozono/doiget/issues). This creates a
+[doiget issue tracker](https://github.com/QAtlasHub/doiget/issues). This creates a
 public record of attempted contact while preserving privacy of the underlying request body
 (only the existence of the request is public).
 

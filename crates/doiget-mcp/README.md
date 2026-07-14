@@ -1,6 +1,6 @@
 # doiget-mcp
 
-> stdio MCP server for [doiget](https://github.com/sotashimozono/doiget). Exposed
+> stdio MCP server for [doiget](https://github.com/QAtlasHub/doiget). Exposed
 > by the `doiget serve` subcommand from `doiget-cli` so an MCP host (Claude Desktop,
 > Cursor, Codex, Claude Code) can resolve DOIs and arXiv ids, fetch Open Access PDFs
 > through official publisher APIs, and inspect the local store.

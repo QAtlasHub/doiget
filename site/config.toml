@@ -1,7 +1,7 @@
 # Zola configuration for the doiget public site.
 #
 # Served at the custom domain `https://codes.sota-shimozono.com/doiget/`
-# (GitHub Pages canonical; `sotashimozono.github.io/doiget/` 301s to it
+# (GitHub Pages canonical; `qatlashub.github.io/doiget/` 301s to it
 # over http). `base_url` MUST equal the serving domain — Zola bakes it
 # into absolute CSS/JS URLs, and a mismatch downgrades them to http on
 # an https page (mixed content → browsers block → unstyled site). CI
@@ -38,7 +38,7 @@ include_content = true
 # the footer without editing the template. Update when the phase plan
 # advances.
 phase_status = "v0.2.0 — shipping"
-github_url = "https://github.com/sotashimozono/doiget"
+github_url = "https://github.com/QAtlasHub/doiget"
 crates_io_url = "https://crates.io/crates/doiget-core"
 docs_rs_url = "https://docs.rs/doiget-core"
 contact_email = "souta.shimozono@gmail.com"

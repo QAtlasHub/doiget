@@ -22,7 +22,7 @@ name: release-sbom
 #   cosign verify-blob \
 #     --bundle doiget-sbom-<tag>.cdx.json.cosign.bundle \
 #     --certificate-identity-regexp \
-#       'https://github.com/sotashimozono/doiget/.github/workflows/release-sbom.yml@.*' \
+#       'https://github.com/QAtlasHub/doiget/.github/workflows/release-sbom.yml@.*' \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
 #     doiget-sbom-<tag>.cdx.json
 

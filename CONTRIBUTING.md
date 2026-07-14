@@ -16,7 +16,7 @@ doiget targets **Rust stable**. The active toolchain is pinned via
 #    Or:  brew install rustup                (macOS via Homebrew)
 
 # 2. Clone and build.
-git clone https://github.com/sotashimozono/doiget.git
+git clone https://github.com/QAtlasHub/doiget.git
 cd doiget
 cargo build                                # default features = oa-only
 cargo build --no-default-features          # sanity: minimal features
@@ -45,7 +45,7 @@ subcommand list, and any `doiget <subcommand>` returns a `Phase 0 stub` error.
 2. Read the relevant ADR(s) in [docs/DECISIONS/](docs/DECISIONS/) for the area you're
    touching. Decisions are normative; deviation requires a new ADR.
 3. Check that an issue or discussion exists. For non-trivial changes, please open a
-   [Discussion](https://github.com/sotashimozono/doiget/discussions) first.
+   [Discussion](https://github.com/QAtlasHub/doiget/discussions) first.
 
 ## Scope-reopening meta-rule
 

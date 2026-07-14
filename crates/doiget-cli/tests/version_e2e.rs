@@ -31,7 +31,7 @@ fn doiget(dir: &TempDir) -> Command {
 fn releases_body(tag: &str, draft: bool, prerelease: bool) -> serde_json::Value {
     serde_json::json!([{
         "tag_name":  tag,
-        "html_url":  format!("https://github.com/sotashimozono/doiget/releases/tag/{tag}"),
+        "html_url":  format!("https://github.com/QAtlasHub/doiget/releases/tag/{tag}"),
         "draft":     draft,
         "prerelease": prerelease,
     }])
@@ -87,7 +87,7 @@ async fn version_check_newer_available_human_output() {
     let server = MockServer::start().await;
     // v1.0.0 is numerically greater than any 0.x.y build.
     Mock::given(method("GET"))
-        .and(path("/repos/sotashimozono/doiget/releases"))
+        .and(path("/repos/QAtlasHub/doiget/releases"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(releases_body("v1.0.0", false, false)),
         )
@@ -115,7 +115,7 @@ async fn version_check_up_to_date_human_output() {
     let server = MockServer::start().await;
     // v0.1.0 is older than any current build (>= 0.4.x).
     Mock::given(method("GET"))
-        .and(path("/repos/sotashimozono/doiget/releases"))
+        .and(path("/repos/QAtlasHub/doiget/releases"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(releases_body("v0.1.0", false, false)),
         )
@@ -142,7 +142,7 @@ async fn version_check_up_to_date_human_output() {
 async fn version_check_json_mode_emits_structured_object() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/repos/sotashimozono/doiget/releases"))
+        .and(path("/repos/QAtlasHub/doiget/releases"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(releases_body("v1.0.0", false, false)),
         )
@@ -181,7 +181,7 @@ async fn version_check_json_mode_emits_structured_object() {
 async fn version_check_skips_draft_releases() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/repos/sotashimozono/doiget/releases"))
+        .and(path("/repos/QAtlasHub/doiget/releases"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(releases_body("v9.0.0", true, false)),
         )
@@ -209,7 +209,7 @@ async fn version_check_skips_draft_releases() {
 async fn version_check_skips_prerelease_flag_releases() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/repos/sotashimozono/doiget/releases"))
+        .and(path("/repos/QAtlasHub/doiget/releases"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(releases_body("v9.0.0", false, true)),
         )
@@ -237,11 +237,11 @@ async fn version_check_skips_tags_with_beta_suffix() {
     let server = MockServer::start().await;
     // draft=false, prerelease=false, but tag has -beta — must be filtered.
     Mock::given(method("GET"))
-        .and(path("/repos/sotashimozono/doiget/releases"))
+        .and(path("/repos/QAtlasHub/doiget/releases"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(serde_json::json!([{
                 "tag_name":   "v9.0.0-beta.1",
-                "html_url":   "https://github.com/sotashimozono/doiget/releases/tag/v9.0.0-beta.1",
+                "html_url":   "https://github.com/QAtlasHub/doiget/releases/tag/v9.0.0-beta.1",
                 "draft":      false,
                 "prerelease": false,
             }])),
@@ -270,7 +270,7 @@ async fn version_check_picks_first_stable_skipping_unstable() {
     let server = MockServer::start().await;
     // First entry is a draft; second is the stable release to pick.
     Mock::given(method("GET"))
-        .and(path("/repos/sotashimozono/doiget/releases"))
+        .and(path("/repos/QAtlasHub/doiget/releases"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
                 "tag_name":   "v10.0.0",
@@ -280,7 +280,7 @@ async fn version_check_picks_first_stable_skipping_unstable() {
             },
             {
                 "tag_name":   "v0.9.0",
-                "html_url":   "https://github.com/sotashimozono/doiget/releases/tag/v0.9.0",
+                "html_url":   "https://github.com/QAtlasHub/doiget/releases/tag/v0.9.0",
                 "draft":      false,
                 "prerelease": false,
             }
@@ -309,7 +309,7 @@ async fn version_check_picks_first_stable_skipping_unstable() {
 async fn version_check_rate_limited_json_reports_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/repos/sotashimozono/doiget/releases"))
+        .and(path("/repos/QAtlasHub/doiget/releases"))
         .respond_with(ResponseTemplate::new(403))
         .mount(&server)
         .await;
@@ -339,7 +339,7 @@ async fn version_check_rate_limited_json_reports_error() {
 async fn version_check_rate_limited_human_exits_zero() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/repos/sotashimozono/doiget/releases"))
+        .and(path("/repos/QAtlasHub/doiget/releases"))
         .respond_with(ResponseTemplate::new(403))
         .mount(&server)
         .await;
@@ -357,7 +357,7 @@ async fn version_check_rate_limited_human_exits_zero() {
 async fn version_check_empty_releases_reports_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/repos/sotashimozono/doiget/releases"))
+        .and(path("/repos/QAtlasHub/doiget/releases"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
         .mount(&server)
         .await;
@@ -400,9 +400,9 @@ async fn version_check_quiet_suppresses_network_call() {
 async fn version_check_newer_available_human_prints_release_url() {
     let server = MockServer::start().await;
     let tag = "v1.0.0";
-    let expected_url = format!("https://github.com/sotashimozono/doiget/releases/tag/{tag}");
+    let expected_url = format!("https://github.com/QAtlasHub/doiget/releases/tag/{tag}");
     Mock::given(method("GET"))
-        .and(path("/repos/sotashimozono/doiget/releases"))
+        .and(path("/repos/QAtlasHub/doiget/releases"))
         .respond_with(ResponseTemplate::new(200).set_body_json(releases_body(tag, false, false)))
         .mount(&server)
         .await;
@@ -421,7 +421,7 @@ async fn version_check_json_up_to_date_newer_available_false() {
     let server = MockServer::start().await;
     // v0.1.0 is older than any current build — newer_available must be false.
     Mock::given(method("GET"))
-        .and(path("/repos/sotashimozono/doiget/releases"))
+        .and(path("/repos/QAtlasHub/doiget/releases"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(releases_body("v0.1.0", false, false)),
         )

@@ -55,7 +55,7 @@
 
           meta = with pkgs.lib; {
             description = "Open-access academic paper fetcher and stdio MCP server";
-            homepage    = "https://github.com/sotashimozono/doiget";
+            homepage    = "https://github.com/QAtlasHub/doiget";
             license     = licenses.mit;
             maintainers = [];
             platforms   = platforms.unix ++ platforms.windows;

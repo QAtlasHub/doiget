@@ -53,7 +53,7 @@ Wire form (JSON / MCP): `"INVALID_REF"`, `"NO_OA_AVAILABLE"`, etc.
 | `FETCH_TIMEOUT` | Per-request timeout exceeded. | Retry. |
 | `SCHEMA_TOO_NEW` | Store entry's `schema_version` is ahead. | Upgrade doiget. |
 | `LOCK_TIMEOUT` | Could not acquire `flock` within 5 s. | Retry; another process holds it. |
-| `INTERNAL_ERROR` | Bug. | Report at <https://github.com/sotashimozono/doiget/issues>. |
+| `INTERNAL_ERROR` | Bug. | Report at <https://github.com/QAtlasHub/doiget/issues>. |
 | `NOT_IMPLEMENTED` | Feature is spec'd but not yet wired in this Phase. | Wait for next minor release; do not retry. |
 | `TEXT_UNAVAILABLE` | The id is valid and resolvable, but the **requested representation** is missing: `doiget text` got a 200 from ar5iv with no extractable prose (the paper was never converted to HTML). Distinct from `NOT_FOUND` (the id *does* exist) and `NO_OA_AVAILABLE` (the paper may still be OA — only the HTML render is missing). Issue #302. | Yes — fetch the PDF instead (`doiget fetch <id>`); do not "fix" the identifier. |
 
