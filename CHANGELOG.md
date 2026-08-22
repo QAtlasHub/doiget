@@ -10,6 +10,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.8-beta.3] - 2026-08-22
+
+### Added
+- **[cli]** `doiget config init` writes a fully commented `config.toml` template to
+  the resolved config path. A fresh install has no config file, nothing created
+  one, and three of the four settings that decide a session's outcome — store
+  location and the two allowlist flags — fail silently when it is absent. Every
+  line in the template is commented out, so it documents the choices without
+  changing behaviour; each comment says what the default actually is, not just
+  what the key is called. `--force` overwrites, and without it `init` refuses
+  rather than replace a file that may hold a hand-written allowlist (#408).
+
 ## [0.8.8-beta.2] - 2026-08-22
 
 ### Changed
