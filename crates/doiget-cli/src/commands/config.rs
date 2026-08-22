@@ -200,9 +200,10 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
                 Ok(cfg_ext) => {
                     check(
                         &format!(
-                            "user-extension hosts loaded: {} (trust_academic_repos={})",
+                            "user-extension hosts loaded: {} (academic={}, oa_registries={})",
                             cfg_ext.additional_hosts.len(),
-                            cfg_ext.trust_academic_repos
+                            cfg_ext.trust_academic_repos,
+                            cfg_ext.trust_oa_registries
                         ),
                         true,
                         None,
@@ -217,19 +218,23 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
                     // passing check by design, so this is a separate
                     // advisory line — the check itself stays `[ ok ]`,
                     // because having no config is a valid posture.
-                    if !cfg_ext.trust_academic_repos && cfg_ext.additional_hosts.is_empty() {
+                    let widened = cfg_ext.trust_academic_repos
+                        || cfg_ext.trust_oa_registries
+                        || !cfg_ext.additional_hosts.is_empty();
+                    if !widened {
+                        eprintln!("       note: built-in allowlist only. To widen it, edit");
+                        eprintln!("             {}", cfg.config_path);
                         eprintln!(
-                            "       note: built-in allowlist only. To also allow academic \
-                             repositories"
+                            "             [network] trust_academic_repos = true   # *.ac.uk, \
+                             *.ac.jp, ..."
                         );
                         eprintln!(
-                            "             ([network] trust_academic_repos = true) or specific \
-                             hosts"
+                            "             [network] trust_oa_registries  = true   # DOAJ, \
+                             SciELO, Zenodo, ..."
                         );
                         eprintln!(
-                            "             ([[network.additional_hosts]]), edit {} \
-                             — docs/CONFIG.md §3.1",
-                            cfg.config_path
+                            "             [[network.additional_hosts]]            # anything \
+                             else — docs/CONFIG.md §3.1"
                         );
                     }
                 }

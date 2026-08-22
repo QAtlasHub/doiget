@@ -65,6 +65,7 @@ total_timeout_sec = 300
 # Without them, an OA PDF hosted off the built-in allowlist is denied with
 # `error[CAPABILITY_DENIED]: ... redirect_not_in_allowlist`.
 trust_academic_repos = false   # true = also allow the 15 curated academic suffixes below
+trust_oa_registries  = false   # true = also allow the curated OA registries (DOAJ, SciELO, ...)
 
 [[network.additional_hosts]]
 host = "*.uj.edu.pl"           # single-suffix wildcard, or a literal FQDN
@@ -101,8 +102,13 @@ runs against the built-in allowlist only.
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
-| `trust_academic_repos` | bool | `false` | Adds 15 curated single-suffix academic wildcards to the allowlist. |
+| `trust_academic_repos` | bool | `false` | Adds 15 curated single-suffix academic wildcards — where institutions host their own **Green OA**. |
+| `trust_oa_registries` | bool | `false` | Adds the curated **OA registries / repositories** — where cross-publisher **Gold OA** is indexed or hosted. |
 | `[[network.additional_hosts]]` | array of tables | empty | Adds individual hosts. `host` is required; `note` is optional and free-text. |
+
+The two flags are separate because the trust arguments differ — "this institution
+publishes its own work here" is not "this registry indexes open content across
+publishers" — so you can take either without the other.
 
 `trust_academic_repos = true` activates exactly these patterns, which cover the national
 registration blocks institutions use for Green-OA repositories:
@@ -120,7 +126,25 @@ So the denial above is fixed by one line — `strathprints.strath.ac.uk` is `.ac
 trust_academic_repos = true
 ```
 
-`[[network.additional_hosts]]` is for anything outside that set. A pattern is either a
+`trust_oa_registries = true` activates the OA-registry set:
+
+```
+doaj.org      *.doaj.org      scielo.org    *.scielo.org   *.scielo.br
+zenodo.org    *.zenodo.org    osf.io        *.osf.io
+hal.science   *.hal.science   core.ac.uk
+```
+
+Every entry is a registry or repository whose *purpose* is open distribution, never a
+publisher platform — turning this on must not become a way to reach paywalled content.
+Note that both the apex (`doaj.org`) and the wildcard (`*.doaj.org`) appear: a
+single-suffix wildcard does **not** match the apex, and DOAJ redirects to the apex.
+
+Without this flag a Gold-OA article routed through DOAJ — e.g. IEEE Access
+`10.1109/access.2024.3495502` — is denied on a stock install, while a Green-OA copy on
+an institutional repository is reachable behind `trust_academic_repos`. For an
+open-access tool that polarity is backwards, which is why the flag exists.
+
+`[[network.additional_hosts]]` is for anything outside either set. A pattern is either a
 literal FQDN (`ruj.uj.edu.pl`) or a **single-suffix wildcard** (`*.uj.edu.pl`). Multi-segment
 globs (`*.edu.*`), a bare `*`, and a misplaced `*` (`foo.*.org`) are rejected at load time —
 this table uses `deny_unknown_fields`, so a typo such as `hsot = "..."` fails loudly rather

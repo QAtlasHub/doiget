@@ -22,6 +22,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   unset contact address actually costs: Unpaywall is still queried, but with the
   `doiget@localhost` placeholder, i.e. from the non-polite pool (#405).
 
+### Added
+- **[network]** New opt-in `[network] trust_oa_registries = true`, the Gold-OA
+  companion to `trust_academic_repos`. Adds a curated set of open-access
+  **registries / repositories** — DOAJ, SciELO, Zenodo, OSF, HAL, CORE — to the
+  allowlist. Separate flag because the trust argument differs: one is "this
+  institution publishes its own work here", the other is "this registry indexes
+  open content across publishers". Before this, a Green-OA copy on an
+  institutional repository was reachable behind one flag while a Gold-OA article
+  routed through DOAJ was not reachable at all, which is backwards for an
+  open-access tool (#405). Both the apex (`doaj.org`) and the wildcard are listed:
+  a single-suffix wildcard does not match an apex, and DOAJ redirects to the apex.
+
 ### Changed
 - **[cli]** A `redirect_not_in_allowlist` denial now emits a `= help:` block naming
   the config file and both allowlist keys, echoing the attempted host into a

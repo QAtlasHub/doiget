@@ -284,10 +284,17 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
                         if cfg.trust_academic_repos {
                             hosts.extend(doiget_core::user_extension::academic_repo_hosts());
                         }
+                        // Issue #405: the Gold-OA counterpart. Separate flag
+                        // because the trust argument is different — see
+                        // `oa_registry_hosts`.
+                        if cfg.trust_oa_registries {
+                            hosts.extend(doiget_core::user_extension::oa_registry_hosts());
+                        }
                         if !hosts.is_empty() {
                             tracing::info!(
                                 count = hosts.len(),
                                 trust_academic_repos = cfg.trust_academic_repos,
+                                trust_oa_registries = cfg.trust_oa_registries,
                                 path = %path,
                                 "merging user-extension allowlist hosts (ADR-0028 D2)"
                             );
@@ -1074,6 +1081,10 @@ fn denial_note_lines(dc: &DenialContext, config_path: Option<&camino::Utf8Path>)
         "          [network] trust_academic_repos = true   # 15 curated academic suffixes"
             .to_string(),
     );
+    out.push(
+        "          [network] trust_oa_registries  = true   # DOAJ, SciELO, Zenodo, OSF, HAL"
+            .to_string(),
+    );
     if dc.attempted.is_some() {
         out.push(format!(
             "          [[network.additional_hosts]] host = \"{attempted}\"   # or this one"
@@ -1294,6 +1305,101 @@ host = "*.uj.edu.pl"
         assert!(
             !oa.matches("ruj.uj.edu.ru"),
             "host outside the suffix MUST NOT match"
+        );
+    }
+
+    /// Issue #405: `[network] trust_oa_registries = true` MUST widen the
+    /// production `oa-publisher` allowlist through the same
+    /// `build_http_client` path a real fetch takes — the flag is worthless
+    /// if it only sets a struct field. Pinned on the exact host that
+    /// denied the reported Gold-OA fetch (`doaj.org`, an apex, which a
+    /// single-suffix wildcard would NOT cover), and on the academic flag
+    /// staying off so the two sets cannot silently imply each other.
+    #[test]
+    #[serial]
+    fn build_http_client_merges_oa_registries_when_flag_is_set() {
+        use std::io::Write;
+
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let cfg_dir = td.path().join("doiget");
+        std::fs::create_dir_all(&cfg_dir).expect("mkdir doiget/");
+        let mut f = std::fs::File::create(cfg_dir.join("config.toml")).expect("create config");
+        f.write_all(b"[network]\ntrust_oa_registries = true\n")
+            .expect("write config.toml");
+        drop(f);
+
+        struct EnvGuard {
+            key: &'static str,
+            prev: Option<String>,
+        }
+        impl EnvGuard {
+            fn save(key: &'static str) -> Self {
+                Self {
+                    key,
+                    prev: std::env::var(key).ok(),
+                }
+            }
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.prev {
+                    Some(v) => std::env::set_var(self.key, v),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+        let _g: Vec<EnvGuard> = [
+            "XDG_CONFIG_HOME",
+            "APPDATA",
+            "HOME",
+            "USERPROFILE",
+            "DOIGET_ARXIV_BASE",
+            "DOIGET_CROSSREF_BASE",
+            "DOIGET_UNPAYWALL_BASE",
+            "DOIGET_OA_PUBLISHER_BASE",
+            "DOIGET_OPENALEX_BASE",
+        ]
+        .iter()
+        .map(|k| EnvGuard::save(k))
+        .collect();
+        for k in ["XDG_CONFIG_HOME", "APPDATA", "HOME", "USERPROFILE"] {
+            std::env::set_var(k, td.path());
+        }
+        for k in [
+            "DOIGET_ARXIV_BASE",
+            "DOIGET_CROSSREF_BASE",
+            "DOIGET_UNPAYWALL_BASE",
+            "DOIGET_OA_PUBLISHER_BASE",
+            "DOIGET_OPENALEX_BASE",
+        ] {
+            std::env::remove_var(k);
+        }
+
+        let client = build_http_client(None).expect("HttpClient builds");
+        let oa = client
+            .source_allowlist("oa-publisher")
+            .expect("oa-publisher source registered");
+
+        assert!(
+            oa.matches("doaj.org"),
+            "the apex that denied 10.1109/access.2024.3495502 MUST match; got {:?}",
+            oa.redirect_hosts
+        );
+        assert!(oa.matches("www.doaj.org"), "wildcard covers subdomains");
+        assert!(oa.matches("zenodo.org"), "zenodo apex must match");
+        assert!(
+            oa.redirect_hosts.iter().any(|p| p == "*.aps.org"),
+            "the curated allowlist MUST survive the merge"
+        );
+        // The academic flag was NOT set, so its set must NOT be merged —
+        // otherwise one flag silently grants what the other advertises.
+        assert!(
+            !oa.matches("strathprints.strath.ac.uk"),
+            "trust_oa_registries MUST NOT imply trust_academic_repos"
+        );
+        assert!(
+            !oa.matches("evil.example.com"),
+            "unrelated host still denied"
         );
     }
 
