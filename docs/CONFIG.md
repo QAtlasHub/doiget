@@ -226,6 +226,54 @@ agreed = true
 
 If both env var and credentials.toml provide the same key, env var wins.
 
+## 6.1 Institutional networks: what works and what does not
+
+Being on a subscribing university network does **not** make paywalled content
+fetchable. Two independent things sit in the way, and only one of them is doiget's:
+
+1. **The allowlist.** IEEE, ACM, SIAM and AMS are not on the default `oa-publisher`
+   allowlist, so doiget will not attempt the publisher leg for them at all.
+2. **The publisher's bot wall.** Even from a subscribing address, a scripted client
+   commonly gets `202 Accepted` with an **empty body** — a challenge holding response,
+   not a paywall and not a 403. The subscription is not the binding constraint; being a
+   program is.
+
+So widening the allowlist alone would not fix such a fetch; it would move the failure
+one step later. `HTTPS_PROXY` is honoured (§4), but a proxy fixes *addressing*, never
+the bot wall — and if you are already on the subscribing network, tunnelling elsewhere
+routes you away from your entitlement.
+
+The two routes that do work:
+
+- **Per-publisher TDM credentials** (§6). This is the interface publishers intend
+  programs to use, and it sidesteps the WAF by not being the web front end.
+- **A real browser** on the subscribing network.
+
+`doiget config doctor --network` reports which of your publishers will actually talk to
+this client:
+
+```
+$ doiget config doctor --network
+network (--network):
+  egress          not probed (needs a third-party echo service; try `curl ifconfig.me`)
+                  a proxy fixes addressing, never a bot wall
+  unpaywall       polite pool as you@institution.edu
+  oa-publisher    22 host patterns allowlisted
+  probe link.springer.com      200 3100 bytes    ok
+  probe arxiv.org              200 5854 bytes    ok
+  probe ieeexplore.ieee.org    not allowlisted   no request sent; ...
+  probe doaj.org               not allowlisted   no request sent; ...
+```
+
+The flag is opt-in because it makes real outbound requests: one GET per listed host, no
+retries, and only against hosts already on the allowlist — the probe enforces the same
+allowlist a fetch would, so it cannot be pointed at an arbitrary host. Hosts that are
+**not** allowlisted are still listed, reported as `not allowlisted` with no request
+sent; that line is usually the answer.
+
+`202` with an empty body is called out as a bot challenge rather than reported as a
+success, because a status code alone cannot distinguish the two.
+
 ## 7. Inspecting effective config
 
 ```sh
