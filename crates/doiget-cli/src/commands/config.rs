@@ -784,9 +784,9 @@ mod tests {
     /// test covers the wiring on the one platform where it CAN be
     /// exercised in a hermetic test.
     #[cfg(target_os = "linux")]
-    #[test]
+    #[tokio::test]
     #[serial_test::serial]
-    fn doctor_fails_with_malformed_user_extension_config() {
+    async fn doctor_fails_with_malformed_user_extension_config() {
         let _g = unset_all_doiget_config_env();
         let _email = EnvGuard::set("DOIGET_CONTACT_EMAIL", "alice@example.org");
 
@@ -805,9 +805,10 @@ mod tests {
         )
         .expect("write config.toml");
 
-        // POSIX `dirs::config_dir()` honors `XDG_CONFIG_HOME` first,
-        // so pointing it at our tempdir routes `cfg.config_path` to
-        // our crafted file.
+        // `fetch::config_dir_utf8()` — which `ResolvedConfig` now shares
+        // with the reader — honors `XDG_CONFIG_HOME` first on every
+        // platform, so pointing it at our tempdir routes
+        // `cfg.config_path` to our crafted file.
         let _x = EnvGuard::set("XDG_CONFIG_HOME", cfg_root.as_str());
 
         let err = run(
