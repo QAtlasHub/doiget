@@ -289,6 +289,10 @@ struct RawNetwork {
     /// academic institution allowlist (issue #323). See [`academic_repo_hosts`].
     #[serde(default)]
     trust_academic_repos: bool,
+    /// `[network] trust_oa_registries = true` — activates the built-in curated
+    /// open-access registry allowlist (issue #405). See [`oa_registry_hosts`].
+    #[serde(default)]
+    trust_oa_registries: bool,
     #[serde(flatten)]
     _other: serde::de::IgnoredAny,
 }
@@ -318,6 +322,10 @@ pub struct UserExtensionConfig {
     /// `config.toml`. Callers that respect this flag SHOULD merge
     /// [`academic_repo_hosts`] into their allowlist.
     pub trust_academic_repos: bool,
+    /// `true` when `[network] trust_oa_registries = true` is set in
+    /// `config.toml`. Callers that respect this flag SHOULD merge
+    /// [`oa_registry_hosts`] into their allowlist.
+    pub trust_oa_registries: bool,
 }
 
 /// Returns the built-in curated set of academic institution host patterns.
@@ -359,6 +367,57 @@ pub fn academic_repo_hosts() -> Vec<UserExtensionHost> {
         .collect()
 }
 
+/// Returns the built-in curated set of open-access **registry** host
+/// patterns.
+///
+/// Activated via `[network] trust_oa_registries = true` in `config.toml`
+/// (issue #405). Companion to [`academic_repo_hosts`], and deliberately a
+/// separate flag: that set is "institutions publish their own Green OA
+/// here", this one is "cross-publisher registries and repositories index
+/// or host Gold OA here". They are different trust arguments, so a user
+/// can take either without the other.
+///
+/// Why this exists: the default allowlist covers publishers, so a Green-OA
+/// copy on an institutional repository was reachable behind one flag while
+/// a Gold-OA article routed through DOAJ was not reachable at all. For an
+/// open-access tool that polarity is backwards — `10.1109/access.2024.3495502`
+/// (IEEE Access, gold OA) is denied at `doaj.org` on a stock install.
+///
+/// Every entry is a registry or repository whose *purpose* is open
+/// distribution, not a publisher platform — enabling this must not become
+/// a way to reach paywalled content. Both the apex and the `*.` wildcard
+/// are listed where the apex itself serves content: a single-suffix
+/// wildcard does not match the apex ([`validate_pattern`]), and the DOAJ
+/// redirect in #405 targeted the bare apex.
+pub fn oa_registry_hosts() -> Vec<UserExtensionHost> {
+    const PATTERNS: &[(&str, &str)] = &[
+        ("doaj.org", "DOAJ — Directory of Open Access Journals"),
+        ("*.doaj.org", "DOAJ subdomains"),
+        ("scielo.org", "SciELO — Latin American / Iberian OA network"),
+        ("*.scielo.org", "SciELO national portals"),
+        ("*.scielo.br", "SciELO Brazil"),
+        ("zenodo.org", "Zenodo — CERN general-purpose OA repository"),
+        ("*.zenodo.org", "Zenodo subdomains"),
+        ("osf.io", "OSF / OSF Preprints (Center for Open Science)"),
+        ("*.osf.io", "OSF preprint servers (psyarxiv, socarxiv, ...)"),
+        ("hal.science", "HAL — French national OA repository"),
+        ("*.hal.science", "HAL institutional portals"),
+        (
+            "core.ac.uk",
+            "CORE — OA aggregator (Open University / Jisc)",
+        ),
+    ];
+    PATTERNS
+        .iter()
+        .filter_map(|(pat, note)| {
+            HostPattern::new(*pat).ok().map(|host| UserExtensionHost {
+                host,
+                note: Some(note.to_string()),
+            })
+        })
+        .collect()
+}
+
 /// Parse a `config.toml` body string. Pure function; the path is used
 /// only for error messages.
 fn parse_str(
@@ -371,6 +430,7 @@ fn parse_str(
     })?;
     let raw_net = raw.network.unwrap_or_default();
     let trust_academic_repos = raw_net.trust_academic_repos;
+    let trust_oa_registries = raw_net.trust_oa_registries;
     let raw_hosts = raw_net.additional_hosts;
 
     // Two-phase: collect ALL invalid patterns rather than failing on
@@ -399,6 +459,7 @@ fn parse_str(
     Ok(UserExtensionConfig {
         additional_hosts: validated,
         trust_academic_repos,
+        trust_oa_registries,
     })
 }
 
@@ -940,6 +1001,79 @@ host = "*.uj.edu.pl"
         let cfg = parse_str(toml, p("config.toml")).unwrap();
         assert!(cfg.trust_academic_repos);
         assert_eq!(cfg.additional_hosts, vec![]);
+    }
+
+    // ---- trust_oa_registries (#405) ----------------------------------
+
+    #[test]
+    fn parse_trust_oa_registries_false_by_default() {
+        let cfg = parse_str("[network]\n", p("config.toml")).unwrap();
+        assert!(!cfg.trust_oa_registries);
+    }
+
+    #[test]
+    fn parse_trust_oa_registries_true_when_set() {
+        let toml = "[network]\ntrust_oa_registries = true";
+        let cfg = parse_str(toml, p("config.toml")).unwrap();
+        assert!(cfg.trust_oa_registries);
+        // Independent of the academic flag — the two trust arguments are
+        // different, so taking one must not imply the other.
+        assert!(!cfg.trust_academic_repos);
+        assert_eq!(cfg.additional_hosts, vec![]);
+    }
+
+    #[test]
+    fn oa_registry_hosts_are_valid_patterns() {
+        let hosts = oa_registry_hosts();
+        assert!(
+            !hosts.is_empty(),
+            "at least one OA registry pattern expected"
+        );
+        for h in &hosts {
+            // Every entry must survive the ADR-0028 D2-1 validator. Unlike
+            // the academic set these include bare apexes (`doaj.org`), so
+            // the assertion is validity, not wildcard shape.
+            validate_pattern(h.host.as_str()).unwrap_or_else(|e| {
+                panic!("invalid OA registry pattern {}: {e:?}", h.host.as_str())
+            });
+            assert!(
+                h.note.is_some(),
+                "every curated entry carries a note: {}",
+                h.host.as_str()
+            );
+        }
+    }
+
+    /// The denial that motivated #405 targeted the bare apex `doaj.org`.
+    /// A single-suffix wildcard does not match an apex, so the apex MUST be
+    /// listed separately or the flag would not fix the reported case.
+    #[test]
+    fn oa_registry_hosts_cover_the_doaj_apex_that_motivated_405() {
+        let hosts = oa_registry_hosts();
+        let patterns: Vec<&str> = hosts.iter().map(|h| h.host.as_str()).collect();
+        for expected in &["doaj.org", "*.doaj.org", "scielo.org", "zenodo.org"] {
+            assert!(
+                patterns.contains(expected),
+                "expected OA registry pattern {expected} not found in {patterns:?}"
+            );
+        }
+    }
+
+    /// The two curated sets must stay disjoint: an entry in both would make
+    /// one flag silently widen what the other advertises.
+    #[test]
+    fn curated_sets_are_disjoint() {
+        let academic: Vec<String> = academic_repo_hosts()
+            .iter()
+            .map(|h| h.host.as_str().to_string())
+            .collect();
+        for h in oa_registry_hosts() {
+            assert!(
+                !academic.contains(&h.host.as_str().to_string()),
+                "{} is in both curated sets",
+                h.host.as_str()
+            );
+        }
     }
 
     #[test]

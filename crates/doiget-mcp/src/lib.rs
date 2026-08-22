@@ -3777,10 +3777,17 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
                         if cfg.trust_academic_repos {
                             hosts.extend(doiget_core::user_extension::academic_repo_hosts());
                         }
+                        // Issue #405: the Gold-OA counterpart. Separate flag
+                        // because the trust argument is different — see
+                        // `oa_registry_hosts`.
+                        if cfg.trust_oa_registries {
+                            hosts.extend(doiget_core::user_extension::oa_registry_hosts());
+                        }
                         if !hosts.is_empty() {
                             tracing::info!(
                                 count = hosts.len(),
                                 trust_academic_repos = cfg.trust_academic_repos,
+                                trust_oa_registries = cfg.trust_oa_registries,
                                 path = %path,
                                 "merging user-extension allowlist hosts (ADR-0028 D2)"
                             );

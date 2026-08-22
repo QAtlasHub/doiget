@@ -53,6 +53,20 @@ pub mod graph;
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 
+/// Resolve the path of the user `config.toml`, for messages that need to
+/// name the file the user must edit.
+///
+/// Same resolution as [`config::ResolvedConfig::from_env`]
+/// (`<dirs::config_dir()>/doiget/config.toml`), kept here so the fetch-side
+/// denial help (issue #405) and `config doctor` cannot drift. Returns
+/// `None` only when the platform has no config dir at all, in which case
+/// callers should fall back to naming the file generically — a missing
+/// config dir must never turn an advisory line into a hard error.
+pub(crate) fn user_config_path() -> Option<Utf8PathBuf> {
+    let cfg = Utf8PathBuf::try_from(dirs::config_dir()?).ok()?;
+    Some(cfg.join("doiget").join("config.toml"))
+}
+
 /// Resolve the on-disk store root.
 ///
 /// Resolution order (subset of `docs/CONFIG.md` §4 — full CLI-flag /

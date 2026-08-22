@@ -60,13 +60,24 @@ impl ResolvedConfig {
     /// (an unknown / locked-down platform); on every realistic POSIX or
     /// Windows host this returns `Ok` even with no `DOIGET_*` env vars set.
     pub fn from_env() -> Result<Self> {
-        // `dirs::config_dir()` returns `std::path::PathBuf`; hoist it into
-        // `Utf8PathBuf` immediately at the OS boundary so the rest of the
-        // function (and the public struct) stays UTF-8-only per the workspace
-        // `disallowed-types` clippy rule.
-        let cfg = Utf8PathBuf::try_from(
-            dirs::config_dir().ok_or_else(|| anyhow::anyhow!("no config dir"))?,
-        )?;
+        // Issue #405: resolve the config dir the SAME way the READER does
+        // (`commands::fetch::config_dir_utf8`, which `build_http_client`
+        // uses to load `[[network.additional_hosts]]`), for the same
+        // reason `store_root` and `log_path` already reuse their writers'
+        // resolvers — `config show` / `config path` / `doctor` must never
+        // name a file other than the one that is actually read.
+        //
+        // They diverged before this: `dirs::config_dir()` resolves the
+        // Windows roaming AppData through the known-folder API and ignores
+        // `XDG_CONFIG_HOME` entirely, while `config_dir_utf8()` checks
+        // `XDG_CONFIG_HOME` first on every platform. So on Windows a user
+        // with `XDG_CONFIG_HOME` set — normal for cross-platform dotfiles —
+        // got `doiget fetch` reading one `config.toml` while
+        // `doiget config doctor` validated a different one and reported
+        // "user-extension hosts loaded: 0" about a file the fetch path had
+        // never opened. That makes the #405 doctor hint point at the wrong
+        // file, which is worse than not printing it.
+        let cfg = super::fetch::config_dir_utf8()?;
 
         // Store root: identical resolution to where artifacts actually land
         // (`super::resolve_store_root`) so `config show` / `doctor` never drifts
@@ -171,7 +182,7 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
             );
             if std::env::var_os("DOIGET_STORE_ROOT").is_none() {
                 eprintln!(
-                    "       note: relative to the current directory (ADR-0036). Set                      DOIGET_STORE_ROOT"
+                    "       note: relative to the current directory (ADR-0036). Set DOIGET_STORE_ROOT"
                 );
                 eprintln!("             (or store.root in config.toml) for one central library.");
             }
@@ -214,16 +225,47 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
             // `Ok(vec![])` for not-found, so the OK arm always reports
             // a count.
             match doiget_core::user_extension::load(&cfg.config_path) {
-                Ok(cfg_ext) => check(
-                    &format!(
-                        "user-extension hosts loaded: {} (trust_academic_repos={})",
-                        cfg_ext.additional_hosts.len(),
-                        cfg_ext.trust_academic_repos
-                    ),
-                    true,
-                    None,
-                    &mut all_ok,
-                ),
+                Ok(cfg_ext) => {
+                    check(
+                        &format!(
+                            "user-extension hosts loaded: {} (academic={}, oa_registries={})",
+                            cfg_ext.additional_hosts.len(),
+                            cfg_ext.trust_academic_repos,
+                            cfg_ext.trust_oa_registries
+                        ),
+                        true,
+                        None,
+                        &mut all_ok,
+                    );
+                    // Issue #405: reporting `trust_academic_repos=false`
+                    // states the fact without naming the fix, and a default
+                    // install (no config.toml at all) is exactly the posture
+                    // whose OA fetches get denied at an off-allowlist
+                    // redirect. When nothing has widened the allowlist, name
+                    // the file and both keys. `check` swallows tips on a
+                    // passing check by design, so this is a separate
+                    // advisory line — the check itself stays `[ ok ]`,
+                    // because having no config is a valid posture.
+                    let widened = cfg_ext.trust_academic_repos
+                        || cfg_ext.trust_oa_registries
+                        || !cfg_ext.additional_hosts.is_empty();
+                    if !widened {
+                        eprintln!("       note: built-in allowlist only. To widen it, edit");
+                        eprintln!("             {}", cfg.config_path);
+                        eprintln!(
+                            "             [network] trust_academic_repos = true   # *.ac.uk, \
+                             *.ac.jp, ..."
+                        );
+                        eprintln!(
+                            "             [network] trust_oa_registries  = true   # DOAJ, \
+                             SciELO, Zenodo, ..."
+                        );
+                        eprintln!(
+                            "             [[network.additional_hosts]]            # anything \
+                             else — docs/CONFIG.md §3.1"
+                        );
+                    }
+                }
                 Err(e) => check(
                     &format!("user-extension config invalid: {e}"),
                     false,
@@ -363,6 +405,51 @@ mod tests {
         );
         assert_eq!(cfg.contact_email, None);
         assert_eq!(cfg.unpaywall_email, None);
+    }
+
+    /// Issue #405: `config show` / `config path` / `doctor` MUST name the
+    /// same `config.toml` that `build_http_client` reads. Before this,
+    /// `ResolvedConfig` used `dirs::config_dir()` while the reader used
+    /// `fetch::config_dir_utf8()`; on Windows the former ignores
+    /// `XDG_CONFIG_HOME` (known-folder API), so the doctor validated a
+    /// file the fetch path never opened.
+    #[test]
+    #[serial_test::serial]
+    fn config_path_matches_the_resolver_the_reader_uses() {
+        struct EnvGuard(&'static str, Option<String>);
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.1 {
+                    Some(v) => std::env::set_var(self.0, v),
+                    None => std::env::remove_var(self.0),
+                }
+            }
+        }
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let _guards: Vec<EnvGuard> = ["XDG_CONFIG_HOME", "APPDATA", "HOME", "USERPROFILE"]
+            .iter()
+            .map(|k| EnvGuard(k, std::env::var(k).ok()))
+            .collect();
+        std::env::set_var("XDG_CONFIG_HOME", td.path());
+
+        let cfg = ResolvedConfig::from_env().expect("resolve config");
+        let reader = crate::commands::fetch::config_dir_utf8()
+            .expect("reader resolves")
+            .join("doiget")
+            .join("config.toml");
+        assert_eq!(
+            cfg.config_path, reader,
+            "doctor must validate the file the reader loads"
+        );
+        assert!(
+            cfg.config_path.as_str().starts_with(
+                camino::Utf8Path::from_path(td.path())
+                    .expect("utf-8 tempdir")
+                    .as_str()
+            ),
+            "XDG_CONFIG_HOME must win on every platform; got {}",
+            cfg.config_path
+        );
     }
 
     #[test]

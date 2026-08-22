@@ -10,6 +10,49 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.7-beta.7] - 2026-08-22
+
+### Added
+- **[docs]** `docs/CONFIG.md` §3.1 documents the two `[network]` keys that decide
+  whether a fetch is allowed — `trust_academic_repos` (the 15 curated academic
+  suffixes) and `[[network.additional_hosts]]`. Both shipped in 0.8.0 but appeared
+  only in `CHANGELOG.md`, so §3 read as if `user_agent` / `unpaywall_email` / the
+  three timeouts were the whole `[network]` section (#405).
+- **[docs]** `docs/CONFIG.md` §4 lists `DOIGET_CONTACT_EMAIL` and states what an
+  unset contact address actually costs: Unpaywall is still queried, but with the
+  `doiget@localhost` placeholder, i.e. from the non-polite pool (#405).
+
+### Added
+- **[network]** New opt-in `[network] trust_oa_registries = true`, the Gold-OA
+  companion to `trust_academic_repos`. Adds a curated set of open-access
+  **registries / repositories** — DOAJ, SciELO, Zenodo, OSF, HAL, CORE — to the
+  allowlist. Separate flag because the trust argument differs: one is "this
+  institution publishes its own work here", the other is "this registry indexes
+  open content across publishers". Before this, a Green-OA copy on an
+  institutional repository was reachable behind one flag while a Gold-OA article
+  routed through DOAJ was not reachable at all, which is backwards for an
+  open-access tool (#405). Both the apex (`doaj.org`) and the wildcard are listed:
+  a single-suffix wildcard does not match an apex, and DOAJ redirects to the apex.
+
+### Changed
+- **[cli]** A `redirect_not_in_allowlist` denial now emits a `= help:` block naming
+  the config file and both allowlist keys, echoing the attempted host into a
+  copy-pasteable `[[network.additional_hosts]]` line. The denial previously printed
+  the host and the allowlist only, which reads as "this host is forbidden" rather
+  than "you have not enabled the class it belongs to" (#405).
+- **[cli]** `doiget config doctor` names the config file and both keys when nothing
+  has widened the allowlist, instead of reporting a bare `trust_academic_repos=false`
+  (#405).
+
+### Fixed
+- **[cli]** `doiget config show` / `config path` / `config doctor` now resolve
+  `config.toml` through the same resolver the reader uses
+  (`fetch::config_dir_utf8`) instead of `dirs::config_dir()`. The two diverged:
+  `dirs::config_dir()` ignores `XDG_CONFIG_HOME` on Windows, so a user with that
+  variable set — normal for cross-platform dotfiles — had `doiget fetch` read one
+  `config.toml` while `doiget config doctor` validated a different one and reported
+  "user-extension hosts loaded: 0" about a file the fetch path never opened (#405).
+
 ## [0.8.7-beta.6] - 2026-08-22
 
 ### Fixed
