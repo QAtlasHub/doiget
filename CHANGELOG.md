@@ -10,6 +10,17 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.7-beta.3] - 2026-08-22
+
+### Changed
+- **[deps]** Bump `ulid` 1.2.1 → 3.0.0. Breaking upstream: `Ulid::new()` was removed
+  in favour of `Ulid::generate()`. Both call sites — the CLI and MCP `session_id`
+  generators — were updated; the emitted id is unchanged (26-char Crockford base32,
+  `docs/PROVENANCE_LOG.md` §3), which `new_session_id_is_26_chars` pins.
+- **[supply-chain]** `cargo vet` exemptions for `ulid` 3.0.0 and its new random
+  backend (`rand` 0.10.2, `rand_core` 0.10.1, `chacha20` 0.10.1). `rand` 0.9.4 stays
+  in the tree for other consumers, so its exemption is kept alongside.
+
 ## [0.8.7-beta.2] - 2026-08-22
 
 ### Security
