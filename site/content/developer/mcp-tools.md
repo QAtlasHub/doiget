@@ -28,13 +28,13 @@ speaks **stdio only** ([ADR-0001](DECISIONS/), [`SCOPE.md`](SCOPE.md) §non-goal
 | `doiget_list_recent` | Last N fetched entries. |
 | `doiget_paper_pdf_path` | Return the local path of a cached PDF. **Does not read, parse, or transmit content.** |
 | `doiget_capability_profile` | Report which sources this instance is allowed to use. |
-| `doiget_health` | Operational sanity (store writable, version, schema). |
+| `doiget_health` | Operational sanity (store writable, version, schema). `store_writable` is a best-effort probe of the nearest **existing** ancestor of the store root — it creates nothing, so calling this tool never materialises `papers/` (#406). |
 
 Additional tools:
 
 | Tool | Purpose |
 |---|---|
-| `doiget_expand_citation_graph` | BFS expansion of citations. Hard-capped. |
+| `doiget_expand_citation_graph` | BFS expansion of citations. Hard-capped. **Build-gated:** advertised only when compiled with `--features citation` (ADR-0010); a default `cargo install` build omits it from `tools/list` entirely rather than advertising a tool that can only answer `NOT_IMPLEMENTED` (#379). The shipped `.mcpb` enables the feature, so Claude Desktop always sees it. |
 | `doiget_bibtex_export` | BibTeX for one or many entries. |
 | `doiget_csl_export` | CSL JSON for one or many entries. |
 | `doiget_resolve_citation` | Resolve a free-form bibliographic citation string to ranked DOI candidates. |

@@ -120,13 +120,22 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
         names.contains(&"doiget_paper_pdf_path"),
         "tools/list must include doiget_paper_pdf_path; got: {names:?}"
     );
-    // Slice 15: doiget_expand_citation_graph is always advertised
-    // (the tool method is always present; body returns NOT_IMPLEMENTED
-    // when this binary was built without --features citation).
-    assert!(
-        names.contains(&"doiget_expand_citation_graph"),
-        "tools/list must include doiget_expand_citation_graph; got: {names:?}"
-    );
+    // Issue #379: doiget_expand_citation_graph is advertised ONLY when
+    // the `citation` feature is compiled in. A feature-off build used to
+    // list it and answer NOT_IMPLEMENTED to every call, which is a tool
+    // an agent can plan around but never use; now the route is removed
+    // in `Server::new` so it is absent from tools/list entirely.
+    if cfg!(feature = "citation") {
+        assert!(
+            names.contains(&"doiget_expand_citation_graph"),
+            "--features citation must advertise the tool; got: {names:?}"
+        );
+    } else {
+        assert!(
+            !names.contains(&"doiget_expand_citation_graph"),
+            "feature-off must NOT advertise it (#379: NOT_IMPLEMENTED-only); got: {names:?}"
+        );
+    }
     // Slice 15b: BibTeX / CSL export tools.
     assert!(
         names.contains(&"doiget_bibtex_export"),
@@ -470,18 +479,26 @@ async fn doiget_metadata_only_arxiv_happy_path_returns_metadata_envelope() -> an
         .await;
 
     let td = tempfile::TempDir::new().expect("tempdir");
-    let log_path = camino::Utf8Path::from_path(td.path())
-        .expect("tempdir is utf-8")
-        .join("mcp-meta.jsonl");
+    let tmp = camino::Utf8Path::from_path(td.path()).expect("tempdir is utf-8");
+    let log_path = tmp.join("mcp-meta.jsonl");
+    let store_root = tmp.join("papers");
 
     let env = EnvGuard::new(&[
         "DOIGET_ARXIV_BASE",
         "DOIGET_CROSSREF_BASE",
         "DOIGET_UNPAYWALL_BASE",
         "DOIGET_LOG_PATH",
+        // Issue #406: without this, `doiget_metadata_only` writes its
+        // record to the ADR-0036 default store root — `./papers` under
+        // the CWD, which for a test binary is the crate directory. The
+        // suite used to leave `crates/doiget-mcp/papers/` behind, and
+        // `papers/` is not in `.gitignore`, so a `git add -A` would
+        // commit it.
+        "DOIGET_STORE_ROOT",
     ]);
     env.set("DOIGET_ARXIV_BASE", &server.uri());
     env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
 
     let (client, server_handle) = boot_in_memory_server().await?;
 
@@ -543,18 +560,26 @@ async fn doiget_metadata_only_doi_crossref_happy_path_returns_metadata_envelope(
         .await;
 
     let td = tempfile::TempDir::new().expect("tempdir");
-    let log_path = camino::Utf8Path::from_path(td.path())
-        .expect("tempdir is utf-8")
-        .join("mcp-meta.jsonl");
+    let tmp = camino::Utf8Path::from_path(td.path()).expect("tempdir is utf-8");
+    let log_path = tmp.join("mcp-meta.jsonl");
+    let store_root = tmp.join("papers");
 
     let env = EnvGuard::new(&[
         "DOIGET_ARXIV_BASE",
         "DOIGET_CROSSREF_BASE",
         "DOIGET_UNPAYWALL_BASE",
         "DOIGET_LOG_PATH",
+        // Issue #406: without this, `doiget_metadata_only` writes its
+        // record to the ADR-0036 default store root — `./papers` under
+        // the CWD, which for a test binary is the crate directory. The
+        // suite used to leave `crates/doiget-mcp/papers/` behind, and
+        // `papers/` is not in `.gitignore`, so a `git add -A` would
+        // commit it.
+        "DOIGET_STORE_ROOT",
     ]);
     env.set("DOIGET_CROSSREF_BASE", &server.uri());
     env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
 
     let (client, server_handle) = boot_in_memory_server().await?;
 
@@ -710,19 +735,27 @@ async fn doiget_metadata_only_network_failure_returns_network_error_envelope() -
         .await;
 
     let td = tempfile::TempDir::new().expect("tempdir");
-    let log_path = camino::Utf8Path::from_path(td.path())
-        .expect("tempdir is utf-8")
-        .join("mcp-meta.jsonl");
+    let tmp = camino::Utf8Path::from_path(td.path()).expect("tempdir is utf-8");
+    let log_path = tmp.join("mcp-meta.jsonl");
+    let store_root = tmp.join("papers");
 
     let env = EnvGuard::new(&[
         "DOIGET_ARXIV_BASE",
         "DOIGET_CROSSREF_BASE",
         "DOIGET_UNPAYWALL_BASE",
         "DOIGET_LOG_PATH",
+        // Issue #406: without this, `doiget_metadata_only` writes its
+        // record to the ADR-0036 default store root — `./papers` under
+        // the CWD, which for a test binary is the crate directory. The
+        // suite used to leave `crates/doiget-mcp/papers/` behind, and
+        // `papers/` is not in `.gitignore`, so a `git add -A` would
+        // commit it.
+        "DOIGET_STORE_ROOT",
     ]);
     env.set("DOIGET_CROSSREF_BASE", &server.uri());
     env.set("DOIGET_UNPAYWALL_BASE", &server.uri());
     env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
 
     let (client, server_handle) = boot_in_memory_server().await?;
 
