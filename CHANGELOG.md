@@ -10,6 +10,17 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.8-beta.1] - 2026-08-22
+
+### Fixed
+- **[ci]** Add `.cargo/audit.toml` mirroring the `[advisories] ignore` list in
+  `deny.toml`. The two tools do not share configuration — `cargo deny` reads
+  `deny.toml`, `cargo audit` reads `.cargo/audit.toml` — so the already-assessed
+  `paste` unmaintained advisory (RUSTSEC-2024-0436) was suppressed for one and
+  re-reported by the other. It stayed invisible because `rustsec/audit-check`
+  treats an informational warning as fatal on `push` but not on `pull_request`:
+  every PR was green while `main` had been red since 2026-08-10.
+
 ## [0.8.7] - 2026-08-22
 
 Security, allowlist visibility, and a network doctor. The two config keys that decide
