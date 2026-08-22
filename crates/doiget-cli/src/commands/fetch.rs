@@ -59,7 +59,7 @@ use doiget_core::{CapabilityProfile, DenialContext, DenialReason, ErrorCode, Rat
 
 /// Defer to docs/PROVENANCE_LOG.md §3: 26-char ULID per process invocation.
 pub(crate) fn new_session_id() -> String {
-    ulid::Ulid::new().to_string()
+    ulid::Ulid::generate().to_string()
 }
 
 // ---------------------------------------------------------------------------
