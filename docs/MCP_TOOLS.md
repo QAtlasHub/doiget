@@ -28,7 +28,7 @@ Additional tools:
 
 | Tool | Purpose |
 |---|---|
-| `doiget_expand_citation_graph` | BFS expansion of citations. Hard-capped. |
+| `doiget_expand_citation_graph` | BFS expansion of citations. Hard-capped. **Build-gated:** advertised only when compiled with `--features citation` (ADR-0010); a default `cargo install` build omits it from `tools/list` entirely rather than advertising a tool that can only answer `NOT_IMPLEMENTED` (#379). The shipped `.mcpb` enables the feature, so Claude Desktop always sees it. |
 | `doiget_bibtex_export` | BibTeX for one or many entries. |
 | `doiget_csl_export` | CSL JSON for one or many entries. |
 | `doiget_resolve_citation` | Resolve a free-form bibliographic citation string to ranked DOI candidates. |

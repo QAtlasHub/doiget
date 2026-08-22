@@ -89,12 +89,13 @@ use serde_json::{json, Value};
 pub struct Server {
     profile: CapabilityProfile,
     /// rmcp tool dispatch table, populated by the `#[tool_router]` macro
-    /// on the inherent impl block below. `#[tool_handler]` (in its default
-    /// configuration) uses the associated fn `Self::tool_router()` rather
-    /// than this field, but holding the router on the struct keeps the
-    /// type valid for `router = self.tool_router` if a future refactor
-    /// (e.g., merging multiple tool routers) needs that form.
-    #[allow(dead_code)]
+    /// on the inherent impl block below and then trimmed per build
+    /// features in [`Server::new`].
+    ///
+    /// `#[tool_handler(router = self.tool_router)]` reads THIS field rather
+    /// than the associated fn `Self::tool_router()`, which is what makes
+    /// the per-instance trimming visible to `tools/list` and `tools/call`
+    /// (issue #379). Do not switch the handler back to the associated fn.
     tool_router: ToolRouter<Server>,
 }
 
@@ -102,9 +103,28 @@ pub struct Server {
 impl Server {
     /// Construct a server with the given runtime capability profile.
     pub fn new(profile: CapabilityProfile) -> Self {
+        let mut tool_router = Self::tool_router();
+        // Issue #379 / #373(b): a tool that can only ever answer
+        // NOT_IMPLEMENTED is worse than an absent one — an agent will
+        // plan around it, call it, and get a dead end it cannot act on.
+        // `doiget_expand_citation_graph` needs the `citation` Cargo
+        // feature (ADR-0010), which the default `cargo install` build
+        // does not enable, so drop it from the router in that build and
+        // it disappears from `tools/list` and `tools/call` alike.
+        //
+        // The `#[tool]` method itself stays unconditional: rmcp's
+        // `#[tool_router]` macro generates registration code that names
+        // every `#[tool]` method, so `#[cfg]`-gating the method out does
+        // not compile (E0599 on the generated `..._tool_attr`). Removing
+        // the route at construction is the supported way to express this
+        // — `ToolRouter::remove_route` landed in rmcp 2.x, which is why
+        // #379 was blocked when the repo was on 1.7.
+        if !cfg!(feature = "citation") {
+            tool_router.remove_route("doiget_expand_citation_graph");
+        }
         Self {
             profile,
-            tool_router: Self::tool_router(),
+            tool_router,
         }
     }
 
@@ -3660,7 +3680,7 @@ fn build_fetch_context() -> anyhow::Result<FetchContext> {
                 .map_err(|e| anyhow::anyhow!("creating log dir {parent}: {e}"))?;
         }
     }
-    let session_id = ulid::Ulid::new().to_string();
+    let session_id = ulid::Ulid::generate().to_string();
     let log = Arc::new(
         ProvenanceLog::open(log_path, session_id.clone())
             .map_err(|e| anyhow::anyhow!("opening provenance log: {e}"))?,
@@ -3880,12 +3900,15 @@ fn resolve_log_path() -> anyhow::Result<Utf8PathBuf> {
 }
 
 // `tool_handler` wires the router into rmcp's `ServerHandler` trait — it
-// generates `call_tool`, `list_tools`, and `get_tool` from
-// `Self::tool_router()`. We provide `get_info` ourselves so the server
-// identifies itself as `name = "doiget"`, advertises
-// `protocolVersion = "2024-11-05"` (the version the smoke test asserts),
-// and includes capability-aware `instructions`.
-#[tool_handler]
+// generates `call_tool`, `list_tools`, and `get_tool`. `router =
+// self.tool_router` points those at the per-instance field built in
+// `Server::new` instead of the macro's default `Self::tool_router()`, so
+// the feature-gated trimming done there is what the peer actually sees
+// (issue #379). We provide `get_info` ourselves so the server identifies
+// itself as `name = "doiget"`, advertises `protocolVersion =
+// "2024-11-05"` (the version the smoke test asserts), and includes
+// capability-aware `instructions`.
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerInfo {
         // Both `ServerInfo` and `Implementation` are `#[non_exhaustive]`

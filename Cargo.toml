@@ -15,7 +15,7 @@ exclude = [
 ]
 
 [workspace.package]
-version       = "0.8.7-beta.2"
+version       = "0.8.7-beta.6"
 edition       = "2021"
 rust-version  = "1.86"
 license       = "MIT"
@@ -41,9 +41,9 @@ features-doc-link = "docs/SOURCES.md"
 
 [workspace.dependencies]
 # Core
-doiget-core = { path = "crates/doiget-core", version = "0.8.7-beta.2" }
-doiget-cli  = { path = "crates/doiget-cli", version = "0.8.7-beta.2" }
-doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.7-beta.2" }
+doiget-core = { path = "crates/doiget-core", version = "0.8.7-beta.6" }
+doiget-cli  = { path = "crates/doiget-cli", version = "0.8.7-beta.6" }
+doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.7-beta.6" }
 
 # Async runtime — features are deliberately limited (avoid `full`).
 tokio = { version = "1", default-features = false, features = [
@@ -143,7 +143,7 @@ tar = "0.4"
 
 # UUIDs / ULIDs (mcp_call_id, session_id)
 uuid = { version = "1", features = ["v4", "serde"] }
-ulid = { version = "1", features = ["serde"] }
+ulid = { version = "3", features = ["serde"] }
 
 # URL parsing — required, see docs/SECURITY.md §1.4
 url = "2"

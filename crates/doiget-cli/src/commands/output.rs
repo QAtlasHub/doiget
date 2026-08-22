@@ -61,6 +61,23 @@
 
 use clap::ValueEnum;
 
+/// Stderr sink for the `docs/ERRORS.md` §3 human lines — errors, `= note:`
+/// advisories, progress and skip notes.
+///
+/// stdout is reserved for the requested artifact (ADR-0001), and the
+/// workspace denies `clippy::print_stderr` so that MCP stdio purity cannot
+/// be broken by an accidental `println!`. This function is the one
+/// sanctioned exception, and the `#[allow]` lives here rather than being
+/// re-stated per command module.
+///
+/// Issue #346: ten command modules each carried a byte-identical private
+/// copy of this two-liner with its own `#[allow]`. One copy means the lint
+/// exception is auditable in one place.
+#[allow(clippy::print_stderr)]
+pub fn print_err(args: std::fmt::Arguments<'_>) {
+    eprintln!("{args}");
+}
+
 /// The four output modes from `docs/CONFIG.md` §3 / ADR-0017.
 ///
 /// - `Human`: line-oriented text, intended for a terminal.
