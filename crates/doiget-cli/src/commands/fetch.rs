@@ -1032,6 +1032,64 @@ pub(crate) fn cli_exit_code(code: ErrorCode) -> i32 {
     }
 }
 
+/// Build the ADR-0023 `denial_context` advisory lines shared by
+/// [`render_fetch_error`] and [`render_blocked_error`]: the `= note:`
+/// naming what was attempted and what the allowlist held, plus — for
+/// `redirect_not_in_allowlist` — a `= help:` block naming the config file
+/// and the two keys that widen the allowlist.
+///
+/// Issue #405: the note on its own reads as "this host is forbidden", when
+/// what actually happened is "you have not enabled the class it belongs
+/// to". `trust_academic_repos` and `[[network.additional_hosts]]` are the
+/// supported fixes, so the denial names them instead of leaving the user to
+/// find them in `CHANGELOG.md`.
+///
+/// Pure (returns the lines rather than printing them) so the wording is
+/// unit-testable without capturing process stderr; `config_path` is passed
+/// in for the same reason. `None` means the platform has no config dir, in
+/// which case the file is named generically — a missing config dir must
+/// never turn an advisory line into a hard error.
+fn denial_note_lines(dc: &DenialContext, config_path: Option<&camino::Utf8Path>) -> Vec<String> {
+    let attempted = dc.attempted.as_deref().unwrap_or("(unknown)");
+    let mut out = vec![match &dc.expected {
+        Some(exp) if !exp.is_empty() => {
+            format!(
+                "  = note: attempted {attempted}; allowed: {}",
+                exp.join(", ")
+            )
+        }
+        _ => format!("  = note: attempted {attempted}"),
+    }];
+    if dc.reason != DenialReason::RedirectNotInAllowlist {
+        return out;
+    }
+    let where_ = config_path.map_or_else(
+        || "your doiget config.toml".to_string(),
+        |p| p.as_str().to_string(),
+    );
+    out.push(format!(
+        "  = help: that host is not on the allowlist yet; widen it in {where_}"
+    ));
+    out.push(
+        "          [network] trust_academic_repos = true   # 15 curated academic suffixes"
+            .to_string(),
+    );
+    if dc.attempted.is_some() {
+        out.push(format!(
+            "          [[network.additional_hosts]] host = \"{attempted}\"   # or this one"
+        ));
+    }
+    out.push("          see docs/CONFIG.md §3.1 for both".to_string());
+    out
+}
+
+/// Print the [`denial_note_lines`] advisory block on stderr.
+fn print_denial_notes(dc: &DenialContext) {
+    for line in denial_note_lines(dc, super::user_config_path().as_deref()) {
+        print_err(format_args!("{line}"));
+    }
+}
+
 /// Render a terminal [`FetchError`] in the `docs/ERRORS.md` §3
 /// "Researcher (CLI human)" form: `error[CODE]: message` on stderr,
 /// plus an actionable `= note:` line carrying the ADR-0023
@@ -1046,18 +1104,7 @@ pub(crate) fn render_fetch_error(e: &FetchError) {
     let code: ErrorCode = e.into();
     print_err(format_args!("error[{}]: {}", code.as_wire(), e));
     if let Some(dc) = Option::<DenialContext>::from(e) {
-        let attempted = dc.attempted.as_deref().unwrap_or("(unknown)");
-        match &dc.expected {
-            Some(exp) if !exp.is_empty() => {
-                print_err(format_args!(
-                    "  = note: attempted {attempted}; allowed: {}",
-                    exp.join(", ")
-                ));
-            }
-            _ => {
-                print_err(format_args!("  = note: attempted {attempted}"));
-            }
-        }
+        print_denial_notes(&dc);
     }
 }
 
@@ -1106,18 +1153,7 @@ fn render_blocked_error(
         }
     }
     if let Some(dc) = denial {
-        let attempted = dc.attempted.as_deref().unwrap_or("(unknown)");
-        match &dc.expected {
-            Some(exp) if !exp.is_empty() => {
-                print_err(format_args!(
-                    "  = note: attempted {attempted}; allowed: {}",
-                    exp.join(", ")
-                ));
-            }
-            _ => {
-                print_err(format_args!("  = note: attempted {attempted}"));
-            }
-        }
+        print_denial_notes(dc);
     }
     // The metadata TOML still landed; point the user at it so the
     // partial result is not lost (it is still useful), without
@@ -1440,6 +1476,82 @@ host = "*.uj.edu.pl"
                 "CLI wire token for {r:?} must equal the serde snake_case form"
             );
         }
+    }
+
+    // ── #405: the denial must name the knob that unblocks it ─────────────
+
+    /// A `redirect_not_in_allowlist` denial is not "this host is forbidden",
+    /// it is "you have not enabled the class it belongs to". The advisory
+    /// block MUST name the config file and BOTH supported keys, and echo the
+    /// attempted host into the `additional_hosts` line so the fix is
+    /// copy-pasteable (issue #405).
+    #[test]
+    fn redirect_denial_names_both_allowlist_keys_and_the_config_file() {
+        let mut dc = denial(DenialReason::RedirectNotInAllowlist);
+        dc.attempted = Some("strathprints.strath.ac.uk".to_string());
+        dc.expected = Some(vec!["*.springer.com".to_string()]);
+
+        let cfg = camino::Utf8PathBuf::from("/home/alice/.config/doiget/config.toml");
+        let lines = denial_note_lines(&dc, Some(cfg.as_path()));
+        let joined = lines.join("\n");
+
+        assert!(
+            joined.contains("attempted strathprints.strath.ac.uk; allowed: *.springer.com"),
+            "the pre-existing note must survive; got:\n{joined}"
+        );
+        assert!(
+            joined.contains("trust_academic_repos = true"),
+            "the curated-set knob must be named; got:\n{joined}"
+        );
+        assert!(
+            joined.contains("[[network.additional_hosts]] host = \"strathprints.strath.ac.uk\""),
+            "the per-host escape hatch must echo the attempted host; got:\n{joined}"
+        );
+        assert!(
+            joined.contains("/home/alice/.config/doiget/config.toml"),
+            "the file the user must edit must be named; got:\n{joined}"
+        );
+        assert!(
+            joined.contains("docs/CONFIG.md §3.1"),
+            "the schema section must be named; got:\n{joined}"
+        );
+    }
+
+    /// The help block is specific to the allowlist. Other denial classes
+    /// (an insecure scheme, a blocklisted host) are NOT fixed by widening
+    /// the allowlist, so pointing at `trust_academic_repos` there would be
+    /// actively misleading — they keep the bare `= note:`.
+    #[test]
+    fn non_allowlist_denials_get_no_allowlist_help() {
+        for reason in [DenialReason::InsecureScheme, DenialReason::HostInBlockList] {
+            let mut dc = denial(reason);
+            dc.attempted = Some("evil.example.com".to_string());
+            let lines = denial_note_lines(&dc, None);
+            assert_eq!(
+                lines.len(),
+                1,
+                "{reason:?} must emit the note only, got: {lines:?}"
+            );
+            assert!(
+                !lines[0].contains("trust_academic_repos"),
+                "{reason:?} is not fixed by widening the allowlist: {lines:?}"
+            );
+        }
+    }
+
+    /// A platform with no config dir still gets both keys — the advisory
+    /// degrades to a generic file name rather than being suppressed, and
+    /// `attempted: None` drops only the host-specific line.
+    #[test]
+    fn redirect_denial_help_degrades_without_config_dir_or_host() {
+        let lines = denial_note_lines(&denial(DenialReason::RedirectNotInAllowlist), None);
+        let joined = lines.join("\n");
+        assert!(joined.contains("your doiget config.toml"), "{joined}");
+        assert!(joined.contains("trust_academic_repos = true"), "{joined}");
+        assert!(
+            !joined.contains("additional_hosts]] host ="),
+            "no attempted host means no copy-pasteable host line; got:\n{joined}"
+        );
     }
 
     // ── #344 Slice 2: --link helpers ──────────────────────────────────────

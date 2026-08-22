@@ -197,16 +197,42 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
             // `Ok(vec![])` for not-found, so the OK arm always reports
             // a count.
             match doiget_core::user_extension::load(&cfg.config_path) {
-                Ok(cfg_ext) => check(
-                    &format!(
-                        "user-extension hosts loaded: {} (trust_academic_repos={})",
-                        cfg_ext.additional_hosts.len(),
-                        cfg_ext.trust_academic_repos
-                    ),
-                    true,
-                    None,
-                    &mut all_ok,
-                ),
+                Ok(cfg_ext) => {
+                    check(
+                        &format!(
+                            "user-extension hosts loaded: {} (trust_academic_repos={})",
+                            cfg_ext.additional_hosts.len(),
+                            cfg_ext.trust_academic_repos
+                        ),
+                        true,
+                        None,
+                        &mut all_ok,
+                    );
+                    // Issue #405: reporting `trust_academic_repos=false`
+                    // states the fact without naming the fix, and a default
+                    // install (no config.toml at all) is exactly the posture
+                    // whose OA fetches get denied at an off-allowlist
+                    // redirect. When nothing has widened the allowlist, name
+                    // the file and both keys. `check` swallows tips on a
+                    // passing check by design, so this is a separate
+                    // advisory line — the check itself stays `[ ok ]`,
+                    // because having no config is a valid posture.
+                    if !cfg_ext.trust_academic_repos && cfg_ext.additional_hosts.is_empty() {
+                        eprintln!(
+                            "       note: built-in allowlist only. To also allow academic \
+                             repositories"
+                        );
+                        eprintln!(
+                            "             ([network] trust_academic_repos = true) or specific \
+                             hosts"
+                        );
+                        eprintln!(
+                            "             ([[network.additional_hosts]]), edit {} \
+                             — docs/CONFIG.md §3.1",
+                            cfg.config_path
+                        );
+                    }
+                }
                 Err(e) => check(
                     &format!("user-extension config invalid: {e}"),
                     false,

@@ -61,6 +61,15 @@ connect_timeout_sec = 10
 read_timeout_sec = 60
 total_timeout_sec = 300
 
+# Allowlist extension — these two keys decide whether a fetch is ALLOWED.
+# Without them, an OA PDF hosted off the built-in allowlist is denied with
+# `error[CAPABILITY_DENIED]: ... redirect_not_in_allowlist`.
+trust_academic_repos = false   # true = also allow the 15 curated academic suffixes below
+
+[[network.additional_hosts]]
+host = "*.uj.edu.pl"           # single-suffix wildcard, or a literal FQDN
+note = "Jagiellonian University repository"
+
 [output]
 mode = "human"          # human | json | quiet | mcp
 color = "auto"          # auto | always | never
@@ -75,6 +84,64 @@ strict = false           # also fail on unreachable (transient) ids; absent (404
 doiget reads only the keys it knows about. Unknown keys cause a startup warning but do
 not fail.
 
+### 3.1 Allowlist extension — `trust_academic_repos` / `[[network.additional_hosts]]`
+
+doiget only fetches from hosts on its allowlist, and a redirect to an off-allowlist host is
+denied:
+
+```
+error[CAPABILITY_DENIED]: an OA PDF was found but its host is blocked by supply-chain
+policy (redirect_not_in_allowlist): redirect target strathprints.strath.ac.uk not in
+allowlist for source oa-publisher
+```
+
+The two keys below are the supported way to widen it. Both live under `[network]`, and
+neither is set by default — a fresh install has no `config.toml` at all, so every fetch
+runs against the built-in allowlist only.
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `trust_academic_repos` | bool | `false` | Adds 15 curated single-suffix academic wildcards to the allowlist. |
+| `[[network.additional_hosts]]` | array of tables | empty | Adds individual hosts. `host` is required; `note` is optional and free-text. |
+
+`trust_academic_repos = true` activates exactly these patterns, which cover the national
+registration blocks institutions use for Green-OA repositories:
+
+```
+*.ac.uk   *.ac.jp   *.jst.go.jp   *.edu.au   *.edu.cn
+*.ac.cn   *.edu.pl  *.ac.nz       *.ac.za    *.ac.in
+*.edu.br  *.edu.tw  *.edu.tr      *.edu.ar   *.edu.mx
+```
+
+So the denial above is fixed by one line — `strathprints.strath.ac.uk` is `.ac.uk`:
+
+```toml
+[network]
+trust_academic_repos = true
+```
+
+`[[network.additional_hosts]]` is for anything outside that set. A pattern is either a
+literal FQDN (`ruj.uj.edu.pl`) or a **single-suffix wildcard** (`*.uj.edu.pl`). Multi-segment
+globs (`*.edu.*`), a bare `*`, and a misplaced `*` (`foo.*.org`) are rejected at load time —
+this table uses `deny_unknown_fields`, so a typo such as `hsot = "..."` fails loudly rather
+than being silently ignored.
+
+```toml
+[[network.additional_hosts]]
+host = "*.uj.edu.pl"
+note = "Jagiellonian University repository"
+
+[[network.additional_hosts]]
+host = "doaj.org"
+note = "DOAJ — common redirect target for gold-OA journal content"
+```
+
+Run `doiget config doctor` to confirm what was loaded:
+
+```
+[ ok ] user-extension hosts loaded: 2 (trust_academic_repos=true)
+```
+
 ## 4. Environment variables
 
 All `DOIGET_*` env vars use `SCREAMING_SNAKE_CASE`. Boolean env vars accept `1` / `0`,
@@ -87,10 +154,18 @@ All `DOIGET_*` env vars use `SCREAMING_SNAKE_CASE`. Boolean env vars accept `1` 
 | `DOIGET_LOG_PATH` | `log.path` |
 | `DOIGET_LOG_RETENTION_DAYS` | `log.retention_days` |
 | `DOIGET_USER_AGENT` | `network.user_agent` |
+| `DOIGET_CONTACT_EMAIL` | Polite-pool contact address; also the default for `DOIGET_UNPAYWALL_EMAIL`. |
 | `DOIGET_UNPAYWALL_EMAIL` | `network.unpaywall_email` |
 | `DOIGET_MODE` | `output.mode` |
 | `NO_COLOR` | Forces `output.color = "never"` (xdg standard). |
 | `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` | reqwest honors these (system standard). |
+
+With neither email set, doiget still queries Unpaywall — it sends the placeholder
+`doiget@localhost`, which lands in the non-polite pool and may be rate-limited or refused.
+Setting `DOIGET_CONTACT_EMAIL` is therefore worth doing before any batch run, and it is what
+`doiget config doctor` flags. It also makes the automatic arXiv preprint fallback reliable:
+when a DOI's OA PDF is blocked, doiget retries via the arXiv preprint that Unpaywall named,
+so a throttled Unpaywall response costs you that fallback too.
 
 CapabilityProfile-related env vars are documented in [`CAPABILITY.md`](CAPABILITY.md).
 

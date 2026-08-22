@@ -10,6 +10,28 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.7-beta.2] - 2026-08-22
+
+### Added
+- **[docs]** `docs/CONFIG.md` §3.1 documents the two `[network]` keys that decide
+  whether a fetch is allowed — `trust_academic_repos` (the 15 curated academic
+  suffixes) and `[[network.additional_hosts]]`. Both shipped in 0.8.0 but appeared
+  only in `CHANGELOG.md`, so §3 read as if `user_agent` / `unpaywall_email` / the
+  three timeouts were the whole `[network]` section (#405).
+- **[docs]** `docs/CONFIG.md` §4 lists `DOIGET_CONTACT_EMAIL` and states what an
+  unset contact address actually costs: Unpaywall is still queried, but with the
+  `doiget@localhost` placeholder, i.e. from the non-polite pool (#405).
+
+### Changed
+- **[cli]** A `redirect_not_in_allowlist` denial now emits a `= help:` block naming
+  the config file and both allowlist keys, echoing the attempted host into a
+  copy-pasteable `[[network.additional_hosts]]` line. The denial previously printed
+  the host and the allowlist only, which reads as "this host is forbidden" rather
+  than "you have not enabled the class it belongs to" (#405).
+- **[cli]** `doiget config doctor` names the config file and both keys when nothing
+  has widened the allowlist, instead of reporting a bare `trust_academic_repos=false`
+  (#405).
+
 ## [0.8.7-beta.1] - 2026-07-14
 
 Dependency maintenance — first beta of the 0.8.7 line (retargeted off the 0.8.6 stable).
