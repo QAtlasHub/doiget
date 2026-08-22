@@ -10,6 +10,126 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-08-22
+
+Security, allowlist visibility, and a network doctor. The two config keys that decide
+whether a fetch is allowed are finally documented and named in the denial that hits them;
+`doiget config doctor --network` answers "which publishers will actually talk to me?"; and
+a health check no longer creates the store it was only meant to inspect.
+
+### Security
+- **[deps]** Bump `h2` 0.4.14 → 0.4.18 for **RUSTSEC-2026-0258** /
+  GHSA-q83h-524g-xf6h ("h2 unbounded empty DATA frames", low severity, patched
+  in 0.4.16). `h2` is transitive via `reqwest`/`hyper`; doiget is an HTTP client
+  and does not accept inbound HTTP/2, so the DoS is not reachable from an
+  attacker-chosen peer in normal use — but the advisory made `cargo audit` and
+  `cargo deny` red on `next`, and the fix is a lockfile bump.
+- **[supply-chain]** Refresh the `cargo vet` exemption for `h2` to 0.4.18.
+
+### Added
+- **[cli]** `doiget config doctor --network` — the outbound half of the report
+  (#407): proxy configuration in effect, which Unpaywall pool you are in, how many
+  host patterns the `oa-publisher` allowlist holds, and one GET per well-known
+  publisher showing which will talk to a scripted client. Opt-in because it makes
+  real requests; no retries; probes only hosts already on the allowlist, so it
+  cannot be pointed at an arbitrary host. A `2xx` with an **empty body** is
+  reported as a bot challenge rather than a success — that is the case a status
+  code alone cannot diagnose, and the one that makes a subscribing university
+  network still fail. Egress address is deliberately not probed: that needs a
+  third-party echo service, i.e. a new outbound dependency and a new `PRIVACY.md`
+  entry, for a diagnostic.
+- **[core]** New `HttpClient::probe` / `ProbeOutcome` behind the above.
+- **[docs]** `docs/CONFIG.md` §6.1 "Institutional networks: what works and what
+  does not" — IP-based subscription does not imply fetchability (#407).
+- **[docs]** `docs/CONFIG.md` §3.1 documents the two `[network]` keys that decide
+  whether a fetch is allowed — `trust_academic_repos` (the 15 curated academic
+  suffixes) and `[[network.additional_hosts]]`. Both shipped in 0.8.0 but appeared
+  only in `CHANGELOG.md`, so §3 read as if `user_agent` / `unpaywall_email` / the
+  three timeouts were the whole `[network]` section (#405).
+- **[docs]** `docs/CONFIG.md` §4 lists `DOIGET_CONTACT_EMAIL` and states what an
+  unset contact address actually costs: Unpaywall is still queried, but with the
+  `doiget@localhost` placeholder, i.e. from the non-polite pool (#405).
+- **[network]** New opt-in `[network] trust_oa_registries = true`, the Gold-OA
+  companion to `trust_academic_repos`. Adds a curated set of open-access
+  **registries / repositories** — DOAJ, SciELO, Zenodo, OSF, HAL, CORE — to the
+  allowlist. Separate flag because the trust argument differs: one is "this
+  institution publishes its own work here", the other is "this registry indexes
+  open content across publishers". Before this, a Green-OA copy on an
+  institutional repository was reachable behind one flag while a Gold-OA article
+  routed through DOAJ was not reachable at all, which is backwards for an
+  open-access tool (#405). Both the apex (`doaj.org`) and the wildcard are listed:
+  a single-suffix wildcard does not match an apex, and DOAJ redirects to the apex.
+- **[cli]** `doiget config doctor` reports the **resolved** `store_root` path, and
+  notes that it is cwd-relative when `DOIGET_STORE_ROOT` is unset. Reporting only
+  "store_root parent exists" confirmed a path the user could not see (#406).
+- **[repo]** `.gitignore` ignores `papers/`.
+
+### Changed
+- **[cli]** A `redirect_not_in_allowlist` denial now emits a `= help:` block naming
+  the config file and both allowlist keys, echoing the attempted host into a
+  copy-pasteable `[[network.additional_hosts]]` line. The denial previously printed
+  the host and the allowlist only, which reads as "this host is forbidden" rather
+  than "you have not enabled the class it belongs to" (#405).
+- **[cli]** `doiget config doctor` names the config file and both keys when nothing
+  has widened the allowlist, instead of reporting a bare `trust_academic_repos=false`
+  (#405).
+- **[mcp]** `doiget_expand_citation_graph` is no longer advertised in `tools/list`
+  when the binary was built without `--features citation`. It previously appeared in
+  every build and answered `NOT_IMPLEMENTED` to every call, so an agent could plan
+  around a tool it could never use. The route is now dropped in `Server::new` for
+  feature-off builds, which also makes `tools/call` report an unknown tool instead of
+  a dead end (#379, closing the open half of #373). The shipped `.mcpb` and the
+  Claude Desktop Extension enable the feature, so they are unaffected.
+- **[cli/refactor]** `print_err` moves to `commands::output` as a single
+  `pub(crate)` function. Ten command modules each carried a byte-identical
+  private copy with its own `#[allow(clippy::print_stderr)]`; the workspace
+  denies that lint to protect MCP stdio purity, so the exception is now
+  auditable in one place instead of ten (#346 item 2). Quality only — no
+  behaviour change; net −45 lines.
+- **[deps]** Bump `ulid` 1.2.1 → 3.0.0. Breaking upstream: `Ulid::new()` was removed
+  in favour of `Ulid::generate()`. Both call sites — the CLI and MCP `session_id`
+  generators — were updated; the emitted id is unchanged (26-char Crockford base32,
+  `docs/PROVENANCE_LOG.md` §3), which `new_session_id_is_26_chars` pins.
+- **[supply-chain]** `cargo vet` exemptions for `ulid` 3.0.0 and its new random
+  backend (`rand` 0.10.2, `rand_core` 0.10.1, `chacha20` 0.10.1). `rand` 0.9.4 stays
+  in the tree for other consumers, so its exemption is kept alongside.
+- **[deps]** Bump `rustls` 0.23.41 → 0.23.42 (patch release; no API change, no
+  advisory — `cargo audit` / `cargo deny` stay green).
+- **[supply-chain]** Refresh the `cargo vet` exemptions in
+  `supply-chain/config.toml` to match the current lockfile (`rustls` 0.23.42,
+  plus `bytes` 1.12.1, `quick-xml` 0.41.0, `rmcp` / `rmcp-macros` 2.2.0 and
+  `uuid` 1.23.5, which had already landed on `next`), so `cargo vet --locked`
+  is green again.
+
+### Fixed
+- **[cli]** The `redirect_not_in_allowlist` `= help:` line names the `config.toml`
+  the **reader** actually loads. `user_config_path` used `dirs::config_dir()`, which
+  ignores `XDG_CONFIG_HOME` on Windows, so on a machine with cross-platform dotfiles
+  the denial pointed at a file `doiget fetch` never opened — the same drift already
+  fixed for `config show` / `path` / `doctor`. Naming the wrong file is worse than
+  naming none (#405).
+- **[mcp]** `doiget_health`'s `store_writable` probe handles a relative
+  `DOIGET_STORE_ROOT`. The ancestor walk bottomed out at `""` and answered `false`
+  for a directory a write would happily create; `""` now resolves against the cwd,
+  matching the pre-#406 behaviour (#406).
+- **[cli]** `doiget config show` / `config path` / `config doctor` now resolve
+  `config.toml` through the same resolver the reader uses
+  (`fetch::config_dir_utf8`) instead of `dirs::config_dir()`. The two diverged:
+  `dirs::config_dir()` ignores `XDG_CONFIG_HOME` on Windows, so a user with that
+  variable set — normal for cross-platform dotfiles — had `doiget fetch` read one
+  `config.toml` while `doiget config doctor` validated a different one and reported
+  "user-extension hosts loaded: 0" about a file the fetch path never opened (#405).
+- **[mcp]** `doiget_health` no longer creates the store root. Its `store_writable`
+  probe called `create_dir_all`, so a tool annotated `read_only_hint = true`
+  materialised `papers/` in whatever directory the server was started from —
+  indeterminate for a daemon, and usually an unrelated source repository for an
+  agent. The probe now walks up to the nearest existing ancestor and reports
+  whether that is a writable directory (#406).
+- **[test]** `initialize_handshake` no longer leaks `crates/doiget-mcp/papers/`.
+  Three `doiget_metadata_only` tests did not pin `DOIGET_STORE_ROOT`, so their
+  records landed in the ADR-0036 cwd default — the crate directory. `papers/` was
+  not in `.gitignore`, so a `git add -A` would have committed them (#406).
+
 ## [0.8.6] - 2026-06-29
 
 MCP tool safety annotations — the `.mcpb` is now ready for the Claude Desktop Extensions directory.

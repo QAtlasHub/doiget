@@ -127,7 +127,7 @@ doiget sends a stable `User-Agent` header per fetch to comply with each source's
 politeness policy:
 
 ```
-User-Agent: doiget/<version> (+https://github.com/sotashimozono/doiget)
+User-Agent: doiget/<version> (+https://github.com/QAtlasHub/doiget)
 ```
 
 ### 1.11 Auto-update / telemetry

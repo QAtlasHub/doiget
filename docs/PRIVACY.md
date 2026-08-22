@@ -60,4 +60,4 @@ sources you explicitly enabled. doiget bundles no keys and shares none.
 
 ## Contact
 
-Questions or concerns: <https://github.com/sotashimozono/doiget/issues>
+Questions or concerns: <https://github.com/QAtlasHub/doiget/issues>

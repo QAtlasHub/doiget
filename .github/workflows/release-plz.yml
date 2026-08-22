@@ -93,7 +93,7 @@ jobs:
       contents: read   # only reads the repo + git tag object
     steps:
       - name: Checkout full history (gate needs tags + lane branches)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0          # G4 (published history) + G7 (branch reachability)
           ref: ${{ env.TAG }}     # the tagged commit
@@ -131,7 +131,7 @@ jobs:
       id-token: write   # OIDC: exchange GitHub token for short-lived crates.io token
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ env.TAG }}
       - name: Install Rust toolchain (stable)
@@ -205,7 +205,7 @@ jobs:
       contents: write   # create the GitHub Release + tag association
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ env.TAG }}
       - name: Extract the CHANGELOG section + decide prerelease
@@ -324,7 +324,7 @@ jobs:
             target: ""
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ env.TAG }}
       - name: Install Rust toolchain (stable)
@@ -430,7 +430,7 @@ jobs:
       id-token: write   # cosign keyless: mint Fulcio cert from OIDC token
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ env.TAG }}
       - name: Install Rust toolchain (stable)
@@ -500,11 +500,11 @@ jobs:
 
   # -------------------------------------------------------------------------
   # e. mcp-registry — publish / refresh the official MCP Registry entry
-  #    (io.github.sotashimozono/doiget) via GitHub OIDC. STABLE tags only (the
+  #    (io.github.QAtlasHub/doiget) via GitHub OIDC. STABLE tags only (the
   #    registry should point at a stable crate version; betas are pre-release).
   #    BEST-EFFORT (continue-on-error): a registry hiccup must never fail the
   #    crates.io / GitHub release. NO secret — the `id-token: write` OIDC token
-  #    authorizes the `io.github.sotashimozono/*` namespace because this Action
+  #    authorizes the `io.github.QAtlasHub/*` namespace because this Action
   #    runs in that org's repo. The registry verifies the `mcp-name:` marker on
   #    the doiget-cli crate README the `publish` job just uploaded, so a short
   #    retry loop absorbs crates.io indexing lag. mcp-publisher is version-pinned
@@ -523,7 +523,7 @@ jobs:
       MCP_PUBLISHER_VERSION: v1.7.9
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ env.TAG }}
       - name: Install mcp-publisher (pinned)
@@ -558,7 +558,7 @@ jobs:
           # `publish` job just uploaded.
           for i in $(seq 1 6); do
             if ./mcp-publisher publish; then
-              echo "::notice::published io.github.sotashimozono/doiget@${TAG#v} to the MCP registry"
+              echo "::notice::published io.github.QAtlasHub/doiget@${TAG#v} to the MCP registry"
               exit 0
             fi
             echo "publish attempt $i/6 failed (crate may not be indexed yet); waiting 30s"
@@ -585,7 +585,7 @@ jobs:
       contents: write   # download release binaries + upload the .mcpb
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ env.TAG }}
       - name: Install the mcpb CLI

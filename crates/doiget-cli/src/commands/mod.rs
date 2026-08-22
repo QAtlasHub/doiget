@@ -53,6 +53,30 @@ pub mod graph;
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 
+/// Resolve the path of the user `config.toml`, for messages that need to
+/// name the file the user must edit.
+///
+/// Same resolution as [`config::ResolvedConfig::from_env`]
+/// (`<dirs::config_dir()>/doiget/config.toml`), kept here so the fetch-side
+/// denial help (issue #405) and `config doctor` cannot drift. Returns
+/// `None` only when the platform has no config dir at all, in which case
+/// callers should fall back to naming the file generically — a missing
+/// config dir must never turn an advisory line into a hard error.
+pub(crate) fn user_config_path() -> Option<Utf8PathBuf> {
+    // MUST stay `config_dir_utf8` — the resolver the READER uses. This
+    // shipped as `dirs::config_dir()`, which ignores `XDG_CONFIG_HOME` on
+    // Windows, so the denial help named `%APPDATA%\doiget\config.toml`
+    // while `build_http_client` was loading the XDG one. Naming the wrong
+    // file is worse than naming none, and it is the whole point of the
+    // #405 help line. Same fix as `ResolvedConfig::from_env`.
+    Some(
+        fetch::config_dir_utf8()
+            .ok()?
+            .join("doiget")
+            .join("config.toml"),
+    )
+}
+
 /// Resolve the on-disk store root.
 ///
 /// Resolution order (subset of `docs/CONFIG.md` §4 — full CLI-flag /

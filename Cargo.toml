@@ -15,12 +15,12 @@ exclude = [
 ]
 
 [workspace.package]
-version       = "0.8.6"
+version       = "0.8.7"
 edition       = "2021"
 rust-version  = "1.86"
 license       = "MIT"
-repository    = "https://github.com/sotashimozono/doiget"
-homepage      = "https://github.com/sotashimozono/doiget"
+repository    = "https://github.com/QAtlasHub/doiget"
+homepage      = "https://github.com/QAtlasHub/doiget"
 authors       = ["Sota Shimozono"]
 keywords      = ["doi", "arxiv", "mcp", "academic", "openaccess"]
 categories    = ["command-line-utilities", "science"]
@@ -41,9 +41,9 @@ features-doc-link = "docs/SOURCES.md"
 
 [workspace.dependencies]
 # Core
-doiget-core = { path = "crates/doiget-core", version = "0.8.6" }
-doiget-cli  = { path = "crates/doiget-cli", version = "0.8.6" }
-doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.6" }
+doiget-core = { path = "crates/doiget-core", version = "0.8.7" }
+doiget-cli  = { path = "crates/doiget-cli", version = "0.8.7" }
+doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.7" }
 
 # Async runtime — features are deliberately limited (avoid `full`).
 tokio = { version = "1", default-features = false, features = [
@@ -143,7 +143,7 @@ tar = "0.4"
 
 # UUIDs / ULIDs (mcp_call_id, session_id)
 uuid = { version = "1", features = ["v4", "serde"] }
-ulid = { version = "1", features = ["serde"] }
+ulid = { version = "3", features = ["serde"] }
 
 # URL parsing — required, see docs/SECURITY.md §1.4
 url = "2"
@@ -156,7 +156,7 @@ url = "2"
 # response). Default features (no `serde`, no `encoding`) are sufficient
 # — we hand-roll a small event walker in `sources::arxiv`. Not on
 # `deny.toml`'s banned list.
-quick-xml = { version = "0.40", default-features = false }
+quick-xml = { version = "0.41", default-features = false }
 
 # BibTeX / BibLaTeX bibliography input parser (ADR-0030 D2). Enabled in
 # the default feature set — `.bib` is the dominant export format from
@@ -201,7 +201,7 @@ petgraph = "0.6"
 # `deny.toml` bans `axum` / `hyper::Server` / `openssl` / `native-tls`.
 # A `cargo tree -p doiget-mcp` after the edit must NOT show any of those
 # crates; `cargo deny check` enforces this in CI.
-rmcp = { version = "1.7", default-features = false, features = [
+rmcp = { version = "2.2", default-features = false, features = [
     "server", "macros", "transport-io", "schemars",
 ] }
 

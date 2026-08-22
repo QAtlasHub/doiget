@@ -45,6 +45,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 
+use super::output::print_err;
 #[cfg(feature = "citation")]
 use doiget_core::http::tier_2_allowlist;
 use doiget_core::http::{
@@ -59,7 +60,7 @@ use doiget_core::{CapabilityProfile, DenialContext, DenialReason, ErrorCode, Rat
 
 /// Defer to docs/PROVENANCE_LOG.md §3: 26-char ULID per process invocation.
 pub(crate) fn new_session_id() -> String {
-    ulid::Ulid::new().to_string()
+    ulid::Ulid::generate().to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -284,10 +285,17 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
                         if cfg.trust_academic_repos {
                             hosts.extend(doiget_core::user_extension::academic_repo_hosts());
                         }
+                        // Issue #405: the Gold-OA counterpart. Separate flag
+                        // because the trust argument is different — see
+                        // `oa_registry_hosts`.
+                        if cfg.trust_oa_registries {
+                            hosts.extend(doiget_core::user_extension::oa_registry_hosts());
+                        }
                         if !hosts.is_empty() {
                             tracing::info!(
                                 count = hosts.len(),
                                 trust_academic_repos = cfg.trust_academic_repos,
+                                trust_oa_registries = cfg.trust_oa_registries,
                                 path = %path,
                                 "merging user-extension allowlist hosts (ADR-0028 D2)"
                             );
@@ -937,14 +945,6 @@ fn print_success(args: std::fmt::Arguments<'_>) {
     eprintln!("{args}");
 }
 
-/// Stderr sink for the `docs/ERRORS.md` §3 human-error lines. Mirrors
-/// [`print_success`]; the localized `#[allow]` is the minimal
-/// intervention for the workspace `clippy::print_stderr` lint.
-#[allow(clippy::print_stderr)]
-fn print_err(args: std::fmt::Arguments<'_>) {
-    eprintln!("{args}");
-}
-
 /// Carries a `docs/ERRORS.md` §4 process exit code out of a CLI
 /// command to `main`, which owns the actual `std::process::exit`
 /// (calling it inside `run_with_options` would kill in-process
@@ -1032,6 +1032,68 @@ pub(crate) fn cli_exit_code(code: ErrorCode) -> i32 {
     }
 }
 
+/// Build the ADR-0023 `denial_context` advisory lines shared by
+/// [`render_fetch_error`] and [`render_blocked_error`]: the `= note:`
+/// naming what was attempted and what the allowlist held, plus — for
+/// `redirect_not_in_allowlist` — a `= help:` block naming the config file
+/// and the two keys that widen the allowlist.
+///
+/// Issue #405: the note on its own reads as "this host is forbidden", when
+/// what actually happened is "you have not enabled the class it belongs
+/// to". `trust_academic_repos` and `[[network.additional_hosts]]` are the
+/// supported fixes, so the denial names them instead of leaving the user to
+/// find them in `CHANGELOG.md`.
+///
+/// Pure (returns the lines rather than printing them) so the wording is
+/// unit-testable without capturing process stderr; `config_path` is passed
+/// in for the same reason. `None` means the platform has no config dir, in
+/// which case the file is named generically — a missing config dir must
+/// never turn an advisory line into a hard error.
+fn denial_note_lines(dc: &DenialContext, config_path: Option<&camino::Utf8Path>) -> Vec<String> {
+    let attempted = dc.attempted.as_deref().unwrap_or("(unknown)");
+    let mut out = vec![match &dc.expected {
+        Some(exp) if !exp.is_empty() => {
+            format!(
+                "  = note: attempted {attempted}; allowed: {}",
+                exp.join(", ")
+            )
+        }
+        _ => format!("  = note: attempted {attempted}"),
+    }];
+    if dc.reason != DenialReason::RedirectNotInAllowlist {
+        return out;
+    }
+    let where_ = config_path.map_or_else(
+        || "your doiget config.toml".to_string(),
+        |p| p.as_str().to_string(),
+    );
+    out.push(format!(
+        "  = help: that host is not on the allowlist yet; widen it in {where_}"
+    ));
+    out.push(
+        "          [network] trust_academic_repos = true   # 15 curated academic suffixes"
+            .to_string(),
+    );
+    out.push(
+        "          [network] trust_oa_registries  = true   # DOAJ, SciELO, Zenodo, OSF, HAL"
+            .to_string(),
+    );
+    if dc.attempted.is_some() {
+        out.push(format!(
+            "          [[network.additional_hosts]] host = \"{attempted}\"   # or this one"
+        ));
+    }
+    out.push("          see docs/CONFIG.md §3.1 for both".to_string());
+    out
+}
+
+/// Print the [`denial_note_lines`] advisory block on stderr.
+fn print_denial_notes(dc: &DenialContext) {
+    for line in denial_note_lines(dc, super::user_config_path().as_deref()) {
+        print_err(format_args!("{line}"));
+    }
+}
+
 /// Render a terminal [`FetchError`] in the `docs/ERRORS.md` §3
 /// "Researcher (CLI human)" form: `error[CODE]: message` on stderr,
 /// plus an actionable `= note:` line carrying the ADR-0023
@@ -1046,18 +1108,7 @@ pub(crate) fn render_fetch_error(e: &FetchError) {
     let code: ErrorCode = e.into();
     print_err(format_args!("error[{}]: {}", code.as_wire(), e));
     if let Some(dc) = Option::<DenialContext>::from(e) {
-        let attempted = dc.attempted.as_deref().unwrap_or("(unknown)");
-        match &dc.expected {
-            Some(exp) if !exp.is_empty() => {
-                print_err(format_args!(
-                    "  = note: attempted {attempted}; allowed: {}",
-                    exp.join(", ")
-                ));
-            }
-            _ => {
-                print_err(format_args!("  = note: attempted {attempted}"));
-            }
-        }
+        print_denial_notes(&dc);
     }
 }
 
@@ -1106,18 +1157,7 @@ fn render_blocked_error(
         }
     }
     if let Some(dc) = denial {
-        let attempted = dc.attempted.as_deref().unwrap_or("(unknown)");
-        match &dc.expected {
-            Some(exp) if !exp.is_empty() => {
-                print_err(format_args!(
-                    "  = note: attempted {attempted}; allowed: {}",
-                    exp.join(", ")
-                ));
-            }
-            _ => {
-                print_err(format_args!("  = note: attempted {attempted}"));
-            }
-        }
+        print_denial_notes(dc);
     }
     // The metadata TOML still landed; point the user at it so the
     // partial result is not lost (it is still useful), without
@@ -1258,6 +1298,101 @@ host = "*.uj.edu.pl"
         assert!(
             !oa.matches("ruj.uj.edu.ru"),
             "host outside the suffix MUST NOT match"
+        );
+    }
+
+    /// Issue #405: `[network] trust_oa_registries = true` MUST widen the
+    /// production `oa-publisher` allowlist through the same
+    /// `build_http_client` path a real fetch takes — the flag is worthless
+    /// if it only sets a struct field. Pinned on the exact host that
+    /// denied the reported Gold-OA fetch (`doaj.org`, an apex, which a
+    /// single-suffix wildcard would NOT cover), and on the academic flag
+    /// staying off so the two sets cannot silently imply each other.
+    #[test]
+    #[serial]
+    fn build_http_client_merges_oa_registries_when_flag_is_set() {
+        use std::io::Write;
+
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let cfg_dir = td.path().join("doiget");
+        std::fs::create_dir_all(&cfg_dir).expect("mkdir doiget/");
+        let mut f = std::fs::File::create(cfg_dir.join("config.toml")).expect("create config");
+        f.write_all(b"[network]\ntrust_oa_registries = true\n")
+            .expect("write config.toml");
+        drop(f);
+
+        struct EnvGuard {
+            key: &'static str,
+            prev: Option<String>,
+        }
+        impl EnvGuard {
+            fn save(key: &'static str) -> Self {
+                Self {
+                    key,
+                    prev: std::env::var(key).ok(),
+                }
+            }
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.prev {
+                    Some(v) => std::env::set_var(self.key, v),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+        let _g: Vec<EnvGuard> = [
+            "XDG_CONFIG_HOME",
+            "APPDATA",
+            "HOME",
+            "USERPROFILE",
+            "DOIGET_ARXIV_BASE",
+            "DOIGET_CROSSREF_BASE",
+            "DOIGET_UNPAYWALL_BASE",
+            "DOIGET_OA_PUBLISHER_BASE",
+            "DOIGET_OPENALEX_BASE",
+        ]
+        .iter()
+        .map(|k| EnvGuard::save(k))
+        .collect();
+        for k in ["XDG_CONFIG_HOME", "APPDATA", "HOME", "USERPROFILE"] {
+            std::env::set_var(k, td.path());
+        }
+        for k in [
+            "DOIGET_ARXIV_BASE",
+            "DOIGET_CROSSREF_BASE",
+            "DOIGET_UNPAYWALL_BASE",
+            "DOIGET_OA_PUBLISHER_BASE",
+            "DOIGET_OPENALEX_BASE",
+        ] {
+            std::env::remove_var(k);
+        }
+
+        let client = build_http_client(None).expect("HttpClient builds");
+        let oa = client
+            .source_allowlist("oa-publisher")
+            .expect("oa-publisher source registered");
+
+        assert!(
+            oa.matches("doaj.org"),
+            "the apex that denied 10.1109/access.2024.3495502 MUST match; got {:?}",
+            oa.redirect_hosts
+        );
+        assert!(oa.matches("www.doaj.org"), "wildcard covers subdomains");
+        assert!(oa.matches("zenodo.org"), "zenodo apex must match");
+        assert!(
+            oa.redirect_hosts.iter().any(|p| p == "*.aps.org"),
+            "the curated allowlist MUST survive the merge"
+        );
+        // The academic flag was NOT set, so its set must NOT be merged —
+        // otherwise one flag silently grants what the other advertises.
+        assert!(
+            !oa.matches("strathprints.strath.ac.uk"),
+            "trust_oa_registries MUST NOT imply trust_academic_repos"
+        );
+        assert!(
+            !oa.matches("evil.example.com"),
+            "unrelated host still denied"
         );
     }
 
@@ -1440,6 +1575,126 @@ host = "*.uj.edu.pl"
                 "CLI wire token for {r:?} must equal the serde snake_case form"
             );
         }
+    }
+
+    /// The `= help:` line names a file for the user to edit, so it MUST be
+    /// the file `build_http_client` actually reads. `user_config_path` used
+    /// `dirs::config_dir()`, which ignores `XDG_CONFIG_HOME` on Windows —
+    /// so on a machine with cross-platform dotfiles the denial pointed at a
+    /// `config.toml` the fetch path never opened. Naming the wrong file is
+    /// worse than naming none.
+    #[test]
+    #[serial]
+    fn denial_help_names_the_file_the_reader_loads() {
+        struct EnvGuard(&'static str, Option<String>);
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.1 {
+                    Some(v) => std::env::set_var(self.0, v),
+                    None => std::env::remove_var(self.0),
+                }
+            }
+        }
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let _g: Vec<EnvGuard> = ["XDG_CONFIG_HOME", "APPDATA", "HOME", "USERPROFILE"]
+            .iter()
+            .map(|k| EnvGuard(k, std::env::var(k).ok()))
+            .collect();
+        std::env::set_var("XDG_CONFIG_HOME", td.path());
+
+        let reader = super::config_dir_utf8()
+            .expect("reader resolves")
+            .join("doiget")
+            .join("config.toml");
+        let helped = crate::commands::user_config_path().expect("help path resolves");
+        assert_eq!(
+            helped, reader,
+            "the denial help must name the config.toml the reader loads"
+        );
+
+        let mut dc = denial(DenialReason::RedirectNotInAllowlist);
+        dc.attempted = Some("strathprints.strath.ac.uk".to_string());
+        let joined = denial_note_lines(&dc, Some(helped.as_path())).join("\n");
+        assert!(
+            joined.contains(reader.as_str()),
+            "rendered help must carry that path; got:\n{joined}"
+        );
+    }
+
+    // ── #405: the denial must name the knob that unblocks it ─────────────
+
+    /// A `redirect_not_in_allowlist` denial is not "this host is forbidden",
+    /// it is "you have not enabled the class it belongs to". The advisory
+    /// block MUST name the config file and BOTH supported keys, and echo the
+    /// attempted host into the `additional_hosts` line so the fix is
+    /// copy-pasteable (issue #405).
+    #[test]
+    fn redirect_denial_names_both_allowlist_keys_and_the_config_file() {
+        let mut dc = denial(DenialReason::RedirectNotInAllowlist);
+        dc.attempted = Some("strathprints.strath.ac.uk".to_string());
+        dc.expected = Some(vec!["*.springer.com".to_string()]);
+
+        let cfg = camino::Utf8PathBuf::from("/home/alice/.config/doiget/config.toml");
+        let lines = denial_note_lines(&dc, Some(cfg.as_path()));
+        let joined = lines.join("\n");
+
+        assert!(
+            joined.contains("attempted strathprints.strath.ac.uk; allowed: *.springer.com"),
+            "the pre-existing note must survive; got:\n{joined}"
+        );
+        assert!(
+            joined.contains("trust_academic_repos = true"),
+            "the curated-set knob must be named; got:\n{joined}"
+        );
+        assert!(
+            joined.contains("[[network.additional_hosts]] host = \"strathprints.strath.ac.uk\""),
+            "the per-host escape hatch must echo the attempted host; got:\n{joined}"
+        );
+        assert!(
+            joined.contains("/home/alice/.config/doiget/config.toml"),
+            "the file the user must edit must be named; got:\n{joined}"
+        );
+        assert!(
+            joined.contains("docs/CONFIG.md §3.1"),
+            "the schema section must be named; got:\n{joined}"
+        );
+    }
+
+    /// The help block is specific to the allowlist. Other denial classes
+    /// (an insecure scheme, a blocklisted host) are NOT fixed by widening
+    /// the allowlist, so pointing at `trust_academic_repos` there would be
+    /// actively misleading — they keep the bare `= note:`.
+    #[test]
+    fn non_allowlist_denials_get_no_allowlist_help() {
+        for reason in [DenialReason::InsecureScheme, DenialReason::HostInBlockList] {
+            let mut dc = denial(reason);
+            dc.attempted = Some("evil.example.com".to_string());
+            let lines = denial_note_lines(&dc, None);
+            assert_eq!(
+                lines.len(),
+                1,
+                "{reason:?} must emit the note only, got: {lines:?}"
+            );
+            assert!(
+                !lines[0].contains("trust_academic_repos"),
+                "{reason:?} is not fixed by widening the allowlist: {lines:?}"
+            );
+        }
+    }
+
+    /// A platform with no config dir still gets both keys — the advisory
+    /// degrades to a generic file name rather than being suppressed, and
+    /// `attempted: None` drops only the host-specific line.
+    #[test]
+    fn redirect_denial_help_degrades_without_config_dir_or_host() {
+        let lines = denial_note_lines(&denial(DenialReason::RedirectNotInAllowlist), None);
+        let joined = lines.join("\n");
+        assert!(joined.contains("your doiget config.toml"), "{joined}");
+        assert!(joined.contains("trust_academic_repos = true"), "{joined}");
+        assert!(
+            !joined.contains("additional_hosts]] host ="),
+            "no attempted host means no copy-pasteable host line; got:\n{joined}"
+        );
     }
 
     // ── #344 Slice 2: --link helpers ──────────────────────────────────────

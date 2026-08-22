@@ -143,7 +143,7 @@ doiget's defaults are designed to be on the polite side of every source we know 
 
 - 5 fetches per second, regardless of source.
 - Per-source backoff of 200 ms between consecutive requests.
-- `User-Agent: doiget/<version> (+https://github.com/sotashimozono/doiget)`.
+- `User-Agent: doiget/<version> (+https://github.com/QAtlasHub/doiget)`.
 - Honors `Retry-After` headers (treats 429 as `RATE_LIMITED` with the indicated wait).
 
 If a source publishes a stricter rate guideline, doiget will adopt the stricter value at
