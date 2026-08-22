@@ -22,7 +22,7 @@ speaks **stdio only** ([ADR-0001](DECISIONS/), [`SCOPE.md`](SCOPE.md) §non-goal
 | `doiget_list_recent` | Last N fetched entries. |
 | `doiget_paper_pdf_path` | Return the local path of a cached PDF. **Does not read, parse, or transmit content.** |
 | `doiget_capability_profile` | Report which sources this instance is allowed to use. |
-| `doiget_health` | Operational sanity (store writable, version, schema). |
+| `doiget_health` | Operational sanity (store writable, version, schema). `store_writable` is a best-effort probe of the nearest **existing** ancestor of the store root — it creates nothing, so calling this tool never materialises `papers/` (#406). |
 
 Additional tools:
 

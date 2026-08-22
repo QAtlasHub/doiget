@@ -10,6 +10,26 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.7-beta.6] - 2026-08-22
+
+### Fixed
+- **[mcp]** `doiget_health` no longer creates the store root. Its `store_writable`
+  probe called `create_dir_all`, so a tool annotated `read_only_hint = true`
+  materialised `papers/` in whatever directory the server was started from —
+  indeterminate for a daemon, and usually an unrelated source repository for an
+  agent. The probe now walks up to the nearest existing ancestor and reports
+  whether that is a writable directory (#406).
+- **[test]** `initialize_handshake` no longer leaks `crates/doiget-mcp/papers/`.
+  Three `doiget_metadata_only` tests did not pin `DOIGET_STORE_ROOT`, so their
+  records landed in the ADR-0036 cwd default — the crate directory. `papers/` was
+  not in `.gitignore`, so a `git add -A` would have committed them (#406).
+
+### Added
+- **[cli]** `doiget config doctor` reports the **resolved** `store_root` path, and
+  notes that it is cwd-relative when `DOIGET_STORE_ROOT` is unset. Reporting only
+  "store_root parent exists" confirmed a path the user could not see (#406).
+- **[repo]** `.gitignore` ignores `papers/`.
+
 ## [0.8.7-beta.5] - 2026-08-22
 
 ### Changed

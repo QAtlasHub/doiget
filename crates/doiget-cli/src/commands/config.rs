@@ -158,6 +158,23 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
         "doctor" => {
             let mut all_ok = true;
             let store_parent = cfg.store_root.parent().map(|p| p.as_str()).unwrap_or("");
+            // Issue #406: the default store root is `./papers` under the
+            // CWD (ADR-0036), so it MOVES every time the user `cd`s. A
+            // check that says only "parent exists" confirms a path the
+            // user cannot see; naming it is what makes the cwd-relative
+            // default self-evident instead of surprising.
+            check(
+                &format!("store_root: {}", cfg.store_root),
+                true,
+                None,
+                &mut all_ok,
+            );
+            if std::env::var_os("DOIGET_STORE_ROOT").is_none() {
+                eprintln!(
+                    "       note: relative to the current directory (ADR-0036). Set                      DOIGET_STORE_ROOT"
+                );
+                eprintln!("             (or store.root in config.toml) for one central library.");
+            }
             check(
                 "store_root parent exists",
                 cfg.store_root.parent().map(|p| p.exists()).unwrap_or(true),
