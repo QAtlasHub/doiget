@@ -44,6 +44,15 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   has widened the allowlist, instead of reporting a bare `trust_academic_repos=false`
   (#405).
 
+### Fixed
+- **[cli]** `doiget config show` / `config path` / `config doctor` now resolve
+  `config.toml` through the same resolver the reader uses
+  (`fetch::config_dir_utf8`) instead of `dirs::config_dir()`. The two diverged:
+  `dirs::config_dir()` ignores `XDG_CONFIG_HOME` on Windows, so a user with that
+  variable set — normal for cross-platform dotfiles — had `doiget fetch` read one
+  `config.toml` while `doiget config doctor` validated a different one and reported
+  "user-extension hosts loaded: 0" about a file the fetch path never opened (#405).
+
 ## [0.8.7-beta.1] - 2026-07-14
 
 Dependency maintenance — first beta of the 0.8.7 line (retargeted off the 0.8.6 stable).
