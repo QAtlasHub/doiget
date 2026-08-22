@@ -137,7 +137,7 @@ Notes:
 | Field | Value |
 |---|---|
 | `source` | `oa-publisher` (synthetic — see notes) |
-| `redirect_hosts` | `*.springer.com`, `*.springeropen.com`, `*.springernature.com`, `*.nature.com`, `*.wiley.com`, `*.elsevier.com`, `*.sciencedirect.com`, `*.frontiersin.org`, `*.mdpi.com`, `*.plos.org`, `*.biorxiv.org`, `*.medrxiv.org`, `europepmc.org`, `*.europepmc.org`, `*.nih.gov`, `*.ncbi.nlm.nih.gov`, `*.aps.org`, `scipost.org`, `*.scipost.org`, `*.iop.org`, `arxiv.org`, `*.arxiv.org` |
+| `redirect_hosts` | `*.springer.com`, `*.springeropen.com`, `*.springernature.com`, `*.nature.com`, `*.wiley.com`, `*.elsevier.com`, `*.sciencedirect.com`, `*.frontiersin.org`, `*.mdpi.com`, `*.plos.org`, `*.biorxiv.org`, `*.medrxiv.org`, `europepmc.org`, `*.europepmc.org`, `*.nih.gov`, `*.ncbi.nlm.nih.gov`, `*.aps.org`, `scipost.org`, `*.scipost.org`, `*.iop.org`, `doaj.org`, `*.doaj.org`, `arxiv.org`, `*.arxiv.org` |
 
 Notes:
 
@@ -152,6 +152,15 @@ Notes:
   `HttpClient::fetch_pdf("oa-publisher", url)`.
 - **Documented OA hosts.** Each entry below is the documented OA host for the
   named publisher / repository. Changes follow the §5 update process.
+- **DOAJ (ADR-0037).** `doaj.org` + `*.doaj.org` were promoted here from the
+  `doaj` **metadata** source key (`tier_2_allowlist`), which the CLI wires in
+  only under `#[cfg(feature = "citation")]`. The two keys disagreed about a
+  host the project had already accepted, and a stock build could not reach it
+  at all — so a gold-OA article redirected through DOAJ was denied while a
+  green-OA copy on an institutional repository was reachable behind one flag.
+  Promoted on the ADR-0027 precedent that made `*.aps.org` unconditional
+  rather than feature-gated. Empirically observed via
+  `10.1109/access.2024.3495502` (IEEE Access, gold OA; #405).
 - **Empirical verification (ADR-0027).** The physics-society / diamond-OA
   hosts (`*.aps.org`, `scipost.org`, `*.scipost.org`, `*.iop.org`) were
   added from a real `doiget batch` over 30 OpenAlex-OA

@@ -1373,13 +1373,16 @@ host = "*.uj.edu.pl"
             .source_allowlist("oa-publisher")
             .expect("oa-publisher source registered");
 
+        // ADR-0037: DOAJ is a DEFAULT allowlist entry now, so it is not
+        // evidence that the flag worked. Assert on a host only the flag can
+        // provide.
         assert!(
-            oa.matches("doaj.org"),
-            "the apex that denied 10.1109/access.2024.3495502 MUST match; got {:?}",
+            oa.matches("zenodo.org"),
+            "the zenodo apex must match with the flag set; got {:?}",
             oa.redirect_hosts
         );
-        assert!(oa.matches("www.doaj.org"), "wildcard covers subdomains");
-        assert!(oa.matches("zenodo.org"), "zenodo apex must match");
+        assert!(oa.matches("data.zenodo.org"), "wildcard covers subdomains");
+        assert!(oa.matches("hal.science"), "hal apex must match");
         assert!(
             oa.redirect_hosts.iter().any(|p| p == "*.aps.org"),
             "the curated allowlist MUST survive the merge"
