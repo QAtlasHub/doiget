@@ -470,18 +470,26 @@ async fn doiget_metadata_only_arxiv_happy_path_returns_metadata_envelope() -> an
         .await;
 
     let td = tempfile::TempDir::new().expect("tempdir");
-    let log_path = camino::Utf8Path::from_path(td.path())
-        .expect("tempdir is utf-8")
-        .join("mcp-meta.jsonl");
+    let tmp = camino::Utf8Path::from_path(td.path()).expect("tempdir is utf-8");
+    let log_path = tmp.join("mcp-meta.jsonl");
+    let store_root = tmp.join("papers");
 
     let env = EnvGuard::new(&[
         "DOIGET_ARXIV_BASE",
         "DOIGET_CROSSREF_BASE",
         "DOIGET_UNPAYWALL_BASE",
         "DOIGET_LOG_PATH",
+        // Issue #406: without this, `doiget_metadata_only` writes its
+        // record to the ADR-0036 default store root — `./papers` under
+        // the CWD, which for a test binary is the crate directory. The
+        // suite used to leave `crates/doiget-mcp/papers/` behind, and
+        // `papers/` is not in `.gitignore`, so a `git add -A` would
+        // commit it.
+        "DOIGET_STORE_ROOT",
     ]);
     env.set("DOIGET_ARXIV_BASE", &server.uri());
     env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
 
     let (client, server_handle) = boot_in_memory_server().await?;
 
@@ -543,18 +551,26 @@ async fn doiget_metadata_only_doi_crossref_happy_path_returns_metadata_envelope(
         .await;
 
     let td = tempfile::TempDir::new().expect("tempdir");
-    let log_path = camino::Utf8Path::from_path(td.path())
-        .expect("tempdir is utf-8")
-        .join("mcp-meta.jsonl");
+    let tmp = camino::Utf8Path::from_path(td.path()).expect("tempdir is utf-8");
+    let log_path = tmp.join("mcp-meta.jsonl");
+    let store_root = tmp.join("papers");
 
     let env = EnvGuard::new(&[
         "DOIGET_ARXIV_BASE",
         "DOIGET_CROSSREF_BASE",
         "DOIGET_UNPAYWALL_BASE",
         "DOIGET_LOG_PATH",
+        // Issue #406: without this, `doiget_metadata_only` writes its
+        // record to the ADR-0036 default store root — `./papers` under
+        // the CWD, which for a test binary is the crate directory. The
+        // suite used to leave `crates/doiget-mcp/papers/` behind, and
+        // `papers/` is not in `.gitignore`, so a `git add -A` would
+        // commit it.
+        "DOIGET_STORE_ROOT",
     ]);
     env.set("DOIGET_CROSSREF_BASE", &server.uri());
     env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
 
     let (client, server_handle) = boot_in_memory_server().await?;
 
@@ -710,19 +726,27 @@ async fn doiget_metadata_only_network_failure_returns_network_error_envelope() -
         .await;
 
     let td = tempfile::TempDir::new().expect("tempdir");
-    let log_path = camino::Utf8Path::from_path(td.path())
-        .expect("tempdir is utf-8")
-        .join("mcp-meta.jsonl");
+    let tmp = camino::Utf8Path::from_path(td.path()).expect("tempdir is utf-8");
+    let log_path = tmp.join("mcp-meta.jsonl");
+    let store_root = tmp.join("papers");
 
     let env = EnvGuard::new(&[
         "DOIGET_ARXIV_BASE",
         "DOIGET_CROSSREF_BASE",
         "DOIGET_UNPAYWALL_BASE",
         "DOIGET_LOG_PATH",
+        // Issue #406: without this, `doiget_metadata_only` writes its
+        // record to the ADR-0036 default store root — `./papers` under
+        // the CWD, which for a test binary is the crate directory. The
+        // suite used to leave `crates/doiget-mcp/papers/` behind, and
+        // `papers/` is not in `.gitignore`, so a `git add -A` would
+        // commit it.
+        "DOIGET_STORE_ROOT",
     ]);
     env.set("DOIGET_CROSSREF_BASE", &server.uri());
     env.set("DOIGET_UNPAYWALL_BASE", &server.uri());
     env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
 
     let (client, server_handle) = boot_in_memory_server().await?;
 

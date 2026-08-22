@@ -46,3 +46,8 @@ lcov.info
 # Test scratch
 /tmp/
 /scratch/
+
+# Default store root (ADR-0036: `./papers` under the CWD). Running doiget
+# — or the test suite — inside the repo materialises this; it is never
+# repo content. Issue #406.
+papers/
