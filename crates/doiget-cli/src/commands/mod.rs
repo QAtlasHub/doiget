@@ -63,8 +63,18 @@ use camino::Utf8PathBuf;
 /// callers should fall back to naming the file generically — a missing
 /// config dir must never turn an advisory line into a hard error.
 pub(crate) fn user_config_path() -> Option<Utf8PathBuf> {
-    let cfg = Utf8PathBuf::try_from(dirs::config_dir()?).ok()?;
-    Some(cfg.join("doiget").join("config.toml"))
+    // MUST stay `config_dir_utf8` — the resolver the READER uses. This
+    // shipped as `dirs::config_dir()`, which ignores `XDG_CONFIG_HOME` on
+    // Windows, so the denial help named `%APPDATA%\doiget\config.toml`
+    // while `build_http_client` was loading the XDG one. Naming the wrong
+    // file is worse than naming none, and it is the whole point of the
+    // #405 help line. Same fix as `ResolvedConfig::from_env`.
+    Some(
+        fetch::config_dir_utf8()
+            .ok()?
+            .join("doiget")
+            .join("config.toml"),
+    )
 }
 
 /// Resolve the on-disk store root.

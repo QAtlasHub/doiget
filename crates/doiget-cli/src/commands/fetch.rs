@@ -1577,6 +1577,50 @@ host = "*.uj.edu.pl"
         }
     }
 
+    /// The `= help:` line names a file for the user to edit, so it MUST be
+    /// the file `build_http_client` actually reads. `user_config_path` used
+    /// `dirs::config_dir()`, which ignores `XDG_CONFIG_HOME` on Windows —
+    /// so on a machine with cross-platform dotfiles the denial pointed at a
+    /// `config.toml` the fetch path never opened. Naming the wrong file is
+    /// worse than naming none.
+    #[test]
+    #[serial]
+    fn denial_help_names_the_file_the_reader_loads() {
+        struct EnvGuard(&'static str, Option<String>);
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.1 {
+                    Some(v) => std::env::set_var(self.0, v),
+                    None => std::env::remove_var(self.0),
+                }
+            }
+        }
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let _g: Vec<EnvGuard> = ["XDG_CONFIG_HOME", "APPDATA", "HOME", "USERPROFILE"]
+            .iter()
+            .map(|k| EnvGuard(k, std::env::var(k).ok()))
+            .collect();
+        std::env::set_var("XDG_CONFIG_HOME", td.path());
+
+        let reader = super::config_dir_utf8()
+            .expect("reader resolves")
+            .join("doiget")
+            .join("config.toml");
+        let helped = crate::commands::user_config_path().expect("help path resolves");
+        assert_eq!(
+            helped, reader,
+            "the denial help must name the config.toml the reader loads"
+        );
+
+        let mut dc = denial(DenialReason::RedirectNotInAllowlist);
+        dc.attempted = Some("strathprints.strath.ac.uk".to_string());
+        let joined = denial_note_lines(&dc, Some(helped.as_path())).join("\n");
+        assert!(
+            joined.contains(reader.as_str()),
+            "rendered help must carry that path; got:\n{joined}"
+        );
+    }
+
     // ── #405: the denial must name the knob that unblocks it ─────────────
 
     /// A `redirect_not_in_allowlist` denial is not "this host is forbidden",

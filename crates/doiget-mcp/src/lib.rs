@@ -4000,7 +4000,17 @@ fn resolve_store_root() -> Option<Utf8PathBuf> {
 fn probe_store_writable(path: &camino::Utf8Path) -> bool {
     let mut cur = Some(path);
     while let Some(p) = cur {
-        match std::fs::metadata(p.as_std_path()) {
+        // A relative root (`DOIGET_STORE_ROOT=papers`) walks up to `""`,
+        // whose implicit base is the current directory — stat that rather
+        // than reporting the root unwritable. `docs/CONFIG.md` §4 asks for
+        // absolute paths, but answering "not writable" for a directory we
+        // would happily create is a worse failure than being lenient.
+        let probe = if p.as_str().is_empty() {
+            camino::Utf8Path::new(".")
+        } else {
+            p
+        };
+        match std::fs::metadata(probe.as_std_path()) {
             Ok(md) => return md.is_dir() && !md.permissions().readonly(),
             // Not found (or not statable) — try the parent. `parent()`
             // yields `None` at the root, which ends the walk.
@@ -4117,6 +4127,26 @@ mod tests {
     /// An existing store root reports writable, and a path whose nearest
     /// existing ancestor is a FILE reports not-writable — a file cannot
     /// hold a store, so `true` there would be a lie the first write pays for.
+    /// A relative `DOIGET_STORE_ROOT` walks up to `""`, whose implicit base
+    /// is the cwd. Reporting it unwritable would be wrong — a write there
+    /// succeeds — and the pre-#406 `create_dir_all` probe got this right.
+    #[test]
+    fn probe_store_writable_handles_a_relative_root() {
+        // `papers` (no `./`) is the case that exhausts the walk.
+        assert!(
+            probe_store_writable(camino::Utf8Path::new("papers")),
+            "a bare relative root resolves against the cwd, which is writable"
+        );
+        assert!(
+            probe_store_writable(camino::Utf8Path::new("./papers")),
+            "the dotted form must agree with the bare form"
+        );
+        assert!(
+            !camino::Utf8Path::new("papers").exists(),
+            "still creates nothing"
+        );
+    }
+
     #[test]
     fn probe_store_writable_distinguishes_dir_from_file() {
         let td = tempfile::TempDir::new().expect("tempdir");
