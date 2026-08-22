@@ -10,6 +10,24 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.7-beta.8] - 2026-08-22
+
+### Added
+- **[cli]** `doiget config doctor --network` — the outbound half of the report
+  (#407): proxy configuration in effect, which Unpaywall pool you are in, how many
+  host patterns the `oa-publisher` allowlist holds, and one GET per well-known
+  publisher showing which will talk to a scripted client. Opt-in because it makes
+  real requests; no retries; probes only hosts already on the allowlist, so it
+  cannot be pointed at an arbitrary host. A `2xx` with an **empty body** is
+  reported as a bot challenge rather than a success — that is the case a status
+  code alone cannot diagnose, and the one that makes a subscribing university
+  network still fail. Egress address is deliberately not probed: that needs a
+  third-party echo service, i.e. a new outbound dependency and a new `PRIVACY.md`
+  entry, for a diagnostic.
+- **[core]** New `HttpClient::probe` / `ProbeOutcome` behind the above.
+- **[docs]** `docs/CONFIG.md` §6.1 "Institutional networks: what works and what
+  does not" — IP-based subscription does not imply fetchability (#407).
+
 ## [0.8.7-beta.7] - 2026-08-22
 
 ### Added
@@ -43,21 +61,6 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 - **[cli]** `doiget config doctor` names the config file and both keys when nothing
   has widened the allowlist, instead of reporting a bare `trust_academic_repos=false`
   (#405).
-
-- **[cli]** `doiget config doctor --network` — the outbound half of the report
-  (#407): proxy configuration in effect, which Unpaywall pool you are in, how many
-  host patterns the `oa-publisher` allowlist holds, and one GET per well-known
-  publisher showing which will talk to a scripted client. Opt-in because it makes
-  real requests; no retries; probes only hosts already on the allowlist, so it
-  cannot be pointed at an arbitrary host. A `2xx` with an **empty body** is
-  reported as a bot challenge rather than a success — that is the case a status
-  code alone cannot diagnose, and the one that makes a subscribing university
-  network still fail. Egress address is deliberately not probed: that needs a
-  third-party echo service, i.e. a new outbound dependency and a new `PRIVACY.md`
-  entry, for a diagnostic.
-- **[core]** New `HttpClient::probe` / `ProbeOutcome` behind the above.
-- **[docs]** `docs/CONFIG.md` §6.1 "Institutional networks: what works and what
-  does not" — IP-based subscription does not imply fetchability (#407).
 
 ### Fixed
 - **[cli]** `doiget config show` / `config path` / `config doctor` now resolve
