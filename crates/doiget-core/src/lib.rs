@@ -921,6 +921,14 @@ pub struct MetadataAccess {
     pub semantic_scholar: bool,
     /// Phase 4+; enabled by `DOIGET_ENABLE_DOAJ`.
     pub doaj: bool,
+    /// DOI **resolution** for DataCite-registered DOIs (Zenodo / figshare /
+    /// Dryad / OSF / most institutional repositories); enabled by
+    /// `DOIGET_ENABLE_DATACITE`.
+    ///
+    /// Unlike its siblings this is not enrichment — Crossref and Unpaywall
+    /// simply do not index these DOIs, so without it a live, open record is
+    /// reported [`ErrorCode::NotFound`] (ADR-0040, #414).
+    pub datacite: bool,
 }
 
 /// Process-wide rate limits. Hard-coded; not configurable.
@@ -1149,6 +1157,11 @@ impl CapabilityProfile {
             ),
             doaj: resolve_metadata_flag(
                 "DOIGET_ENABLE_DOAJ",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            datacite: resolve_metadata_flag(
+                "DOIGET_ENABLE_DATACITE",
                 "metadata",
                 cfg!(feature = "metadata"),
             ),

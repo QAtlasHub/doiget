@@ -41,7 +41,12 @@ its use of these APIs polite.
 
 **Opt-in only — compile-time feature flag + your own configuration:**
 
-- `--features metadata`: **Semantic Scholar**, **DOAJ** (extra metadata).
+- `--features metadata`: **Semantic Scholar**, **DOAJ** (extra metadata) and
+  **DataCite** (<https://api.datacite.org>, DOI resolution for Zenodo / figshare /
+  Dryad / OSF). Each is additionally inert until you set its own
+  `DOIGET_ENABLE_<NAME>`, so compiling the feature in contacts nobody by itself.
+  DataCite is queried by exact DOI only — never used as a search surface — and
+  needs no key or account.
 - `--features tdm-springer | tdm-aps | tdm-elsevier`: the respective publisher
   text-and-data-mining APIs, used **only with your own API key and explicit
   agreement**. doiget bundles no keys and shares none.

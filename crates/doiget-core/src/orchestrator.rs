@@ -1114,7 +1114,44 @@ async fn fetch_paper_doi(
         .as_ref()
         .and_then(|c| c.metadata_json.clone())
         .unwrap_or(Value::Null);
-    let extracted = extract_crossref_fields(&crossref_meta);
+    // `mut` only in `metadata` builds, where the DataCite fallback below may
+    // reassign it; without that feature nothing writes to it.
+    #[allow(unused_mut)]
+    let mut extracted = extract_crossref_fields(&crossref_meta);
+
+    // Issue #414 / ADR-0040: DataCite fallback, strictly AFTER Crossref and
+    // only when Crossref produced nothing. DataCite is the other large
+    // registration agency — Zenodo / figshare / Dryad / OSF DOIs are in
+    // neither Crossref nor Unpaywall, so without this a live, open record
+    // is reported NotFound. Ordering it here is what makes the source
+    // additive: a Crossref-registered DOI never reaches it, so turning the
+    // flag on cannot change any resolution that already works.
+    //
+    // Runtime-gated by `DOIGET_ENABLE_DATACITE` (off by default), so with
+    // the flag unset this block is inert and behaviour is byte-identical.
+    #[cfg(feature = "metadata")]
+    let datacite_meta = if cross.is_none() && profile.metadata.datacite {
+        match crate::sources::datacite::DataCiteSource::new()
+            .fetch(ref_, profile, ctx)
+            .await
+        {
+            Ok(r) => {
+                if let Some(attrs) = r.metadata_json.as_ref() {
+                    extracted = extract_datacite_fields(attrs);
+                }
+                r.metadata_json
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "datacite fallback found nothing for this DOI");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    #[cfg(not(feature = "metadata"))]
+    let datacite_meta: Option<Value> = None;
+    let _ = &datacite_meta;
 
     // Unpaywall second — license enrichment + OA URL chain discovery.
     // A failure here is non-fatal: we still write the Crossref-
@@ -1741,6 +1778,73 @@ pub(crate) struct CrossrefFields {
     pub(crate) issue: Option<String>,
     pub(crate) pages: Option<String>,
     pub(crate) type_: Option<String>,
+}
+
+/// Map a DataCite `data.attributes` object onto [`CrossrefFields`].
+///
+/// Issue #414. DataCite is a different registration agency with a
+/// different schema, but downstream only consumes [`CrossrefFields`], so
+/// the shapes are reconciled here rather than by widening every consumer.
+///
+/// `type_` deliberately carries `types.resourceTypeGeneral` — on Zenodo,
+/// dataset plus software plus image outnumber `JournalArticle`, and an
+/// agent that cannot tell them apart will treat a software release as a
+/// paper. Every field degrades to `None` rather than guessing.
+#[cfg(feature = "metadata")]
+pub(crate) fn extract_datacite_fields(attributes: &Value) -> CrossrefFields {
+    let title = attributes
+        .get("titles")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|t| t.get("title"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let authors = attributes
+        .get("creators")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| {
+                    // `name` is the canonical field; fall back to the
+                    // given/family pair when a depositor supplied only that.
+                    c.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            let given = c.get("givenName").and_then(|v| v.as_str());
+                            let family = c.get("familyName").and_then(|v| v.as_str());
+                            match (given, family) {
+                                (Some(g), Some(f)) => Some(format!("{g} {f}")),
+                                (None, Some(f)) => Some(f.to_string()),
+                                _ => None,
+                            }
+                        })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let year = attributes
+        .get("publicationYear")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|y| i32::try_from(y).ok());
+    let venue = attributes.get("publisher").and_then(|v| {
+        // DataCite 4.5 made `publisher` an object; earlier records
+        // carry a bare string.
+        v.as_str()
+            .map(str::to_string)
+            .or_else(|| v.get("name").and_then(|n| n.as_str()).map(str::to_string))
+    });
+    let type_ = crate::sources::datacite::resource_type_general(attributes).map(str::to_string);
+    CrossrefFields {
+        title,
+        authors,
+        year,
+        venue,
+        volume: None,
+        issue: None,
+        pages: None,
+        type_,
+    }
 }
 
 /// Defensively pull bibliographic fields out of a Crossref envelope's

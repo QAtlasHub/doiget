@@ -268,6 +268,7 @@ mod tests {
             openalex: false,
             semantic_scholar: false,
             doaj: true,
+            datacite: false,
         };
         p
     }

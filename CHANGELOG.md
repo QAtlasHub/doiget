@@ -10,6 +10,21 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.8-beta.4] - 2026-08-22
+
+### Added
+- **[source]** **DataCite** DOI resolution, opt-in via `DOIGET_ENABLE_DATACITE`
+  (#414, first of the #413 epic under ADR-0040). DataCite is the second large
+  registration agency and Crossref/Unpaywall index neither its DOIs nor its
+  records, so a live, open-access Zenodo / figshare / Dryad / OSF DOI resolved to
+  `NOT_FOUND` — a false negative already documented on that `ErrorCode` variant
+  and seen as a false positive in `doiget-citation-check`. Ordered strictly
+  **after** Crossref in the DOI fan-out and only consulted when Crossref returned
+  nothing, so a Crossref-registered DOI never reaches it and enabling the flag
+  cannot change any resolution that already works. `resourceTypeGeneral` is
+  surfaced because most DataCite DOIs are not articles. Metadata only: DataCite
+  returns a landing page, not a file, so no PDF is fetched.
+
 ## [0.8.8-beta.3] - 2026-08-22
 
 ### Added
