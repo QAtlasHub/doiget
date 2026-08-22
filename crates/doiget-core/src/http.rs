@@ -432,6 +432,20 @@ pub fn oa_publisher_allowlist() -> Vec<SourceAllowlist> {
             "*.scipost.org".to_string(),
             // IOP Publishing — iopscience.iop.org (New J. Phys. etc.).
             "*.iop.org".to_string(),
+            // DOAJ — the canonical redirect host for gold-OA journal
+            // content. ADR-0037: this domain was ALREADY trusted in this
+            // file under the `"doaj"` metadata key (`tier_2_allowlist`),
+            // which the CLI wires in only under
+            // `#[cfg(feature = "citation")]` — so the two keys disagreed
+            // about a host the project had already accepted, and a stock
+            // build could not reach it at all. Promoted here on the
+            // ADR-0027 precedent that made `*.aps.org` unconditional
+            // rather than feature-gated. The apex is listed separately
+            // because a single-suffix wildcard does not match it and the
+            // observed redirect (10.1109/access.2024.3495502, #405)
+            // targeted the bare apex.
+            "doaj.org".to_string(),
+            "*.doaj.org".to_string(),
             // arXiv — already on the `arxiv` tier-1 allowlist, but the
             // Unpaywall-driven path uses the `oa-publisher` source key,
             // so we mirror the host list here too. See REDIRECT_ALLOWLIST.md
@@ -1376,6 +1390,52 @@ fn build_client(allowlist: SourceAllowlist, ua: &str) -> Result<Client, reqwest:
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// ADR-0037: `doaj.org` must be reachable on the `oa-publisher` key with
+    /// NO config file and NO feature flags — that is the whole point of
+    /// promoting it. Pinned on the apex specifically: a single-suffix
+    /// wildcard does not match an apex, and the redirect that motivated
+    /// #405 (10.1109/access.2024.3495502, IEEE Access gold OA) targeted the
+    /// bare apex.
+    #[test]
+    fn doaj_is_on_the_default_oa_publisher_allowlist() {
+        let lists = oa_publisher_allowlist();
+        let oa = lists
+            .iter()
+            .find(|a| a.source == "oa-publisher")
+            .expect("oa-publisher entry");
+        assert!(
+            oa.matches("doaj.org"),
+            "apex must match: {:?}",
+            oa.redirect_hosts
+        );
+        assert!(oa.matches("www.doaj.org"), "subdomains must match");
+        assert!(
+            !oa.matches("doaj.org.evil.test"),
+            "suffix confusion must not match"
+        );
+    }
+
+    /// The `"doaj"` metadata key and the `"oa-publisher"` PDF-redirect key
+    /// must now agree about DOAJ. Their disagreement was the defect ADR-0037
+    /// fixed; this pins that they cannot silently drift apart again.
+    #[test]
+    fn doaj_metadata_and_oa_publisher_keys_agree() {
+        let meta = tier_2_allowlist();
+        let doaj = meta.iter().find(|a| a.source == "doaj").expect("doaj key");
+        let lists = oa_publisher_allowlist();
+        let oa = lists
+            .iter()
+            .find(|a| a.source == "oa-publisher")
+            .expect("oa key");
+        for pat in &doaj.redirect_hosts {
+            let sample = pat.strip_prefix("*.").unwrap_or(pat);
+            assert!(
+                oa.matches(sample),
+                "{pat} is trusted on the doaj key but not on oa-publisher"
+            );
+        }
+    }
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 

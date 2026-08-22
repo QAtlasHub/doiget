@@ -37,12 +37,25 @@ behavior the default ([`LEGAL.md`](LEGAL.md) §6 safeguard 8).
 
 ## 3. Default release binaries
 
-`cargo install doiget` (default) compiles Tier 1 only. Tier 2 metadata sources require
-an opt-in build:
+`cargo install doiget` (default) compiles Tier 1 only. The optional source surface
+requires an opt-in build:
 
 ```sh
 cargo install doiget --features metadata
 ```
+
+**What `metadata` means (ADR-0040, NORMATIVE).** The feature name predates the sources
+it now carries. As of 0.8.8 it gates **the optional non-Tier-1 source surface as a
+whole** — enrichment, resolution *and* retrieval — not enrichment alone. Compiling it
+in makes that code present; it does **not** turn any source on. Every source under it
+is additionally gated at runtime by its own `DOIGET_ENABLE_<NAME>`, and with every such
+variable unset the observable behaviour of the binary is identical to a Tier-1-only
+build. The runtime flag is the boundary that matters; the Cargo feature only decides
+what is compiled.
+
+Published release binaries build `--no-default-features --features oa-only,citation`,
+and `citation = ["metadata"]`, so this code ships — inert — in the binaries you
+download.
 
 Tier 3 TDM sources are individually feature-flagged and require user-driven build:
 

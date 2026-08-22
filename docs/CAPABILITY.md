@@ -157,6 +157,13 @@ fn read_tdm_grant(agree_var: &str, key_var: &str) -> Result<Option<TdmGrant>, Ca
 
 | Variable | Type | Effect |
 |---|---|---|
+> **The `metadata` Cargo feature vs. these variables (ADR-0040, NORMATIVE).** The
+> feature decides what is *compiled*; the variables below decide what is *reachable*.
+> As of 0.8.8 `metadata` gates the whole optional non-Tier-1 source surface —
+> enrichment, resolution and retrieval — and release binaries compile it in. A source
+> is inert until its own `DOIGET_ENABLE_<NAME>` is set, so with all of them unset the
+> binary behaves exactly as a Tier-1-only build.
+
 | `DOIGET_ENABLE_OPENALEX` | presence | Enables OpenAlex (metadata only). |
 | `DOIGET_ENABLE_S2` | presence | Enables Semantic Scholar. |
 | `DOIGET_ENABLE_DOAJ` | presence | Enables DOAJ. |

@@ -10,6 +10,31 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.8-beta.2] - 2026-08-22
+
+### Changed
+- **[network]** `doaj.org` / `*.doaj.org` are on the **default** `oa-publisher`
+  allowlist (ADR-0037). They were already trusted under the `doaj` *metadata*
+  source key, which the CLI wires in only under `#[cfg(feature = "citation")]`, so
+  the two keys disagreed about a host the project had already accepted and a stock
+  build could not reach it at all. Promoted on the ADR-0027 precedent that made
+  `*.aps.org` unconditional. A gold-OA article routed through DOAJ now works with
+  no configuration (#405).
+- **[network]** DOAJ is removed from the `trust_oa_registries` curated set — it no
+  longer needs a flag. The remaining five (SciELO, Zenodo, OSF, HAL, CORE) appear
+  nowhere in `http.rs`, so for them the flag is genuinely new trust and stays
+  opt-in (#405).
+- **[docs]** `metadata` is redefined in `SOURCES.md` §3 and `CAPABILITY.md` as the
+  optional non-Tier-1 source surface as a whole — enrichment, resolution and
+  retrieval — with the runtime `DOIGET_ENABLE_<NAME>` flags, not the Cargo feature,
+  as the boundary that keeps sources inert (ADR-0040, #413).
+
+### Added
+- **[docs]** ADR-0037 (DOAJ on `oa-publisher`), ADR-0038 (store root stays
+  cwd-relative; 0036 reaffirmed against #406), ADR-0039 (IEEE / ACM / SIAM / AMS
+  stay off the allowlist; TDM credentials are the route, #407), ADR-0040 (source
+  expansion gated by `metadata`, #413).
+
 ## [0.8.8-beta.1] - 2026-08-22
 
 ### Fixed
