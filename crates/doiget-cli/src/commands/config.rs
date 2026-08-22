@@ -353,7 +353,8 @@ pub enum ProbeVerdict {
 }
 
 impl ProbeVerdict {
-    /// Map a [`ProbeOutcome`] to a verdict. Pure, so the classification —
+    /// Map a [`doiget_core::http::ProbeOutcome`] to a verdict. Pure, so
+    /// the classification —
     /// the part with the actual judgement in it — is unit-testable without
     /// a network or a mock server.
     pub fn classify(status: u16, body_bytes: usize) -> Self {
