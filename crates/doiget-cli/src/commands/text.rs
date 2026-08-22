@@ -25,14 +25,8 @@ use doiget_core::paper_text::{paper_text, PaperText, AR5IV_DEFAULT_BASE};
 use doiget_core::{ArxivId, ErrorCode, Ref};
 
 use super::fetch::{build_resolve_context, cli_exit_code, CliExit};
+use super::output::print_err;
 use super::output::OutputMode;
-
-/// Stderr sink for `docs/ERRORS.md` §3 human-error lines (mirrors the
-/// `print_err` helper in `commands::search` / `commands::fetch`).
-#[allow(clippy::print_stderr)]
-fn print_err(args: std::fmt::Arguments<'_>) {
-    eprintln!("{args}");
-}
 
 /// Run the `text` subcommand.
 ///

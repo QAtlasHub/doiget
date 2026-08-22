@@ -22,14 +22,8 @@ use doiget_core::store::{render, FsStore, Metadata, Store};
 use doiget_core::{Ref, Safekey};
 
 use super::fetch::CliExit;
+use super::output::print_err;
 use super::resolve_store_root;
-
-/// Stderr sink for progress / skip notes (`docs/ERRORS.md` §3); stdout
-/// carries only the `.bib` artifact (ADR-0001).
-#[allow(clippy::print_stderr)]
-fn print_err(args: std::fmt::Arguments<'_>) {
-    eprintln!("{args}");
-}
 
 /// Run the `bib` subcommand against the configured store.
 ///

@@ -43,15 +43,8 @@ use doiget_core::orchestrator::{cite_metadata, resolve_only, MetadataOnlyOutcome
 use doiget_core::store::{render, FsStore, Metadata, Store};
 use doiget_core::{CapabilityProfile, Ref};
 
+use super::output::print_err;
 use super::resolve_store_root;
-
-/// Stderr sink for the offline-fallback `note:` line (mirrors the
-/// `print_err` helper in sibling commands). Kept off stdout so the BibTeX
-/// artifact stays clean (ADR-0001).
-#[allow(clippy::print_stderr)]
-fn print_err(args: std::fmt::Arguments<'_>) {
-    eprintln!("{args}");
-}
 
 /// Run the `cite` subcommand.
 ///

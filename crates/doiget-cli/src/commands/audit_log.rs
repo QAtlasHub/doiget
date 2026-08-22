@@ -42,15 +42,7 @@ use camino::Utf8PathBuf;
 use doiget_core::provenance::{verify_all, VerifyIssueKind};
 
 use super::fetch::CliExit;
-
-/// Stderr sink for the `docs/ERRORS.md` §3 human-error lines. Mirrors
-/// the `print_err` helper in `commands::fetch`; the localized `#[allow]`
-/// is the minimal intervention for the workspace `clippy::print_stderr`
-/// lint.
-#[allow(clippy::print_stderr)]
-fn print_err(args: std::fmt::Arguments<'_>) {
-    eprintln!("{args}");
-}
+use super::output::print_err;
 
 /// Run the `audit-log` subcommand.
 ///

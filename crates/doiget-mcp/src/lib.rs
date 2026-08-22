@@ -89,12 +89,13 @@ use serde_json::{json, Value};
 pub struct Server {
     profile: CapabilityProfile,
     /// rmcp tool dispatch table, populated by the `#[tool_router]` macro
-    /// on the inherent impl block below. `#[tool_handler]` (in its default
-    /// configuration) uses the associated fn `Self::tool_router()` rather
-    /// than this field, but holding the router on the struct keeps the
-    /// type valid for `router = self.tool_router` if a future refactor
-    /// (e.g., merging multiple tool routers) needs that form.
-    #[allow(dead_code)]
+    /// on the inherent impl block below and then trimmed per build
+    /// features in [`Server::new`].
+    ///
+    /// `#[tool_handler(router = self.tool_router)]` reads THIS field rather
+    /// than the associated fn `Self::tool_router()`, which is what makes
+    /// the per-instance trimming visible to `tools/list` and `tools/call`
+    /// (issue #379). Do not switch the handler back to the associated fn.
     tool_router: ToolRouter<Server>,
 }
 
@@ -102,9 +103,28 @@ pub struct Server {
 impl Server {
     /// Construct a server with the given runtime capability profile.
     pub fn new(profile: CapabilityProfile) -> Self {
+        let mut tool_router = Self::tool_router();
+        // Issue #379 / #373(b): a tool that can only ever answer
+        // NOT_IMPLEMENTED is worse than an absent one — an agent will
+        // plan around it, call it, and get a dead end it cannot act on.
+        // `doiget_expand_citation_graph` needs the `citation` Cargo
+        // feature (ADR-0010), which the default `cargo install` build
+        // does not enable, so drop it from the router in that build and
+        // it disappears from `tools/list` and `tools/call` alike.
+        //
+        // The `#[tool]` method itself stays unconditional: rmcp's
+        // `#[tool_router]` macro generates registration code that names
+        // every `#[tool]` method, so `#[cfg]`-gating the method out does
+        // not compile (E0599 on the generated `..._tool_attr`). Removing
+        // the route at construction is the supported way to express this
+        // — `ToolRouter::remove_route` landed in rmcp 2.x, which is why
+        // #379 was blocked when the repo was on 1.7.
+        if !cfg!(feature = "citation") {
+            tool_router.remove_route("doiget_expand_citation_graph");
+        }
         Self {
             profile,
-            tool_router: Self::tool_router(),
+            tool_router,
         }
     }
 
@@ -137,18 +157,17 @@ impl Server {
     /// test to validate the rmcp wiring. The output shape is
     /// `{ ok: true, version, schema_version, store_writable }`.
     ///
-    /// `store_writable` is a best-effort probe: we attempt
-    /// `std::fs::create_dir_all(<store_root>)` and report whether it
-    /// succeeded. Per `docs/SECURITY.md` §1.5 directory creation is
-    /// idempotent and is not user-data write — this matches the spec's
-    /// "read-only check" framing.
+    /// `store_writable` is a best-effort probe of the nearest existing
+    /// ancestor of the store root — see [`probe_store_writable`]. It
+    /// creates nothing, which is what lets this tool honour its
+    /// `read_only_hint = true` annotation (issue #406).
     #[tool(
         description = "WHEN TO USE: Operational sanity check for the doiget MCP server.\n\
                        INPUTS: none.\n\
                        OUTPUTS: { ok: true, version, schema_version, store_writable }.\n\
                        COSTS: <1 ms.\n\
-                       SIDE EFFECTS: idempotent mkdir of the store root.\n\
-                       LIMITS: none.",
+                       SIDE EFFECTS: none.\n\
+                       LIMITS: store_writable is a best-effort probe of the nearest existing ancestor; it never creates the store.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3661,7 +3680,7 @@ fn build_fetch_context() -> anyhow::Result<FetchContext> {
                 .map_err(|e| anyhow::anyhow!("creating log dir {parent}: {e}"))?;
         }
     }
-    let session_id = ulid::Ulid::new().to_string();
+    let session_id = ulid::Ulid::generate().to_string();
     let log = Arc::new(
         ProvenanceLog::open(log_path, session_id.clone())
             .map_err(|e| anyhow::anyhow!("opening provenance log: {e}"))?,
@@ -3888,12 +3907,15 @@ fn resolve_log_path() -> anyhow::Result<Utf8PathBuf> {
 }
 
 // `tool_handler` wires the router into rmcp's `ServerHandler` trait — it
-// generates `call_tool`, `list_tools`, and `get_tool` from
-// `Self::tool_router()`. We provide `get_info` ourselves so the server
-// identifies itself as `name = "doiget"`, advertises
-// `protocolVersion = "2024-11-05"` (the version the smoke test asserts),
-// and includes capability-aware `instructions`.
-#[tool_handler]
+// generates `call_tool`, `list_tools`, and `get_tool`. `router =
+// self.tool_router` points those at the per-instance field built in
+// `Server::new` instead of the macro's default `Self::tool_router()`, so
+// the feature-gated trimming done there is what the peer actually sees
+// (issue #379). We provide `get_info` ourselves so the server identifies
+// itself as `name = "doiget"`, advertises `protocolVersion =
+// "2024-11-05"` (the version the smoke test asserts), and includes
+// capability-aware `instructions`.
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerInfo {
         // Both `ServerInfo` and `Implementation` are `#[non_exhaustive]`
@@ -3958,11 +3980,34 @@ fn resolve_store_root() -> Option<Utf8PathBuf> {
 
 /// Best-effort writability probe for the resolved store root.
 ///
-/// Returns `true` iff `std::fs::create_dir_all(path)` succeeds. The probe
-/// is idempotent (per `docs/SECURITY.md` §1.5 — directory creation is
-/// not considered a user-data write) and non-destructive.
+/// Walks up to the nearest **existing** ancestor of `path` and reports
+/// whether it is a directory that is not marked read-only. Returns `false`
+/// if no ancestor exists at all.
+///
+/// Issue #406: this used to answer the question by calling
+/// `std::fs::create_dir_all(path)`, which made `doiget_health` — a tool
+/// annotated `read_only_hint = true` — materialise `papers/` inside
+/// whatever directory the server happened to be started from. For a daemon
+/// that directory is indeterminate, and for an agent it is usually an
+/// unrelated source repository. A probe must not be the thing that creates
+/// the store.
+///
+/// The trade-off is deliberate: an existing, writable ancestor does not
+/// prove the mkdir would succeed. That is why the field is documented as
+/// best-effort — a wrong `true` costs a clear error on the first real
+/// write, whereas the old approach cost a stray directory on every health
+/// check.
 fn probe_store_writable(path: &camino::Utf8Path) -> bool {
-    std::fs::create_dir_all(path).is_ok()
+    let mut cur = Some(path);
+    while let Some(p) = cur {
+        match std::fs::metadata(p.as_std_path()) {
+            Ok(md) => return md.is_dir() && !md.permissions().readonly(),
+            // Not found (or not statable) — try the parent. `parent()`
+            // yields `None` at the root, which ends the walk.
+            Err(_) => cur = p.parent(),
+        }
+    }
+    false
 }
 
 /// Serialize a [`CapabilityProfile`] to the JSON surface defined by
@@ -4035,6 +4080,59 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// #406: the store-writability probe MUST NOT create anything.
+    /// `doiget_health` is annotated `read_only_hint = true`, and the old
+    /// `create_dir_all` implementation made a health check materialise
+    /// `papers/` in whatever directory the server was started from — for
+    /// a daemon, an indeterminate one; for an agent, usually an unrelated
+    /// source repository.
+    #[test]
+    fn probe_store_writable_creates_nothing() {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let base = camino::Utf8Path::from_path(td.path()).expect("tempdir is utf-8");
+        let missing = base.join("papers");
+
+        assert!(
+            probe_store_writable(&missing),
+            "an absent root under a writable parent must still probe writable"
+        );
+        assert!(
+            !missing.exists(),
+            "the probe must not create {missing} — see #406"
+        );
+
+        // Nested-absent: the walk has to climb more than one level.
+        let deep = base.join("a").join("b").join("papers");
+        assert!(
+            probe_store_writable(&deep),
+            "nested-absent must climb to {base}"
+        );
+        assert!(
+            !base.join("a").exists(),
+            "the probe must not create intermediates"
+        );
+    }
+
+    /// An existing store root reports writable, and a path whose nearest
+    /// existing ancestor is a FILE reports not-writable — a file cannot
+    /// hold a store, so `true` there would be a lie the first write pays for.
+    #[test]
+    fn probe_store_writable_distinguishes_dir_from_file() {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let base = camino::Utf8Path::from_path(td.path()).expect("tempdir is utf-8");
+
+        let real = base.join("papers");
+        std::fs::create_dir_all(real.as_std_path()).expect("mkdir");
+        assert!(probe_store_writable(&real), "an existing dir is writable");
+
+        let file = base.join("not-a-dir");
+        std::fs::write(file.as_std_path(), b"x").expect("write");
+        assert!(
+            !probe_store_writable(&file.join("papers")),
+            "a file ancestor must not report writable"
+        );
+    }
 
     /// #370: numeric tool params accept a JSON number OR a stringified
     /// number (`"10"`); absent / `null` / empty-string stay `None`.

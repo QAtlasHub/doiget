@@ -45,6 +45,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 
+use super::output::print_err;
 #[cfg(feature = "citation")]
 use doiget_core::http::tier_2_allowlist;
 use doiget_core::http::{
@@ -59,7 +60,7 @@ use doiget_core::{CapabilityProfile, DenialContext, DenialReason, ErrorCode, Rat
 
 /// Defer to docs/PROVENANCE_LOG.md §3: 26-char ULID per process invocation.
 pub(crate) fn new_session_id() -> String {
-    ulid::Ulid::new().to_string()
+    ulid::Ulid::generate().to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -941,14 +942,6 @@ fn make_symlink(_src: &Utf8Path, _dst: &Utf8Path) -> std::io::Result<()> {
 /// minimal intervention.
 #[allow(clippy::print_stderr)]
 fn print_success(args: std::fmt::Arguments<'_>) {
-    eprintln!("{args}");
-}
-
-/// Stderr sink for the `docs/ERRORS.md` §3 human-error lines. Mirrors
-/// [`print_success`]; the localized `#[allow]` is the minimal
-/// intervention for the workspace `clippy::print_stderr` lint.
-#[allow(clippy::print_stderr)]
-fn print_err(args: std::fmt::Arguments<'_>) {
     eprintln!("{args}");
 }
 
