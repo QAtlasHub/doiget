@@ -10,6 +10,16 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.7-beta.2] - 2026-08-22
+
+### Changed
+- **[cli/refactor]** `print_err` moves to `commands::output` as a single
+  `pub(crate)` function. Ten command modules each carried a byte-identical
+  private copy with its own `#[allow(clippy::print_stderr)]`; the workspace
+  denies that lint to protect MCP stdio purity, so the exception is now
+  auditable in one place instead of ten (#346 item 2). Quality only — no
+  behaviour change; net −45 lines.
+
 ## [0.8.7-beta.1] - 2026-07-14
 
 Dependency maintenance — first beta of the 0.8.7 line (retargeted off the 0.8.6 stable).
