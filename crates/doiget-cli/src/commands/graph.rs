@@ -34,15 +34,7 @@ use doiget_core::sources::openalex::OpenalexSource;
 use doiget_core::{ErrorCode, Ref};
 
 use super::fetch::{cli_exit_code, CliExit, FetchHarness};
-
-/// Stderr sink for the `docs/ERRORS.md` §3 human-error lines. Mirrors
-/// the `print_err` helper in `commands::fetch`; the localized `#[allow]`
-/// is the minimal intervention for the workspace `clippy::print_stderr`
-/// lint.
-#[allow(clippy::print_stderr)]
-fn print_err(args: std::fmt::Arguments<'_>) {
-    eprintln!("{args}");
-}
+use super::output::print_err;
 
 /// Run the `graph` subcommand against the live source set.
 ///
