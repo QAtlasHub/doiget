@@ -10,6 +10,17 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.7-beta.2] - 2026-08-22
+
+### Changed
+- **[mcp]** `doiget_expand_citation_graph` is no longer advertised in `tools/list`
+  when the binary was built without `--features citation`. It previously appeared in
+  every build and answered `NOT_IMPLEMENTED` to every call, so an agent could plan
+  around a tool it could never use. The route is now dropped in `Server::new` for
+  feature-off builds, which also makes `tools/call` report an unknown tool instead of
+  a dead end (#379, closing the open half of #373). The shipped `.mcpb` and the
+  Claude Desktop Extension enable the feature, so they are unaffected.
+
 ## [0.8.7-beta.1] - 2026-07-14
 
 Dependency maintenance — first beta of the 0.8.7 line (retargeted off the 0.8.6 stable).

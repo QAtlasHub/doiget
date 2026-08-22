@@ -120,13 +120,22 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
         names.contains(&"doiget_paper_pdf_path"),
         "tools/list must include doiget_paper_pdf_path; got: {names:?}"
     );
-    // Slice 15: doiget_expand_citation_graph is always advertised
-    // (the tool method is always present; body returns NOT_IMPLEMENTED
-    // when this binary was built without --features citation).
-    assert!(
-        names.contains(&"doiget_expand_citation_graph"),
-        "tools/list must include doiget_expand_citation_graph; got: {names:?}"
-    );
+    // Issue #379: doiget_expand_citation_graph is advertised ONLY when
+    // the `citation` feature is compiled in. A feature-off build used to
+    // list it and answer NOT_IMPLEMENTED to every call, which is a tool
+    // an agent can plan around but never use; now the route is removed
+    // in `Server::new` so it is absent from tools/list entirely.
+    if cfg!(feature = "citation") {
+        assert!(
+            names.contains(&"doiget_expand_citation_graph"),
+            "--features citation must advertise the tool; got: {names:?}"
+        );
+    } else {
+        assert!(
+            !names.contains(&"doiget_expand_citation_graph"),
+            "feature-off must NOT advertise it (#379: NOT_IMPLEMENTED-only); got: {names:?}"
+        );
+    }
     // Slice 15b: BibTeX / CSL export tools.
     assert!(
         names.contains(&"doiget_bibtex_export"),
