@@ -102,6 +102,16 @@ a health check no longer creates the store it was only meant to inspect.
   is green again.
 
 ### Fixed
+- **[cli]** The `redirect_not_in_allowlist` `= help:` line names the `config.toml`
+  the **reader** actually loads. `user_config_path` used `dirs::config_dir()`, which
+  ignores `XDG_CONFIG_HOME` on Windows, so on a machine with cross-platform dotfiles
+  the denial pointed at a file `doiget fetch` never opened — the same drift already
+  fixed for `config show` / `path` / `doctor`. Naming the wrong file is worse than
+  naming none (#405).
+- **[mcp]** `doiget_health`'s `store_writable` probe handles a relative
+  `DOIGET_STORE_ROOT`. The ancestor walk bottomed out at `""` and answered `false`
+  for a directory a write would happily create; `""` now resolves against the cwd,
+  matching the pre-#406 behaviour (#406).
 - **[cli]** `doiget config show` / `config path` / `config doctor` now resolve
   `config.toml` through the same resolver the reader uses
   (`fetch::config_dir_utf8`) instead of `dirs::config_dir()`. The two diverged:
