@@ -182,7 +182,7 @@ pub fn run(action: String, mode: super::output::OutputMode) -> Result<()> {
             );
             if std::env::var_os("DOIGET_STORE_ROOT").is_none() {
                 eprintln!(
-                    "       note: relative to the current directory (ADR-0036). Set                      DOIGET_STORE_ROOT"
+                    "       note: relative to the current directory (ADR-0036). Set DOIGET_STORE_ROOT"
                 );
                 eprintln!("             (or store.root in config.toml) for one central library.");
             }
