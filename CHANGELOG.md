@@ -10,7 +10,7 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
-## [0.8.7-beta.2] - 2026-08-22
+## [0.8.7-beta.4] - 2026-08-22
 
 ### Changed
 - **[cli/refactor]** `print_err` moves to `commands::output` as a single
@@ -19,6 +19,28 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   denies that lint to protect MCP stdio purity, so the exception is now
   auditable in one place instead of ten (#346 item 2). Quality only — no
   behaviour change; net −45 lines.
+
+## [0.8.7-beta.3] - 2026-08-22
+
+### Changed
+- **[deps]** Bump `ulid` 1.2.1 → 3.0.0. Breaking upstream: `Ulid::new()` was removed
+  in favour of `Ulid::generate()`. Both call sites — the CLI and MCP `session_id`
+  generators — were updated; the emitted id is unchanged (26-char Crockford base32,
+  `docs/PROVENANCE_LOG.md` §3), which `new_session_id_is_26_chars` pins.
+- **[supply-chain]** `cargo vet` exemptions for `ulid` 3.0.0 and its new random
+  backend (`rand` 0.10.2, `rand_core` 0.10.1, `chacha20` 0.10.1). `rand` 0.9.4 stays
+  in the tree for other consumers, so its exemption is kept alongside.
+
+## [0.8.7-beta.2] - 2026-08-22
+
+### Security
+- **[deps]** Bump `h2` 0.4.14 → 0.4.18 for **RUSTSEC-2026-0258** /
+  GHSA-q83h-524g-xf6h ("h2 unbounded empty DATA frames", low severity, patched
+  in 0.4.16). `h2` is transitive via `reqwest`/`hyper`; doiget is an HTTP client
+  and does not accept inbound HTTP/2, so the DoS is not reachable from an
+  attacker-chosen peer in normal use — but the advisory made `cargo audit` and
+  `cargo deny` red on `next`, and the fix is a lockfile bump.
+- **[supply-chain]** Refresh the `cargo vet` exemption for `h2` to 0.4.18.
 
 ## [0.8.7-beta.1] - 2026-07-14
 
