@@ -29,6 +29,7 @@ use doiget_core::store::{EntryInfo, FsStore, Store};
 use doiget_core::ErrorCode;
 
 use super::fetch::{cli_exit_code, CliExit, FetchHarness};
+use super::output::print_err;
 use super::output::OutputMode;
 use super::resolve_store_root;
 
@@ -97,13 +98,6 @@ pub struct ExternalArgs {
     pub publisher: Option<String>,
     /// Result ordering.
     pub sort: SortArg,
-}
-
-/// Stderr sink for `docs/ERRORS.md` §3 human-error lines (mirrors the
-/// `print_err` helper in `commands::fetch` / `commands::graph`).
-#[allow(clippy::print_stderr)]
-fn print_err(args: std::fmt::Arguments<'_>) {
-    eprintln!("{args}");
 }
 
 /// Run the `search` subcommand.

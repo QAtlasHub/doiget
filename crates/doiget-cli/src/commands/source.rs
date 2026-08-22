@@ -31,12 +31,8 @@ use doiget_core::paper_tex_source::{
 use doiget_core::{ArxivId, ErrorCode, Ref};
 
 use super::fetch::{build_resolve_context, cli_exit_code, CliExit};
+use super::output::print_err;
 use super::output::OutputMode;
-
-#[allow(clippy::print_stderr)]
-fn print_err(args: std::fmt::Arguments<'_>) {
-    eprintln!("{args}");
-}
 
 /// Run the `source` subcommand.
 ///

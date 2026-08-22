@@ -3681,7 +3681,7 @@ fn build_fetch_context() -> anyhow::Result<FetchContext> {
                 .map_err(|e| anyhow::anyhow!("creating log dir {parent}: {e}"))?;
         }
     }
-    let session_id = ulid::Ulid::new().to_string();
+    let session_id = ulid::Ulid::generate().to_string();
     let log = Arc::new(
         ProvenanceLog::open(log_path, session_id.clone())
             .map_err(|e| anyhow::anyhow!("opening provenance log: {e}"))?,

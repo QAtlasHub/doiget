@@ -110,6 +110,10 @@ criteria = "safe-to-deploy"
 version = "1.2.61"
 criteria = "safe-to-deploy"
 
+[[exemptions.chacha20]]
+version = "0.10.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.chrono]]
 version = "0.4.45"
 criteria = "safe-to-deploy"
@@ -279,7 +283,7 @@ version = "0.3.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.h2]]
-version = "0.4.14"
+version = "0.4.18"
 criteria = "safe-to-deploy"
 
 [[exemptions.hashbrown]]
@@ -516,6 +520,14 @@ criteria = "safe-to-deploy"
 
 [[exemptions.rand]]
 version = "0.9.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.rand]]
+version = "0.10.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.rand_core]]
+version = "0.10.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.redox_syscall]]
@@ -839,7 +851,7 @@ version = "1.20.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.ulid]]
-version = "1.2.1"
+version = "3.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.unicode-ident]]
