@@ -11,7 +11,7 @@
 //! never invoked from inside an MCP session (`doiget serve` runs a
 //! different code path), so the lint is locally relaxed below.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 
 use super::fetch::CliExit;
@@ -129,7 +129,12 @@ impl ResolvedConfig {
 // belong on stderr by design (stdout stays clean for `| jq` style pipes
 // when we add `--json` later).
 #[allow(clippy::print_stdout, clippy::print_stderr)]
-pub async fn run(action: String, mode: super::output::OutputMode, network: bool) -> Result<()> {
+pub async fn run(
+    action: String,
+    mode: super::output::OutputMode,
+    network: bool,
+    force: bool,
+) -> Result<()> {
     // `mode` honors ADR-0017: `Quiet` suppresses the TOML dump (`show`)
     // and the path println! (`path`); `doctor` is unaffected because its
     // per-check output is on stderr and only the failure/success exit
@@ -138,6 +143,10 @@ pub async fn run(action: String, mode: super::output::OutputMode, network: bool)
     let cfg = ResolvedConfig::from_env()?;
     if network && action != "doctor" {
         eprintln_err("error: --network applies to `config doctor` only");
+        return Err(anyhow::Error::new(CliExit(2)));
+    }
+    if force && action != "init" {
+        eprintln_err("error: --force applies to `config init` only");
         return Err(anyhow::Error::new(CliExit(2)));
     }
     match action.as_str() {
@@ -155,6 +164,7 @@ pub async fn run(action: String, mode: super::output::OutputMode, network: bool)
                 print!("{s}");
             }
         },
+        "init" => init_config(&cfg, force, mode)?,
         "path" => match mode {
             super::output::OutputMode::Quiet => {}
             super::output::OutputMode::Json => {
@@ -304,7 +314,7 @@ pub async fn run(action: String, mode: super::output::OutputMode, network: bool)
             // misuse → `docs/ERRORS.md` §4 exit 2, not the generic exit 1
             // a bare `bail!` produced.
             eprintln_err(&format!(
-                "error: unknown config action: {other}; expected `show` / `path` / `doctor`"
+                "error: unknown config action: {other}; expected `init` / `show` / `path` / `doctor`"
             ));
             return Err(anyhow::Error::new(CliExit(2)));
         }
@@ -327,6 +337,135 @@ fn eprintln_err(msg: &str) {
 /// When `ok` is `false` and `tip` is `Some`, a remediation tip is printed
 /// on the next line, indented so it is visually attached to the failed
 /// check (issue #322).
+/// The commented `config.toml` template written by `doiget config init`.
+///
+/// Issue #408: on a fresh install `~/.config/doiget/config.toml` does not
+/// exist, nothing creates it, and four of the settings that decide the
+/// outcome of a session live in it. Three of those four fail *silently*.
+/// Every commented line here doubles as documentation at the place the user
+/// is already looking.
+///
+/// Pure and `pub(crate)` so the tests can assert the template actually
+/// mentions each load-bearing key — a template that silently loses one is
+/// the failure mode worth guarding against.
+pub(crate) fn config_template() -> &'static str {
+    // NOTE: every key below is commented out on purpose. Writing live values
+    // would change behaviour just by running `init`; the file's job is to be
+    // a discoverable, annotated menu, not a new set of defaults.
+    r#"# ~/.config/doiget/config.toml — written by `doiget config init`.
+#
+# Every field is optional and every line below is commented out: this file
+# documents the choices, it does not change behaviour until you uncomment
+# something. Re-run `doiget config init --force` to restore this template.
+#
+# See docs/CONFIG.md for the full schema, and run `doiget config doctor`
+# (add --network for outbound checks) to see what is actually in effect.
+
+[store]
+# Where fetched papers are written.
+#
+# DEFAULT: `./papers` — relative to the CURRENT WORKING DIRECTORY, so it
+# moves with you (ADR-0036). That is deliberate: artifacts land where the
+# work is, instead of somewhere you have to go looking for. The cost is that
+# fetching from many directories leaves several small stores. Set this for a
+# single central library.
+# root = "/home/you/papers"
+
+[network]
+# Contact address for the polite pool. STRONGLY RECOMMENDED.
+#
+# Without it doiget still queries Unpaywall, but as `doiget@localhost`, from
+# the non-polite pool — where you may be throttled or refused. Since the
+# automatic arXiv-preprint fallback fires on what Unpaywall reports, a
+# throttled response quietly costs you that fallback too.
+# unpaywall_email = "you@institution.edu"
+
+# Allow the curated academic-repository suffixes, i.e. where institutions
+# host their own Green OA:
+#   *.ac.uk  *.ac.jp  *.jst.go.jp  *.edu.au  *.edu.cn  *.ac.cn  *.edu.pl
+#   *.ac.nz  *.ac.za  *.ac.in  *.edu.br  *.edu.tw  *.edu.tr  *.edu.ar
+#   *.edu.mx
+#
+# Without this, an OA PDF on e.g. `strathprints.strath.ac.uk` is denied with
+# `error[CAPABILITY_DENIED] ... redirect_not_in_allowlist`.
+# trust_academic_repos = false
+
+# Allow the curated cross-publisher OA registries and repositories:
+#   scielo.org  zenodo.org  osf.io  hal.science  core.ac.uk  (+ subdomains)
+#
+# Separate from the flag above because the trust argument differs: one is
+# "this institution publishes its own work here", the other is "this registry
+# indexes open content across publishers". DOAJ needs no flag — it is on the
+# default allowlist (ADR-0037).
+# trust_oa_registries = false
+
+# Anything outside both curated sets. Each entry is a literal FQDN or a
+# single-suffix wildcard (`*.example.edu`); multi-segment globs are rejected
+# at load time, as are unknown keys in this table.
+# [[network.additional_hosts]]
+# host = "repository.example.edu"
+# note = "free-text, optional"
+
+# Request timeouts, in seconds.
+# connect_timeout_sec = 10
+# read_timeout_sec = 60
+# total_timeout_sec = 300
+
+[output]
+# mode = "human"     # human | json | quiet | mcp
+# color = "auto"     # auto | always | never
+# progress = false
+# emoji = false
+"#
+}
+
+/// `doiget config init` — write [`config_template`] to the resolved config
+/// path (issue #408).
+///
+/// Refuses to overwrite an existing file unless `force`. That refusal is the
+/// whole safety property: the file may hold a user's hand-written allowlist,
+/// and silently replacing it with a fully commented-out template would
+/// disable every host they had added.
+#[allow(clippy::print_stdout, clippy::print_stderr)]
+fn init_config(cfg: &ResolvedConfig, force: bool, mode: super::output::OutputMode) -> Result<()> {
+    let path = &cfg.config_path;
+    let existed = path.exists();
+    if existed && !force {
+        eprintln_err(&format!(
+            "error: {path} already exists; pass --force to overwrite it"
+        ));
+        return Err(anyhow::Error::new(CliExit(2)));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent.as_std_path())
+            .with_context(|| format!("creating config directory {parent}"))?;
+    }
+    std::fs::write(path.as_std_path(), config_template())
+        .with_context(|| format!("writing {path}"))?;
+
+    match mode {
+        super::output::OutputMode::Quiet => {}
+        super::output::OutputMode::Json => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": true,
+                    "config_path": path.as_str(),
+                    "overwritten": existed,
+                })
+            );
+        }
+        _ => {
+            let verb = if existed { "overwrote" } else { "wrote" };
+            println!("{verb} {path}");
+            eprintln_err(
+                "  = note: every field is commented out; nothing changed until you edit it",
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Classification of a single publisher probe (issue #407).
 ///
 /// The point of the enum is the `BotChallenge` arm. A publisher WAF answers
@@ -672,6 +811,68 @@ mod tests {
         );
     }
 
+    // ── #408: `config init` ──────────────────────────────────────────────
+
+    /// The template's job is to document the keys that fail *silently* on a
+    /// default install. If one is ever dropped from it, the file stops being
+    /// the answer to #408 while still looking fine.
+    #[test]
+    fn template_documents_every_silently_defaulting_key() {
+        let t = config_template();
+        for key in [
+            "[store]",
+            "root =",
+            "unpaywall_email",
+            "trust_academic_repos",
+            "trust_oa_registries",
+            "[[network.additional_hosts]]",
+        ] {
+            assert!(t.contains(key), "template must mention {key}");
+        }
+        // ADR-0036 / ADR-0037 are the two non-obvious defaults; the template
+        // must say what they are, not merely name the keys.
+        assert!(
+            t.contains("CURRENT WORKING DIRECTORY"),
+            "store root default"
+        );
+        assert!(
+            t.contains("doiget@localhost"),
+            "non-polite pool consequence"
+        );
+        assert!(t.contains("DOAJ needs no flag"), "post-ADR-0037 accuracy");
+    }
+
+    /// Every line must be inert: writing live values would mean `init`
+    /// silently changed behaviour just by being run.
+    #[test]
+    fn template_is_entirely_commented_out() {
+        for line in config_template().lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                continue;
+            }
+            assert!(
+                t.starts_with('[') && t.ends_with(']') && !t.starts_with("[["),
+                "only bare section headers may be live; found: {line:?}"
+            );
+        }
+    }
+
+    /// The template must round-trip as TOML — a malformed one would be
+    /// written happily and only fail on the user's next command.
+    #[test]
+    fn template_parses_as_toml() {
+        let v: toml::Value = toml::from_str(config_template()).expect("template is valid TOML");
+        // With everything commented out it must carry no live keys beyond the
+        // empty section tables.
+        for (name, tbl) in v.as_table().expect("table") {
+            assert!(
+                tbl.as_table().expect("section").is_empty(),
+                "section [{name}] must be empty in the template"
+            );
+        }
+    }
+
     // ── #407: probe classification ───────────────────────────────────────
 
     /// The load-bearing case. A publisher WAF answers a scripted client
@@ -758,6 +959,7 @@ mod tests {
             "doctor".into(),
             crate::commands::output::OutputMode::Human,
             false,
+            false,
         )
         .await
         .expect_err("doctor should fail when DOIGET_CONTACT_EMAIL is unset");
@@ -780,6 +982,7 @@ mod tests {
         run(
             "doctor".into(),
             crate::commands::output::OutputMode::Human,
+            false,
             false,
         )
         .await
@@ -833,6 +1036,7 @@ mod tests {
             "doctor".into(),
             crate::commands::output::OutputMode::Human,
             false,
+            false,
         )
         .await
         .expect_err("doctor should fail when user-extension config is malformed");
@@ -872,6 +1076,7 @@ mod tests {
         let err = run(
             "bogus".into(),
             crate::commands::output::OutputMode::Human,
+            false,
             false,
         )
         .await

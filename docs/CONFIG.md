@@ -35,6 +35,16 @@ A value set higher in the chain overrides any value set lower.
 
 ## 3. config.toml schema
 
+> **The file does not exist by default.** A fresh install has no
+> `config.toml` at all, and three of the four settings that most often decide the
+> outcome of a session — store location, the two allowlist flags — fail *silently*
+> when it is absent. Run **`doiget config init`** to write a fully commented
+> template to the path `doiget config path` reports; every line is commented out,
+> so it documents the choices without changing behaviour until you edit it.
+> `--force` overwrites an existing file (without it, `init` refuses, so it can
+> never silently discard a hand-written allowlist).
+
+
 ```toml
 # ~/.config/doiget/config.toml — all fields optional
 
@@ -202,6 +212,8 @@ overridable by flag:
 | `--progress` / `--no-progress` | `output.progress` |
 | `--quiet` / `-q` | implies `--mode=quiet` |
 | `--json` | implies `--mode=json` |
+| `--force` | `config init` only: overwrite an existing `config.toml` |
+| `--network` | `config doctor` only: also run the outbound report (§6.1) |
 
 `doiget serve` always runs in `mcp` mode regardless of flags. Other subcommands honor the
 mode resolution above.
