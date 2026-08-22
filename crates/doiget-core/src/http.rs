@@ -121,6 +121,23 @@ fn backoff_delay(attempt: u32) -> Duration {
 // ---------------------------------------------------------------------------
 
 /// Per-source allowlist entry. Matches the schema in
+/// What a [`HttpClient::probe`] observed (issue #407).
+///
+/// `body_bytes` is load-bearing, not decoration: a publisher WAF answers a
+/// scripted client with `202 Accepted` and an empty body, which a
+/// status-only report reads as success. Status plus body size separates
+/// "the publisher served me" from "the publisher is holding me at a bot
+/// challenge".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeOutcome {
+    /// HTTP status of the (post-redirect) response.
+    pub status: u16,
+    /// Bytes of body received.
+    pub body_bytes: usize,
+    /// Host of the final URL, after any allowlisted redirects.
+    pub final_host: Option<String>,
+}
+
 /// `docs/REDIRECT_ALLOWLIST.md` §2.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -770,6 +787,73 @@ impl HttpClient {
     /// Any [`HttpError`] variant including [`HttpError::NotAPdf`].
     pub async fn fetch_pdf(&self, source: &str, url: Url) -> Result<(Bytes, Url), HttpError> {
         self.fetch_inner(source, url, &[], true).await
+    }
+
+    /// Single diagnostic request against `url`, reporting what came back
+    /// instead of turning it into an error.
+    ///
+    /// This is the primitive behind `doiget config doctor --network`
+    /// (issue #407). It differs from [`Self::fetch_bytes`] in three ways
+    /// that matter for a diagnostic:
+    ///
+    /// - **Non-2xx is data, not failure.** "403" is the answer to the
+    ///   question the user is asking, so it comes back in
+    ///   [`ProbeOutcome::status`] rather than as `HttpError::HttpStatus`.
+    /// - **No retries.** A probe that silently retried would hide the
+    ///   very flakiness it is meant to expose, and would multiply load on
+    ///   a publisher for a question that is not a fetch.
+    /// - **The host is checked against the source allowlist up front.**
+    ///   A doctor that probed arbitrary user-supplied hosts would be an
+    ///   SSRF gadget wearing a diagnostic hat; the allowlist is the same
+    ///   one a real fetch would enforce, which is also what makes
+    ///   "not allowlisted" a meaningful answer.
+    ///
+    /// The body is read so that [`ProbeOutcome::body_bytes`] can
+    /// distinguish a real `200` from the `202` + empty-body holding
+    /// response publisher WAFs return to scripted clients — the case in
+    /// #407 that a status code alone cannot diagnose. The read is capped
+    /// by the same size limits as any other fetch.
+    ///
+    /// # Errors
+    ///
+    /// [`HttpError::UnknownSource`] if `source` is not registered,
+    /// [`HttpError::RedirectDenied`] if the host is off the allowlist
+    /// (before any request is sent), or [`HttpError::Network`] for a
+    /// transport failure — a timeout IS the diagnosis, so it is returned
+    /// rather than retried.
+    pub async fn probe(&self, source: &str, url: Url) -> Result<ProbeOutcome, HttpError> {
+        let client = self
+            .clients
+            .get(source)
+            .ok_or_else(|| HttpError::UnknownSource {
+                source_key: source.to_string(),
+            })?;
+        let host = url.host_str().unwrap_or_default().to_string();
+        let allow = self
+            .source_allowlist(source)
+            .ok_or_else(|| HttpError::UnknownSource {
+                source_key: source.to_string(),
+            })?;
+        if !allow.matches(&host) {
+            return Err(HttpError::RedirectDenied {
+                source_key: source.to_string(),
+                host,
+                expected_hosts: allow.redirect_hosts.clone(),
+            });
+        }
+        let response = client.get(url).send().await.map_err(HttpError::Network)?;
+        let status = response.status().as_u16();
+        let final_host = response.url().host_str().map(str::to_string);
+        let body_bytes = response
+            .bytes()
+            .await
+            .map(|b| b.len())
+            .map_err(HttpError::Network)?;
+        Ok(ProbeOutcome {
+            status,
+            body_bytes,
+            final_host,
+        })
     }
 
     async fn fetch_inner(

@@ -567,6 +567,13 @@ enum Command {
     Config {
         /// `show` / `path` / `doctor`
         action: String,
+        /// `doctor` only: also run the outbound network report — proxy
+        /// configuration, Unpaywall pool, allowlist coverage, and one
+        /// GET per well-known publisher to show which will talk to a
+        /// scripted client (issue #407). Opt-in because it makes real
+        /// requests.
+        #[arg(long)]
+        network: bool,
     },
     /// Expand a DOI's citation neighborhood via OpenAlex (BFS,
     /// ADR-0010 hard caps). Requires `--features citation` AND
@@ -753,7 +760,9 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 doiget_cli::commands::provenance::migrate(dry_run, mode)
             }
         },
-        Some(Command::Config { action }) => doiget_cli::commands::config::run(action, mode),
+        Some(Command::Config { action, network }) => {
+            doiget_cli::commands::config::run(action, mode, network).await
+        }
         Some(Command::Info { ref_ }) => {
             doiget_cli::commands::info::run(ref_, mode, out.quiet_was_explicit)
         }
