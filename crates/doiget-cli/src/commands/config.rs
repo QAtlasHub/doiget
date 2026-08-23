@@ -34,6 +34,13 @@ use super::fetch::CliExit;
 pub struct ResolvedConfig {
     /// Root of the on-disk paper store. Default: `./papers` (under the cwd).
     pub store_root: Utf8PathBuf,
+    /// Which rung of the ADR-0036 order produced `store_root` (#441).
+    ///
+    /// Reported because the failure it guards against is invisible
+    /// otherwise: a `[store] root` that is present but unread resolves to
+    /// the cwd default, and the two coincide whenever the user happens to
+    /// run from the directory they configured.
+    pub store_root_source: String,
     /// Directory holding doiget's append-only logs. Derived from
     /// `log_path`'s parent so it always agrees with the writer.
     pub log_dir: Utf8PathBuf,
@@ -83,7 +90,7 @@ impl ResolvedConfig {
         // (`super::resolve_store_root`) so `config show` / `doctor` never drifts
         // from the writer — `DOIGET_STORE_ROOT` else `./papers` under the cwd
         // (#344 / ADR-0036).
-        let store_root = super::resolve_store_root()?;
+        let (store_root, store_root_source) = super::resolve_store_root_with_source()?;
 
         // Issue #142: resolve the log path the SAME way the writer does
         // (`commands::fetch::resolve_log_path` / `commands::audit_log`):
@@ -108,6 +115,7 @@ impl ResolvedConfig {
 
         Ok(Self {
             store_root,
+            store_root_source: store_root_source.label().to_string(),
             log_dir,
             log_path,
             config_dir,
@@ -194,7 +202,14 @@ pub async fn run(
                 None,
                 &mut all_ok,
             );
-            if std::env::var_os("DOIGET_STORE_ROOT").is_none() {
+            // #441: naming the rung is the whole point. A `[store] root`
+            // that is set but unread lands on the cwd default, and the two
+            // coincide whenever the user runs from the directory they
+            // configured — so "store_root: /home/me/papers" alone cannot
+            // distinguish "your setting worked" from "your setting was
+            // ignored and you happen to be standing in it".
+            eprintln!("       from: {}", cfg.store_root_source);
+            if cfg.store_root_source == super::StoreRootSource::CwdDefault.label() {
                 eprintln!(
                     "       note: relative to the current directory (ADR-0036). Set DOIGET_STORE_ROOT"
                 );
@@ -369,6 +384,10 @@ pub(crate) fn config_template() -> &'static str {
 # work is, instead of somewhere you have to go looking for. The cost is that
 # fetching from many directories leaves several small stores. Set this for a
 # single central library.
+#
+# Overridden by DOIGET_STORE_ROOT and by --store-root, which share a rung
+# above this one. A leading `~` IS expanded here (a config file has no
+# shell, unlike the env var).
 # root = "/home/you/papers"
 
 [network]
@@ -1087,6 +1106,93 @@ mod tests {
         assert_eq!(
             cli_exit.0, 2,
             "unknown config action is misuse → exit 2, not the generic exit 1"
+        );
+    }
+    /// Build an isolated config dir containing `config.toml` with `body`.
+    fn config_home_with(body: &str) -> (tempfile::TempDir, camino::Utf8PathBuf) {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let root = camino::Utf8PathBuf::try_from(td.path().to_path_buf()).expect("utf-8 tempdir");
+        std::fs::create_dir_all(root.join("doiget").as_std_path()).expect("mkdir");
+        std::fs::write(root.join("doiget").join("config.toml").as_std_path(), body)
+            .expect("write config");
+        (td, root)
+    }
+
+    /// #441: the rung that was missing. `[store] root` must beat the cwd
+    /// default.
+    ///
+    /// The assertion that matters is the NEGATIVE one. `store_root ==
+    /// <configured>` alone would also pass if the config were ignored and
+    /// the test happened to run from the configured directory — which is
+    /// exactly how the bug hid: a user testing from `$HOME` with
+    /// `root = "$HOME/papers"` sees the right answer for the wrong reason.
+    #[test]
+    #[serial_test::serial]
+    fn store_root_in_config_beats_the_cwd_default() {
+        let _g = unset_all_doiget_config_env();
+        let lib_td = tempfile::TempDir::new().expect("tempdir");
+        let library = camino::Utf8PathBuf::try_from(lib_td.path().to_path_buf())
+            .expect("utf-8 tempdir")
+            .as_str()
+            .replace('\u{5c}', "/");
+        let (_cfg_td, cfg_root) = config_home_with(&format!("[store]\nroot = \"{library}\"\n"));
+
+        let _x = EnvGuard::set("XDG_CONFIG_HOME", cfg_root.as_str());
+        let cfg = ResolvedConfig::from_env().expect("config resolves");
+
+        let cwd_default = camino::Utf8PathBuf::try_from(std::env::current_dir().expect("cwd"))
+            .expect("utf-8 cwd")
+            .join("papers");
+        assert_ne!(
+            cfg.store_root, cwd_default,
+            "the config value was ignored and the cwd default answered instead"
+        );
+        assert_eq!(
+            cfg.store_root.as_str().replace('\u{5c}', "/"),
+            library,
+            "[store] root must win over the cwd default (ADR-0036 rung 2)"
+        );
+        assert_eq!(
+            cfg.store_root_source,
+            super::super::StoreRootSource::ConfigFile.label(),
+            "doctor must attribute it to the config file"
+        );
+    }
+
+    /// The rung ABOVE it still wins. Adding rung 2 must not demote the env
+    /// var, which is also how `--store-root` is applied.
+    #[test]
+    #[serial_test::serial]
+    fn env_beats_store_root_in_config() {
+        let _g = unset_all_doiget_config_env();
+        let (_cfg_td, cfg_root) = config_home_with("[store]\nroot = \"/from/config\"\n");
+
+        let _x = EnvGuard::set("XDG_CONFIG_HOME", cfg_root.as_str());
+        let _e = EnvGuard::set("DOIGET_STORE_ROOT", "/from/env");
+        let cfg = ResolvedConfig::from_env().expect("config resolves");
+
+        assert_eq!(cfg.store_root.as_str(), "/from/env");
+        assert_eq!(
+            cfg.store_root_source,
+            super::super::StoreRootSource::Env.label()
+        );
+    }
+
+    /// A blank value means "unset", not "the empty path" — otherwise it
+    /// would resolve to the filesystem root.
+    #[test]
+    #[serial_test::serial]
+    fn blank_store_root_in_config_falls_through_to_the_default() {
+        let _g = unset_all_doiget_config_env();
+        let (_cfg_td, cfg_root) = config_home_with("[store]\nroot = \"   \"\n");
+
+        let _x = EnvGuard::set("XDG_CONFIG_HOME", cfg_root.as_str());
+        let cfg = ResolvedConfig::from_env().expect("config resolves");
+
+        assert_eq!(
+            cfg.store_root_source,
+            super::super::StoreRootSource::CwdDefault.label(),
+            "a blank root must not be treated as a configured value"
         );
     }
 }

@@ -1,5 +1,10 @@
 //! User-extensible capability gate (ADR-0028, #220).
 //!
+//! The single reader for the user's `config.toml`. Parses
+//! `[[network.additional_hosts]]`, the two `[network]` trust flags, and
+//! `[store] root` (#441) — one opener, so no two commands can disagree
+//! about which file they are describing.
+//!
 //! Parses the `[[network.additional_hosts]]` array-of-tables from the
 //! user's `config.toml`, validates each entry against the restricted
 //! ADR-0028 D2-1 pattern grammar, and merges the user-added hosts into
@@ -49,7 +54,7 @@
 //! (MCP) currently sees no effect; that is the load-bearing item
 //! S3b closes.
 
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use serde::Deserialize;
 
 use crate::http::SourceAllowlist;
@@ -277,6 +282,25 @@ pub fn load(config_path: &Utf8Path) -> Result<UserExtensionConfig, UserExtension
 struct RawConfig {
     #[serde(default)]
     network: Option<RawNetwork>,
+    #[serde(default)]
+    store: Option<RawStore>,
+    #[serde(flatten)]
+    _other: serde::de::IgnoredAny,
+}
+
+/// `[store]` — read here rather than by a second reader so there is exactly
+/// one answer to "which config.toml" (#441). A separate opener is how
+/// `doiget fetch` and `doiget config doctor` once disagreed about the file
+/// they were describing.
+#[derive(Debug, Default, Deserialize)]
+struct RawStore {
+    /// `[store] root` — the central library path. Documented in
+    /// `docs/CONFIG.md` §3 and ADR-0036 since 0.7, and parsed by nobody
+    /// until #441: `resolve_store_root` read the env var and then fell
+    /// straight through to the cwd default, so the file rung the docs,
+    /// `config init` and `config doctor` all pointed at did nothing.
+    #[serde(default)]
+    root: Option<String>,
     #[serde(flatten)]
     _other: serde::de::IgnoredAny,
 }
@@ -326,6 +350,13 @@ pub struct UserExtensionConfig {
     /// `config.toml`. Callers that respect this flag SHOULD merge
     /// [`oa_registry_hosts`] into their allowlist.
     pub trust_oa_registries: bool,
+    /// `[store] root`, verbatim, when present and non-empty (#441).
+    ///
+    /// Returned as the raw string rather than a path: expanding it needs a
+    /// home directory, and this crate has no home-directory dependency.
+    /// The CLI and MCP resolvers own that step, and both place this rung
+    /// below `DOIGET_STORE_ROOT` and above the cwd default (ADR-0036).
+    pub store_root: Option<String>,
 }
 
 /// Returns the built-in curated set of academic institution host patterns.
@@ -459,11 +490,64 @@ fn parse_str(
             issues,
         });
     }
+    // An empty `root = ""` is treated as absent rather than as "the empty
+    // path": it would otherwise resolve to a store at the filesystem root
+    // or to a panic downstream, and a blank value plainly means "unset".
+    let store_root = raw
+        .store
+        .and_then(|st| st.root)
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty());
+
     Ok(UserExtensionConfig {
         additional_hosts: validated,
         trust_academic_repos,
         trust_oa_registries,
+        store_root,
     })
+}
+
+/// Turn a raw `[store] root` value into a path, expanding a leading `~`.
+///
+/// A config file has no shell, so `~/papers` written there would otherwise
+/// become a literal directory named `~` next to the cwd — a silent wrong
+/// answer of exactly the kind #441 was about. `DOIGET_STORE_ROOT` needs no
+/// equivalent because the shell expands it before the process starts.
+///
+/// Kept out of [`parse_str`] so parsing stays a pure function of the file
+/// text; both the CLI and the MCP resolver call this at the point of use,
+/// which is also what keeps their two answers identical.
+///
+/// Falls back to the value verbatim when neither `HOME` nor `USERPROFILE`
+/// is set — a wrong path the user can see beats a silent substitution.
+#[must_use]
+pub fn expand_store_root(raw: &str) -> Utf8PathBuf {
+    let rest = match raw.strip_prefix('~') {
+        Some(r) => r,
+        None => return Utf8PathBuf::from(raw),
+    };
+    // Only `~` and `~/...` — `~alice/...` is another user's home, which is
+    // not something this can resolve, so it is left verbatim.
+    // A backslash char literal is written as a unicode escape so no tool
+    // that rewrites this file can mangle it.
+    if !(rest.is_empty() || rest.starts_with('/') || rest.starts_with('\u{5c}')) {
+        return Utf8PathBuf::from(raw);
+    }
+    let home = std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .or_else(|| std::env::var("USERPROFILE").ok().filter(|h| !h.is_empty()));
+    match home {
+        Some(h) => {
+            let trimmed = rest.trim_start_matches(['/', '\u{5c}']);
+            if trimmed.is_empty() {
+                Utf8PathBuf::from(h)
+            } else {
+                Utf8PathBuf::from(h).join(trimmed)
+            }
+        }
+        None => Utf8PathBuf::from(raw),
+    }
 }
 
 /// Validate a host pattern per ADR-0028 D2-1.
@@ -1117,6 +1201,74 @@ host = "*.uj.edu.pl"
                 patterns.contains(expected),
                 "expected academic pattern {expected} not found"
             );
+        }
+    }
+    /// #441: `[store] root` reaches the caller at all.
+    #[test]
+    fn store_root_is_parsed_from_the_same_file_as_the_network_gate() {
+        let cfg = parse_str(
+            "[store]\nroot = \"/home/alice/papers\"\n\n[network]\ntrust_academic_repos = true\n",
+            Utf8Path::new("test.toml"),
+        )
+        .expect("parses");
+        assert_eq!(cfg.store_root.as_deref(), Some("/home/alice/papers"));
+        assert!(
+            cfg.trust_academic_repos,
+            "the network section must still be read from the same pass"
+        );
+    }
+
+    /// A blank value is "unset", not the empty path — which would resolve
+    /// to the filesystem root.
+    #[test]
+    fn blank_store_root_parses_as_absent() {
+        let cfg =
+            parse_str("[store]\nroot = \"  \"\n", Utf8Path::new("test.toml")).expect("parses");
+        assert_eq!(cfg.store_root, None);
+    }
+
+    /// No `[store]` table at all is fine, and must not disturb anything.
+    #[test]
+    fn absent_store_table_is_not_an_error() {
+        let cfg = parse_str(
+            "[network]\ntrust_oa_registries = true\n",
+            Utf8Path::new("t.toml"),
+        )
+        .expect("parses");
+        assert_eq!(cfg.store_root, None);
+        assert!(cfg.trust_oa_registries);
+    }
+
+    /// A config file has no shell, so `~` must be expanded here or it
+    /// becomes a literal directory named `~`.
+    #[test]
+    #[serial_test::serial]
+    fn expand_store_root_resolves_a_leading_tilde() {
+        let prior_home = std::env::var("HOME").ok();
+        let prior_profile = std::env::var("USERPROFILE").ok();
+        std::env::set_var("HOME", "/home/alice");
+        std::env::remove_var("USERPROFILE");
+
+        assert_eq!(
+            expand_store_root("~/papers")
+                .as_str()
+                .replace('\u{5c}', "/"),
+            "/home/alice/papers"
+        );
+        assert_eq!(expand_store_root("~").as_str(), "/home/alice");
+        // Absolute and relative paths pass through untouched.
+        assert_eq!(expand_store_root("/srv/papers").as_str(), "/srv/papers");
+        assert_eq!(expand_store_root("papers").as_str(), "papers");
+        // `~alice` is another user's home; not something this can resolve,
+        // so it must be left alone rather than silently mangled.
+        assert_eq!(expand_store_root("~bob/papers").as_str(), "~bob/papers");
+
+        match prior_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        if let Some(v) = prior_profile {
+            std::env::set_var("USERPROFILE", v);
         }
     }
 }

@@ -40,6 +40,31 @@ Resolution order is otherwise unchanged: `DOIGET_STORE_ROOT` env >
 single central library sets `DOIGET_STORE_ROOT=~/papers` (or `store.root`
 in `config.toml`), which also restores BiblioFetch.jl co-location.
 
+### Amendment 1 (2026-08-23, #441) — the config rung now exists
+
+The order above described an implementation that did not exist. Until #441
+`resolve_store_root` read `DOIGET_STORE_ROOT` and fell straight through to
+the cwd default; `[store] root` was parsed by nothing, while `docs/CONFIG.md`
+§3 listed it, `doiget config init` wrote it into its template and
+`doiget config doctor` recommended it. A user could follow every piece of
+the tool's own advice and have the setting silently ignored — worst of all
+when they tested from the directory they had configured, where the ignored
+value and the cwd default coincide.
+
+Two clarifications to the sentence above, now that it is implemented:
+
+- **The flag and the env var share one rung.** `--store-root` is applied by
+  writing `DOIGET_STORE_ROOT`, so the flag wins over an inherited env value
+  (the usual CLI convention) rather than losing to it. The original wording
+  put the env var first; no build ever behaved that way.
+- **A leading `~` is expanded for the config value only.** The env var is
+  expanded by the shell before doiget sees it; a config file has no shell,
+  so `~/papers` written there would otherwise become a literal `~`
+  directory.
+
+`doiget config doctor` now prints which rung answered, so a setting that is
+present but not honoured can no longer look like one that worked.
+
 This **amends ADR-0004**: doiget and BiblioFetch.jl no longer co-locate
 their stores *by default*. The shared on-disk *format* (STORE.md) — the
 actual coexistence contract — is unchanged; pointing both tools at the
