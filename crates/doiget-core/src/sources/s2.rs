@@ -42,7 +42,7 @@ const DEFAULT_FIELDS: &str = "title,year,citationCount,references";
 ///
 /// `Debug` is implemented manually (not derived) so the optional
 /// `api_key` is never printed: a derived `Debug` would render the raw
-/// key, contradicting the [`api_key`](Self::api_key) doc contract and
+/// key, contradicting the `api_key` doc contract and
 /// the credential-hygiene posture the TDM sources hold (their keys are
 /// `secrecy::SecretString`). S2 is not behind a `tdm-*` feature and the
 /// `secrecy` dep is `tdm-*`-gated/optional, so wrapping the field in

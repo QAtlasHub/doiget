@@ -10,8 +10,8 @@
 //!
 //! ## Resolution, not enrichment
 //!
-//! Its siblings ([`openalex`](super::openalex) / [`s2`](super::s2) /
-//! [`doaj`](super::doaj)) add fields to a record Crossref already
+//! Its siblings (`openalex` / `s2` /
+//! `doaj`) add fields to a record Crossref already
 //! returned. This one answers the prior question — *does this DOI exist*
 //! — for an agency doiget otherwise cannot see. It therefore belongs
 //! **after** Crossref in the DOI fan-out: a Crossref-registered DOI never
@@ -20,10 +20,10 @@
 //!
 //! ## Capability gate
 //!
-//! [`DataCiteSource::can_serve`] returns `true` only when
+//! `DataCiteSource::can_serve` returns `true` only when
 //! [`CapabilityProfile.metadata.datacite`](crate::CapabilityProfile) is
-//! `true` AND the ref is a [`Ref::Doi`]. The bool is set by
-//! [`CapabilityProfile::from_env`] from `DOIGET_ENABLE_DATACITE`, which is
+//! `true` AND the ref is a `Ref::Doi`. The bool is set by
+//! `CapabilityProfile::from_env` from `DOIGET_ENABLE_DATACITE`, which is
 //! **off by default** (ADR-0040) — with it unset the binary behaves
 //! exactly as it did before this source existed.
 //!

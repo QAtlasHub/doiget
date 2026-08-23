@@ -7,10 +7,10 @@
 //!
 //! ## Capability gate
 //!
-//! [`HalSource::can_serve`] returns `true` only when
+//! `HalSource::can_serve` returns `true` only when
 //! [`CapabilityProfile.metadata.hal`](crate::CapabilityProfile) is `true`
-//! AND the ref is a [`Ref::Doi`]. The bool is set by
-//! [`CapabilityProfile::from_env`] from `DOIGET_ENABLE_HAL`, which is
+//! AND the ref is a `Ref::Doi`. The bool is set by
+//! `CapabilityProfile::from_env` from `DOIGET_ENABLE_HAL`, which is
 //! **off by default** (ADR-0040) — with it unset this source is inert and
 //! the binary behaves exactly as before.
 //!
