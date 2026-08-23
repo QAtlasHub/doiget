@@ -53,6 +53,10 @@ its use of these APIs polite.
 - `--features metadata`: **OpenAIRE** (<https://api.openaire.eu>, European repository
   aggregation). Inert until `DOIGET_ENABLE_OPENAIRE` is set; queried by exact DOI
   through the Graph API v1 `pid` parameter only. No key or account.
+- `--features metadata`: **CORE** (<https://api.core.ac.uk>, cross-repository OA
+  aggregation). Inert until `DOIGET_ENABLE_CORE` is set. Works with no account; if
+  you supply your own free key in `DOIGET_CORE_API_KEY` it is sent as a bearer
+  header to CORE and to nowhere else, and is never written to the provenance log.
 - `--features tdm-springer | tdm-aps | tdm-elsevier`: the respective publisher
   text-and-data-mining APIs, used **only with your own API key and explicit
   agreement**. doiget bundles no keys and shares none.

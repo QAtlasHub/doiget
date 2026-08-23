@@ -27,6 +27,7 @@ weight = 200
 | DataCite | 2 (resolution) | 4 | none | <https://datacite.org/terms-and-conditions/> | `--features metadata` + `DOIGET_ENABLE_DATACITE` |
 | HAL | 2 (metadata) | 4 | none | <https://api.archives-ouvertes.fr/docs> | `--features metadata` + `DOIGET_ENABLE_HAL` |
 | OpenAIRE | 2 (metadata) | 4 | none | <https://graph.openaire.eu/docs/> | `--features metadata` + `DOIGET_ENABLE_OPENAIRE` |
+| CORE | 2 (metadata) | 4 | optional free key (`DOIGET_CORE_API_KEY`) | <https://core.ac.uk/terms> | `--features metadata` + `DOIGET_ENABLE_CORE` |
 | Springer Nature OA | 3 (institutional) | 5a | API key | <https://dev.springernature.com/> | `--features tdm-springer` + key + agree |
 | APS Harvest TDM | 3 (institutional) | 5b | API key | <https://harvest.aps.org/> | `--features tdm-aps` + key + agree |
 | Elsevier ScienceDirect TDM | 3 (institutional) | 5c | API key | <https://www.elsevier.com/legal/tdmrep> | `--features tdm-elsevier` + key + agree |

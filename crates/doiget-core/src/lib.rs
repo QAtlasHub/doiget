@@ -936,6 +936,11 @@ pub struct MetadataAccess {
     /// OpenAIRE — European institutional / funder repository aggregation;
     /// enabled by `DOIGET_ENABLE_OPENAIRE` (ADR-0040, #416).
     pub openaire: bool,
+    /// CORE — cross-repository OA aggregation, the last fallback in the
+    /// optional chain; enabled by `DOIGET_ENABLE_CORE`. An optional free
+    /// key in `DOIGET_CORE_API_KEY` raises the rate limit but is not
+    /// required (ADR-0040, #417).
+    pub core: bool,
 }
 
 /// Process-wide rate limits. Hard-coded; not configurable.
@@ -1175,6 +1180,11 @@ impl CapabilityProfile {
             hal: resolve_metadata_flag("DOIGET_ENABLE_HAL", "metadata", cfg!(feature = "metadata")),
             openaire: resolve_metadata_flag(
                 "DOIGET_ENABLE_OPENAIRE",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            core: resolve_metadata_flag(
+                "DOIGET_ENABLE_CORE",
                 "metadata",
                 cfg!(feature = "metadata"),
             ),
