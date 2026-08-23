@@ -3317,7 +3317,7 @@ impl AttemptOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SourceAttempt {
-    /// Source key, matching [`Source::name`](crate::source::Source::name).
+    /// Source key, matching [`crate::source::Source::name`].
     pub source: &'static str,
     /// What happened.
     pub outcome: AttemptOutcome,
