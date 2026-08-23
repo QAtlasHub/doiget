@@ -117,3 +117,8 @@ jobs:
       - env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --workspace --no-deps --no-default-features --features oa-only
+      # The `citation` surface was never doc-built, so two broken intra-doc
+      # links sat latent on `main` and the five 0.8.8 sources could add more
+      # without CI noticing. Release binaries ship `oa-only,citation`, so the
+      # docs for that surface have to build too.
+      - run: cargo doc --workspace --no-deps --no-default-features --features oa-only,citation

@@ -921,6 +921,29 @@ pub struct MetadataAccess {
     pub semantic_scholar: bool,
     /// Phase 4+; enabled by `DOIGET_ENABLE_DOAJ`.
     pub doaj: bool,
+    /// DOI **resolution** for DataCite-registered DOIs (Zenodo / figshare /
+    /// Dryad / OSF / most institutional repositories); enabled by
+    /// `DOIGET_ENABLE_DATACITE`.
+    ///
+    /// Unlike its siblings this is not enrichment — Crossref and Unpaywall
+    /// simply do not index these DOIs, so without it a live, open record is
+    /// reported [`ErrorCode::NotFound`] (ADR-0040, #414).
+    pub datacite: bool,
+    /// HAL — the French national OA repository, holding maths / physics /
+    /// CS deposits that Crossref-centric indexes miss; enabled by
+    /// `DOIGET_ENABLE_HAL` (ADR-0040, #418).
+    pub hal: bool,
+    /// OpenAIRE — European institutional / funder repository aggregation;
+    /// enabled by `DOIGET_ENABLE_OPENAIRE` (ADR-0040, #416).
+    pub openaire: bool,
+    /// CORE — cross-repository OA aggregation, the last fallback in the
+    /// optional chain; enabled by `DOIGET_ENABLE_CORE`. An optional free
+    /// key in `DOIGET_CORE_API_KEY` raises the rate limit but is not
+    /// required (ADR-0040, #417).
+    pub core: bool,
+    /// Europe PMC — biomedical OA full text that Unpaywall does not index;
+    /// enabled by `DOIGET_ENABLE_EUROPE_PMC` (ADR-0040, #415).
+    pub europe_pmc: bool,
 }
 
 /// Process-wide rate limits. Hard-coded; not configurable.
@@ -1149,6 +1172,27 @@ impl CapabilityProfile {
             ),
             doaj: resolve_metadata_flag(
                 "DOIGET_ENABLE_DOAJ",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            datacite: resolve_metadata_flag(
+                "DOIGET_ENABLE_DATACITE",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            hal: resolve_metadata_flag("DOIGET_ENABLE_HAL", "metadata", cfg!(feature = "metadata")),
+            openaire: resolve_metadata_flag(
+                "DOIGET_ENABLE_OPENAIRE",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            core: resolve_metadata_flag(
+                "DOIGET_ENABLE_CORE",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            europe_pmc: resolve_metadata_flag(
+                "DOIGET_ENABLE_EUROPE_PMC",
                 "metadata",
                 cfg!(feature = "metadata"),
             ),

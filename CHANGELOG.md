@@ -10,6 +10,130 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.8] - 2026-08-23
+
+### Fixed
+- **[source]** The five optional sources are now **actually reached**. DataCite was
+  wired into the DOI fan-out; Europe PMC, OpenAIRE, HAL and CORE were not called by
+  anything, so setting `DOIGET_ENABLE_HAL` (and the other three) was a silent no-op.
+  Every source unit test passed because each drove its own `Source` impl directly —
+  nothing asserted that the production path reached them (#413).
+- **[ci]** `rustdoc` now builds the `oa-only,citation` surface too, not just
+  `oa-only`. Release binaries ship `citation`, but its docs were never built — so
+  two broken intra-doc links had been sitting latent on `main`, and the five new
+  sources could have added more without CI noticing. Both latent links fixed.
+- **[source]** Optional sources honour `DOIGET_<NAME>_BASE` overrides, mirroring
+  `DOIGET_CROSSREF_BASE`. Without this the chain could only ever talk to production,
+  which is *why* it shipped unreachable: no test could point it anywhere, so no test
+  could prove reachability.
+
+### Added
+- **[core]** A resolution trace. Every optional source records a `SourceAttempt`
+  — including the ones **not** consulted — distinguishing "not consulted (set
+  `DOIGET_ENABLE_X` to enable)", "not consulted (an earlier source answered)", "not
+  consulted (cannot serve this ref kind)", "consulted: no record", "consulted: found,
+  not open access", and "consulted: failed". A DOI that resolves nowhere now reports
+  which of those happened, per source, instead of returning the bare Crossref error.
+  "We asked and it had nothing" and "we never asked" are different problems with
+  different fixes, and were previously the same observable (#413).
+
+Five opt-in OA sources, a config-file generator, and four architecture decisions.
+The optional source surface roughly doubles — DataCite, Europe PMC, OpenAIRE, CORE
+and HAL — while the default binary is byte-identical to 0.8.7: every source is
+compiled in but inert until its own `DOIGET_ENABLE_<NAME>` is set.
+
+### Added
+- **[source]** **Europe PMC** — biomedical OA full text that Unpaywall does not
+  index, opt-in via `DOIGET_ENABLE_EUROPE_PMC` (#415). Completes the #413 epic.
+  Gated on `isOpenAccess`, deliberately **not** `inEPMC`: a record can be present
+  in the archive while its full text is subscription-only, and gating on presence
+  would return records doiget cannot retrieve. A non-OA hit is an explicit refusal
+  naming both flags, not a retry. `resultType=core` is requested because the
+  default `lite` response omits `fullTextUrlList`, which is the point of consulting
+  the source. The OA PDF location is surfaced from `fullTextUrlList`; the download
+  itself goes through the existing `oa-publisher` leg, where a blocked fetch
+  already surfaces with an ADR-0023 `denial_context` naming the host and allowlist.
+- **[source]** **CORE** — cross-repository OA aggregation, opt-in via
+  `DOIGET_ENABLE_CORE` (#417). The broadest single OA index outside Unpaywall, so
+  it sits last in the optional chain. An **optional** free key in
+  `DOIGET_CORE_API_KEY` raises the rate limit; absent — or blank — it degrades to
+  the key-less limit rather than failing. No key is bundled and none is needed to
+  build. A rejected key surfaces as a transport error carrying the 401/403, which
+  is a different error *type* from the `NOT_FOUND` a genuine miss produces, so a
+  misconfigured key cannot be mistaken for an absent paper.
+- **[source]** **OpenAIRE** — European institutional / funder repository
+  aggregation, opt-in via `DOIGET_ENABLE_OPENAIRE` (#416). Uses the **Graph API
+  v1**; the legacy `/search/publications` endpoint is unstable (503s were measured
+  in #416) and is deliberately not wired. Unlike the pure-OA sources, OpenAIRE
+  aggregates records with **mixed access rights**, so a hit is not evidence of
+  availability: only a COAR `c_abf2` (OPEN) `bestAccessRight` is accepted, judged
+  on the code rather than the human-readable label, and an absent field counts as
+  not open.
+- **[source]** **HAL** — the French national OA repository, opt-in via
+  `DOIGET_ENABLE_HAL` (#418). Holds author deposits in maths / physics / CS that
+  Crossref-centric indexes miss. OA deposits only: a record whose
+  `openAccess_bool` is not `true` is rejected rather than returned, because an
+  entry resolving to no reachable text looks like a hit but is not one.
+  Metadata-only; the `hal.science` content host is reached through
+  `oa-publisher`, not this source key.
+- **[source]** **DataCite** DOI resolution, opt-in via `DOIGET_ENABLE_DATACITE`
+  (#414, first of the #413 epic under ADR-0040). DataCite is the second large
+  registration agency and Crossref/Unpaywall index neither its DOIs nor its
+  records, so a live, open-access Zenodo / figshare / Dryad / OSF DOI resolved to
+  `NOT_FOUND` — a false negative already documented on that `ErrorCode` variant
+  and seen as a false positive in `doiget-citation-check`. Ordered strictly
+  **after** Crossref in the DOI fan-out and only consulted when Crossref returned
+  nothing, so a Crossref-registered DOI never reaches it and enabling the flag
+  cannot change any resolution that already works. `resourceTypeGeneral` is
+  surfaced because most DataCite DOIs are not articles. Metadata only: DataCite
+  returns a landing page, not a file, so no PDF is fetched.
+- **[cli]** `doiget config init` writes a fully commented `config.toml` template to
+  the resolved config path. A fresh install has no config file, nothing created
+  one, and three of the four settings that decide a session's outcome — store
+  location and the two allowlist flags — fail silently when it is absent. Every
+  line in the template is commented out, so it documents the choices without
+  changing behaviour; each comment says what the default actually is, not just
+  what the key is called. `--force` overwrites, and without it `init` refuses
+  rather than replace a file that may hold a hand-written allowlist (#408).
+- **[docs]** ADR-0037 (DOAJ on `oa-publisher`), ADR-0038 (store root stays
+  cwd-relative; 0036 reaffirmed against #406), ADR-0039 (IEEE / ACM / SIAM / AMS
+  stay off the allowlist; TDM credentials are the route, #407), ADR-0040 (source
+  expansion gated by `metadata`, #413).
+
+### Changed
+- **[network]** `doaj.org` / `*.doaj.org` are on the **default** `oa-publisher`
+  allowlist (ADR-0037). They were already trusted under the `doaj` *metadata*
+  source key, which the CLI wires in only under `#[cfg(feature = "citation")]`, so
+  the two keys disagreed about a host the project had already accepted and a stock
+  build could not reach it at all. Promoted on the ADR-0027 precedent that made
+  `*.aps.org` unconditional. A gold-OA article routed through DOAJ now works with
+  no configuration (#405).
+- **[network]** DOAJ is removed from the `trust_oa_registries` curated set — it no
+  longer needs a flag. The remaining five (SciELO, Zenodo, OSF, HAL, CORE) appear
+  nowhere in `http.rs`, so for them the flag is genuinely new trust and stays
+  opt-in (#405).
+- **[docs]** `metadata` is redefined in `SOURCES.md` §3 and `CAPABILITY.md` as the
+  optional non-Tier-1 source surface as a whole — enrichment, resolution and
+  retrieval — with the runtime `DOIGET_ENABLE_<NAME>` flags, not the Cargo feature,
+  as the boundary that keeps sources inert (ADR-0040, #413).
+
+### Fixed
+- **[source]** Register `datacite` in `tier_2_allowlist`. **DataCite shipped in
+  0.8.8-beta.4 with no transport allowlist entry, so a production fetch would have
+  failed `UnknownSource`.** Every unit test passed because they build their client
+  with `new_for_tests_allow_http("datacite", ..)`, which registers the key itself —
+  the tests could not see the gap. A new
+  `every_tier_2_source_has_a_transport_allowlist_entry` enumerates the Tier-2
+  sources against the allowlist so this cannot recur; removing an entry now fails
+  `cargo test`.
+- **[ci]** Add `.cargo/audit.toml` mirroring the `[advisories] ignore` list in
+  `deny.toml`. The two tools do not share configuration — `cargo deny` reads
+  `deny.toml`, `cargo audit` reads `.cargo/audit.toml` — so the already-assessed
+  `paste` unmaintained advisory (RUSTSEC-2024-0436) was suppressed for one and
+  re-reported by the other. It stayed invisible because `rustsec/audit-check`
+  treats an informational warning as fatal on `push` but not on `pull_request`:
+  every PR was green while `main` had been red since 2026-08-10.
+
 ## [0.8.7] - 2026-08-22
 
 Security, allowlist visibility, and a network doctor. The two config keys that decide

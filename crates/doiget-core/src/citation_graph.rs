@@ -1,6 +1,6 @@
 //! Citation graph BFS expansion (Phase 4 / ADR-0010).
 //!
-//! Spec: [`docs/DECISIONS/0010-citation-graph-hard-cap.md`].
+//! Spec: `docs/DECISIONS/0010-citation-graph-hard-cap.md`.
 //!
 //! ## Binding contract
 //!
@@ -447,6 +447,11 @@ mod tests {
             openalex: true,
             semantic_scholar: false,
             doaj: false,
+            datacite: false,
+            hal: false,
+            openaire: false,
+            core: false,
+            europe_pmc: false,
         };
         p
     }

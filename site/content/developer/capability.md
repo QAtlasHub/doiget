@@ -116,6 +116,11 @@ impl CapabilityProfile {
                 openalex:        env::var("DOIGET_ENABLE_OPENALEX").is_ok(),
                 semantic_scholar: env::var("DOIGET_ENABLE_S2").is_ok(),
                 doaj:            env::var("DOIGET_ENABLE_DOAJ").is_ok(),
+                datacite:        env::var("DOIGET_ENABLE_DATACITE").is_ok(),
+                hal:             env::var("DOIGET_ENABLE_HAL").is_ok(),
+                openaire:        env::var("DOIGET_ENABLE_OPENAIRE").is_ok(),
+                core:            env::var("DOIGET_ENABLE_CORE").is_ok(),
+                europe_pmc:      env::var("DOIGET_ENABLE_EUROPE_PMC").is_ok(),
             },
             tdm_elsevier: read_tdm_grant("DOIGET_AGREE_TDM_ELSEVIER", "DOIGET_KEY_ELSEVIER")?,
             tdm_aps:      read_tdm_grant("DOIGET_AGREE_TDM_APS",      "DOIGET_KEY_APS")?,
@@ -163,9 +168,22 @@ fn read_tdm_grant(agree_var: &str, key_var: &str) -> Result<Option<TdmGrant>, Ca
 
 | Variable | Type | Effect |
 |---|---|---|
+> **The `metadata` Cargo feature vs. these variables (ADR-0040, NORMATIVE).** The
+> feature decides what is *compiled*; the variables below decide what is *reachable*.
+> As of 0.8.8 `metadata` gates the whole optional non-Tier-1 source surface —
+> enrichment, resolution and retrieval — and release binaries compile it in. A source
+> is inert until its own `DOIGET_ENABLE_<NAME>` is set, so with all of them unset the
+> binary behaves exactly as a Tier-1-only build.
+
 | `DOIGET_ENABLE_OPENALEX` | presence | Enables OpenAlex (metadata only). |
 | `DOIGET_ENABLE_S2` | presence | Enables Semantic Scholar. |
 | `DOIGET_ENABLE_DOAJ` | presence | Enables DOAJ. |
+| `DOIGET_ENABLE_DATACITE` | presence | Enables DataCite DOI **resolution** (Zenodo / figshare / Dryad / OSF). Unlike its siblings this is not enrichment: without it those DOIs report `NOT_FOUND` even when the record is live and open (#414). |
+| `DOIGET_ENABLE_HAL` | presence | Enables HAL, the French national OA repository. OA deposits only: a record whose `openAccess_bool` is not `true` is rejected rather than returned (#418). |
+| `DOIGET_ENABLE_OPENAIRE` | presence | Enables OpenAIRE (European repository aggregation, Graph API v1). Mixed access rights: only a COAR `c_abf2` (OPEN) `bestAccessRight` is accepted; EMBARGO / RESTRICTED / CLOSED / absent are refused (#416). |
+| `DOIGET_ENABLE_CORE` | presence | Enables CORE, the broadest cross-repository OA index and therefore the last fallback in the chain (#417). |
+| `DOIGET_CORE_API_KEY` | value | **Optional.** Your own free CORE key, raising the rate limit. Absent (or blank) degrades to the key-less limit rather than failing. Never bundled; sent as a bearer header and never logged. A 401/403 with a key set is reported as a transport error, distinct from "not found", so a bad key does not look like a missing paper. |
+| `DOIGET_ENABLE_EUROPE_PMC` | presence | Enables Europe PMC (biomedical OA full text Unpaywall does not index). OA subset only: gated on `isOpenAccess`, **not** `inEPMC` — a record can be in the archive while its full text is subscription-only (#415). |
 | `DOIGET_AGREE_TDM_ELSEVIER` | `=1` | Acknowledges Elsevier TDM ToS. Pairs with key. |
 | `DOIGET_KEY_ELSEVIER` | secret string | Elsevier API key. Read into `Secret<String>`. |
 | `DOIGET_AGREE_TDM_APS` | `=1` | Acknowledges APS Harvest TDM ToS. |

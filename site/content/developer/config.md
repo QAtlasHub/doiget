@@ -41,6 +41,16 @@ A value set higher in the chain overrides any value set lower.
 
 ## 3. config.toml schema
 
+> **The file does not exist by default.** A fresh install has no
+> `config.toml` at all, and three of the four settings that most often decide the
+> outcome of a session — store location, the two allowlist flags — fail *silently*
+> when it is absent. Run **`doiget config init`** to write a fully commented
+> template to the path `doiget config path` reports; every line is commented out,
+> so it documents the choices without changing behaviour until you edit it.
+> `--force` overwrites an existing file (without it, `init` refuses, so it can
+> never silently discard a hand-written allowlist).
+
+
 ```toml
 # ~/.config/doiget/config.toml — all fields optional
 
@@ -65,7 +75,7 @@ total_timeout_sec = 300
 # Without them, an OA PDF hosted off the built-in allowlist is denied with
 # `error[CAPABILITY_DENIED]: ... redirect_not_in_allowlist`.
 trust_academic_repos = false   # true = also allow the 15 curated academic suffixes below
-trust_oa_registries  = false   # true = also allow the curated OA registries (DOAJ, SciELO, ...)
+trust_oa_registries  = false   # true = also allow the curated OA registries (SciELO, Zenodo, ...)
 
 [[network.additional_hosts]]
 host = "*.uj.edu.pl"           # single-suffix wildcard, or a literal FQDN
@@ -129,20 +139,21 @@ trust_academic_repos = true
 `trust_oa_registries = true` activates the OA-registry set:
 
 ```
-doaj.org      *.doaj.org      scielo.org    *.scielo.org   *.scielo.br
+scielo.org    *.scielo.org    *.scielo.br
 zenodo.org    *.zenodo.org    osf.io        *.osf.io
 hal.science   *.hal.science   core.ac.uk
 ```
 
 Every entry is a registry or repository whose *purpose* is open distribution, never a
 publisher platform — turning this on must not become a way to reach paywalled content.
-Note that both the apex (`doaj.org`) and the wildcard (`*.doaj.org`) appear: a
-single-suffix wildcard does **not** match the apex, and DOAJ redirects to the apex.
+Note that both the apex and the wildcard are listed where the apex serves content: a
+single-suffix wildcard does **not** match the apex.
 
-Without this flag a Gold-OA article routed through DOAJ — e.g. IEEE Access
-`10.1109/access.2024.3495502` — is denied on a stock install, while a Green-OA copy on
-an institutional repository is reachable behind `trust_academic_repos`. For an
-open-access tool that polarity is backwards, which is why the flag exists.
+**DOAJ is not in this set — it needs no flag.** `doaj.org` is on the *default*
+allowlist as of 0.8.8 (ADR-0037), because the project already trusted it under the
+`doaj` metadata source key and the two keys simply disagreed. So a Gold-OA article
+routed through DOAJ — e.g. IEEE Access `10.1109/access.2024.3495502` — works on a
+stock install with no configuration at all.
 
 `[[network.additional_hosts]]` is for anything outside either set. A pattern is either a
 literal FQDN (`ruj.uj.edu.pl`) or a **single-suffix wildcard** (`*.uj.edu.pl`). Multi-segment
@@ -156,8 +167,8 @@ host = "*.uj.edu.pl"
 note = "Jagiellonian University repository"
 
 [[network.additional_hosts]]
-host = "doaj.org"
-note = "DOAJ — common redirect target for gold-OA journal content"
+host = "repository.example.edu"
+note = "a repository outside both curated sets"
 ```
 
 Run `doiget config doctor` to confirm what was loaded:
@@ -207,6 +218,8 @@ overridable by flag:
 | `--progress` / `--no-progress` | `output.progress` |
 | `--quiet` / `-q` | implies `--mode=quiet` |
 | `--json` | implies `--mode=json` |
+| `--force` | `config init` only: overwrite an existing `config.toml` |
+| `--network` | `config doctor` only: also run the outbound report (§6.1) |
 
 `doiget serve` always runs in `mcp` mode regardless of flags. Other subcommands honor the
 mode resolution above.
@@ -268,7 +281,7 @@ network (--network):
   probe link.springer.com      200 3100 bytes    ok
   probe arxiv.org              200 5854 bytes    ok
   probe ieeexplore.ieee.org    not allowlisted   no request sent; ...
-  probe doaj.org               not allowlisted   no request sent; ...
+  probe doaj.org               200 793 bytes     ok
 ```
 
 The flag is opt-in because it makes real outbound requests: one GET per listed host, no

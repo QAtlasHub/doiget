@@ -268,6 +268,11 @@ mod tests {
             openalex: false,
             semantic_scholar: false,
             doaj: true,
+            datacite: false,
+            hal: false,
+            openaire: false,
+            core: false,
+            europe_pmc: false,
         };
         p
     }

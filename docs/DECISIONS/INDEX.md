@@ -53,6 +53,10 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0034 | arXiv source bundle + individual figure download | Accepted (0.8.0, #352) | `feat/343-source-bundle-figures` | #343 / dogfood 2026-06-24 |
 | 0035 | `fetch --link`: surface fetched artifacts into the working tree | Accepted (0.8.0, #352) | `feat/344-fetch-link` | #344 / dogfood 2026-06-24 |
 | 0036 | Default store root → `./papers` (cwd); amends 0004 co-location | Accepted (0.8.0, #352) | `feat/344-default-store-cwd` | #344 problem 1 / dogfood 2026-06-24 |
+| 0037 | `doaj.org` promoted to the default `oa-publisher` allowlist; `trust_oa_registries` keeps the rest | Accepted (0.8.8) | `feat/adr-source-and-allowlist-decisions` | #405 item 3 / #409 |
+| 0038 | Store root stays cwd-relative; 0036 reaffirmed against new evidence | Accepted (0.8.8) | `feat/adr-source-and-allowlist-decisions` | #406 |
+| 0039 | IEEE / ACM / SIAM / AMS stay off `oa-publisher`; TDM credentials are the route | Accepted (0.8.8) | `feat/adr-source-and-allowlist-decisions` | #407 |
+| 0040 | Source expansion gated by the existing `metadata` feature, runtime-gated off | Accepted (0.8.8) | `feat/adr-source-and-allowlist-decisions` | #413 |
 
 ## Conventions
 

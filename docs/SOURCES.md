@@ -18,6 +18,11 @@
 | OpenAlex | 2 (metadata) | 4 | none | <https://docs.openalex.org/how-to-use-the-api/api-overview> | `--features metadata` + `DOIGET_ENABLE_OPENALEX` |
 | Semantic Scholar | 2 (metadata) | 4 | API key (optional) | <https://www.semanticscholar.org/product/api> | `--features metadata` + `DOIGET_ENABLE_S2` |
 | DOAJ | 2 (metadata) | 4 | none | <https://www.doaj.org/api> | `--features metadata` + `DOIGET_ENABLE_DOAJ` |
+| DataCite | 2 (resolution) | 4 | none | <https://datacite.org/terms-and-conditions/> | `--features metadata` + `DOIGET_ENABLE_DATACITE` |
+| HAL | 2 (metadata) | 4 | none | <https://api.archives-ouvertes.fr/docs> | `--features metadata` + `DOIGET_ENABLE_HAL` |
+| OpenAIRE | 2 (metadata) | 4 | none | <https://graph.openaire.eu/docs/> | `--features metadata` + `DOIGET_ENABLE_OPENAIRE` |
+| CORE | 2 (metadata) | 4 | optional free key (`DOIGET_CORE_API_KEY`) | <https://core.ac.uk/terms> | `--features metadata` + `DOIGET_ENABLE_CORE` |
+| Europe PMC | 2 (metadata) | 4 | none | <https://europepmc.org/About> | `--features metadata` + `DOIGET_ENABLE_EUROPE_PMC` |
 | Springer Nature OA | 3 (institutional) | 5a | API key | <https://dev.springernature.com/> | `--features tdm-springer` + key + agree |
 | APS Harvest TDM | 3 (institutional) | 5b | API key | <https://harvest.aps.org/> | `--features tdm-aps` + key + agree |
 | Elsevier ScienceDirect TDM | 3 (institutional) | 5c | API key | <https://www.elsevier.com/legal/tdmrep> | `--features tdm-elsevier` + key + agree |
@@ -37,12 +42,25 @@ behavior the default ([`LEGAL.md`](LEGAL.md) §6 safeguard 8).
 
 ## 3. Default release binaries
 
-`cargo install doiget` (default) compiles Tier 1 only. Tier 2 metadata sources require
-an opt-in build:
+`cargo install doiget` (default) compiles Tier 1 only. The optional source surface
+requires an opt-in build:
 
 ```sh
 cargo install doiget --features metadata
 ```
+
+**What `metadata` means (ADR-0040, NORMATIVE).** The feature name predates the sources
+it now carries. As of 0.8.8 it gates **the optional non-Tier-1 source surface as a
+whole** — enrichment, resolution *and* retrieval — not enrichment alone. Compiling it
+in makes that code present; it does **not** turn any source on. Every source under it
+is additionally gated at runtime by its own `DOIGET_ENABLE_<NAME>`, and with every such
+variable unset the observable behaviour of the binary is identical to a Tier-1-only
+build. The runtime flag is the boundary that matters; the Cargo feature only decides
+what is compiled.
+
+Published release binaries build `--no-default-features --features oa-only,citation`,
+and `citation = ["metadata"]`, so this code ships — inert — in the binaries you
+download.
 
 Tier 3 TDM sources are individually feature-flagged and require user-driven build:
 

@@ -125,7 +125,7 @@ enum ProvenanceAction {
                   \x20 list-recent  List the most recently fetched entries\n\
                   \x20 audit-log    Inspect or verify the provenance log\n\
                   \x20 provenance   Provenance-log lifecycle ops (migrate v1 -> v2)\n\
-                  \x20 config       Show or doctor the resolved configuration\n\
+                  \x20 config       init / show / path / doctor the configuration\n\
                   \x20 serve        Run as an MCP server over stdio\n\
                   \x20 graph        Expand a DOI's citation neighborhood via OpenAlex\n\
                   \x20              (requires --features citation + DOIGET_ENABLE_OPENALEX)\n\
@@ -565,8 +565,13 @@ enum Command {
     Capabilities,
     /// Show or doctor the resolved configuration.
     Config {
-        /// `show` / `path` / `doctor`
+        /// `init` / `show` / `path` / `doctor`
         action: String,
+        /// `init` only: overwrite an existing config.toml. Without this,
+        /// `init` refuses rather than replace a file that may hold a
+        /// hand-written allowlist (issue #408).
+        #[arg(long)]
+        force: bool,
         /// `doctor` only: also run the outbound network report — proxy
         /// configuration, Unpaywall pool, allowlist coverage, and one
         /// GET per well-known publisher to show which will talk to a
@@ -760,9 +765,11 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 doiget_cli::commands::provenance::migrate(dry_run, mode)
             }
         },
-        Some(Command::Config { action, network }) => {
-            doiget_cli::commands::config::run(action, mode, network).await
-        }
+        Some(Command::Config {
+            action,
+            network,
+            force,
+        }) => doiget_cli::commands::config::run(action, mode, network, force).await,
         Some(Command::Info { ref_ }) => {
             doiget_cli::commands::info::run(ref_, mode, out.quiet_was_explicit)
         }

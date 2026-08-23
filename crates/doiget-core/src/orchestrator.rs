@@ -1114,7 +1114,38 @@ async fn fetch_paper_doi(
         .as_ref()
         .and_then(|c| c.metadata_json.clone())
         .unwrap_or(Value::Null);
-    let extracted = extract_crossref_fields(&crossref_meta);
+    // `mut` only in `metadata` builds, where the DataCite fallback below may
+    // reassign it; without that feature nothing writes to it.
+    #[allow(unused_mut)]
+    let mut extracted = extract_crossref_fields(&crossref_meta);
+
+    // #413 / ADR-0040: the optional resolution chain, strictly AFTER
+    // Crossref and consulted only when Crossref produced nothing. That
+    // ordering is what makes every source additive — a Crossref-registered
+    // DOI never reaches them, so enabling a flag cannot change a
+    // resolution that already works.
+    //
+    // Every source records a `SourceAttempt`, including the ones that were
+    // NOT consulted. That is the point: before this, a failed DOI fetch
+    // returned the Crossref error and said nothing about the rest of the
+    // chain, so "HAL was asked and had nothing" and "HAL was never asked
+    // because the flag is unset" were the same observable. They are
+    // different problems with different fixes.
+    #[allow(unused_mut)]
+    let mut attempts: Vec<SourceAttempt> = Vec::new();
+    #[cfg(feature = "metadata")]
+    let optional_meta = resolve_optional_chain(
+        ref_,
+        profile,
+        ctx,
+        cross.is_some(),
+        &mut extracted,
+        &mut attempts,
+    )
+    .await;
+    #[cfg(not(feature = "metadata"))]
+    let optional_meta: Option<Value> = None;
+    let _ = &optional_meta;
 
     // Unpaywall second — license enrichment + OA URL chain discovery.
     // A failure here is non-fatal: we still write the Crossref-
@@ -1284,6 +1315,26 @@ async fn fetch_paper_doi(
     // Surface the Crossref error so the caller reports a real reason.
     if let Some(e) = crossref_err {
         if pdf_bytes.is_none() {
+            // #413: attach the resolution trace. Returning the bare
+            // Crossref error was the whole problem — it said nothing about
+            // whether the optional chain had been consulted and come up
+            // empty, or had never run because its flags are unset. Those
+            // need different fixes, so the message has to tell them apart.
+            if !attempts.is_empty() {
+                let trace = render_attempts(&attempts);
+                let lead = if nothing_was_consulted(&attempts) {
+                    "no optional source was consulted for this DOI"
+                } else {
+                    "the optional sources were consulted and did not resolve it"
+                };
+                return Err(FetchError::NotFound {
+                    hint: format!(
+                        "{e}
+  = note: {lead}:
+{trace}"
+                    ),
+                });
+            }
             return Err(e);
         }
     }
@@ -1732,6 +1783,7 @@ async fn try_fetch_oa_pdf(
 }
 
 /// Subset of Crossref `message` fields populated into the on-disk metadata.
+#[derive(Default)]
 pub(crate) struct CrossrefFields {
     pub(crate) title: Option<String>,
     pub(crate) authors: Vec<String>,
@@ -1741,6 +1793,73 @@ pub(crate) struct CrossrefFields {
     pub(crate) issue: Option<String>,
     pub(crate) pages: Option<String>,
     pub(crate) type_: Option<String>,
+}
+
+/// Map a DataCite `data.attributes` object onto [`CrossrefFields`].
+///
+/// Issue #414. DataCite is a different registration agency with a
+/// different schema, but downstream only consumes [`CrossrefFields`], so
+/// the shapes are reconciled here rather than by widening every consumer.
+///
+/// `type_` deliberately carries `types.resourceTypeGeneral` — on Zenodo,
+/// dataset plus software plus image outnumber `JournalArticle`, and an
+/// agent that cannot tell them apart will treat a software release as a
+/// paper. Every field degrades to `None` rather than guessing.
+#[cfg(feature = "metadata")]
+pub(crate) fn extract_datacite_fields(attributes: &Value) -> CrossrefFields {
+    let title = attributes
+        .get("titles")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|t| t.get("title"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let authors = attributes
+        .get("creators")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| {
+                    // `name` is the canonical field; fall back to the
+                    // given/family pair when a depositor supplied only that.
+                    c.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            let given = c.get("givenName").and_then(|v| v.as_str());
+                            let family = c.get("familyName").and_then(|v| v.as_str());
+                            match (given, family) {
+                                (Some(g), Some(f)) => Some(format!("{g} {f}")),
+                                (None, Some(f)) => Some(f.to_string()),
+                                _ => None,
+                            }
+                        })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let year = attributes
+        .get("publicationYear")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|y| i32::try_from(y).ok());
+    let venue = attributes.get("publisher").and_then(|v| {
+        // DataCite 4.5 made `publisher` an object; earlier records
+        // carry a bare string.
+        v.as_str()
+            .map(str::to_string)
+            .or_else(|| v.get("name").and_then(|n| n.as_str()).map(str::to_string))
+    });
+    let type_ = crate::sources::datacite::resource_type_general(attributes).map(str::to_string);
+    CrossrefFields {
+        title,
+        authors,
+        year,
+        venue,
+        volume: None,
+        issue: None,
+        pages: None,
+        type_,
+    }
 }
 
 /// Defensively pull bibliographic fields out of a Crossref envelope's
@@ -3112,5 +3231,645 @@ mod tests {
         // nothing parseable -> empty (still a valid TOML)
         assert!(extract_metadata_authors(&json!({"x": 1})).is_empty());
         assert!(extract_metadata_authors(&json!({"authors": []})).is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Source-attempt trace (#413 follow-up)
+// ---------------------------------------------------------------------------
+
+/// Why a given optional source did or did not contribute.
+///
+/// The distinction this type exists to make: **"we asked and it had
+/// nothing" is not the same failure as "we never asked".** Before this,
+/// both looked identical from outside — a DOI fetch that failed returned
+/// the Crossref error and said nothing about the rest of the chain, so a
+/// user could not tell whether HAL had been consulted and come up empty,
+/// or whether `DOIGET_ENABLE_HAL` was simply unset. One means the paper is
+/// not there; the other means you have not turned the source on. They need
+/// completely different actions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AttemptOutcome {
+    /// Runtime flag unset — **not consulted**. Carries the env var so the
+    /// message can name the exact thing the user has to change.
+    Disabled {
+        /// e.g. `"DOIGET_ENABLE_HAL"`.
+        env: &'static str,
+    },
+    /// This source cannot serve this kind of ref at all (e.g. an arXiv id
+    /// handed to a DOI-only resolver). Not a misconfiguration.
+    NotApplicable,
+    /// An earlier source in the chain already answered, so this one was
+    /// deliberately skipped. Not a failure.
+    NotNeeded,
+    /// **Consulted.** The source has no record for this ref.
+    NoRecord,
+    /// **Consulted.** A record exists but is not open access — the source
+    /// knows the paper and still cannot give it to us.
+    NotOpenAccess {
+        /// Source-specific detail, e.g. the access-rights code observed.
+        detail: String,
+    },
+    /// **Consulted.** The request itself failed (transport, auth, schema).
+    Failed {
+        /// Rendered error.
+        detail: String,
+    },
+    /// **Consulted**, and it answered.
+    Resolved,
+}
+
+impl AttemptOutcome {
+    /// Whether a request actually went out for this source.
+    ///
+    /// This is the predicate the reachability tests assert on: a source
+    /// reporting `was_consulted() == false` is one the production path
+    /// never reached, which is exactly the condition that used to be
+    /// invisible.
+    #[must_use]
+    pub fn was_consulted(&self) -> bool {
+        matches!(
+            self,
+            Self::NoRecord | Self::NotOpenAccess { .. } | Self::Failed { .. } | Self::Resolved
+        )
+    }
+
+    /// One-line rendering, phrased so consulted and not-consulted cannot
+    /// be misread for one another.
+    #[must_use]
+    pub fn render(&self) -> String {
+        match self {
+            Self::Disabled { env } => format!("not consulted (set {env} to enable)"),
+            Self::NotApplicable => "not consulted (cannot serve this ref kind)".to_string(),
+            Self::NotNeeded => "not consulted (an earlier source answered)".to_string(),
+            Self::NoRecord => "consulted: no record".to_string(),
+            Self::NotOpenAccess { detail } => {
+                format!("consulted: found, not open access ({detail})")
+            }
+            Self::Failed { detail } => format!("consulted: failed ({detail})"),
+            Self::Resolved => "consulted: resolved".to_string(),
+        }
+    }
+}
+
+/// One row of the resolution trace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SourceAttempt {
+    /// Source key, matching [`crate::source::Source::name`].
+    pub source: &'static str,
+    /// What happened.
+    pub outcome: AttemptOutcome,
+}
+
+impl SourceAttempt {
+    /// Construct a row.
+    #[must_use]
+    pub fn new(source: &'static str, outcome: AttemptOutcome) -> Self {
+        Self { source, outcome }
+    }
+}
+
+/// Render a whole trace as an `= note:`-style block.
+///
+/// Ordered as the chain ran, so reading top to bottom tells you how far
+/// resolution actually got.
+#[must_use]
+pub fn render_attempts(attempts: &[SourceAttempt]) -> String {
+    attempts
+        .iter()
+        .map(|a| format!("  {:<12} {}", a.source, a.outcome.render()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// True when no source in the trace was actually reached.
+///
+/// Distinguishes "this DOI is genuinely not findable" from "nothing was
+/// even switched on" — a data problem versus a configuration problem.
+#[must_use]
+pub fn nothing_was_consulted(attempts: &[SourceAttempt]) -> bool {
+    !attempts.is_empty() && attempts.iter().all(|a| !a.outcome.was_consulted())
+}
+
+/// Map a source's terminal error onto an [`AttemptOutcome`].
+///
+/// Keeps the classification in one place so every source in the chain
+/// reports the same way: a clean miss must not be recorded as a failure,
+/// and an access refusal must not be recorded as a miss.
+#[cfg(feature = "metadata")]
+fn classify_attempt(e: &FetchError) -> AttemptOutcome {
+    match e {
+        FetchError::NotFound { .. } => AttemptOutcome::NoRecord,
+        // Sources signal "found it, cannot give it to you" through
+        // SourceSchema with an explicit hint (OpenAIRE access rights,
+        // Europe PMC isOpenAccess, HAL openAccess_bool). The hint is
+        // carried verbatim so the reason survives into the message.
+        FetchError::SourceSchema { hint } if is_access_refusal(hint) => {
+            AttemptOutcome::NotOpenAccess {
+                detail: hint.clone(),
+            }
+        }
+        other => AttemptOutcome::Failed {
+            detail: other.to_string(),
+        },
+    }
+}
+
+/// Whether a `SourceSchema` hint describes an access refusal rather than a
+/// malformed response.
+#[cfg(feature = "metadata")]
+fn is_access_refusal(hint: &str) -> bool {
+    hint.contains("not open access") || hint.contains("openAccess")
+}
+
+/// Run the optional resolution chain and record one [`SourceAttempt`] per
+/// source, consulted or not.
+///
+/// Order is #413's priority order: DataCite (resolution for the second
+/// registration agency) first, then the OA aggregators, then CORE as the
+/// broadest and therefore last fallback. Each is skipped — with a recorded
+/// reason — once something has answered, so the common case costs at most
+/// one extra request.
+///
+/// `extracted` is overwritten by the first source that answers, so the
+/// caller sees the bibliographic fields of whichever source resolved.
+#[cfg(feature = "metadata")]
+async fn resolve_optional_chain(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    crossref_answered: bool,
+    extracted: &mut CrossrefFields,
+    attempts: &mut Vec<SourceAttempt>,
+) -> Option<Value> {
+    // Built eagerly so the trace lists every source in a fixed order even
+    // when none is consulted — an empty trace would be indistinguishable
+    // from "no chain exists", which is the confusion this whole mechanism
+    // is here to remove.
+    // Base URLs come from the env, mirroring `crossref_source_from_env`
+    // and friends. Without this the chain could only ever talk to
+    // production, which is how it shipped unreachable in the first place:
+    // no test could point it anywhere, so no test could prove it was
+    // reached.
+    let datacite = optional_base("DOIGET_DATACITE_BASE").map_or_else(
+        crate::sources::datacite::DataCiteSource::new,
+        crate::sources::datacite::DataCiteSource::with_base,
+    );
+    let epmc = optional_base("DOIGET_EUROPE_PMC_BASE").map_or_else(
+        crate::sources::europepmc::EuropePmcSource::new,
+        crate::sources::europepmc::EuropePmcSource::with_base,
+    );
+    let openaire = optional_base("DOIGET_OPENAIRE_BASE").map_or_else(
+        crate::sources::openaire::OpenAireSource::new,
+        crate::sources::openaire::OpenAireSource::with_base,
+    );
+    let hal = optional_base("DOIGET_HAL_BASE").map_or_else(
+        crate::sources::hal::HalSource::new,
+        crate::sources::hal::HalSource::with_base,
+    );
+    let core = optional_base("DOIGET_CORE_BASE").map_or_else(
+        crate::sources::core_oa::CoreSource::new,
+        crate::sources::core_oa::CoreSource::with_base,
+    );
+
+    // The name is carried explicitly rather than read from `src.name()`:
+    // that borrows the source, while a `SourceAttempt` holds a `'static`
+    // key so the trace can outlive the chain. A test asserts the two agree,
+    // so this cannot drift into a lie.
+    let chain: Vec<(&'static str, &'static str, &dyn crate::source::Source)> = vec![
+        ("datacite", "DOIGET_ENABLE_DATACITE", &datacite),
+        ("europe-pmc", "DOIGET_ENABLE_EUROPE_PMC", &epmc),
+        ("openaire", "DOIGET_ENABLE_OPENAIRE", &openaire),
+        ("hal", "DOIGET_ENABLE_HAL", &hal),
+        ("core", "DOIGET_ENABLE_CORE", &core),
+    ];
+
+    let mut resolved: Option<Value> = None;
+
+    for (name, env, src) in chain {
+        debug_assert_eq!(name, src.name(), "chain name must match Source::name");
+
+        // Crossref already answered: nothing in this chain is needed.
+        if crossref_answered || resolved.is_some() {
+            attempts.push(SourceAttempt::new(name, AttemptOutcome::NotNeeded));
+            continue;
+        }
+        // `can_serve` folds two very different reasons together, so split
+        // them: a disabled flag is a configuration problem the user can
+        // fix; an inapplicable ref kind is not.
+        if !src.can_serve(profile, ref_) {
+            let outcome = if matches!(ref_, Ref::Doi(_)) {
+                AttemptOutcome::Disabled { env }
+            } else {
+                AttemptOutcome::NotApplicable
+            };
+            attempts.push(SourceAttempt::new(name, outcome));
+            continue;
+        }
+
+        match src.fetch(ref_, profile, ctx).await {
+            Ok(r) => {
+                if let Some(meta) = r.metadata_json.as_ref() {
+                    *extracted = extract_optional_fields(name, meta);
+                }
+                attempts.push(SourceAttempt::new(name, AttemptOutcome::Resolved));
+                resolved = r.metadata_json;
+            }
+            Err(e) => {
+                tracing::debug!(source = name, error = %e, "optional source did not resolve");
+                attempts.push(SourceAttempt::new(name, classify_attempt(&e)));
+            }
+        }
+    }
+    resolved
+}
+
+/// Read a `DOIGET_*_BASE` override, warning rather than failing on a
+/// malformed value — a bad override must not take the source offline.
+#[cfg(feature = "metadata")]
+fn optional_base(env: &str) -> Option<url::Url> {
+    let raw = std::env::var(env).ok()?;
+    match url::Url::parse(&raw) {
+        Ok(u) => Some(u),
+        Err(e) => {
+            tracing::warn!(value = %raw, error = %e, env, "base override is not a valid URL; using the default");
+            None
+        }
+    }
+}
+
+/// Map an optional source's payload onto [`CrossrefFields`].
+///
+/// Only DataCite has a documented field mapping today
+/// ([`extract_datacite_fields`]); the OA aggregators return
+/// source-specific shapes whose bibliographic mapping is separate work.
+/// Rather than guess, those keep whatever Crossref produced and contribute
+/// their payload as `metadata_json` only — an empty title is a visible
+/// gap, a wrong title is a silent corruption.
+#[cfg(feature = "metadata")]
+fn extract_optional_fields(source: &str, meta: &Value) -> CrossrefFields {
+    match source {
+        "datacite" => extract_datacite_fields(meta),
+        _ => CrossrefFields::default(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #413: chain reachability + "never asked" vs "asked and empty"
+// ---------------------------------------------------------------------------
+//
+// These tests exist because four of the five sources added in 0.8.8 were
+// initially unreachable: implemented, capability-gated, allowlisted — and
+// never called by anything. Every unit test passed, because each one drove
+// its own `Source` impl directly. Nothing asserted that the PRODUCTION
+// path reaches them.
+//
+// So the assertions here are deliberately about reach, not behaviour:
+// `server.received_requests()` is the only evidence that a source was
+// actually consulted, and the attempt trace is the only way an operator
+// can tell "consulted and empty" from "never consulted".
+
+#[cfg(all(test, feature = "metadata"))]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod chain_tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use camino::Utf8PathBuf;
+    use tempfile::TempDir;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::http::HttpClient;
+    use crate::provenance::ProvenanceLog;
+    use crate::rate_limiter::RateLimiter;
+    use crate::{CapabilityProfile, Doi, MetadataAccess, RateLimits, Ref};
+
+    /// A context whose HTTP client points EVERY optional source key at the
+    /// same mock server, so "was this source reached?" is answerable by
+    /// asking the server what it received.
+    /// Point every optional source at the mock. Restored on drop; these
+    /// tests are serialised because the vars are process-global.
+    struct BaseGuard(Vec<(&'static str, Option<String>)>);
+    impl BaseGuard {
+        fn to(uri: &str) -> Self {
+            const VARS: &[&str] = &[
+                "DOIGET_DATACITE_BASE",
+                "DOIGET_EUROPE_PMC_BASE",
+                "DOIGET_OPENAIRE_BASE",
+                "DOIGET_HAL_BASE",
+                "DOIGET_CORE_BASE",
+            ];
+            Self(
+                VARS.iter()
+                    .map(|v| {
+                        let old = std::env::var(v).ok();
+                        std::env::set_var(v, uri);
+                        (*v, old)
+                    })
+                    .collect(),
+            )
+        }
+    }
+    impl Drop for BaseGuard {
+        fn drop(&mut self) {
+            for (v, old) in &self.0 {
+                match old {
+                    Some(o) => std::env::set_var(v, o),
+                    None => std::env::remove_var(v),
+                }
+            }
+        }
+    }
+
+    fn ctx_for(host: &str) -> (TempDir, FetchContext) {
+        let td = TempDir::new().expect("tempdir");
+        let dir = Utf8PathBuf::try_from(td.path().to_path_buf()).expect("utf-8");
+        let http = Arc::new(HttpClient::new_for_tests_allow_http_multi(&[
+            ("datacite", host),
+            ("europe-pmc", host),
+            ("openaire", host),
+            ("hal", host),
+            ("core", host),
+        ]));
+        let session_id = "01J0000000000000000000TEST".to_string();
+        let log = Arc::new(
+            ProvenanceLog::open(dir.join("t.jsonl"), session_id.clone()).expect("log opens"),
+        );
+        (
+            td,
+            FetchContext {
+                http,
+                rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+                log,
+                session_id,
+                cache_root: None,
+            },
+        )
+    }
+
+    fn all_off() -> CapabilityProfile {
+        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        p.metadata = MetadataAccess {
+            openalex: false,
+            semantic_scholar: false,
+            doaj: false,
+            datacite: false,
+            hal: false,
+            openaire: false,
+            core: false,
+            europe_pmc: false,
+        };
+        p
+    }
+
+    fn all_on() -> CapabilityProfile {
+        let mut p = all_off();
+        p.metadata.datacite = true;
+        p.metadata.hal = true;
+        p.metadata.openaire = true;
+        p.metadata.core = true;
+        p.metadata.europe_pmc = true;
+        p
+    }
+
+    fn outcome<'a>(attempts: &'a [SourceAttempt], name: &str) -> &'a AttemptOutcome {
+        &attempts
+            .iter()
+            .find(|a| a.source == name)
+            .unwrap_or_else(|| panic!("no attempt recorded for {name}; got {attempts:?}"))
+            .outcome
+    }
+
+    /// THE regression for the bug this whole change exists to fix.
+    ///
+    /// With every flag on and Crossref having produced nothing, all five
+    /// sources must actually be REACHED — proven by the mock server having
+    /// received five requests, not by any assertion about return values.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn every_optional_source_is_actually_reached_by_the_production_chain() {
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        // Every source gets a syntactically valid but empty answer, so the
+        // chain runs to the end instead of stopping at the first hit.
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"results":[],"response":{"docs":[]},"resultList":{"result":[]}}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+        let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("doi"));
+        let mut fields = CrossrefFields::default();
+        let mut attempts = Vec::new();
+
+        resolve_optional_chain(&ref_, &all_on(), &ctx, false, &mut fields, &mut attempts).await;
+
+        let names: Vec<&str> = attempts.iter().map(|a| a.source).collect();
+        assert_eq!(
+            names,
+            vec!["datacite", "europe-pmc", "openaire", "hal", "core"],
+            "the trace must list every source, in chain order"
+        );
+        for a in &attempts {
+            assert!(
+                a.outcome.was_consulted(),
+                "{} was NOT reached by the production chain: {:?}",
+                a.source,
+                a.outcome
+            );
+        }
+        assert_eq!(
+            server.received_requests().await.expect("recorded").len(),
+            5,
+            "each enabled source must issue exactly one request"
+        );
+    }
+
+    /// The distinction the trace exists for: flags off means **no request
+    /// is made at all**, and the trace says so in a way that cannot be
+    /// confused with an empty result.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn flags_off_means_never_consulted_and_says_which_var_to_set() {
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+        let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("doi"));
+        let mut fields = CrossrefFields::default();
+        let mut attempts = Vec::new();
+
+        resolve_optional_chain(&ref_, &all_off(), &ctx, false, &mut fields, &mut attempts).await;
+
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded")
+                .is_empty(),
+            "a disabled chain must make NO request"
+        );
+        assert!(
+            nothing_was_consulted(&attempts),
+            "the trace must report that nothing was reached"
+        );
+        assert_eq!(
+            outcome(&attempts, "hal"),
+            &AttemptOutcome::Disabled {
+                env: "DOIGET_ENABLE_HAL"
+            },
+            "a disabled source must name the variable that enables it"
+        );
+        let rendered = render_attempts(&attempts);
+        assert!(
+            rendered.contains("not consulted (set DOIGET_ENABLE_HAL to enable)"),
+            "rendered trace must be actionable; got:\n{rendered}"
+        );
+    }
+
+    /// The two states that used to be indistinguishable, side by side.
+    /// If this ever passes with both rendering the same string, the whole
+    /// mechanism is worthless.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn never_consulted_and_consulted_but_empty_render_differently() {
+        // (a) consulted, empty.
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"results":[]}"#))
+            .mount(&server)
+            .await;
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+        let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("doi"));
+        let mut f1 = CrossrefFields::default();
+        let mut consulted = Vec::new();
+        let mut on = all_off();
+        on.metadata.datacite = true;
+        resolve_optional_chain(&ref_, &on, &ctx, false, &mut f1, &mut consulted).await;
+
+        // (b) never consulted.
+        let mut f2 = CrossrefFields::default();
+        let mut skipped = Vec::new();
+        resolve_optional_chain(&ref_, &all_off(), &ctx, false, &mut f2, &mut skipped).await;
+
+        let a = outcome(&consulted, "datacite");
+        let b = outcome(&skipped, "datacite");
+        assert!(a.was_consulted(), "(a) must be consulted, got {a:?}");
+        assert!(!b.was_consulted(), "(b) must NOT be consulted, got {b:?}");
+        assert_ne!(
+            a.render(),
+            b.render(),
+            "the two states MUST NOT render identically"
+        );
+        assert!(a.render().starts_with("consulted:"), "{}", a.render());
+        assert!(b.render().starts_with("not consulted"), "{}", b.render());
+    }
+
+    /// When Crossref already answered, the chain must not fire at all —
+    /// and must say why, rather than looking like everything was disabled.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_crossref_hit_skips_the_chain_without_pretending_it_was_disabled() {
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+        let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("doi"));
+        let mut fields = CrossrefFields::default();
+        let mut attempts = Vec::new();
+
+        resolve_optional_chain(&ref_, &all_on(), &ctx, true, &mut fields, &mut attempts).await;
+
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded")
+                .is_empty(),
+            "a Crossref hit must cost no extra requests"
+        );
+        for a in &attempts {
+            assert_eq!(
+                a.outcome,
+                AttemptOutcome::NotNeeded,
+                "{} must be NotNeeded, not Disabled — the flags ARE on",
+                a.source
+            );
+        }
+    }
+
+    /// An access refusal is not a miss. OpenAIRE / Europe PMC / HAL all
+    /// report "found it, cannot give it to you" — that must not be recorded
+    /// as `NoRecord`, or the operator concludes the paper does not exist.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn an_access_refusal_is_recorded_distinctly_from_a_miss() {
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"resultList":{"result":[{"doi":"10.1234/x","isOpenAccess":"N","inEPMC":"Y"}]}}"#,
+            ))
+            .mount(&server)
+            .await;
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+        let ref_ = Ref::Doi(Doi::parse("10.1234/x").expect("doi"));
+        let mut fields = CrossrefFields::default();
+        let mut attempts = Vec::new();
+        let mut on = all_off();
+        on.metadata.europe_pmc = true;
+
+        resolve_optional_chain(&ref_, &on, &ctx, false, &mut fields, &mut attempts).await;
+
+        let o = outcome(&attempts, "europe-pmc");
+        assert!(
+            matches!(o, AttemptOutcome::NotOpenAccess { .. }),
+            "a closed record must be NotOpenAccess, not NoRecord/Failed; got {o:?}"
+        );
+        assert!(o.was_consulted(), "it WAS reached");
+        assert!(
+            o.render().contains("not open access"),
+            "the reason must survive into the message; got {}",
+            o.render()
+        );
+    }
+
+    /// A source that cannot serve the ref kind is not a misconfiguration,
+    /// so it must not tell the user to set an env var that would not help.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn an_arxiv_ref_is_not_applicable_rather_than_disabled() {
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+        let ref_ = Ref::Arxiv(crate::ArxivId::parse("2401.12345").expect("arxiv"));
+        let mut fields = CrossrefFields::default();
+        let mut attempts = Vec::new();
+
+        resolve_optional_chain(&ref_, &all_on(), &ctx, false, &mut fields, &mut attempts).await;
+
+        for a in &attempts {
+            assert_eq!(
+                a.outcome,
+                AttemptOutcome::NotApplicable,
+                "{} must be NotApplicable for an arXiv ref",
+                a.source
+            );
+            assert!(
+                !a.outcome.render().contains("set DOIGET_"),
+                "must not suggest a variable that would not help: {}",
+                a.outcome.render()
+            );
+        }
+        assert!(server
+            .received_requests()
+            .await
+            .expect("recorded")
+            .is_empty());
     }
 }

@@ -379,9 +379,14 @@ pub fn academic_repo_hosts() -> Vec<UserExtensionHost> {
 ///
 /// Why this exists: the default allowlist covers publishers, so a Green-OA
 /// copy on an institutional repository was reachable behind one flag while
-/// a Gold-OA article routed through DOAJ was not reachable at all. For an
-/// open-access tool that polarity is backwards — `10.1109/access.2024.3495502`
-/// (IEEE Access, gold OA) is denied at `doaj.org` on a stock install.
+/// cross-publisher OA registries were not reachable at all.
+///
+/// DOAJ is deliberately NOT in this set. ADR-0037 promoted `doaj.org` to the
+/// default `oa_publisher_allowlist` unconditionally, because the project had
+/// already trusted it under the `"doaj"` metadata key and the two keys simply
+/// disagreed. The hosts below are different: none of them appears anywhere in
+/// `http.rs`, so for them this flag is genuinely new trust and opt-in is
+/// correct.
 ///
 /// Every entry is a registry or repository whose *purpose* is open
 /// distribution, not a publisher platform — enabling this must not become
@@ -391,8 +396,6 @@ pub fn academic_repo_hosts() -> Vec<UserExtensionHost> {
 /// redirect in #405 targeted the bare apex.
 pub fn oa_registry_hosts() -> Vec<UserExtensionHost> {
     const PATTERNS: &[(&str, &str)] = &[
-        ("doaj.org", "DOAJ — Directory of Open Access Journals"),
-        ("*.doaj.org", "DOAJ subdomains"),
         ("scielo.org", "SciELO — Latin American / Iberian OA network"),
         ("*.scielo.org", "SciELO national portals"),
         ("*.scielo.br", "SciELO Brazil"),
@@ -1031,7 +1034,7 @@ host = "*.uj.edu.pl"
         );
         for h in &hosts {
             // Every entry must survive the ADR-0028 D2-1 validator. Unlike
-            // the academic set these include bare apexes (`doaj.org`), so
+            // the academic set these include bare apexes (`osf.io`), so
             // the assertion is validity, not wildcard shape.
             validate_pattern(h.host.as_str()).unwrap_or_else(|e| {
                 panic!("invalid OA registry pattern {}: {e:?}", h.host.as_str())
@@ -1044,14 +1047,26 @@ host = "*.uj.edu.pl"
         }
     }
 
-    /// The denial that motivated #405 targeted the bare apex `doaj.org`.
-    /// A single-suffix wildcard does not match an apex, so the apex MUST be
-    /// listed separately or the flag would not fix the reported case.
+    /// ADR-0037 moved DOAJ out of this set and into the DEFAULT
+    /// `oa_publisher_allowlist`, so the flag must NOT carry it — otherwise
+    /// the two places disagree again, in the other direction.
     #[test]
-    fn oa_registry_hosts_cover_the_doaj_apex_that_motivated_405() {
+    fn oa_registry_hosts_exclude_doaj_which_is_now_a_default() {
         let hosts = oa_registry_hosts();
         let patterns: Vec<&str> = hosts.iter().map(|h| h.host.as_str()).collect();
-        for expected in &["doaj.org", "*.doaj.org", "scielo.org", "zenodo.org"] {
+        for gone in &["doaj.org", "*.doaj.org"] {
+            assert!(
+                !patterns.contains(gone),
+                "{gone} belongs to oa_publisher_allowlist since ADR-0037, not to this flag;                  got {patterns:?}"
+            );
+        }
+        for expected in &[
+            "scielo.org",
+            "zenodo.org",
+            "osf.io",
+            "hal.science",
+            "core.ac.uk",
+        ] {
             assert!(
                 patterns.contains(expected),
                 "expected OA registry pattern {expected} not found in {patterns:?}"
