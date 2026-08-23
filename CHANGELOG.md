@@ -10,6 +10,20 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.8-beta.8] - 2026-08-23
+
+### Added
+- **[source]** **Europe PMC** — biomedical OA full text that Unpaywall does not
+  index, opt-in via `DOIGET_ENABLE_EUROPE_PMC` (#415). Completes the #413 epic.
+  Gated on `isOpenAccess`, deliberately **not** `inEPMC`: a record can be present
+  in the archive while its full text is subscription-only, and gating on presence
+  would return records doiget cannot retrieve. A non-OA hit is an explicit refusal
+  naming both flags, not a retry. `resultType=core` is requested because the
+  default `lite` response omits `fullTextUrlList`, which is the point of consulting
+  the source. The OA PDF location is surfaced from `fullTextUrlList`; the download
+  itself goes through the existing `oa-publisher` leg, where a blocked fetch
+  already surfaces with an ADR-0023 `denial_context` naming the host and allowlist.
+
 ## [0.8.8-beta.7] - 2026-08-23
 
 ### Added

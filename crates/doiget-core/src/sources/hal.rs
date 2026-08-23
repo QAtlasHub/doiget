@@ -330,6 +330,7 @@ mod tests {
             hal,
             openaire: false,
             core: false,
+            europe_pmc: false,
         };
         p
     }
