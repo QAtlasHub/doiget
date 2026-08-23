@@ -450,6 +450,7 @@ mod tests {
             datacite: false,
             hal: false,
             openaire: false,
+            core: false,
         };
         p
     }

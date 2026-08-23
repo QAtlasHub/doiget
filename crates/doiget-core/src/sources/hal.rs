@@ -329,6 +329,7 @@ mod tests {
             datacite: false,
             hal,
             openaire: false,
+            core: false,
         };
         p
     }

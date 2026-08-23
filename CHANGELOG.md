@@ -10,6 +10,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.8-beta.7] - 2026-08-23
+
+### Added
+- **[source]** **CORE** — cross-repository OA aggregation, opt-in via
+  `DOIGET_ENABLE_CORE` (#417). The broadest single OA index outside Unpaywall, so
+  it sits last in the optional chain. An **optional** free key in
+  `DOIGET_CORE_API_KEY` raises the rate limit; absent — or blank — it degrades to
+  the key-less limit rather than failing. No key is bundled and none is needed to
+  build. A rejected key surfaces as a transport error carrying the 401/403, which
+  is a different error *type* from the `NOT_FOUND` a genuine miss produces, so a
+  misconfigured key cannot be mistaken for an absent paper.
+
 ## [0.8.8-beta.6] - 2026-08-23
 
 ### Added

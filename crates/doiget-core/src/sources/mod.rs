@@ -4,7 +4,7 @@
 //!
 //! - Tier 1 (Open Access, always compiled in): Crossref / Unpaywall / arXiv.
 //! - Tier 2 (metadata enrichment, Phase 4, behind the `metadata` Cargo
-//!   feature): OpenAlex / Semantic Scholar / DOAJ / DataCite / HAL / OpenAIRE.
+//!   feature): OpenAlex / Semantic Scholar / DOAJ / DataCite / HAL / OpenAIRE / CORE.
 //! - Tier 3 (TDM, Phase 5, behind per-publisher Cargo features):
 //!   Springer Nature OA / APS Harvest / Elsevier ScienceDirect.
 
@@ -44,6 +44,15 @@ pub mod hal;
 /// Runtime-gated by `DOIGET_ENABLE_OPENAIRE`, off by default (#416).
 #[cfg(feature = "metadata")]
 pub mod openaire;
+
+/// CORE — cross-repository OA aggregation, the broadest single OA index
+/// outside Unpaywall and therefore the LAST fallback in the chain. Takes
+/// an optional free key from `DOIGET_CORE_API_KEY`; absent, it degrades
+/// to the key-less rate limit. Runtime-gated by `DOIGET_ENABLE_CORE`,
+/// off by default (#417). Named `core_oa` because `core` is a built-in
+/// crate name.
+#[cfg(feature = "metadata")]
+pub mod core_oa;
 
 // ---------------------------------------------------------------------------
 // Tier 3 (Phase 5) — compile-gated by per-publisher Cargo features.

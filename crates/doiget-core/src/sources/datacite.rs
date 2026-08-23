@@ -308,6 +308,7 @@ mod tests {
             datacite,
             hal: false,
             openaire: false,
+            core: false,
         };
         p
     }

@@ -259,6 +259,8 @@ pub fn tier_2_allowlist() -> Vec<SourceAllowlist> {
         // endpoint on the same host is unstable (503s) and deliberately
         // unused; only the Graph path is called.
         SourceAllowlist::new("openaire", vec!["api.openaire.eu".to_string()]),
+        // CORE REST v3 (#417). Optional bearer key; same host either way.
+        SourceAllowlist::new("core", vec!["api.core.ac.uk".to_string()]),
     ]
 }
 
@@ -1427,6 +1429,7 @@ mod tests {
         let datacite = crate::sources::datacite::DataCiteSource::new();
         let hal = crate::sources::hal::HalSource::new();
         let openaire = crate::sources::openaire::OpenAireSource::new();
+        let core = crate::sources::core_oa::CoreSource::new();
         let names: Vec<&str> = vec![
             openalex.name(),
             s2.name(),
@@ -1434,6 +1437,7 @@ mod tests {
             datacite.name(),
             hal.name(),
             openaire.name(),
+            core.name(),
         ];
         let registered: Vec<String> = tier_2_allowlist()
             .iter()
