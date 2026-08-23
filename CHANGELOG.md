@@ -12,6 +12,27 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [0.8.8] - 2026-08-23
 
+### Fixed
+- **[source]** The five optional sources are now **actually reached**. DataCite was
+  wired into the DOI fan-out; Europe PMC, OpenAIRE, HAL and CORE were not called by
+  anything, so setting `DOIGET_ENABLE_HAL` (and the other three) was a silent no-op.
+  Every source unit test passed because each drove its own `Source` impl directly —
+  nothing asserted that the production path reached them (#413).
+- **[source]** Optional sources honour `DOIGET_<NAME>_BASE` overrides, mirroring
+  `DOIGET_CROSSREF_BASE`. Without this the chain could only ever talk to production,
+  which is *why* it shipped unreachable: no test could point it anywhere, so no test
+  could prove reachability.
+
+### Added
+- **[core]** A resolution trace. Every optional source records a `SourceAttempt`
+  — including the ones **not** consulted — distinguishing "not consulted (set
+  `DOIGET_ENABLE_X` to enable)", "not consulted (an earlier source answered)", "not
+  consulted (cannot serve this ref kind)", "consulted: no record", "consulted: found,
+  not open access", and "consulted: failed". A DOI that resolves nowhere now reports
+  which of those happened, per source, instead of returning the bare Crossref error.
+  "We asked and it had nothing" and "we never asked" are different problems with
+  different fixes, and were previously the same observable (#413).
+
 Five opt-in OA sources, a config-file generator, and four architecture decisions.
 The optional source surface roughly doubles — DataCite, Europe PMC, OpenAIRE, CORE
 and HAL — while the default binary is byte-identical to 0.8.7: every source is
