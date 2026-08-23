@@ -4,7 +4,7 @@
 //!
 //! - Tier 1 (Open Access, always compiled in): Crossref / Unpaywall / arXiv.
 //! - Tier 2 (metadata enrichment, Phase 4, behind the `metadata` Cargo
-//!   feature): OpenAlex / Semantic Scholar / DOAJ / DataCite / HAL / OpenAIRE / CORE.
+//!   feature): OpenAlex / Semantic Scholar / DOAJ / DataCite / HAL / OpenAIRE / CORE / Europe PMC.
 //! - Tier 3 (TDM, Phase 5, behind per-publisher Cargo features):
 //!   Springer Nature OA / APS Harvest / Elsevier ScienceDirect.
 
@@ -53,6 +53,13 @@ pub mod openaire;
 /// crate name.
 #[cfg(feature = "metadata")]
 pub mod core_oa;
+
+/// Europe PMC — biomedical OA full text the Crossref-centric Unpaywall
+/// index misses. OA subset only (`isOpenAccess`, not `inEPMC`); the PDF
+/// it points at is fetched by the existing `oa-publisher` leg, not here.
+/// Runtime-gated by `DOIGET_ENABLE_EUROPE_PMC`, off by default (#415).
+#[cfg(feature = "metadata")]
+pub mod europepmc;
 
 // ---------------------------------------------------------------------------
 // Tier 3 (Phase 5) — compile-gated by per-publisher Cargo features.

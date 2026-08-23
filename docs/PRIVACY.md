@@ -57,6 +57,9 @@ its use of these APIs polite.
   aggregation). Inert until `DOIGET_ENABLE_CORE` is set. Works with no account; if
   you supply your own free key in `DOIGET_CORE_API_KEY` it is sent as a bearer
   header to CORE and to nowhere else, and is never written to the provenance log.
+- `--features metadata`: **Europe PMC** (<https://www.ebi.ac.uk>, biomedical OA full
+  text). Inert until `DOIGET_ENABLE_EUROPE_PMC` is set; queried by exact DOI only.
+  No key or account.
 - `--features tdm-springer | tdm-aps | tdm-elsevier`: the respective publisher
   text-and-data-mining APIs, used **only with your own API key and explicit
   agreement**. doiget bundles no keys and shares none.

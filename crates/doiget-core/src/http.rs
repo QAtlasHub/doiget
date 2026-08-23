@@ -261,6 +261,10 @@ pub fn tier_2_allowlist() -> Vec<SourceAllowlist> {
         SourceAllowlist::new("openaire", vec!["api.openaire.eu".to_string()]),
         // CORE REST v3 (#417). Optional bearer key; same host either way.
         SourceAllowlist::new("core", vec!["api.core.ac.uk".to_string()]),
+        // Europe PMC REST (#415). This is the EBI API host; the OA PDF it
+        // points at lives on `europepmc.org`, which is already on the
+        // `oa-publisher` key and is where the download actually happens.
+        SourceAllowlist::new("europe-pmc", vec!["www.ebi.ac.uk".to_string()]),
     ]
 }
 
@@ -1430,6 +1434,7 @@ mod tests {
         let hal = crate::sources::hal::HalSource::new();
         let openaire = crate::sources::openaire::OpenAireSource::new();
         let core = crate::sources::core_oa::CoreSource::new();
+        let epmc = crate::sources::europepmc::EuropePmcSource::new();
         let names: Vec<&str> = vec![
             openalex.name(),
             s2.name(),
@@ -1438,6 +1443,7 @@ mod tests {
             hal.name(),
             openaire.name(),
             core.name(),
+            epmc.name(),
         ];
         let registered: Vec<String> = tier_2_allowlist()
             .iter()

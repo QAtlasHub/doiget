@@ -352,6 +352,7 @@ mod tests {
             hal: false,
             openaire,
             core: false,
+            europe_pmc: false,
         };
         p
     }

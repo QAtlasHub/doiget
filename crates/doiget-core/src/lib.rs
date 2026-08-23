@@ -941,6 +941,9 @@ pub struct MetadataAccess {
     /// key in `DOIGET_CORE_API_KEY` raises the rate limit but is not
     /// required (ADR-0040, #417).
     pub core: bool,
+    /// Europe PMC — biomedical OA full text that Unpaywall does not index;
+    /// enabled by `DOIGET_ENABLE_EUROPE_PMC` (ADR-0040, #415).
+    pub europe_pmc: bool,
 }
 
 /// Process-wide rate limits. Hard-coded; not configurable.
@@ -1185,6 +1188,11 @@ impl CapabilityProfile {
             ),
             core: resolve_metadata_flag(
                 "DOIGET_ENABLE_CORE",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            europe_pmc: resolve_metadata_flag(
+                "DOIGET_ENABLE_EUROPE_PMC",
                 "metadata",
                 cfg!(feature = "metadata"),
             ),
