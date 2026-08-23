@@ -124,6 +124,19 @@ pub struct Doi(pub(crate) String);
 pub struct ArxivId(pub(crate) String);
 
 impl Doi {
+    /// The DOI registrant prefix — everything before the first `/`, e.g.
+    /// `"10.1103"` for `10.1103/PhysRevLett.116.061102`.
+    ///
+    /// Used to scope publisher-specific Tier-3 TDM sources to the DOIs
+    /// their publisher actually registered (#442). `Doi` is only ever
+    /// constructed through [`Doi::parse`], which requires the
+    /// `10.<registrant>/<suffix>` shape, so the `/` is always present;
+    /// the fallback returns the whole string rather than panicking.
+    #[must_use]
+    pub fn prefix(&self) -> &str {
+        self.0.split_once('/').map_or(self.0.as_str(), |(p, _)| p)
+    }
+
     /// Returns the DOI as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0

@@ -6,8 +6,11 @@ name: coverage
 # `build (zola)`); a Codecov hiccup must not block a merge, so the upload
 # is `fail_ci_if_error: false`. Runs on every PR and on pushes to the two
 # long-lived lanes (`main`, `next`) so Codecov has a base to diff PRs
-# against. Default features only (`oa-only`); the feature-gated Tier-3 TDM
-# code is intentionally outside the default coverage surface.
+# against. Covers `oa-only` plus the Tier-3 TDM features: that code used to
+# be excluded as "not the default surface", which held while nothing called
+# it. Since #442 wired it into the production fetch path it is ordinary
+# reachable code, and leaving it out would report new Tier-3 lines as
+# uncovered while never measuring the tests that do cover them.
 #
 # All third-party Actions are SHA-pinned (repo invariant, ADR-0013):
 # checkout / rust-toolchain / rust-cache reuse the SHAs already pinned in
@@ -36,7 +39,7 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - name: Generate workspace coverage (lcov)
-        run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --locked --features tdm-aps,tdm-elsevier,tdm-springer --lcov --output-path lcov.info
       - name: Upload to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
         with:

@@ -71,6 +71,28 @@ use crate::{CapabilityProfile, Ref};
 /// Production Springer Nature TDM API base URL.
 const DEFAULT_BASE: &str = "https://api.springernature.com";
 
+/// DOI registrant prefixes Springer Nature actually owns.
+///
+/// #442: without this the source answered `can_serve` for ANY DOI, so
+/// wiring it into the chain would have sent every lookup — including
+/// DOIs belonging to other publishers — to Springer Nature. That is a
+/// politeness problem (`docs/SOURCES.md` §6) and a privacy one
+/// (`docs/PRIVACY.md`): it would disclose the user's whole reading list
+/// to a publisher who has no part in it.
+///
+/// Scoped to the DOIs this publisher registered, the disclosure is
+/// nil — resolving such a DOI goes through them anyway.
+///
+/// Verified against the Crossref registrant registry
+/// (`api.crossref.org/prefixes/<prefix>`) on 2026-08-23.
+/// `10.1007` is Springer proper, `10.1038` Nature, `10.1057` Palgrave Macmillan, `10.1140` the European Physical Journal.
+///
+/// Deliberately conservative: a publisher may own prefixes not listed
+/// here. A miss is not silent — it is recorded in the attempt trace as
+/// `not consulted (DOI prefix ... is not ...)`, so it is diagnosable
+/// from the error message rather than looking like a lookup failure.
+pub(crate) const PUBLISHER_PREFIXES: &[&str] = &["10.1007", "10.1038", "10.1057", "10.1140"];
+
 /// The `api_key` query-parameter name Springer Nature expects, and the
 /// value it is replaced with in any URL that leaves this module bound
 /// for a log or recorded-provenance sink (issue #146).
@@ -164,7 +186,14 @@ impl Source for TdmSpringerSource {
     }
 
     fn can_serve(&self, profile: &CapabilityProfile, ref_: &Ref) -> bool {
-        profile.tdm_springer.is_some() && matches!(ref_, Ref::Doi(_))
+        let Ref::Doi(doi) = ref_ else {
+            return false;
+        };
+        // Both halves matter: the grant is the user's opt-in, the prefix
+        // keeps that opt-in from leaking unrelated DOIs to the publisher
+        // (#442). The orchestrator checks the same two conditions so it
+        // can tell them apart in the trace; this is the defensive mirror.
+        profile.tdm_springer.is_some() && PUBLISHER_PREFIXES.contains(&doi.prefix())
     }
 
     async fn fetch(
@@ -289,10 +318,10 @@ mod tests {
 
     const SAMPLE_ENVELOPE_HIT: &str = r#"{
         "apiMessage": "ok",
-        "query": "doi:10.1234/example",
+        "query": "doi:10.1007/example",
         "records": [
             {
-                "identifier": "doi:10.1234/example",
+                "identifier": "doi:10.1007/example",
                 "title": "Example Springer OA Article",
                 "publicationName": "Example Journal",
                 "openaccess": "true"
@@ -302,7 +331,7 @@ mod tests {
 
     const SAMPLE_ENVELOPE_EMPTY: &str = r#"{
         "apiMessage": "ok",
-        "query": "doi:10.1234/example",
+        "query": "doi:10.1007/example",
         "records": []
     }"#;
 
@@ -363,7 +392,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/openaccess/json"))
-            .and(query_param("q", "doi:10.1234/example"))
+            .and(query_param("q", "doi:10.1007/example"))
             .and(query_param("api_key", TEST_KEY))
             .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_ENVELOPE_HIT))
             .mount(&server)
@@ -373,7 +402,7 @@ mod tests {
         let src =
             TdmSpringerSource::with_base(Url::parse(&server.uri()).expect("wiremock URI parses"));
         let profile = profile_with_springer_grant();
-        let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("DOI parses"));
+        let ref_ = Ref::Doi(Doi::parse("10.1007/example").expect("DOI parses"));
 
         // Key comes from the grant now — no env var is touched.
         let result = src.fetch(&ref_, &profile, &ctx).await.expect("fetch ok");
@@ -402,7 +431,7 @@ mod tests {
         let (_td, ctx) = build_test_context("http://127.0.0.1:1");
         let src = TdmSpringerSource::with_base(Url::parse("http://127.0.0.1:1").expect("parses"));
         let profile = profile_with_empty_key_grant();
-        let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("DOI parses"));
+        let ref_ = Ref::Doi(Doi::parse("10.1007/example").expect("DOI parses"));
 
         let err = src
             .fetch(&ref_, &profile, &ctx)
@@ -438,7 +467,7 @@ mod tests {
         let (_td, ctx) = build_test_context("http://127.0.0.1:1");
         let src = TdmSpringerSource::with_base(Url::parse("http://127.0.0.1:1").expect("parses"));
         let profile = CapabilityProfile::from_env().expect("clean env never errors");
-        let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("DOI parses"));
+        let ref_ = Ref::Doi(Doi::parse("10.1007/example").expect("DOI parses"));
 
         assert!(
             !src.can_serve(&profile, &ref_),
@@ -465,11 +494,40 @@ mod tests {
         let src =
             TdmSpringerSource::with_base(Url::parse(&server.uri()).expect("wiremock URI parses"));
         let profile = profile_with_springer_grant();
-        let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("DOI parses"));
+        let ref_ = Ref::Doi(Doi::parse("10.1007/example").expect("DOI parses"));
 
         let result = src.fetch(&ref_, &profile, &ctx).await;
 
         let err = result.expect_err("empty records must surface as SourceSchema");
         assert!(matches!(err, FetchError::SourceSchema { .. }));
+    }
+    /// #442: the grant is the user's opt-in; the prefix keeps that opt-in
+    /// from disclosing unrelated DOIs to Springer Nature. Asserted with the grant
+    /// PRESENT so the prefix is the only thing under test — otherwise a
+    /// false `can_serve` would prove nothing about scoping.
+    #[test]
+    fn can_serve_is_scoped_to_this_publishers_prefixes() {
+        let src = TdmSpringerSource::new();
+        let profile = profile_with_springer_grant();
+
+        let own = Ref::Doi(Doi::parse("10.1007/example").expect("DOI parses"));
+        assert!(
+            src.can_serve(&profile, &own),
+            "must serve its own publisher's DOI when the grant is present"
+        );
+
+        let foreign = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("DOI parses"));
+        assert!(
+            !src.can_serve(&profile, &foreign),
+            "must NOT serve a APS DOI even with a valid grant -- that              would disclose an unrelated lookup to Springer Nature"
+        );
+
+        for p in PUBLISHER_PREFIXES {
+            let doi = Doi::parse(&format!("{p}/probe")).expect("DOI parses");
+            assert!(
+                src.can_serve(&profile, &Ref::Doi(doi)),
+                "declared prefix {p} must be served"
+            );
+        }
     }
 }

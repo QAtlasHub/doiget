@@ -150,6 +150,34 @@ Each requires:
 If any of the three is missing, the source is unavailable at runtime
 ([`CAPABILITY.md`](CAPABILITY.md) §2).
 
+**Scoped to the publisher's own DOIs.** A TDM source is consulted only for DOI
+prefixes its publisher registered (ADR-0041). Enabling `tdm-aps` does not send
+your Elsevier lookups to APS.
+
+| feature | DOI prefixes consulted |
+|---|---|
+| `tdm-aps` | `10.1103` |
+| `tdm-elsevier` | `10.1016`, `10.1006`, `10.1053` |
+| `tdm-springer` | `10.1007`, `10.1038`, `10.1057`, `10.1140` |
+
+The lists are deliberately conservative, so a publisher may own a prefix not
+listed. That is visible rather than silent: the fetch error names it, as
+`not consulted (DOI prefix 10.xxxx is not <publisher>)`.
+
+**When they run.** Strictly after Crossref, and only when Crossref produced
+nothing — the same rule the Tier-2 chain follows, so enabling a TDM source can
+never change a resolution that already works. Within that step, TDM runs before
+the Tier-2 OA aggregators: for a DOI its publisher registered, the publisher's
+own API is the authoritative record.
+
+Every outcome, consulted or not, is recorded in the attempt trace attached to a
+failed fetch, so "asked and had nothing" is always distinguishable from "never
+asked" and from "wrong publisher".
+
+**Pointing them elsewhere.** `DOIGET_APS_BASE`, `DOIGET_ELSEVIER_BASE` and
+`DOIGET_SPRINGER_BASE` override the API base, mirroring `DOIGET_CROSSREF_BASE`.
+Intended for tests and for institutional proxies.
+
 ## 5. Adding a new source
 
 A new source addition requires:

@@ -62,7 +62,12 @@ its use of these APIs polite.
   No key or account.
 - `--features tdm-springer | tdm-aps | tdm-elsevier`: the respective publisher
   text-and-data-mining APIs, used **only with your own API key and explicit
-  agreement**. doiget bundles no keys and shares none.
+  agreement**. doiget bundles no keys and shares none. Each is consulted **only
+  for DOI prefixes that publisher registered** (ADR-0041) — enabling `tdm-aps`
+  does not disclose your Elsevier or IEEE lookups to APS — and only after
+  Crossref failed to resolve the DOI. Since a publisher is asked only about DOIs
+  it issued, and resolving such a DOI goes through it anyway, enabling one of
+  these tells that publisher nothing it could not already observe.
 
 ## What is stored locally
 
