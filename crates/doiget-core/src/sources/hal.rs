@@ -328,6 +328,7 @@ mod tests {
             doaj: false,
             datacite: false,
             hal,
+            openaire: false,
         };
         p
     }

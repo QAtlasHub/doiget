@@ -10,6 +10,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.8-beta.6] - 2026-08-23
+
+### Added
+- **[source]** **OpenAIRE** — European institutional / funder repository
+  aggregation, opt-in via `DOIGET_ENABLE_OPENAIRE` (#416). Uses the **Graph API
+  v1**; the legacy `/search/publications` endpoint is unstable (503s were measured
+  in #416) and is deliberately not wired. Unlike the pure-OA sources, OpenAIRE
+  aggregates records with **mixed access rights**, so a hit is not evidence of
+  availability: only a COAR `c_abf2` (OPEN) `bestAccessRight` is accepted, judged
+  on the code rather than the human-readable label, and an absent field counts as
+  not open.
+
 ## [0.8.8-beta.5] - 2026-08-23
 
 ### Added

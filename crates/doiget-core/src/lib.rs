@@ -933,6 +933,9 @@ pub struct MetadataAccess {
     /// CS deposits that Crossref-centric indexes miss; enabled by
     /// `DOIGET_ENABLE_HAL` (ADR-0040, #418).
     pub hal: bool,
+    /// OpenAIRE — European institutional / funder repository aggregation;
+    /// enabled by `DOIGET_ENABLE_OPENAIRE` (ADR-0040, #416).
+    pub openaire: bool,
 }
 
 /// Process-wide rate limits. Hard-coded; not configurable.
@@ -1170,6 +1173,11 @@ impl CapabilityProfile {
                 cfg!(feature = "metadata"),
             ),
             hal: resolve_metadata_flag("DOIGET_ENABLE_HAL", "metadata", cfg!(feature = "metadata")),
+            openaire: resolve_metadata_flag(
+                "DOIGET_ENABLE_OPENAIRE",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
         };
 
         // -- Tier 3 TDM grants ----------------------------------------------
