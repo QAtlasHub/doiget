@@ -3390,7 +3390,12 @@ pub fn nothing_was_consulted(attempts: &[SourceAttempt]) -> bool {
 /// Keeps the classification in one place so every source in the chain
 /// reports the same way: a clean miss must not be recorded as a failure,
 /// and an access refusal must not be recorded as a miss.
-#[cfg(any(feature = "metadata", feature = "tdm-elsevier", feature = "tdm-aps", feature = "tdm-springer"))]
+#[cfg(any(
+    feature = "metadata",
+    feature = "tdm-elsevier",
+    feature = "tdm-aps",
+    feature = "tdm-springer"
+))]
 fn classify_attempt(e: &FetchError) -> AttemptOutcome {
     match e {
         FetchError::NotFound { .. } => AttemptOutcome::NoRecord,
@@ -3411,7 +3416,12 @@ fn classify_attempt(e: &FetchError) -> AttemptOutcome {
 
 /// Whether a `SourceSchema` hint describes an access refusal rather than a
 /// malformed response.
-#[cfg(any(feature = "metadata", feature = "tdm-elsevier", feature = "tdm-aps", feature = "tdm-springer"))]
+#[cfg(any(
+    feature = "metadata",
+    feature = "tdm-elsevier",
+    feature = "tdm-aps",
+    feature = "tdm-springer"
+))]
 fn is_access_refusal(hint: &str) -> bool {
     hint.contains("not open access") || hint.contains("openAccess")
 }
@@ -3544,7 +3554,11 @@ async fn resolve_optional_chain(
 /// returns its own shape and guessing a mapping risks a wrong title,
 /// which is worse than a missing one — the same stance the OA
 /// aggregators take. The payload is returned as `metadata_json` only.
-#[cfg(any(feature = "tdm-elsevier", feature = "tdm-aps", feature = "tdm-springer"))]
+#[cfg(any(
+    feature = "tdm-elsevier",
+    feature = "tdm-aps",
+    feature = "tdm-springer"
+))]
 // `chain` is built by `#[cfg]`-gated pushes rather than a `vec![]`
 // literal: an attribute per element inside a vec literal is not
 // expressible, and which entries exist depends on the feature set.
@@ -3645,9 +3659,7 @@ async fn resolve_tdm_chain(
         if !e.src.can_serve(profile, ref_) {
             attempts.push(SourceAttempt::new(
                 e.name,
-                AttemptOutcome::Disabled {
-                    env: e.enable_hint,
-                },
+                AttemptOutcome::Disabled { env: e.enable_hint },
             ));
             continue;
         }
@@ -3668,7 +3680,12 @@ async fn resolve_tdm_chain(
 
 /// Read a `DOIGET_*_BASE` override, warning rather than failing on a
 /// malformed value — a bad override must not take the source offline.
-#[cfg(any(feature = "metadata", feature = "tdm-elsevier", feature = "tdm-aps", feature = "tdm-springer"))]
+#[cfg(any(
+    feature = "metadata",
+    feature = "tdm-elsevier",
+    feature = "tdm-aps",
+    feature = "tdm-springer"
+))]
 fn optional_base(env: &str) -> Option<url::Url> {
     let raw = std::env::var(env).ok()?;
     match url::Url::parse(&raw) {
@@ -4406,5 +4423,4 @@ mod tdm_chain_tests {
 {hint}"
         );
     }
-
 }
