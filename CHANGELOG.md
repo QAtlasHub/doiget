@@ -10,7 +10,12 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
-## [0.8.8-beta.8] - 2026-08-23
+## [0.8.8] - 2026-08-23
+
+Five opt-in OA sources, a config-file generator, and four architecture decisions.
+The optional source surface roughly doubles — DataCite, Europe PMC, OpenAIRE, CORE
+and HAL — while the default binary is byte-identical to 0.8.7: every source is
+compiled in but inert until its own `DOIGET_ENABLE_<NAME>` is set.
 
 ### Added
 - **[source]** **Europe PMC** — biomedical OA full text that Unpaywall does not
@@ -23,10 +28,6 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   the source. The OA PDF location is surfaced from `fullTextUrlList`; the download
   itself goes through the existing `oa-publisher` leg, where a blocked fetch
   already surfaces with an ADR-0023 `denial_context` naming the host and allowlist.
-
-## [0.8.8-beta.7] - 2026-08-23
-
-### Added
 - **[source]** **CORE** — cross-repository OA aggregation, opt-in via
   `DOIGET_ENABLE_CORE` (#417). The broadest single OA index outside Unpaywall, so
   it sits last in the optional chain. An **optional** free key in
@@ -35,10 +36,6 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   build. A rejected key surfaces as a transport error carrying the 401/403, which
   is a different error *type* from the `NOT_FOUND` a genuine miss produces, so a
   misconfigured key cannot be mistaken for an absent paper.
-
-## [0.8.8-beta.6] - 2026-08-23
-
-### Added
 - **[source]** **OpenAIRE** — European institutional / funder repository
   aggregation, opt-in via `DOIGET_ENABLE_OPENAIRE` (#416). Uses the **Graph API
   v1**; the legacy `/search/publications` endpoint is unstable (503s were measured
@@ -47,10 +44,6 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   availability: only a COAR `c_abf2` (OPEN) `bestAccessRight` is accepted, judged
   on the code rather than the human-readable label, and an absent field counts as
   not open.
-
-## [0.8.8-beta.5] - 2026-08-23
-
-### Added
 - **[source]** **HAL** — the French national OA repository, opt-in via
   `DOIGET_ENABLE_HAL` (#418). Holds author deposits in maths / physics / CS that
   Crossref-centric indexes miss. OA deposits only: a record whose
@@ -58,20 +51,6 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   entry resolving to no reachable text looks like a hit but is not one.
   Metadata-only; the `hal.science` content host is reached through
   `oa-publisher`, not this source key.
-
-### Fixed
-- **[source]** Register `datacite` in `tier_2_allowlist`. **DataCite shipped in
-  0.8.8-beta.4 with no transport allowlist entry, so a production fetch would have
-  failed `UnknownSource`.** Every unit test passed because they build their client
-  with `new_for_tests_allow_http("datacite", ..)`, which registers the key itself —
-  the tests could not see the gap. A new
-  `every_tier_2_source_has_a_transport_allowlist_entry` enumerates the Tier-2
-  sources against the allowlist so this cannot recur; removing an entry now fails
-  `cargo test`.
-
-## [0.8.8-beta.4] - 2026-08-22
-
-### Added
 - **[source]** **DataCite** DOI resolution, opt-in via `DOIGET_ENABLE_DATACITE`
   (#414, first of the #413 epic under ADR-0040). DataCite is the second large
   registration agency and Crossref/Unpaywall index neither its DOIs nor its
@@ -83,10 +62,6 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   cannot change any resolution that already works. `resourceTypeGeneral` is
   surfaced because most DataCite DOIs are not articles. Metadata only: DataCite
   returns a landing page, not a file, so no PDF is fetched.
-
-## [0.8.8-beta.3] - 2026-08-22
-
-### Added
 - **[cli]** `doiget config init` writes a fully commented `config.toml` template to
   the resolved config path. A fresh install has no config file, nothing created
   one, and three of the four settings that decide a session's outcome — store
@@ -95,8 +70,10 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   changing behaviour; each comment says what the default actually is, not just
   what the key is called. `--force` overwrites, and without it `init` refuses
   rather than replace a file that may hold a hand-written allowlist (#408).
-
-## [0.8.8-beta.2] - 2026-08-22
+- **[docs]** ADR-0037 (DOAJ on `oa-publisher`), ADR-0038 (store root stays
+  cwd-relative; 0036 reaffirmed against #406), ADR-0039 (IEEE / ACM / SIAM / AMS
+  stay off the allowlist; TDM credentials are the route, #407), ADR-0040 (source
+  expansion gated by `metadata`, #413).
 
 ### Changed
 - **[network]** `doaj.org` / `*.doaj.org` are on the **default** `oa-publisher`
@@ -115,15 +92,15 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   retrieval — with the runtime `DOIGET_ENABLE_<NAME>` flags, not the Cargo feature,
   as the boundary that keeps sources inert (ADR-0040, #413).
 
-### Added
-- **[docs]** ADR-0037 (DOAJ on `oa-publisher`), ADR-0038 (store root stays
-  cwd-relative; 0036 reaffirmed against #406), ADR-0039 (IEEE / ACM / SIAM / AMS
-  stay off the allowlist; TDM credentials are the route, #407), ADR-0040 (source
-  expansion gated by `metadata`, #413).
-
-## [0.8.8-beta.1] - 2026-08-22
-
 ### Fixed
+- **[source]** Register `datacite` in `tier_2_allowlist`. **DataCite shipped in
+  0.8.8-beta.4 with no transport allowlist entry, so a production fetch would have
+  failed `UnknownSource`.** Every unit test passed because they build their client
+  with `new_for_tests_allow_http("datacite", ..)`, which registers the key itself —
+  the tests could not see the gap. A new
+  `every_tier_2_source_has_a_transport_allowlist_entry` enumerates the Tier-2
+  sources against the allowlist so this cannot recur; removing an entry now fails
+  `cargo test`.
 - **[ci]** Add `.cargo/audit.toml` mirroring the `[advisories] ignore` list in
   `deny.toml`. The two tools do not share configuration — `cargo deny` reads
   `deny.toml`, `cargo audit` reads `.cargo/audit.toml` — so the already-assessed
