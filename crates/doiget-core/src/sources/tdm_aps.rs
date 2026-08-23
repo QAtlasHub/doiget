@@ -50,6 +50,28 @@ use crate::{CapabilityProfile, Ref};
 /// Production APS Harvest API base URL.
 const DEFAULT_BASE: &str = "https://harvest.aps.org";
 
+/// DOI registrant prefixes the American Physical Society actually owns.
+///
+/// #442: without this the source answered `can_serve` for ANY DOI, so
+/// wiring it into the chain would have sent every lookup — including
+/// DOIs belonging to other publishers — to the American Physical Society. That is a
+/// politeness problem (`docs/SOURCES.md` §6) and a privacy one
+/// (`docs/PRIVACY.md`): it would disclose the user's whole reading list
+/// to a publisher who has no part in it.
+///
+/// Scoped to the DOIs this publisher registered, the disclosure is
+/// nil — resolving such a DOI goes through them anyway.
+///
+/// Verified against the Crossref registrant registry
+/// (`api.crossref.org/prefixes/<prefix>`) on 2026-08-23.
+/// `10.1103` is the Physical Review family.
+///
+/// Deliberately conservative: a publisher may own prefixes not listed
+/// here. A miss is not silent — it is recorded in the attempt trace as
+/// `not consulted (DOI prefix ... is not ...)`, so it is diagnosable
+/// from the error message rather than looking like a lookup failure.
+pub(crate) const PUBLISHER_PREFIXES: &[&str] = &["10.1103"];
+
 /// APS Harvest [`Source`] impl — DOI → `/v2/article/<DOI>` JSON
 /// record.
 #[derive(Clone, Debug)]
@@ -100,7 +122,14 @@ impl Source for TdmApsSource {
     }
 
     fn can_serve(&self, profile: &CapabilityProfile, ref_: &Ref) -> bool {
-        profile.tdm_aps.is_some() && matches!(ref_, Ref::Doi(_))
+        let Ref::Doi(doi) = ref_ else {
+            return false;
+        };
+        // Both halves matter: the grant is the user's opt-in, the prefix
+        // keeps that opt-in from leaking unrelated DOIs to the publisher
+        // (#442). The orchestrator checks the same two conditions so it
+        // can tell them apart in the trace; this is the defensive mirror.
+        profile.tdm_aps.is_some() && PUBLISHER_PREFIXES.contains(&doi.prefix())
     }
 
     async fn fetch(
@@ -353,4 +382,34 @@ mod tests {
         let err = result.expect_err("non-object response must surface as SourceSchema");
         assert!(matches!(err, FetchError::SourceSchema { .. }));
     }
+    /// #442: the grant is the user's opt-in; the prefix keeps that opt-in
+    /// from disclosing unrelated DOIs to American Physical Society (APS). Asserted with the grant
+    /// PRESENT so the prefix is the only thing under test — otherwise a
+    /// false `can_serve` would prove nothing about scoping.
+    #[test]
+    fn can_serve_is_scoped_to_this_publishers_prefixes() {
+        let src = TdmApsSource::new();
+        let profile = profile_with_aps_grant();
+
+        let own = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("DOI parses"));
+        assert!(
+            src.can_serve(&profile, &own),
+            "must serve its own publisher's DOI when the grant is present"
+        );
+
+        let foreign = Ref::Doi(Doi::parse("10.1016/j.example.2024.001").expect("DOI parses"));
+        assert!(
+            !src.can_serve(&profile, &foreign),
+            "must NOT serve a Elsevier DOI even with a valid grant -- that              would disclose an unrelated lookup to American Physical Society (APS)"
+        );
+
+        for p in PUBLISHER_PREFIXES {
+            let doi = Doi::parse(&format!("{p}/probe")).expect("DOI parses");
+            assert!(
+                src.can_serve(&profile, &Ref::Doi(doi)),
+                "declared prefix {p} must be served"
+            );
+        }
+    }
+
 }

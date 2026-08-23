@@ -1421,6 +1421,67 @@ mod tests {
     /// registers the key itself — so the tests could not see the gap, and
     /// only a real fetch would have. Enumerating the names here means
     /// adding a source without its allowlist entry fails at `cargo test`.
+    /// #442 sibling of the Tier-2 guard. A source with no allowlist entry
+    /// fails `UnknownSource` in production while every unit test passes,
+    /// because `new_for_tests_allow_http` registers the key itself — the
+    /// DataCite near-miss in 0.8.8. Now that Tier 3 is actually reached,
+    /// the same trap applies to it.
+    #[cfg(any(
+        feature = "tdm-aps",
+        feature = "tdm-elsevier",
+        feature = "tdm-springer"
+    ))]
+    #[test]
+    fn every_tier_3_source_has_a_transport_allowlist_entry() {
+        use crate::source::Source as _;
+        let mut checked = 0_usize;
+
+        #[cfg(feature = "tdm-aps")]
+        {
+            let src = crate::sources::tdm_aps::TdmApsSource::new();
+            let reg: Vec<String> = tier_3_aps_allowlist()
+                .iter()
+                .map(|a| a.source.clone())
+                .collect();
+            assert!(
+                reg.iter().any(|r| r == src.name()),
+                "source `{}` has no tier_3_aps_allowlist entry; a production                  fetch would fail UnknownSource. registered: {reg:?}",
+                src.name()
+            );
+            checked += 1;
+        }
+        #[cfg(feature = "tdm-elsevier")]
+        {
+            let src = crate::sources::tdm_elsevier::TdmElsevierSource::new();
+            let reg: Vec<String> = tier_3_elsevier_allowlist()
+                .iter()
+                .map(|a| a.source.clone())
+                .collect();
+            assert!(
+                reg.iter().any(|r| r == src.name()),
+                "source `{}` has no tier_3_elsevier_allowlist entry; a production                  fetch would fail UnknownSource. registered: {reg:?}",
+                src.name()
+            );
+            checked += 1;
+        }
+        #[cfg(feature = "tdm-springer")]
+        {
+            let src = crate::sources::tdm_springer::TdmSpringerSource::new();
+            let reg: Vec<String> = tier_3_springer_allowlist()
+                .iter()
+                .map(|a| a.source.clone())
+                .collect();
+            assert!(
+                reg.iter().any(|r| r == src.name()),
+                "source `{}` has no tier_3_springer_allowlist entry; a production                  fetch would fail UnknownSource. registered: {reg:?}",
+                src.name()
+            );
+            checked += 1;
+        }
+
+        assert!(checked > 0, "the guard must have checked something");
+    }
+
     #[test]
     #[cfg(feature = "metadata")]
     fn every_tier_2_source_has_a_transport_allowlist_entry() {
