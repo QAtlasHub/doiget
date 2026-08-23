@@ -18,10 +18,10 @@
 //!
 //! ## Capability gate
 //!
-//! [`OpenAireSource::can_serve`] returns `true` only when
+//! `OpenAireSource::can_serve` returns `true` only when
 //! [`CapabilityProfile.metadata.openaire`](crate::CapabilityProfile) is
-//! `true` AND the ref is a [`Ref::Doi`]. The bool is set by
-//! [`CapabilityProfile::from_env`] from `DOIGET_ENABLE_OPENAIRE`, which is
+//! `true` AND the ref is a `Ref::Doi`. The bool is set by
+//! `CapabilityProfile::from_env` from `DOIGET_ENABLE_OPENAIRE`, which is
 //! **off by default** (ADR-0040) — unset, this source is inert.
 //!
 //! ## Access rights are honoured, never guessed
@@ -35,7 +35,7 @@
 //!
 //! ## Overlap with DataCite is expected
 //!
-//! OpenAIRE mirrors a large slice of Zenodo, which [`super::datacite`]
+//! OpenAIRE mirrors a large slice of Zenodo, which `super::datacite`
 //! also resolves. That is why #413 ordered DataCite first: this source is
 //! consulted later in the chain, so the overlap costs nothing beyond a
 //! request that is not made.
@@ -96,7 +96,7 @@ impl OpenAireSource {
     /// percent-encoded — an unencoded one makes the endpoint reject the
     /// request (observed while verifying the shape). `query_pairs_mut`
     /// handles that, which is why this source does not share
-    /// [`super::datacite`]'s path-segment approach.
+    /// `super::datacite`'s path-segment approach.
     fn request_url(&self, doi: &crate::Doi) -> Result<Url, FetchError> {
         let mut url =
             self.base

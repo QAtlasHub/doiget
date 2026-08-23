@@ -11,10 +11,10 @@
 //!
 //! ## Capability gate
 //!
-//! [`CoreSource::can_serve`] returns `true` only when
+//! `CoreSource::can_serve` returns `true` only when
 //! [`CapabilityProfile.metadata.core`](crate::CapabilityProfile) is `true`
-//! AND the ref is a [`Ref::Doi`]. The bool is set by
-//! [`CapabilityProfile::from_env`] from `DOIGET_ENABLE_CORE`, which is
+//! AND the ref is a `Ref::Doi`. The bool is set by
+//! `CapabilityProfile::from_env` from `DOIGET_ENABLE_CORE`, which is
 //! **off by default** (ADR-0040) — unset, this source is inert.
 //!
 //! ## The API key is optional, and absence is not an error
@@ -34,8 +34,8 @@
 //!
 //! Two failures that are easy to conflate:
 //!
-//! - CORE holds nothing for this DOI — [`FetchError::NotFound`]
-//! - CORE rejected our credentials — [`FetchError::Http`], carrying the
+//! - CORE holds nothing for this DOI — `FetchError::NotFound`
+//! - CORE rejected our credentials — `FetchError::Http`, carrying the
 //!   401/403
 //!
 //! They are different error *types*, not two spellings of one hint, so a

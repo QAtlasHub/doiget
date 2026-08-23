@@ -7,10 +7,10 @@
 //!
 //! ## Capability gate
 //!
-//! [`EuropePmcSource::can_serve`] returns `true` only when
+//! `EuropePmcSource::can_serve` returns `true` only when
 //! [`CapabilityProfile.metadata.europe_pmc`](crate::CapabilityProfile) is
-//! `true` AND the ref is a [`Ref::Doi`]. The bool is set by
-//! [`CapabilityProfile::from_env`] from `DOIGET_ENABLE_EUROPE_PMC`, which
+//! `true` AND the ref is a `Ref::Doi`. The bool is set by
+//! `CapabilityProfile::from_env` from `DOIGET_ENABLE_EUROPE_PMC`, which
 //! is **off by default** (ADR-0040).
 //!
 //! ## OA subset only
@@ -26,7 +26,7 @@
 //!
 //! Per `docs/SOURCES.md` §4 this source returns no PDF bytes. It surfaces
 //! the OA PDF location from `fullTextUrlList` via
-//! [`open_access_pdf_url`], and the fetch itself is performed by the
+//! `open_access_pdf_url`, and the fetch itself is performed by the
 //! existing `oa-publisher` leg — `europepmc.org` is already on that
 //! allowlist.
 //!

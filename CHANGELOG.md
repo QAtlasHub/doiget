@@ -18,6 +18,10 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   anything, so setting `DOIGET_ENABLE_HAL` (and the other three) was a silent no-op.
   Every source unit test passed because each drove its own `Source` impl directly —
   nothing asserted that the production path reached them (#413).
+- **[ci]** `rustdoc` now builds the `oa-only,citation` surface too, not just
+  `oa-only`. Release binaries ship `citation`, but its docs were never built — so
+  two broken intra-doc links had been sitting latent on `main`, and the five new
+  sources could have added more without CI noticing. Both latent links fixed.
 - **[source]** Optional sources honour `DOIGET_<NAME>_BASE` overrides, mirroring
   `DOIGET_CROSSREF_BASE`. Without this the chain could only ever talk to production,
   which is *why* it shipped unreachable: no test could point it anywhere, so no test
