@@ -4,7 +4,7 @@
 //!
 //! - Tier 1 (Open Access, always compiled in): Crossref / Unpaywall / arXiv.
 //! - Tier 2 (metadata enrichment, Phase 4, behind the `metadata` Cargo
-//!   feature): OpenAlex / Semantic Scholar / DOAJ / DataCite.
+//!   feature): OpenAlex / Semantic Scholar / DOAJ / DataCite / HAL.
 //! - Tier 3 (TDM, Phase 5, behind per-publisher Cargo features):
 //!   Springer Nature OA / APS Harvest / Elsevier ScienceDirect.
 
@@ -31,6 +31,12 @@ pub mod doaj;
 /// off by default (ADR-0040, #414).
 #[cfg(feature = "metadata")]
 pub mod datacite;
+
+/// HAL — the French national OA repository. Author deposits in maths /
+/// physics / CS that Crossref-centric indexes miss. Runtime-gated by
+/// `DOIGET_ENABLE_HAL`, off by default (ADR-0040, #418).
+#[cfg(feature = "metadata")]
+pub mod hal;
 
 // ---------------------------------------------------------------------------
 // Tier 3 (Phase 5) — compile-gated by per-publisher Cargo features.

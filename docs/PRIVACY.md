@@ -47,6 +47,9 @@ its use of these APIs polite.
   `DOIGET_ENABLE_<NAME>`, so compiling the feature in contacts nobody by itself.
   DataCite is queried by exact DOI only — never used as a search surface — and
   needs no key or account.
+- `--features metadata`: **HAL** (<https://api.archives-ouvertes.fr>, the French
+  national OA repository). Same shape: inert until `DOIGET_ENABLE_HAL` is set,
+  queried by exact DOI through the `doiId_s` field only, no key or account.
 - `--features tdm-springer | tdm-aps | tdm-elsevier`: the respective publisher
   text-and-data-mining APIs, used **only with your own API key and explicit
   agreement**. doiget bundles no keys and shares none.

@@ -245,6 +245,16 @@ pub fn tier_2_allowlist() -> Vec<SourceAllowlist> {
             "doaj",
             vec!["doaj.org".to_string(), "*.doaj.org".to_string()],
         ),
+        // DataCite REST — DOI resolution for the second registration
+        // agency (#414). Distinct from `doaj.org`: that host serves
+        // article records, this one is the DOI registry API.
+        SourceAllowlist::new("datacite", vec!["api.datacite.org".to_string()]),
+        // HAL — French national OA repository, Solr-style search API
+        // (#418). `api.archives-ouvertes.fr` is the API host; the
+        // deposit landing pages live on `hal.science`, which is reached
+        // through the `oa-publisher` key (via `trust_oa_registries`),
+        // not this one.
+        SourceAllowlist::new("hal", vec!["api.archives-ouvertes.fr".to_string()]),
     ]
 }
 
@@ -1390,6 +1400,46 @@ fn build_client(allowlist: SourceAllowlist, ua: &str) -> Result<Client, reqwest:
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// Every Tier-2 `Source` MUST have a transport allowlist entry under
+    /// its own `name()`, or `HttpClient::fetch_bytes` rejects it with
+    /// `UnknownSource` in production.
+    ///
+    /// This was not hypothetical: #414 shipped `DataCiteSource` with no
+    /// `tier_2_allowlist` entry. Every unit test passed because they build
+    /// their client with `new_for_tests_allow_http("datacite", ..)`, which
+    /// registers the key itself — so the tests could not see the gap, and
+    /// only a real fetch would have. Enumerating the names here means
+    /// adding a source without its allowlist entry fails at `cargo test`.
+    #[test]
+    #[cfg(feature = "metadata")]
+    fn every_tier_2_source_has_a_transport_allowlist_entry() {
+        use crate::source::Source as _;
+        // Bind first: `name()` borrows from the source, so the values must
+        // outlive the collection.
+        let openalex = crate::sources::openalex::OpenalexSource::new(String::new());
+        let s2 = crate::sources::s2::S2Source::new(None);
+        let doaj = crate::sources::doaj::DoajSource::new();
+        let datacite = crate::sources::datacite::DataCiteSource::new();
+        let hal = crate::sources::hal::HalSource::new();
+        let names: Vec<&str> = vec![
+            openalex.name(),
+            s2.name(),
+            doaj.name(),
+            datacite.name(),
+            hal.name(),
+        ];
+        let registered: Vec<String> = tier_2_allowlist()
+            .iter()
+            .map(|a| a.source.clone())
+            .collect();
+        for n in names {
+            assert!(
+                registered.iter().any(|r| r == n),
+                "source `{n}` has no tier_2_allowlist entry; a production fetch                  would fail UnknownSource. registered: {registered:?}"
+            );
+        }
+    }
 
     /// ADR-0037: `doaj.org` must be reachable on the `oa-publisher` key with
     /// NO config file and NO feature flags — that is the whole point of
