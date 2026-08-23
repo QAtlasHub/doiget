@@ -283,6 +283,7 @@ mod tests {
             semantic_scholar: true,
             doaj: false,
             datacite: false,
+            hal: false,
         };
         p
     }

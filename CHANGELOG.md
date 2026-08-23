@@ -10,6 +10,27 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.8-beta.5] - 2026-08-23
+
+### Added
+- **[source]** **HAL** — the French national OA repository, opt-in via
+  `DOIGET_ENABLE_HAL` (#418). Holds author deposits in maths / physics / CS that
+  Crossref-centric indexes miss. OA deposits only: a record whose
+  `openAccess_bool` is not `true` is rejected rather than returned, because an
+  entry resolving to no reachable text looks like a hit but is not one.
+  Metadata-only; the `hal.science` content host is reached through
+  `oa-publisher`, not this source key.
+
+### Fixed
+- **[source]** Register `datacite` in `tier_2_allowlist`. **DataCite shipped in
+  0.8.8-beta.4 with no transport allowlist entry, so a production fetch would have
+  failed `UnknownSource`.** Every unit test passed because they build their client
+  with `new_for_tests_allow_http("datacite", ..)`, which registers the key itself —
+  the tests could not see the gap. A new
+  `every_tier_2_source_has_a_transport_allowlist_entry` enumerates the Tier-2
+  sources against the allowlist so this cannot recur; removing an entry now fails
+  `cargo test`.
+
 ## [0.8.8-beta.4] - 2026-08-22
 
 ### Added

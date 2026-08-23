@@ -929,6 +929,10 @@ pub struct MetadataAccess {
     /// simply do not index these DOIs, so without it a live, open record is
     /// reported [`ErrorCode::NotFound`] (ADR-0040, #414).
     pub datacite: bool,
+    /// HAL — the French national OA repository, holding maths / physics /
+    /// CS deposits that Crossref-centric indexes miss; enabled by
+    /// `DOIGET_ENABLE_HAL` (ADR-0040, #418).
+    pub hal: bool,
 }
 
 /// Process-wide rate limits. Hard-coded; not configurable.
@@ -1165,6 +1169,7 @@ impl CapabilityProfile {
                 "metadata",
                 cfg!(feature = "metadata"),
             ),
+            hal: resolve_metadata_flag("DOIGET_ENABLE_HAL", "metadata", cfg!(feature = "metadata")),
         };
 
         // -- Tier 3 TDM grants ----------------------------------------------
