@@ -270,6 +270,7 @@ mod tests {
             doaj: true,
             datacite: false,
             hal: false,
+            openaire: false,
         };
         p
     }

@@ -50,6 +50,9 @@ its use of these APIs polite.
 - `--features metadata`: **HAL** (<https://api.archives-ouvertes.fr>, the French
   national OA repository). Same shape: inert until `DOIGET_ENABLE_HAL` is set,
   queried by exact DOI through the `doiId_s` field only, no key or account.
+- `--features metadata`: **OpenAIRE** (<https://api.openaire.eu>, European repository
+  aggregation). Inert until `DOIGET_ENABLE_OPENAIRE` is set; queried by exact DOI
+  through the Graph API v1 `pid` parameter only. No key or account.
 - `--features tdm-springer | tdm-aps | tdm-elsevier`: the respective publisher
   text-and-data-mining APIs, used **only with your own API key and explicit
   agreement**. doiget bundles no keys and shares none.

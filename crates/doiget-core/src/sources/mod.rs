@@ -4,7 +4,7 @@
 //!
 //! - Tier 1 (Open Access, always compiled in): Crossref / Unpaywall / arXiv.
 //! - Tier 2 (metadata enrichment, Phase 4, behind the `metadata` Cargo
-//!   feature): OpenAlex / Semantic Scholar / DOAJ / DataCite / HAL.
+//!   feature): OpenAlex / Semantic Scholar / DOAJ / DataCite / HAL / OpenAIRE.
 //! - Tier 3 (TDM, Phase 5, behind per-publisher Cargo features):
 //!   Springer Nature OA / APS Harvest / Elsevier ScienceDirect.
 
@@ -37,6 +37,13 @@ pub mod datacite;
 /// `DOIGET_ENABLE_HAL`, off by default (ADR-0040, #418).
 #[cfg(feature = "metadata")]
 pub mod hal;
+
+/// OpenAIRE — European institutional / funder repository aggregation via
+/// the Graph API v1 (the legacy search endpoint is unstable and unused).
+/// Mixed access rights, so only COAR OPEN records are returned.
+/// Runtime-gated by `DOIGET_ENABLE_OPENAIRE`, off by default (#416).
+#[cfg(feature = "metadata")]
+pub mod openaire;
 
 // ---------------------------------------------------------------------------
 // Tier 3 (Phase 5) — compile-gated by per-publisher Cargo features.

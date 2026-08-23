@@ -294,6 +294,7 @@ mod tests {
             doaj: false,
             datacite: false,
             hal: false,
+            openaire: false,
         };
         p
     }

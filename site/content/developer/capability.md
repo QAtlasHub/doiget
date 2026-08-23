@@ -118,6 +118,7 @@ impl CapabilityProfile {
                 doaj:            env::var("DOIGET_ENABLE_DOAJ").is_ok(),
                 datacite:        env::var("DOIGET_ENABLE_DATACITE").is_ok(),
                 hal:             env::var("DOIGET_ENABLE_HAL").is_ok(),
+                openaire:        env::var("DOIGET_ENABLE_OPENAIRE").is_ok(),
             },
             tdm_elsevier: read_tdm_grant("DOIGET_AGREE_TDM_ELSEVIER", "DOIGET_KEY_ELSEVIER")?,
             tdm_aps:      read_tdm_grant("DOIGET_AGREE_TDM_APS",      "DOIGET_KEY_APS")?,
@@ -177,6 +178,7 @@ fn read_tdm_grant(agree_var: &str, key_var: &str) -> Result<Option<TdmGrant>, Ca
 | `DOIGET_ENABLE_DOAJ` | presence | Enables DOAJ. |
 | `DOIGET_ENABLE_DATACITE` | presence | Enables DataCite DOI **resolution** (Zenodo / figshare / Dryad / OSF). Unlike its siblings this is not enrichment: without it those DOIs report `NOT_FOUND` even when the record is live and open (#414). |
 | `DOIGET_ENABLE_HAL` | presence | Enables HAL, the French national OA repository. OA deposits only: a record whose `openAccess_bool` is not `true` is rejected rather than returned (#418). |
+| `DOIGET_ENABLE_OPENAIRE` | presence | Enables OpenAIRE (European repository aggregation, Graph API v1). Mixed access rights: only a COAR `c_abf2` (OPEN) `bestAccessRight` is accepted; EMBARGO / RESTRICTED / CLOSED / absent are refused (#416). |
 | `DOIGET_AGREE_TDM_ELSEVIER` | `=1` | Acknowledges Elsevier TDM ToS. Pairs with key. |
 | `DOIGET_KEY_ELSEVIER` | secret string | Elsevier API key. Read into `Secret<String>`. |
 | `DOIGET_AGREE_TDM_APS` | `=1` | Acknowledges APS Harvest TDM ToS. |

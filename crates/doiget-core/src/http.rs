@@ -255,6 +255,10 @@ pub fn tier_2_allowlist() -> Vec<SourceAllowlist> {
         // through the `oa-publisher` key (via `trust_oa_registries`),
         // not this one.
         SourceAllowlist::new("hal", vec!["api.archives-ouvertes.fr".to_string()]),
+        // OpenAIRE Graph API v1 (#416). The legacy `/search/publications`
+        // endpoint on the same host is unstable (503s) and deliberately
+        // unused; only the Graph path is called.
+        SourceAllowlist::new("openaire", vec!["api.openaire.eu".to_string()]),
     ]
 }
 
@@ -1422,12 +1426,14 @@ mod tests {
         let doaj = crate::sources::doaj::DoajSource::new();
         let datacite = crate::sources::datacite::DataCiteSource::new();
         let hal = crate::sources::hal::HalSource::new();
+        let openaire = crate::sources::openaire::OpenAireSource::new();
         let names: Vec<&str> = vec![
             openalex.name(),
             s2.name(),
             doaj.name(),
             datacite.name(),
             hal.name(),
+            openaire.name(),
         ];
         let registered: Vec<String> = tier_2_allowlist()
             .iter()
