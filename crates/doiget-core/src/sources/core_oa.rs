@@ -259,6 +259,21 @@ fn license_of(work: &serde_json::Value) -> String {
         .to_string()
 }
 
+/// The OA download location CORE reports for a work, if any (#445).
+///
+/// CORE's `downloadUrl` points at a repository host reached through the
+/// `oa-publisher` key, not this one — see the metadata-only contract in the
+/// module docs. This surfaces it so the OA chain can try it; the fetch is
+/// still performed by the `oa-publisher` leg, with its allowlist and its
+/// ADR-0023 denial context.
+#[must_use]
+pub fn open_access_pdf_url(record: &serde_json::Value) -> Option<&str> {
+    record
+        .get("downloadUrl")
+        .and_then(serde_json::Value::as_str)
+        .filter(|u| !u.is_empty())
+}
+
 fn truncate_for_hint(body: &[u8]) -> String {
     const MAX: usize = 200;
     let s = String::from_utf8_lossy(body);

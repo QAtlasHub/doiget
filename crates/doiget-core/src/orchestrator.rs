@@ -1176,6 +1176,7 @@ async fn fetch_paper_doi(
         &mut attempts,
     )
     .await
+    .map(|(_, m)| m)
     .or(tdm_meta);
     #[cfg(not(feature = "metadata"))]
     let optional_meta: Option<Value> = tdm_meta;
@@ -1339,6 +1340,12 @@ async fn fetch_paper_doi(
     // it under the DOI safekey instead of returning Blocked.
     let (pdf_leg, pdf_bytes, arxiv_id_for_metadata, fallback_license) =
         try_arxiv_preprint_fallback(doi, pdf_leg, pdf_bytes, profile, ctx).await;
+
+    // #445: and if that did not help either, ask whoever else is switched
+    // on. Additive by construction — see the fn docs.
+    #[cfg(feature = "metadata")]
+    let (pdf_leg, pdf_bytes) =
+        try_optional_source_oa_fallback(doi, pdf_leg, pdf_bytes, profile, ctx, &mut attempts).await;
     if let Some(fl) = fallback_license {
         license = fl;
     }
@@ -1466,6 +1473,111 @@ async fn fetch_paper_doi(
         year: metadata.year,
         attempts,
     })
+}
+
+/// Which OA content URL an optional source reported, if any (#445).
+///
+/// Only the three sources that publish a direct document URL contribute.
+/// OpenAIRE's `urls[]` and DataCite's `url` point at a DOI resolver or a
+/// landing page, not a file — handing those to the OA chain would spend a
+/// request to arrive at a page the chain cannot read, and report a
+/// confusing failure. A source that contributes nothing is not a silent
+/// gap: it still appears in the attempt trace with its own outcome.
+#[cfg(feature = "metadata")]
+fn optional_source_oa_url<'a>(source: &str, meta: &'a Value) -> Option<&'a str> {
+    match source {
+        "core" => crate::sources::core_oa::open_access_pdf_url(meta),
+        "hal" => crate::sources::hal::open_access_pdf_url(meta),
+        "europe-pmc" => crate::sources::europepmc::open_access_pdf_url(meta),
+        _ => None,
+    }
+}
+
+/// Last resort for a blocked content leg: ask the enabled optional sources
+/// whether anyone else holds a copy (#445).
+///
+/// The OA chain already tries every location Unpaywall returned, advancing
+/// past each failure — so a 429 does not stop it. What stopped the reported
+/// run is that the candidate list can only ever contain Unpaywall's
+/// locations. Crossref had answered, so the optional chain was skipped
+/// entirely, and a rate limit on the single AMS URL ended a run with four
+/// other indexes switched on.
+///
+/// Each of those sources already surfaces a document URL and each module
+/// says, in its own docs, that the fetch belongs to the `oa-publisher`
+/// leg — `europepmc::open_access_pdf_url` was written for exactly this and
+/// had no caller. This is that caller.
+///
+/// Deliberately last, after the #325 arXiv fallback, so the change is
+/// purely additive: every run that succeeded before still succeeds by the
+/// same route. It costs a request only when the content leg has ALREADY
+/// failed and the user has switched a source on, so a default build with
+/// no flags set is byte-identical.
+#[cfg(feature = "metadata")]
+async fn try_optional_source_oa_fallback(
+    doi: &Doi,
+    pdf_leg: PdfLegStatus,
+    pdf_bytes: Option<Vec<u8>>,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    attempts: &mut Vec<SourceAttempt>,
+) -> (PdfLegStatus, Option<Vec<u8>>) {
+    if pdf_bytes.is_some() || !matches!(pdf_leg, PdfLegStatus::Blocked { .. }) {
+        return (pdf_leg, pdf_bytes);
+    }
+
+    // Reaching here means Crossref answered (a Crossref failure with no PDF
+    // returns NotFound further up), so `attempts` is a row of `NotNeeded`
+    // that carries no information. Running the chain for real replaces it
+    // with what actually happened.
+    let ref_ = Ref::Doi(doi.clone());
+    let mut discard = CrossrefFields::default();
+    let mut fresh: Vec<SourceAttempt> = Vec::new();
+    let resolved =
+        resolve_optional_chain(&ref_, profile, ctx, false, &mut discard, &mut fresh).await;
+    if !fresh.is_empty() {
+        *attempts = fresh;
+    }
+
+    let Some((name, meta)) = resolved else {
+        return (pdf_leg, pdf_bytes);
+    };
+    let Some(raw) = optional_source_oa_url(name, &meta) else {
+        tracing::debug!(
+            source = name,
+            doi = %doi.as_str(),
+            "optional source resolved but reported no document URL"
+        );
+        return (pdf_leg, pdf_bytes);
+    };
+    let Ok(url) = url::Url::parse(raw) else {
+        tracing::warn!(
+            source = name,
+            url = raw,
+            "optional source reported an unparsable document URL; keeping Blocked"
+        );
+        return (pdf_leg, pdf_bytes);
+    };
+
+    tracing::info!(
+        source = name,
+        doi = %doi.as_str(),
+        url = %url,
+        "OA chain exhausted; trying a copy reported by an optional source (#445)"
+    );
+    match try_fetch_oa_pdf(doi, &url, ctx).await {
+        Ok((bytes, _final_url)) => (PdfLegStatus::Fetched, Some(bytes)),
+        Err(e) => {
+            // Keep the ORIGINAL block. The publisher's 429 is what the user
+            // needs to see; a second failure from a repository would bury it.
+            tracing::warn!(
+                source = name,
+                error = %e,
+                "optional-source copy also failed; keeping the original block"
+            );
+            (pdf_leg, pdf_bytes)
+        }
+    }
 }
 
 /// Auto preprint fallback (issue #325). Called after the DOI OA PDF chain
@@ -3460,7 +3572,7 @@ async fn resolve_optional_chain(
     crossref_answered: bool,
     extracted: &mut CrossrefFields,
     attempts: &mut Vec<SourceAttempt>,
-) -> Option<Value> {
+) -> Option<(&'static str, Value)> {
     // Built eagerly so the trace lists every source in a fixed order even
     // when none is consulted — an empty trace would be indistinguishable
     // from "no chain exists", which is the confusion this whole mechanism
@@ -3503,7 +3615,7 @@ async fn resolve_optional_chain(
         ("core", "DOIGET_ENABLE_CORE", &core),
     ];
 
-    let mut resolved: Option<Value> = None;
+    let mut resolved: Option<(&'static str, Value)> = None;
 
     for (name, env, src) in chain {
         debug_assert_eq!(name, src.name(), "chain name must match Source::name");
@@ -3532,7 +3644,7 @@ async fn resolve_optional_chain(
                     *extracted = extract_optional_fields(name, meta);
                 }
                 attempts.push(SourceAttempt::new(name, AttemptOutcome::Resolved));
-                resolved = r.metadata_json;
+                resolved = r.metadata_json.map(|m| (name, m));
             }
             Err(e) => {
                 tracing::debug!(source = name, error = %e, "optional source did not resolve");
@@ -4436,6 +4548,213 @@ mod tdm_chain_tests {
             hint.contains("tdm-aps") && hint.contains("consulted:"),
             "the trace must record tdm-aps as consulted; got:
 {hint}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #445: does a blocked content leg actually fall through to another source?
+// ---------------------------------------------------------------------------
+//
+// The reported run had four indexes switched on and consulted none of them,
+// because the candidate list can only contain Unpaywall's locations and
+// Crossref had already answered. So the assertion that matters is REACH:
+// the mock must record a request to the optional source AND to the copy it
+// reported. A `Fetched` outcome alone would not prove which route produced it.
+
+#[cfg(all(test, feature = "metadata"))]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod oa_fallthrough_tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use camino::Utf8PathBuf;
+    use tempfile::TempDir;
+    use wiremock::matchers::{path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::http::HttpClient;
+    use crate::provenance::ProvenanceLog;
+    use crate::rate_limiter::RateLimiter;
+    use crate::{CapabilityProfile, Doi, RateLimits, Ref};
+
+    struct EnvSet(Vec<(&'static str, Option<String>)>);
+    impl EnvSet {
+        fn new(pairs: &[(&'static str, String)]) -> Self {
+            Self(
+                pairs
+                    .iter()
+                    .map(|(k, v)| {
+                        let old = std::env::var(k).ok();
+                        std::env::set_var(k, v);
+                        (*k, old)
+                    })
+                    .collect(),
+            )
+        }
+    }
+    impl Drop for EnvSet {
+        fn drop(&mut self) {
+            for (k, old) in &self.0 {
+                match old {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+
+    /// Crossref answers, Unpaywall points at a host that 429s, CORE holds a
+    /// repository copy.
+    async fn server_with_a_rate_limited_publisher_and_a_repository_copy() -> MockServer {
+        let server = MockServer::start().await;
+        let base = server.uri();
+
+        Mock::given(path_regex("^/works/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                "{\"status\":\"ok\",\"message\":{\"title\":[\"Computing multiple roots\"]}}",
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(path_regex("^/10\\.1090"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                "{{\"doi\":\"10.1090/example\",\"is_oa\":true,\"oa_status\":\"bronze\",\"best_oa_location\":\
+                 {{\"url_for_pdf\":\"{base}/blocked.pdf\",\"license\":\"cc-by\"}}}}"
+            )))
+            .mount(&server)
+            .await;
+        // The publisher rate-limits. This is the failure that used to end
+        // the whole run.
+        Mock::given(path("/blocked.pdf"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+        Mock::given(path("/v3/search/works"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                "{{\"totalHits\":1,\"results\":[{{\"id\":1,\
+                 \"title\":\"Computing multiple roots\",\"doi\":\"10.1090/example\",\
+                 \"downloadUrl\":\"{base}/repo.pdf\"}}]}}"
+            )))
+            .mount(&server)
+            .await;
+        Mock::given(path("/repo.pdf"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(b"%PDF-1.4\nrepository copy\n".to_vec()),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn ctx_for(host: &str) -> (TempDir, FetchContext) {
+        let td = TempDir::new().expect("tempdir");
+        let dir = Utf8PathBuf::try_from(td.path().to_path_buf()).expect("utf-8");
+        let host_only = host.split(':').next().unwrap_or(host);
+        let http = Arc::new(HttpClient::new_for_tests_allow_http_multi(&[
+            ("crossref", host),
+            ("unpaywall", host),
+            // The content leg compares the URL HOST, without the port,
+            // so this entry must be the bare address.
+            ("oa-publisher", host_only),
+            ("core", host),
+        ]));
+        let session_id = "01J000000000000000000FALL".to_string();
+        let log = Arc::new(
+            ProvenanceLog::open(dir.join("t.jsonl"), session_id.clone()).expect("log opens"),
+        );
+        (
+            td,
+            FetchContext {
+                http,
+                rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+                log,
+                session_id,
+                cache_root: None,
+            },
+        )
+    }
+
+    async fn run_fetch(
+        server: &MockServer,
+        core_enabled: bool,
+    ) -> (FetchPaperOutcome, Vec<String>) {
+        let base = server.uri();
+        let mut env = vec![
+            ("DOIGET_CROSSREF_BASE", base.clone()),
+            ("DOIGET_UNPAYWALL_BASE", base.clone()),
+            ("DOIGET_ARXIV_BASE", base.clone()),
+            ("DOIGET_CORE_BASE", base.clone()),
+            ("DOIGET_CONTACT_EMAIL", "test@example.org".to_string()),
+        ];
+        if core_enabled {
+            env.push(("DOIGET_ENABLE_CORE", "1".to_string()));
+        } else {
+            std::env::remove_var("DOIGET_ENABLE_CORE");
+        }
+        let _env = EnvSet::new(&env);
+
+        let profile = CapabilityProfile::from_env().expect("profile");
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+        let store_td = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::try_from(store_td.path().to_path_buf()).expect("utf-8");
+        let store = crate::store::FsStore::new(root.clone()).expect("store");
+
+        let ref_ = Ref::Doi(Doi::parse("10.1090/example").expect("doi"));
+        let outcome = fetch_paper(&ref_, &profile, &ctx, &store, &root)
+            .await
+            .expect("crossref answered, so the fetch resolves either way");
+        let paths = server
+            .received_requests()
+            .await
+            .expect("recorded")
+            .iter()
+            .map(|r| r.url.path().to_string())
+            .collect();
+        (outcome, paths)
+    }
+
+    /// THE regression for #445. A 429 on the only Unpaywall location must
+    /// not end a run with another source switched on.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_rate_limited_publisher_falls_through_to_an_enabled_source() {
+        let server = server_with_a_rate_limited_publisher_and_a_repository_copy().await;
+        let (outcome, paths) = run_fetch(&server, true).await;
+
+        assert!(
+            paths.iter().any(|p| p == "/v3/search/works"),
+            "CORE was never consulted; paths were {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p == "/repo.pdf"),
+            "the copy CORE reported was never fetched; paths were {paths:?}; leg={:?}",
+            outcome.pdf_leg
+        );
+        assert!(
+            matches!(outcome.pdf_leg, PdfLegStatus::Fetched),
+            "the run should have recovered; got {:?}",
+            outcome.pdf_leg
+        );
+    }
+
+    /// The other half of the contract: with no flag set, behaviour is
+    /// unchanged. The fall-through must not spend a request the user did
+    /// not ask for.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn with_no_source_enabled_the_run_is_unchanged() {
+        let server = server_with_a_rate_limited_publisher_and_a_repository_copy().await;
+        let (outcome, paths) = run_fetch(&server, false).await;
+
+        assert!(
+            !paths.iter().any(|p| p == "/v3/search/works"),
+            "a disabled source must cost nothing; paths were {paths:?}"
+        );
+        assert!(
+            matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. }),
+            "without a fallback source this must still be Blocked; got {:?}",
+            outcome.pdf_leg
         );
     }
 }

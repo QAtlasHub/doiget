@@ -142,7 +142,8 @@ pub(crate) fn resolve_store_root_with_source() -> Result<(Utf8PathBuf, StoreRoot
         return Ok((root, StoreRootSource::ConfigFile));
     }
     let cwd = std::env::current_dir().context(
-        "could not determine the current working directory for the default store root          (set DOIGET_STORE_ROOT to choose an explicit store location)",
+        "could not determine the current working directory for the default store root (set \
+            DOIGET_STORE_ROOT to choose an explicit store location)",
     )?;
     Utf8PathBuf::from_path_buf(cwd)
         .map(|d| (d.join("papers"), StoreRootSource::CwdDefault))
