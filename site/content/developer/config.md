@@ -118,6 +118,17 @@ runs against the built-in allowlist only.
 | `trust_oa_registries` | bool | `false` | Adds the curated **OA registries / repositories** — where cross-publisher **Gold OA** is indexed or hosted. |
 | `[[network.additional_hosts]]` | array of tables | empty | Adds individual hosts. `host` is required; `note` is optional and free-text. |
 
+**Prefer the registrable-domain wildcard.** A publisher often redirects across its own
+subdomains — `www.ams.org` → `pubs.ams.org` — so an entry for the exact host that was
+refused buys you one hop and another denial. `*.ams.org` covers the publisher in one
+line, and matches how the built-in list is written (ADR-0027 bounds the trusted surface
+to registrable-domain wildcards for established publishers). Add the apex alongside it
+when the publisher redirects there too: a single-suffix wildcard does **not** match
+`ams.org` itself, which is why the built-in list carries both forms for `doaj.org`,
+`arxiv.org` and `europepmc.org`.
+
+The denial message suggests all three, most specific first (#443).
+
 The two flags are separate because the trust arguments differ — "this institution
 publishes its own work here" is not "this registry indexes open content across
 publishers" — so you can take either without the other.

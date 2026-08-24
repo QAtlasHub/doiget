@@ -594,11 +594,22 @@ async fn network_report(cfg: &ResolvedConfig) {
     );
     eprintln!("                  a proxy fixes addressing, never a bot wall");
 
+    // #443: this used to read "unpaywall ... may be throttled", which
+    // attributes the whole cost of an unset contact address to the metadata
+    // lookup. The reporter hit HTTP 429 on the CONTENT leg, from the
+    // publisher — the User-Agent goes out on every request, so the label
+    // has to name every request.
     match &cfg.contact_email {
-        Some(e) => eprintln!("  unpaywall       polite pool as {e}"),
-        None => eprintln!(
-            "  unpaywall       non-polite pool (no DOIGET_CONTACT_EMAIL; may be throttled)"
-        ),
+        Some(e) => eprintln!("  contact         polite User-Agent as {e} (all outbound requests)"),
+        None => {
+            eprintln!(
+                "  contact         no DOIGET_CONTACT_EMAIL — every outbound request, metadata"
+            );
+            eprintln!(
+                "                  AND publisher content, goes out on the non-polite pool and"
+            );
+            eprintln!("                  may be throttled (HTTP 429) or refused");
+        }
     }
 
     let client = match crate::commands::fetch::build_http_client(None) {
