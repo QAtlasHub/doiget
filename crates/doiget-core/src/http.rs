@@ -1445,7 +1445,8 @@ mod tests {
                 .collect();
             assert!(
                 reg.iter().any(|r| r == src.name()),
-                "source `{}` has no tier_3_aps_allowlist entry; a production                  fetch would fail UnknownSource. registered: {reg:?}",
+                "source `{}` has no tier_3_aps_allowlist entry; a production fetch would fail \
+                    UnknownSource. registered: {reg:?}",
                 src.name()
             );
             checked += 1;
@@ -1459,7 +1460,8 @@ mod tests {
                 .collect();
             assert!(
                 reg.iter().any(|r| r == src.name()),
-                "source `{}` has no tier_3_elsevier_allowlist entry; a production                  fetch would fail UnknownSource. registered: {reg:?}",
+                "source `{}` has no tier_3_elsevier_allowlist entry; a production fetch would \
+                    fail UnknownSource. registered: {reg:?}",
                 src.name()
             );
             checked += 1;
@@ -1473,7 +1475,8 @@ mod tests {
                 .collect();
             assert!(
                 reg.iter().any(|r| r == src.name()),
-                "source `{}` has no tier_3_springer_allowlist entry; a production                  fetch would fail UnknownSource. registered: {reg:?}",
+                "source `{}` has no tier_3_springer_allowlist entry; a production fetch would \
+                    fail UnknownSource. registered: {reg:?}",
                 src.name()
             );
             checked += 1;
@@ -1513,7 +1516,8 @@ mod tests {
         for n in names {
             assert!(
                 registered.iter().any(|r| r == n),
-                "source `{n}` has no tier_2_allowlist entry; a production fetch                  would fail UnknownSource. registered: {registered:?}"
+                "source `{n}` has no tier_2_allowlist entry; a production fetch would fail \
+                    UnknownSource. registered: {registered:?}"
             );
         }
     }

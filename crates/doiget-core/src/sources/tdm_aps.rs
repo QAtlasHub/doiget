@@ -400,7 +400,8 @@ mod tests {
         let foreign = Ref::Doi(Doi::parse("10.1016/j.example.2024.001").expect("DOI parses"));
         assert!(
             !src.can_serve(&profile, &foreign),
-            "must NOT serve a Elsevier DOI even with a valid grant -- that              would disclose an unrelated lookup to American Physical Society (APS)"
+            "must NOT serve a Elsevier DOI even with a valid grant -- that would disclose an \
+                unrelated lookup to American Physical Society (APS)"
         );
 
         for p in PUBLISHER_PREFIXES {

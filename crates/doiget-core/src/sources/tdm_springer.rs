@@ -519,7 +519,8 @@ mod tests {
         let foreign = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("DOI parses"));
         assert!(
             !src.can_serve(&profile, &foreign),
-            "must NOT serve a APS DOI even with a valid grant -- that              would disclose an unrelated lookup to Springer Nature"
+            "must NOT serve a APS DOI even with a valid grant -- that would disclose an \
+                unrelated lookup to Springer Nature"
         );
 
         for p in PUBLISHER_PREFIXES {

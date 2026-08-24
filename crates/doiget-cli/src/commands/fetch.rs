@@ -1276,7 +1276,8 @@ fn blocked_trace_lines(attempts: &[SourceAttempt], message: &str) -> Vec<String>
     // permanent block, so say which it is.
     if message.contains("429") {
         out.push(
-            "  = suggest: HTTP 429 is a rate limit, not a policy block — it is transient.              Retry later, and set DOIGET_CONTACT_EMAIL for the polite pool."
+            "  = suggest: HTTP 429 is a rate limit, not a policy block — it is transient. Retry \
+                later, and set DOIGET_CONTACT_EMAIL for the polite pool."
                 .to_string(),
         );
     }
@@ -2000,6 +2001,16 @@ host = "*.uj.edu.pl"
             joined.contains("Retry later"),
             "say what to DO, not just what happened:\n{joined}"
         );
+        // A lost `\` line continuation leaves the source indentation
+        // inside the literal, and every test above still passes because
+        // each only asserts `contains`. Nothing in this block is
+        // column-aligned, so an internal double space is that bug.
+        for line in blocked_trace_lines(&[], "network error: HTTP 429 from https://ams.org/x.pdf") {
+            assert!(
+                !line.trim_start().contains("  "),
+                "a lost line continuation left source indentation in the message:\n{line}"
+            );
+        }
     }
 
     /// The converse: a policy denial must not be described as transient,
