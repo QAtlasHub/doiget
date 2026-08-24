@@ -30,6 +30,7 @@ citation = ["doiget-core/citation"]
 tdm-elsevier = ["doiget-core/tdm-elsevier", "doiget-mcp/tdm-elsevier"]
 tdm-aps      = ["doiget-core/tdm-aps", "doiget-mcp/tdm-aps"]
 tdm-springer = ["doiget-core/tdm-springer", "doiget-mcp/tdm-springer"]
+tdm-ieee     = ["doiget-core/tdm-ieee", "doiget-mcp/tdm-ieee"]
 
 [dependencies]
 doiget-core        = { workspace = true }

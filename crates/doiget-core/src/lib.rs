@@ -1080,6 +1080,8 @@ pub struct CapabilityProfile {
     pub tdm_aps: Option<TdmGrant>,
     /// Tier 3 grants are populated only when both env var and feature compile-in are set.
     pub tdm_springer: Option<TdmGrant>,
+    /// Tier 3 grants are populated only when both env var and feature compile-in are set.
+    pub tdm_ieee: Option<TdmGrant>,
     /// Hard-coded rate limits for this process.
     pub rate_limits: RateLimits,
 }
@@ -1230,6 +1232,12 @@ impl CapabilityProfile {
             "tdm-springer",
             cfg!(feature = "tdm-springer"),
         )?;
+        let tdm_ieee = resolve_tdm_grant(
+            "DOIGET_AGREE_TDM_IEEE",
+            "DOIGET_KEY_IEEE",
+            "tdm-ieee",
+            cfg!(feature = "tdm-ieee"),
+        )?;
 
         Ok(Self {
             oa: AlwaysOn,
@@ -1237,6 +1245,7 @@ impl CapabilityProfile {
             tdm_elsevier,
             tdm_aps,
             tdm_springer,
+            tdm_ieee,
             rate_limits: RateLimits::HARD_CODED,
         })
     }

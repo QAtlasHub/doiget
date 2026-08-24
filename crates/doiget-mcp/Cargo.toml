@@ -31,6 +31,7 @@ citation = ["doiget-core/citation"]
 tdm-elsevier = ["doiget-core/tdm-elsevier"]
 tdm-aps      = ["doiget-core/tdm-aps"]
 tdm-springer = ["doiget-core/tdm-springer"]
+tdm-ieee     = ["doiget-core/tdm-ieee"]
 
 [dependencies]
 doiget-core        = { workspace = true }

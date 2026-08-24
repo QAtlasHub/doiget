@@ -254,6 +254,15 @@ agreed = true
 [tdm.springer]
 api_key = "..."
 agreed = true
+
+# Requires a build with `--features tdm-ieee`. The endpoint and response
+# shape are INFERRED from IEEE's public developer portal, not confirmed
+# against a live programme key (#430) — a response in another shape is
+# reported as a schema error naming the field and quoting the body,
+# rather than silently returning nothing.
+[tdm.ieee]
+api_key = "..."
+agreed = true
 ```
 
 If both env var and credentials.toml provide the same key, env var wins.
@@ -264,7 +273,10 @@ Being on a subscribing university network does **not** make paywalled content
 fetchable. Two independent things sit in the way, and only one of them is doiget's:
 
 1. **The allowlist.** IEEE, ACM, SIAM and AMS are not on the default `oa-publisher`
-   allowlist, so doiget will not attempt the publisher leg for them at all.
+   allowlist, so doiget will not attempt the publisher leg for them at all. IEEE now
+   has a TDM route instead (`[tdm.ieee]` above, `--features tdm-ieee`) — that is a
+   different host (`ieeexploreapi.ieee.org`, the API) under a different source key,
+   not a widening of `oa-publisher`.
 2. **The publisher's bot wall.** Even from a subscribing address, a scripted client
    commonly gets `202 Accepted` with an **empty body** — a challenge holding response,
    not a paywall and not a 403. The subscription is not the binding constraint; being a

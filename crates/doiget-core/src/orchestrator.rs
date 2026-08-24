@@ -3726,6 +3726,11 @@ async fn resolve_tdm_chain(
         crate::sources::tdm_springer::TdmSpringerSource::new,
         crate::sources::tdm_springer::TdmSpringerSource::with_base,
     );
+    #[cfg(feature = "tdm-ieee")]
+    let ieee = optional_base("DOIGET_IEEE_BASE").map_or_else(
+        crate::sources::tdm_ieee::TdmIeeeSource::new,
+        crate::sources::tdm_ieee::TdmIeeeSource::with_base,
+    );
 
     // Not a `vec![]` literal: each entry is `#[cfg]`-gated on its own
     // publisher feature, and attribute-per-element inside a vec literal
@@ -3755,6 +3760,14 @@ async fn resolve_tdm_chain(
         prefixes: crate::sources::tdm_springer::PUBLISHER_PREFIXES,
         publisher: "Springer Nature",
         src: &springer,
+    });
+    #[cfg(feature = "tdm-ieee")]
+    chain.push(Entry {
+        name: "tdm-ieee",
+        enable_hint: "DOIGET_KEY_IEEE + DOIGET_AGREE_TDM_IEEE",
+        prefixes: crate::sources::tdm_ieee::PUBLISHER_PREFIXES,
+        publisher: "IEEE",
+        src: &ieee,
     });
 
     let mut resolved: Option<Value> = None;
@@ -4218,7 +4231,8 @@ mod chain_tests {
     test,
     feature = "tdm-aps",
     feature = "tdm-elsevier",
-    feature = "tdm-springer"
+    feature = "tdm-springer",
+    feature = "tdm-ieee"
 ))]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tdm_chain_tests {
@@ -4245,6 +4259,7 @@ mod tdm_chain_tests {
                 "DOIGET_APS_BASE",
                 "DOIGET_ELSEVIER_BASE",
                 "DOIGET_SPRINGER_BASE",
+                "DOIGET_IEEE_BASE",
             ];
             Self(
                 VARS.iter()
@@ -4309,6 +4324,7 @@ mod tdm_chain_tests {
             ("tdm-aps", host),
             ("tdm-elsevier", host),
             ("tdm-springer", host),
+            ("tdm-ieee", host),
         ]));
         let session_id = "01J0000000000000000000TDM".to_string();
         let log = Arc::new(
@@ -4339,6 +4355,7 @@ mod tdm_chain_tests {
         p.tdm_aps = Some(grant("DOIGET_AGREE_TDM_APS"));
         p.tdm_elsevier = Some(grant("DOIGET_AGREE_TDM_ELSEVIER"));
         p.tdm_springer = Some(grant("DOIGET_AGREE_TDM_SPRINGER"));
+        p.tdm_ieee = Some(grant("DOIGET_AGREE_TDM_IEEE"));
         p
     }
 
@@ -4347,6 +4364,7 @@ mod tdm_chain_tests {
         p.tdm_aps = None;
         p.tdm_elsevier = None;
         p.tdm_springer = None;
+        p.tdm_ieee = None;
         p
     }
 
@@ -4368,6 +4386,10 @@ mod tdm_chain_tests {
             ("10.1103/PhysRevX.10.011001", "tdm-aps"),
             ("10.1016/j.example.2024.001", "tdm-elsevier"),
             ("10.1007/s00220-024-05001-x", "tdm-springer"),
+            ("10.1109/TSP.2018.2812747", "tdm-ieee"),
+            // The conference prefix, which is half of what #407 measured
+            // and the half most likely to be dropped by a later edit.
+            ("10.23919/example.2024.001", "tdm-ieee"),
         ] {
             let server = MockServer::start().await;
             Mock::given(method("GET"))
@@ -4404,16 +4426,19 @@ mod tdm_chain_tests {
         let _bases = BaseGuard::to(&server.uri());
         let (_td, ctx) = ctx_for(&server.address().to_string());
 
-        // An IEEE DOI: no compiled-in TDM publisher owns 10.1109.
-        let ref_ = Ref::Doi(Doi::parse("10.1109/TSP.2018.2812747").expect("doi"));
+        // An AMS DOI: no compiled-in TDM publisher owns 10.1090. This
+        // was an IEEE DOI until #430 gave 10.1109 an owner — the test
+        // needs a prefix that stays foreign, and ADR-0039 names AMS as
+        // one of the publishers still without a TDM source.
+        let ref_ = Ref::Doi(Doi::parse("10.1090/s0025-5718-04-01692-8").expect("doi"));
         let mut attempts = Vec::new();
         resolve_tdm_chain(&ref_, &all_gates_open(), &ctx, false, &mut attempts).await;
 
-        for name in ["tdm-aps", "tdm-elsevier", "tdm-springer"] {
+        for name in ["tdm-aps", "tdm-elsevier", "tdm-springer", "tdm-ieee"] {
             let o = outcome(&attempts, name);
             assert!(
                 matches!(o, AttemptOutcome::WrongPublisher { .. }),
-                "{name} must be WrongPublisher for an IEEE DOI, got {o:?}"
+                "{name} must be WrongPublisher for an AMS DOI, got {o:?}"
             );
             assert!(
                 !o.render().contains("DOIGET_KEY"),
@@ -4421,7 +4446,7 @@ mod tdm_chain_tests {
                 o.render()
             );
             assert!(
-                o.render().contains("10.1109"),
+                o.render().contains("10.1090"),
                 "the message must name the prefix that did not match: {}",
                 o.render()
             );
@@ -4482,7 +4507,7 @@ mod tdm_chain_tests {
         let mut attempts = Vec::new();
         resolve_tdm_chain(&ref_, &all_gates_open(), &ctx, true, &mut attempts).await;
 
-        for name in ["tdm-aps", "tdm-elsevier", "tdm-springer"] {
+        for name in ["tdm-aps", "tdm-elsevier", "tdm-springer", "tdm-ieee"] {
             assert_eq!(
                 outcome(&attempts, name),
                 &AttemptOutcome::NotNeeded,

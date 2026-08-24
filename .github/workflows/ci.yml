@@ -41,7 +41,7 @@ jobs:
           # have rotted silently. The union matches the documented install
           # shape (`SOURCES.md` §3); the singleton proves `tdm-*` does not
           # secretly depend on `metadata`.
-          - "oa-only,metadata,tdm-aps,tdm-elsevier,tdm-springer"
+          - "oa-only,metadata,tdm-aps,tdm-elsevier,tdm-springer,tdm-ieee"
           - "oa-only,tdm-aps"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -115,7 +115,7 @@ jobs:
       # tdm_springer / tdm_aps / tdm_elsevier) ran in NO CI job before this.
       # They are the only thing standing between a credential-handling
       # source and a silent regression, so they have to actually run.
-      - run: cargo test --workspace --all-targets --no-default-features --features oa-only,metadata,tdm-aps,tdm-elsevier,tdm-springer
+      - run: cargo test --workspace --all-targets --no-default-features --features oa-only,metadata,tdm-aps,tdm-elsevier,tdm-springer,tdm-ieee
 
   msrv:
     # MSRV is pinned in rust-toolchain.toml / Cargo.toml; the job name
@@ -150,4 +150,4 @@ jobs:
       # Same reasoning for Tier 3: these modules carry the longest
       # doc-comments in the tree (three-gate activation, credential
       # hygiene) and none of it was ever rendered.
-      - run: cargo doc --workspace --no-deps --no-default-features --features oa-only,metadata,tdm-aps,tdm-elsevier,tdm-springer
+      - run: cargo doc --workspace --no-deps --no-default-features --features oa-only,metadata,tdm-aps,tdm-elsevier,tdm-springer,tdm-ieee

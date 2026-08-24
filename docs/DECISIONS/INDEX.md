@@ -58,6 +58,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0039 | IEEE / ACM / SIAM / AMS stay off `oa-publisher`; TDM credentials are the route | Accepted (0.8.8) | `feat/adr-source-and-allowlist-decisions` | #407 |
 | 0040 | Source expansion gated by the existing `metadata` feature, runtime-gated off | Accepted (0.8.8) | `feat/adr-source-and-allowlist-decisions` | #413 |
 | 0041 | Tier-3 TDM sources are scoped to their publisher's DOI prefixes | Accepted (0.8.9) | `fix/442-tier3-orchestrator-wiring` | #442 |
+| 0042 | `tdm-ieee` ships against an inferred contract, marked unverified | Accepted (0.8.9) | `feat/430-tdm-ieee` | #430 |
 
 ## Conventions
 

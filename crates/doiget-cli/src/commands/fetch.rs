@@ -1358,7 +1358,8 @@ mod tests {
     #[cfg(any(
         feature = "tdm-aps",
         feature = "tdm-elsevier",
-        feature = "tdm-springer"
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
     ))]
     #[allow(clippy::vec_init_then_push)]
     fn the_production_client_registers_every_tier_3_source_key() {
@@ -1396,6 +1397,8 @@ mod tests {
         keys.push("tdm-elsevier");
         #[cfg(feature = "tdm-springer")]
         keys.push("tdm-springer");
+        #[cfg(feature = "tdm-ieee")]
+        keys.push("tdm-ieee");
         assert!(!keys.is_empty(), "the guard must have checked something");
         for key in keys {
             assert!(
