@@ -1153,16 +1153,28 @@ async fn fetch_paper_doi(
     // one the user went and got credentials for. Prefix-scoped, so an
     // enabled TDM source is only ever told about DOIs its publisher
     // already knows it issued.
+    // Every `tdm-*` feature must be named here. #457 added `tdm-ieee`
+    // to the chain body and not to these two gates, so a build with
+    // `--features tdm-ieee` alone compiled the source, the allowlist and
+    // the capability grant, and then `#[cfg]`-ed away the only code that
+    // calls any of it. Fourth instance of #442's shape.
     #[cfg(any(
         feature = "tdm-elsevier",
         feature = "tdm-aps",
-        feature = "tdm-springer"
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
     ))]
     let tdm_meta = resolve_tdm_chain(ref_, profile, ctx, cross.is_some(), &mut attempts).await;
+    // The `not(...)` half has to name the same four features as the
+    // `any(...)` above, or a build with only the omitted one compiles
+    // BOTH arms: the real call, then this shadow over it. That is what
+    // `--features tdm-ieee` did — `unused variable: tdm_meta`, and the
+    // chain's result silently discarded.
     #[cfg(not(any(
         feature = "tdm-elsevier",
         feature = "tdm-aps",
-        feature = "tdm-springer"
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
     )))]
     let tdm_meta: Option<Value> = None;
 
@@ -3595,7 +3607,8 @@ pub fn nothing_was_consulted(attempts: &[SourceAttempt]) -> bool {
     feature = "metadata",
     feature = "tdm-elsevier",
     feature = "tdm-aps",
-    feature = "tdm-springer"
+    feature = "tdm-springer",
+    feature = "tdm-ieee"
 ))]
 fn classify_attempt(e: &FetchError) -> AttemptOutcome {
     match e {
@@ -3621,7 +3634,8 @@ fn classify_attempt(e: &FetchError) -> AttemptOutcome {
     feature = "metadata",
     feature = "tdm-elsevier",
     feature = "tdm-aps",
-    feature = "tdm-springer"
+    feature = "tdm-springer",
+    feature = "tdm-ieee"
 ))]
 fn is_access_refusal(hint: &str) -> bool {
     hint.contains("not open access") || hint.contains("openAccess")
@@ -3758,7 +3772,8 @@ async fn resolve_optional_chain(
 #[cfg(any(
     feature = "tdm-elsevier",
     feature = "tdm-aps",
-    feature = "tdm-springer"
+    feature = "tdm-springer",
+    feature = "tdm-ieee"
 ))]
 // `chain` is built by `#[cfg]`-gated pushes rather than a `vec![]`
 // literal: an attribute per element inside a vec literal is not
@@ -3898,7 +3913,8 @@ async fn resolve_tdm_chain(
     feature = "metadata",
     feature = "tdm-elsevier",
     feature = "tdm-aps",
-    feature = "tdm-springer"
+    feature = "tdm-springer",
+    feature = "tdm-ieee"
 ))]
 fn optional_base(env: &str) -> Option<url::Url> {
     let raw = std::env::var(env).ok()?;
@@ -4300,6 +4316,102 @@ mod chain_tests {
 // Gated on all three publishers because the tests name all three. The
 // single-feature CI job still compiles `resolve_tdm_chain` itself, which
 // is what that job is for.
+
+// ---------------------------------------------------------------------------
+// #458: is the chain reachable with ONE publisher compiled?
+// ---------------------------------------------------------------------------
+//
+// The suite below needs all four features, so it only ever runs in the
+// union CI job — where the gates are satisfied by the other three no
+// matter what the fourth is missing. That is exactly how `tdm-ieee`
+// shipped with the chain `#[cfg]`-ed away from it: the source, the
+// allowlist, the capability grant and the docs all existed, and the only
+// code that calls any of them was compiled out.
+//
+// This module is gated on `any(...)`, so it compiles in every singleton
+// job. It does not need a mock, a key or a grant — merely naming
+// `resolve_tdm_chain` fails the build when the caller's gate omits the
+// compiled publisher, which is the whole bug.
+
+#[cfg(all(
+    test,
+    any(
+        feature = "tdm-aps",
+        feature = "tdm-elsevier",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    )
+))]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod tdm_singleton_reach_tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use camino::Utf8PathBuf;
+    use tempfile::TempDir;
+
+    use crate::http::HttpClient;
+    use crate::provenance::ProvenanceLog;
+    use crate::rate_limiter::RateLimiter;
+    use crate::{CapabilityProfile, Doi, RateLimits, Ref};
+
+    fn ctx() -> (TempDir, FetchContext) {
+        let td = TempDir::new().expect("tempdir");
+        let dir = Utf8PathBuf::try_from(td.path().to_path_buf()).expect("utf-8");
+        let session_id = "01J0000000000000000000SNG".to_string();
+        let log = Arc::new(
+            ProvenanceLog::open(dir.join("t.jsonl"), session_id.clone()).expect("log opens"),
+        );
+        let c = FetchContext {
+            http: Arc::new(HttpClient::new_for_tests_allow_http(
+                "tdm-probe",
+                "127.0.0.1:1",
+            )),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+            log,
+            session_id,
+            cache_root: None,
+        };
+        (td, c)
+    }
+
+    /// Every compiled publisher must appear in the trace for a DOI it
+    /// registered — with the gates CLOSED, so no request goes out and no
+    /// credential is needed. A source missing here is one the production
+    /// path cannot reach, whatever its own unit tests say.
+    #[tokio::test]
+    #[serial_test::serial]
+    #[allow(clippy::vec_init_then_push)]
+    async fn every_compiled_publisher_is_in_the_chain() {
+        // Pushed rather than an array literal because each entry is
+        // `#[cfg]`-gated, which is not expressible inside one.
+        let mut cases: Vec<(&str, &str)> = Vec::new();
+        #[cfg(feature = "tdm-aps")]
+        cases.push(("tdm-aps", "10.1103/PhysRevX.10.011001"));
+        #[cfg(feature = "tdm-elsevier")]
+        cases.push(("tdm-elsevier", "10.1016/j.example.2024.001"));
+        #[cfg(feature = "tdm-springer")]
+        cases.push(("tdm-springer", "10.1007/s00220-024-05001-x"));
+        #[cfg(feature = "tdm-ieee")]
+        cases.push(("tdm-ieee", "10.1109/TSP.2018.2812747"));
+        assert!(!cases.is_empty(), "the guard must have checked something");
+
+        let (_td, c) = ctx();
+        let profile = CapabilityProfile::from_env().expect("clean env never errors");
+
+        for (name, doi) in cases {
+            let ref_ = Ref::Doi(Doi::parse(doi).expect("doi"));
+            let mut attempts = Vec::new();
+            resolve_tdm_chain(&ref_, &profile, &c, false, &mut attempts).await;
+            assert!(
+                attempts.iter().any(|a| a.source == name),
+                "`{name}` is compiled but absent from the chain for its own DOI {doi}; \
+                 the production path cannot reach it. attempts: {attempts:?}"
+            );
+        }
+    }
+}
 
 #[cfg(all(
     test,
