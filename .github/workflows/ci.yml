@@ -122,6 +122,23 @@ jobs:
       # They are the only thing standing between a credential-handling
       # source and a silent regression, so they have to actually run.
       - run: cargo test --workspace --all-targets --no-default-features --features oa-only,metadata,tdm-aps,tdm-elsevier,tdm-springer,tdm-ieee
+      # #458: the union job above cannot see a publisher missing from the
+      # chain's `#[cfg]` gate, because the other three satisfy it. That is
+      # how `tdm-ieee` shipped with `resolve_tdm_chain` compiled out from
+      # under it — source, allowlist, grant and docs all present, and no
+      # code left that calls any of them.
+      #
+      # One singleton per publisher, ubuntu only: the reach test is
+      # `any(...)`-gated so each build exercises exactly the publisher it
+      # compiled, and a missing gate is a compile error rather than a
+      # silent no-op.
+      - name: Tier-3 singletons (each publisher alone)
+        run: |
+          for f in tdm-aps tdm-elsevier tdm-springer tdm-ieee; do
+            echo "::group::oa-only,$f"
+            cargo test -p doiget-core --no-default-features --features "oa-only,$f"
+            echo "::endgroup::"
+          done
 
   msrv:
     # MSRV is pinned in rust-toolchain.toml / Cargo.toml; the job name
