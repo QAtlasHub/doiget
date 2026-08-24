@@ -49,7 +49,8 @@ use super::output::print_err;
 #[cfg(feature = "citation")]
 use doiget_core::http::tier_2_allowlist;
 use doiget_core::http::{
-    discovery_allowlist, fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist, HttpClient,
+    discovery_allowlist, fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist,
+    tier_3_allowlists, HttpClient,
 };
 use doiget_core::orchestrator::{
     fetch_paper as core_fetch_paper, FetchPaperOutcome, PdfLegStatus, SourceAttempt,
@@ -265,6 +266,13 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
         // the runtime gate; the allowlist is the transport gate.
         #[cfg(feature = "citation")]
         allowlists.extend(tier_2_allowlist());
+        // #454: the Tier-3 transport gate. #444 made the orchestrator
+        // reach these sources; without this line the fetch it then issues
+        // under `tdm-aps` / `tdm-elsevier` / `tdm-springer` dies at
+        // `UnknownSource`. Empty in a default build (ADR-0002 — no Tier-3
+        // feature is compiled into published binaries), so this is a
+        // no-op for the shipped surface.
+        allowlists.extend(tier_3_allowlists());
 
         // ADR-0028 D2: merge user-extension hosts from
         // `<config_dir>/doiget/config.toml`. See
@@ -1308,6 +1316,96 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    /// Save an env var and restore it on drop.
+    ///
+    /// Both client-builder tests below have to clear the
+    /// `DOIGET_*_BASE` overrides to reach the production branch, and
+    /// leaving one cleared would silently reroute an unrelated test.
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+    impl EnvGuard {
+        fn save(key: &'static str) -> Self {
+            Self {
+                key,
+                prev: std::env::var(key).ok(),
+            }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    /// #454: the guard the list-level one in `http.rs` cannot be.
+    ///
+    /// `every_tier_3_source_has_a_transport_allowlist_entry` asserts that
+    /// `tier_3_aps_allowlist()` *contains* `"tdm-aps"`. It says nothing
+    /// about whether anything hands that list to a client, and for three
+    /// releases nothing did — so the assertion passed while a production
+    /// fetch returned `UnknownSource { source_key: "tdm-aps" }`.
+    ///
+    /// This asserts the object the fetch actually goes through. It cannot
+    /// pass for the reason that one did, because there is no list here to
+    /// be right about in isolation.
+    #[test]
+    #[serial]
+    #[cfg(any(
+        feature = "tdm-aps",
+        feature = "tdm-elsevier",
+        feature = "tdm-springer"
+    ))]
+    #[allow(clippy::vec_init_then_push)]
+    fn the_production_client_registers_every_tier_3_source_key() {
+        // Every base override must be clear or `build_http_client` takes
+        // the test-mode branch, which registers whatever it is given and
+        // would prove nothing.
+        let _g: Vec<EnvGuard> = [
+            "DOIGET_ARXIV_BASE",
+            "DOIGET_CROSSREF_BASE",
+            "DOIGET_UNPAYWALL_BASE",
+            "DOIGET_OA_PUBLISHER_BASE",
+            "DOIGET_OPENALEX_BASE",
+            "DOIGET_AR5IV_BASE",
+        ]
+        .iter()
+        .map(|k| {
+            let g = EnvGuard::save(k);
+            std::env::remove_var(k);
+            g
+        })
+        .collect();
+
+        let client = build_http_client(None).expect("production client builds");
+
+        // Built by push rather than an array literal: with a single
+        // `tdm-*` feature compiled the literal is a one-element loop,
+        // which clippy denies. Same shape as `tier_3_allowlists()`,
+        // and the `vec_init_then_push` allow is on the fn for the same
+        // reason it is there — the pushes are `#[cfg]`-gated, so an
+        // attribute per element is not expressible.
+        let mut keys: Vec<&str> = Vec::new();
+        #[cfg(feature = "tdm-aps")]
+        keys.push("tdm-aps");
+        #[cfg(feature = "tdm-elsevier")]
+        keys.push("tdm-elsevier");
+        #[cfg(feature = "tdm-springer")]
+        keys.push("tdm-springer");
+        assert!(!keys.is_empty(), "the guard must have checked something");
+        for key in keys {
+            assert!(
+                client.source_allowlist(key).is_some(),
+                "the production client has no allowlist for `{key}`; the orchestrator \
+                 reaches this source and the fetch would die at UnknownSource (#454)"
+            );
+        }
+    }
+
     #[test]
     fn new_session_id_is_26_chars() {
         // ULID textual form is fixed-width 26 chars (Crockford base32).
@@ -1355,29 +1453,10 @@ host = "*.uj.edu.pl"
         drop(f);
 
         // Save + override env so `config_dir_utf8()` lands on the
-        // tempdir. Restored on Drop by EnvGuard. We also clear the
+        // tempdir. Restored on Drop by `EnvGuard` (module-level since
+        // #454, which needed the same save/restore). We also clear the
         // five `DOIGET_*_BASE` env vars to force the production
         // branch of `build_http_client`.
-        struct EnvGuard {
-            key: &'static str,
-            prev: Option<String>,
-        }
-        impl EnvGuard {
-            fn save(key: &'static str) -> Self {
-                Self {
-                    key,
-                    prev: std::env::var(key).ok(),
-                }
-            }
-        }
-        impl Drop for EnvGuard {
-            fn drop(&mut self) {
-                match &self.prev {
-                    Some(v) => std::env::set_var(self.key, v),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
         let _g0 = EnvGuard::save("XDG_CONFIG_HOME");
         let _g1 = EnvGuard::save("APPDATA");
         let _g2 = EnvGuard::save("HOME");
