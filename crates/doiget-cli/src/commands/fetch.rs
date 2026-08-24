@@ -1042,84 +1042,11 @@ pub(crate) fn cli_exit_code(code: ErrorCode) -> i32 {
     }
 }
 
-/// Widening suggestions for a refused host, most specific first (#443).
-///
-/// The `= help:` block used to name only the hop that was just refused, so
-/// a publisher whose PDF sits behind `www.x.org -> pubs.x.org` cost the
-/// user one edit-run cycle per hop. Naming the registrable domain too ends
-/// it in one.
-///
-/// It is also the policy-consistent suggestion. The built-in allowlist is
-/// written almost entirely as registrable-domain wildcards
-/// (`*.springer.com`, `*.wiley.com`, `*.aps.org`), and ADR-0027's stated
-/// mitigation for widening the trusted surface is exactly that they are
-/// "bounded registrable-domain wildcards". Suggesting a bare FQDN was both
-/// more work for the user and narrower than the convention the project
-/// applies to itself. The apex is offered alongside the wildcard because a
-/// single-suffix wildcard does not match it — the reason the built-in list
-/// already carries both forms for `doaj.org`, `arxiv.org` and friends.
-///
-/// Conservative by construction: a suggestion is emitted only when the
-/// derived parent is clearly registrable. Getting this exactly right needs
-/// the public suffix list, and a wrong guess here is not cosmetic — it
-/// would invite the user to trust `*.co.uk`.
-fn widening_suggestions(host: &str) -> Vec<(String, &'static str)> {
-    let mut out = vec![(host.to_string(), "this hop only")];
-    let labels: Vec<&str> = host.split('.').filter(|l| !l.is_empty()).collect();
-    if labels.len() < 2 || looks_like_public_suffix(&labels) {
-        return out;
-    }
-    if labels.len() == 2 {
-        // Already the apex: the useful widening is its subdomains.
-        out.push((format!("*.{host}"), "and its subdomains"));
-        return out;
-    }
-    let parent_labels = &labels[1..];
-    if looks_like_public_suffix(parent_labels) {
-        return out;
-    }
-    let parent = parent_labels.join(".");
-    out.push((format!("*.{parent}"), "the whole publisher"));
-    out.push((parent, "apex too (a wildcard does not match it)"));
-    out
-}
-
-/// Whether `labels` looks like a public suffix rather than something a
-/// single organisation registered.
-///
-/// Deliberately crude and deliberately over-cautious: the cost of a false
-/// positive is one missing suggestion, and the cost of a false negative is
-/// telling a user to trust every domain under `co.uk`.
-fn looks_like_public_suffix(labels: &[&str]) -> bool {
-    match labels {
-        // A bare TLD.
-        [_] => true,
-        // `co.uk`, `ac.jp`, `com.au`, … — a known second level under a
-        // two-letter ccTLD. `example.co.uk` has three labels and is NOT
-        // caught here, which is correct.
-        [sld, tld] => {
-            tld.len() == 2
-                && matches!(
-                    *sld,
-                    "co" | "com"
-                        | "ne"
-                        | "net"
-                        | "or"
-                        | "org"
-                        | "ac"
-                        | "edu"
-                        | "gov"
-                        | "go"
-                        | "gr"
-                        | "lg"
-                        | "mil"
-                        | "id"
-                        | "in"
-                )
-        }
-        _ => false,
-    }
-}
+// `widening_suggestions` / `looks_like_public_suffix` moved to
+// `doiget_core::remediation` in #459 so the MCP and `batch --json`
+// surfaces render the same suggestions this block does, rather than a
+// second implementation of them. #454 is the recent lesson about two
+// surfaces each keeping their own copy of a rule.
 
 /// Build the ADR-0023 `denial_context` advisory lines shared by
 /// [`render_fetch_error`] and [`render_blocked_error`]: the `= note:`
@@ -1168,7 +1095,7 @@ fn denial_note_lines(dc: &DenialContext, config_path: Option<&camino::Utf8Path>)
             .to_string(),
     );
     if dc.attempted.is_some() {
-        for (pattern, why) in widening_suggestions(attempted) {
+        for (pattern, why) in doiget_core::remediation::widening_suggestions(attempted) {
             out.push(format!(
                 "          [[network.additional_hosts]] host = \"{pattern}\"   # {why}"
             ));
@@ -2012,7 +1939,7 @@ host = "*.uj.edu.pl"
             "repository.ruj.uj.edu.pl",
             "link.springer.com",
         ] {
-            for (pattern, _) in widening_suggestions(host) {
+            for (pattern, _) in doiget_core::remediation::widening_suggestions(host) {
                 doiget_core::user_extension::validate_pattern(&pattern).unwrap_or_else(|e| {
                     panic!("suggested `{pattern}` for `{host}`, which the validator rejects: {e:?}")
                 });
@@ -2032,7 +1959,7 @@ host = "*.uj.edu.pl"
             ("foo.com.au", "com.au"),
             ("example.org", "org"),
         ] {
-            let joined: String = widening_suggestions(host)
+            let joined: String = doiget_core::remediation::widening_suggestions(host)
                 .into_iter()
                 .map(|(p, _)| p)
                 .collect::<Vec<_>>()
@@ -2050,10 +1977,11 @@ host = "*.uj.edu.pl"
     /// `strath.ac.uk` is a real registration, not a public suffix.
     #[test]
     fn a_four_label_academic_host_still_gets_its_institution_wildcard() {
-        let got: Vec<String> = widening_suggestions("strathprints.strath.ac.uk")
-            .into_iter()
-            .map(|(p, _)| p)
-            .collect();
+        let got: Vec<String> =
+            doiget_core::remediation::widening_suggestions("strathprints.strath.ac.uk")
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect();
         assert!(
             got.iter().any(|p| p == "*.strath.ac.uk"),
             "expected the institution wildcard; got {got:?}"
@@ -2064,7 +1992,7 @@ host = "*.uj.edu.pl"
     /// downward.
     #[test]
     fn an_apex_host_offers_its_subdomains() {
-        let got: Vec<String> = widening_suggestions("ams.org")
+        let got: Vec<String> = doiget_core::remediation::widening_suggestions("ams.org")
             .into_iter()
             .map(|(p, _)| p)
             .collect();

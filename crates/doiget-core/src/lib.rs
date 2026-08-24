@@ -25,6 +25,7 @@ pub mod paper_text;
 pub mod provenance;
 pub mod rate_limiter;
 pub mod refs;
+pub mod remediation;
 pub mod resolver_cache;
 pub mod source;
 pub mod sources;

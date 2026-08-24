@@ -59,6 +59,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0040 | Source expansion gated by the existing `metadata` feature, runtime-gated off | Accepted (0.8.8) | `feat/adr-source-and-allowlist-decisions` | #413 |
 | 0041 | Tier-3 TDM sources are scoped to their publisher's DOI prefixes | Accepted (0.8.9) | `fix/442-tier3-orchestrator-wiring` | #442 |
 | 0042 | `tdm-ieee` ships against an inferred contract, marked unverified | Accepted (0.8.9) | `feat/430-tdm-ieee` | #430 |
+| 0043 | The machine-readable surfaces carry the trace and the remediation | Accepted (0.8.9) | `feat/459-machine-readable-diagnostics` | #459 |
 
 ## Conventions
 

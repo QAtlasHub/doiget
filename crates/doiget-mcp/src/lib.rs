@@ -548,7 +548,10 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: User wants to download a paper PDF given a DOI or arXiv id.\n\
                        INPUTS: ref (DOI or arXiv id), dry_run (optional bool).\n\
-                       OUTPUTS: { ok: true, ref, source, path, license, size_bytes, schema_version } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, ref, error }.\n\
+                       OUTPUTS: { ok: true, ref, source, path, license, size_bytes, schema_version, pdf, attempts } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, ref, error }.\n\
+                       READ `pdf.status` — `ok: true` does NOT mean a PDF landed. `fetched` = PDF on disk; `no_oa_url` = metadata only, no free copy exists; `blocked` = a free copy EXISTS but was refused.\n\
+                       ON `blocked`: do not report the paper as unavailable. `pdf.remediation` lists the config changes that would lift it, narrowest first — `additional_host` entries go under [[network.additional_hosts]] in the config file, a `trust_flag` is a [network] boolean. Show them to the user and let them choose; both widen the trusted download surface.\n\
+                       `attempts` says which other sources were consulted and which were never asked (`consulted: false` + `detail` naming the env var to set). Use it before concluding a paper is not indexed anywhere.\n\
                        COSTS: 1-3 s network call (or 0 when dry_run). May fail if not Open Access.\n\
                        SIDE EFFECTS: Writes PDF (or metadata-only TOML) to the store. Appends a row to the provenance log (unless dry_run).\n\
                        LIMITS: Max 5 fetches/sec (global). Use doiget_batch_fetch for >5 refs.",
@@ -3262,6 +3265,17 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
                     "denial_context".into(),
                     denial_context_to_value(dc, "fetch_paper_pdf_leg"),
                 );
+                // #459: `denial_context` says what was refused. This says
+                // what to do about it — the same suggestions the CLI's
+                // `= help:` block prints, from the same core function.
+                //
+                // Without it an agent sees a refusal and 24 patterns that
+                // are not the host, and reports "not available" for a
+                // paper that one line of config would have fetched.
+                let r = doiget_core::remediation::for_denial(dc);
+                if !r.is_empty() {
+                    o.insert("remediation".into(), json!(r));
+                }
             }
             if let Some(arxiv_id) = suggested_arxiv_id {
                 o.insert("suggested_arxiv_id".into(), json!(arxiv_id));
@@ -3309,7 +3323,22 @@ fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> V
         "year": outcome.year,
         // Issue #118: never a silent metadata-only success.
         "pdf": pdf_leg_json(&outcome.pdf_leg),
+        // #459: the #438 resolution trace. "We asked and it had nothing"
+        // and "we never asked" need different actions, and until now only
+        // the CLI was told which had happened. `null` rather than `[]`
+        // when there is no trace, so "unavailable" stays distinguishable
+        // from "empty".
+        "attempts": attempts_json(&outcome.attempts),
     })
+}
+
+/// Serialise the resolution trace, or `null` when there is none.
+fn attempts_json(attempts: &[doiget_core::orchestrator::SourceAttempt]) -> Value {
+    if attempts.is_empty() {
+        Value::Null
+    } else {
+        doiget_core::orchestrator::attempts_to_value(attempts)
+    }
 }
 
 /// Build the `{ok:false, ref, error:{code, message}}` envelope for
@@ -4435,6 +4464,121 @@ mod tests {
             "user-extension host must appear in the oa-publisher allowlist; \
              got: {:?}",
             oa.redirect_hosts
+        );
+    }
+
+    /// #459: a blocked PDF leg must say what would lift it.
+    ///
+    /// Before this the envelope carried `denial_context` — the host and
+    /// the 24 patterns that are not it — and nothing else. An agent that
+    /// cannot find the one-line fix reports "this paper is not
+    /// available", which for the DOI in ADR-0043 is false: it fetches
+    /// after `trust_academic_repos = true`.
+    #[test]
+    fn a_blocked_leg_carries_the_remediation_that_would_lift_it() {
+        use doiget_core::{DenialContext, DenialReason};
+
+        let leg = PdfLegStatus::Blocked {
+            code: ErrorCode::NetworkError,
+            message: "redirect target strathprints.strath.ac.uk not in allowlist".to_string(),
+            denial: Some(DenialContext {
+                reason: DenialReason::RedirectNotInAllowlist,
+                source: Some("oa-publisher".to_string()),
+                attempted: Some("strathprints.strath.ac.uk".to_string()),
+                expected: Some(vec!["*.arxiv.org".to_string()]),
+                hop_index: None,
+                cap: None,
+                actual: None,
+            }),
+            suggested_arxiv_id: None,
+        };
+        let v = pdf_leg_json(&leg);
+        let rem = v["remediation"]
+            .as_array()
+            .expect("a redirect denial must carry remediation");
+
+        assert!(
+            rem.iter().any(|x| x["value"] == "*.strath.ac.uk"),
+            "the #443 registrable-domain widening must reach MCP too: {v}"
+        );
+        let flag = rem
+            .iter()
+            .find(|x| x["kind"] == "trust_flag")
+            .expect("an *.ac.uk host must surface the curated flag");
+        assert_eq!(flag["value"], "trust_academic_repos");
+        assert!(
+            flag["note"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("*.ac.uk"),
+            "name the pattern that matched, or the flag reads as a guess: {flag}"
+        );
+    }
+
+    /// The converse: a denial with no configuration channel must offer
+    /// nothing. Suggesting a host to trust for an oversized body sends
+    /// the caller after a fix that cannot work.
+    #[test]
+    fn a_denial_with_no_config_channel_carries_no_remediation() {
+        use doiget_core::{DenialContext, DenialReason};
+
+        let leg = PdfLegStatus::Blocked {
+            code: ErrorCode::NetworkError,
+            message: "body exceeded the size cap".to_string(),
+            denial: Some(DenialContext {
+                reason: DenialReason::SizeCapExceeded,
+                source: Some("oa-publisher".to_string()),
+                attempted: None,
+                expected: None,
+                hop_index: None,
+                cap: Some(104_857_600),
+                actual: Some(209_715_200),
+            }),
+            suggested_arxiv_id: None,
+        };
+        let v = pdf_leg_json(&leg);
+        assert!(
+            v.get("remediation").is_none(),
+            "a size cap is not fixed by trusting a host: {v}"
+        );
+        assert!(
+            v.get("denial_context").is_some(),
+            "the denial context itself must still be there: {v}"
+        );
+    }
+
+    /// #459: the trace, and the distinction it exists to make. Absent
+    /// rather than `[]` when unavailable — #413 was filed because those
+    /// two were the same observable.
+    #[test]
+    fn attempts_json_distinguishes_no_trace_from_an_empty_one() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+
+        assert!(
+            attempts_json(&[]).is_null(),
+            "no trace must be null, not an empty array"
+        );
+
+        let a = attempts_json(&[
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: "DOIGET_ENABLE_HAL",
+                },
+            ),
+            SourceAttempt::new("core", AttemptOutcome::NoRecord),
+        ]);
+        let rows = a.as_array().expect("array");
+        assert_eq!(rows[0]["outcome"], "not_consulted_disabled");
+        assert_eq!(
+            rows[0]["detail"], "DOIGET_ENABLE_HAL",
+            "name the var to set, or the agent cannot act on it"
+        );
+        assert_eq!(rows[0]["consulted"], false);
+        assert_eq!(rows[1]["outcome"], "consulted_no_record");
+        assert_eq!(
+            rows[1]["consulted"], true,
+            "asked-and-empty is not the same as never-asked"
         );
     }
 
