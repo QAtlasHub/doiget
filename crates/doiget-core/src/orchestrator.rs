@@ -3453,6 +3453,46 @@ impl AttemptOutcome {
         )
     }
 
+    /// Stable machine token for this outcome (#459).
+    ///
+    /// [`Self::render`] is prose and may be reworded; this is the thing a
+    /// consumer branches on. Kept separate for that reason — the CLI has
+    /// already reworded the trace twice (#413, #438) and a caller keying
+    /// off the sentence would have broken both times.
+    ///
+    /// The two halves of the vocabulary mirror [`Self::was_consulted`]:
+    /// `not_consulted_*` means no request went out, `consulted_*` means one
+    /// did. That distinction is the entire reason this type exists.
+    #[must_use]
+    pub fn wire(&self) -> &'static str {
+        match self {
+            Self::Disabled { .. } => "not_consulted_disabled",
+            Self::NotApplicable => "not_consulted_not_applicable",
+            Self::WrongPublisher { .. } => "not_consulted_wrong_publisher",
+            Self::NotNeeded => "not_consulted_not_needed",
+            Self::NoRecord => "consulted_no_record",
+            Self::NotOpenAccess { .. } => "consulted_not_open_access",
+            Self::Failed { .. } => "consulted_failed",
+            Self::Resolved => "consulted_resolved",
+        }
+    }
+
+    /// The variant's free-text payload, when it has one.
+    ///
+    /// Carried separately from [`Self::wire`] so a consumer gets the
+    /// actionable specifics — which env var, which prefix, which error —
+    /// without parsing them back out of the rendered sentence.
+    #[must_use]
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            Self::Disabled { env } => Some(env),
+            Self::WrongPublisher { detail }
+            | Self::NotOpenAccess { detail }
+            | Self::Failed { detail } => Some(detail),
+            _ => None,
+        }
+    }
+
     /// One-line rendering, phrased so consulted and not-consulted cannot
     /// be misread for one another.
     #[must_use]
@@ -3488,6 +3528,40 @@ impl SourceAttempt {
     pub fn new(source: &'static str, outcome: AttemptOutcome) -> Self {
         Self { source, outcome }
     }
+}
+
+/// The trace as JSON, for the machine-readable surfaces (#459).
+///
+/// One object per source: `{ source, outcome, detail?, consulted }`.
+///
+/// `consulted` is redundant with `outcome` and present anyway. It is the
+/// single question every consumer of this array actually has — "did anyone
+/// else look?" — and making them memorise which of eight tokens implies it
+/// invites the exact confusion the type was introduced to end.
+///
+/// Built here rather than by `#[derive(Serialize)]` on the types: both are
+/// `#[non_exhaustive]` public API, and deriving would make every future
+/// variant a wire change by default instead of by decision.
+#[must_use]
+pub fn attempts_to_value(attempts: &[SourceAttempt]) -> serde_json::Value {
+    serde_json::Value::Array(
+        attempts
+            .iter()
+            .map(|a| {
+                let mut o = serde_json::Map::new();
+                o.insert("source".into(), serde_json::json!(a.source));
+                o.insert("outcome".into(), serde_json::json!(a.outcome.wire()));
+                if let Some(d) = a.outcome.detail() {
+                    o.insert("detail".into(), serde_json::json!(d));
+                }
+                o.insert(
+                    "consulted".into(),
+                    serde_json::json!(a.outcome.was_consulted()),
+                );
+                serde_json::Value::Object(o)
+            })
+            .collect(),
+    )
 }
 
 /// Render a whole trace as an `= note:`-style block.

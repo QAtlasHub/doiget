@@ -526,13 +526,13 @@ fn classify_joined(
                 } = &outcome.pdf_leg
                 {
                     let effective = effective_blocked_code(*code, denial.as_ref());
-                    let denial_value = denial.as_ref().and_then(denial_context_to_value);
                     let record = json_mode.then(|| {
                         build_jsonl_failure(
                             Some(&input),
                             effective.as_wire(),
                             message,
-                            denial_value,
+                            denial.as_ref(),
+                            &outcome.attempts,
                         )
                     });
                     let error_dbg =
@@ -558,11 +558,18 @@ fn classify_joined(
                 let error_dbg = format!("{e:?}");
                 let json_msg = format!("{e}");
                 let code: ErrorCode = (&e).into();
-                let denial_value = Option::<DenialContext>::from(&e)
-                    .as_ref()
-                    .and_then(denial_context_to_value);
+                let denial = Option::<DenialContext>::from(&e);
                 let record = json_mode.then(|| {
-                    build_jsonl_failure(Some(&input), code.as_wire(), &json_msg, denial_value)
+                    build_jsonl_failure(
+                        Some(&input),
+                        code.as_wire(),
+                        &json_msg,
+                        denial.as_ref(),
+                        // A typed `FetchError` carries no trace — the
+                        // orchestrator's `attempts` live on the outcome,
+                        // which this arm never got.
+                        &[],
+                    )
                 });
                 let failure = Some((input.clone(), code.as_wire()));
                 JoinedOutcome {
@@ -582,7 +589,7 @@ fn classify_joined(
             // would mishandle. Self-review for #209 §1.
             let json_msg = format!("batch task panicked: {join_err}");
             let record =
-                json_mode.then(|| build_jsonl_failure(None, "FETCH_ERROR", &json_msg, None));
+                json_mode.then(|| build_jsonl_failure(None, "FETCH_ERROR", &json_msg, None, &[]));
             JoinedOutcome {
                 is_error: true,
                 json_record: record,
@@ -655,12 +662,34 @@ fn build_jsonl_failure(
     ref_input: Option<&str>,
     code: &str,
     message: &str,
-    denial_context: Option<serde_json::Value>,
+    denial: Option<&DenialContext>,
+    attempts: &[doiget_core::orchestrator::SourceAttempt],
 ) -> serde_json::Value {
     let mut error = serde_json::json!({ "code": code, "message": message });
-    if let Some(dc) = denial_context {
-        if let Some(obj) = error.as_object_mut() {
-            obj.insert("denial_context".to_string(), dc);
+    if let Some(obj) = error.as_object_mut() {
+        if let Some(dc) = denial {
+            // Route through the logged helper (#154): a bare `json!` would
+            // coerce a future serialization failure to `null` with no trace.
+            if let Some(v) = denial_context_to_value(dc) {
+                obj.insert("denial_context".to_string(), v);
+            }
+            // #459: `denial_context` says what was refused; this says what
+            // to do. A CI consumer reading only the first can report a
+            // recoverable failure as a permanent one.
+            let r = doiget_core::remediation::for_denial(dc);
+            if !r.is_empty() {
+                obj.insert("remediation".to_string(), serde_json::json!(r));
+            }
+        }
+        // #459: the #438 resolution trace, which until now existed only as
+        // CLI text. Omitted entirely when empty rather than emitted as
+        // `[]`, so "no trace available" and "the trace is empty" stay
+        // distinguishable.
+        if !attempts.is_empty() {
+            obj.insert(
+                "attempts".to_string(),
+                doiget_core::orchestrator::attempts_to_value(attempts),
+            );
         }
     }
     serde_json::json!({
@@ -679,7 +708,10 @@ fn build_jsonl_failure(
 /// a policy denial (`docs/ERRORS.md` §3.1).
 #[allow(clippy::print_stdout)]
 fn emit_jsonl_failure(ref_input: Option<&str>, code: &str, message: &str) {
-    println!("{}", build_jsonl_failure(ref_input, code, message, None));
+    println!(
+        "{}",
+        build_jsonl_failure(ref_input, code, message, None, &[])
+    );
 }
 
 /// Emit a JSON-Lines record for a ref skipped because its PDF already exists
@@ -748,7 +780,7 @@ mod tests {
 
     #[test]
     fn jsonl_failure_shape_invalid_ref() {
-        let v = build_jsonl_failure(Some("not-a-doi"), "INVALID_REF", "bad ref", None);
+        let v = build_jsonl_failure(Some("not-a-doi"), "INVALID_REF", "bad ref", None, &[]);
         assert_eq!(v["ok"], false);
         assert_eq!(v["ref"], "not-a-doi");
         assert_eq!(v["error"]["code"], "INVALID_REF");
@@ -761,7 +793,7 @@ mod tests {
 
     #[test]
     fn jsonl_failure_shape_fetch_error() {
-        let v = build_jsonl_failure(Some("arxiv:2401.12345"), "NETWORK_ERROR", "boom", None);
+        let v = build_jsonl_failure(Some("arxiv:2401.12345"), "NETWORK_ERROR", "boom", None, &[]);
         assert_eq!(v["ok"], false);
         assert_eq!(v["ref"], "arxiv:2401.12345");
         assert_eq!(v["error"]["code"], "NETWORK_ERROR");
@@ -772,19 +804,25 @@ mod tests {
     fn jsonl_failure_shape_with_denial_context() {
         // #210: the structured `denial_context` carries the closed-enum
         // `reason` + per-source detail when a CAPABILITY_DENIED failure
-        // surfaces. Hand-craft the value to pin the wire shape — the
-        // serializer is `DenialContext`'s own `Serialize` impl (ADR-0023).
-        let dc = serde_json::json!({
-            "reason":    "redirect_not_in_allowlist",
-            "source":    "oa-publisher",
-            "attempted": "evil.example.com",
-            "expected":  ["good-publisher.example.org"],
-        });
+        // surfaces. Since #459 the builder takes the typed `DenialContext`
+        // rather than a pre-serialised value, so this now exercises
+        // `DenialContext`'s own `Serialize` impl (ADR-0023) end to end
+        // instead of a hand-written stand-in for it.
+        let dc = DenialContext {
+            reason: doiget_core::DenialReason::RedirectNotInAllowlist,
+            source: Some("oa-publisher".to_string()),
+            attempted: Some("strathprints.strath.ac.uk".to_string()),
+            expected: Some(vec!["good-publisher.example.org".to_string()]),
+            hop_index: None,
+            cap: None,
+            actual: None,
+        };
         let v = build_jsonl_failure(
             Some("10.1234/foo"),
             "CAPABILITY_DENIED",
             "redirect not in allowlist",
-            Some(dc),
+            Some(&dc),
+            &[],
         );
         assert_eq!(v["error"]["code"], "CAPABILITY_DENIED");
         assert_eq!(
@@ -794,7 +832,58 @@ mod tests {
         assert_eq!(v["error"]["denial_context"]["source"], "oa-publisher");
         assert_eq!(
             v["error"]["denial_context"]["attempted"],
-            "evil.example.com"
+            "strathprints.strath.ac.uk"
+        );
+
+        // #459: and the record now says what to DO. A CI consumer reading
+        // only `denial_context` reports a recoverable failure as a
+        // permanent one.
+        let rem = v["error"]["remediation"]
+            .as_array()
+            .expect("a redirect denial must carry remediation");
+        let values: Vec<&str> = rem.iter().filter_map(|x| x["value"].as_str()).collect();
+        assert!(
+            values.contains(&"*.strath.ac.uk"),
+            "the registrable-domain widening must be offered: {values:?}"
+        );
+        assert!(
+            rem.iter()
+                .any(|x| x["kind"] == "trust_flag" && x["value"] == "trust_academic_repos"),
+            "an *.ac.uk host must surface the curated flag: {values:?}"
+        );
+    }
+
+    /// #459: the trace an agent needs to tell "we asked and it had
+    /// nothing" from "we never asked". Absent entirely when there is no
+    /// trace, so the two are not conflated with an empty array.
+    #[test]
+    fn jsonl_failure_carries_the_resolution_trace() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+
+        let attempts = vec![
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: "DOIGET_ENABLE_HAL",
+                },
+            ),
+            SourceAttempt::new("core", AttemptOutcome::NoRecord),
+        ];
+        let v = build_jsonl_failure(Some("10.1/x"), "NOT_FOUND", "nope", None, &attempts);
+        let a = v["error"]["attempts"]
+            .as_array()
+            .expect("attempts must be present when the trace is non-empty");
+        assert_eq!(a[0]["source"], "hal");
+        assert_eq!(a[0]["outcome"], "not_consulted_disabled");
+        assert_eq!(a[0]["detail"], "DOIGET_ENABLE_HAL");
+        assert_eq!(a[0]["consulted"], false);
+        assert_eq!(a[1]["outcome"], "consulted_no_record");
+        assert_eq!(a[1]["consulted"], true);
+
+        let empty = build_jsonl_failure(Some("10.1/x"), "NOT_FOUND", "nope", None, &[]);
+        assert!(
+            empty["error"].get("attempts").is_none(),
+            "no trace must be absent, not an empty array: {empty}"
         );
     }
 
@@ -803,7 +892,7 @@ mod tests {
         // Self-review for #209 §1: a JoinSet panic loses the input, so
         // the record carries `ref: null` rather than a sentinel string
         // that a consumer doing `retry(rec["ref"])` would mishandle.
-        let v = build_jsonl_failure(None, "FETCH_ERROR", "batch task panicked: ...", None);
+        let v = build_jsonl_failure(None, "FETCH_ERROR", "batch task panicked: ...", None, &[]);
         assert_eq!(v["ok"], false);
         assert!(v["ref"].is_null(), "panic record's ref MUST be null: {v}");
         assert_eq!(v["error"]["code"], "FETCH_ERROR");
@@ -1003,12 +1092,12 @@ mod tests {
             !s.contains('\n'),
             "JSONL success must be single-line: {s:?}"
         );
-        let s2 = build_jsonl_failure(Some("10.1/x"), "FETCH_ERROR", "msg", None).to_string();
+        let s2 = build_jsonl_failure(Some("10.1/x"), "FETCH_ERROR", "msg", None, &[]).to_string();
         assert!(
             !s2.contains('\n'),
             "JSONL failure must be single-line: {s2:?}"
         );
-        let s3 = build_jsonl_failure(None, "FETCH_ERROR", "msg", None).to_string();
+        let s3 = build_jsonl_failure(None, "FETCH_ERROR", "msg", None, &[]).to_string();
         assert!(
             !s3.contains('\n'),
             "null-ref JSONL must be single-line: {s3:?}"
