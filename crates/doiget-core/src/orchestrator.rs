@@ -843,6 +843,17 @@ pub struct FetchPaperOutcome {
     pub authors: Vec<String>,
     /// Publication year, when known (#344 identity confirmation).
     pub year: Option<i32>,
+    /// One [`SourceAttempt`] per optional source, consulted or not (#445).
+    ///
+    /// #413 attached this trace to `NotFound` only, so the question it
+    /// exists to answer — *did anything else have this paper?* — went
+    /// unanswered on the outcome where a user is most likely to ask it: an
+    /// OA copy was located at a host that then refused to serve it. "Found
+    /// nowhere" and "found at one host that refused me" have the same next
+    /// step, so they get the same trace.
+    ///
+    /// Empty for an arXiv ref, which has no optional chain.
+    pub attempts: Vec<SourceAttempt>,
 }
 
 impl FetchPaperOutcome {
@@ -881,6 +892,7 @@ impl FetchPaperOutcome {
             title: String::new(),
             authors: Vec::new(),
             year: None,
+            attempts: Vec::new(),
         }
     }
 }
@@ -1077,6 +1089,8 @@ async fn fetch_paper_arxiv(
         title: metadata.title.clone(),
         authors: metadata.authors.clone(),
         year: metadata.year,
+        // arXiv resolves directly; the optional chain is a DOI concept.
+        attempts: Vec::new(),
     })
 }
 
@@ -1450,6 +1464,7 @@ async fn fetch_paper_doi(
         title: metadata.title.clone(),
         authors: metadata.authors.clone(),
         year: metadata.year,
+        attempts,
     })
 }
 

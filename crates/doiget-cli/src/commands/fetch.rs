@@ -51,7 +51,9 @@ use doiget_core::http::tier_2_allowlist;
 use doiget_core::http::{
     discovery_allowlist, fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist, HttpClient,
 };
-use doiget_core::orchestrator::{fetch_paper as core_fetch_paper, FetchPaperOutcome, PdfLegStatus};
+use doiget_core::orchestrator::{
+    fetch_paper as core_fetch_paper, FetchPaperOutcome, PdfLegStatus, SourceAttempt,
+};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
 use doiget_core::source::{FetchContext, FetchError};
@@ -1253,6 +1255,46 @@ fn render_blocked_error(
             arxiv_id
         ));
     }
+    for line in blocked_trace_lines(&outcome.attempts, message) {
+        print_err(format_args!("{line}"));
+    }
+}
+
+/// The `= note:`/`= suggest:` block appended to a blocked PDF leg (#445).
+///
+/// #413 attached the resolution trace to `NotFound` only. But "found
+/// nowhere" and "found at one host that refused me" raise the same next
+/// question — *did anything else have it?* — and only the first one got an
+/// answer. A user with five optional sources enabled saw a bare 429 and no
+/// indication that none of the five had been consulted.
+///
+/// Pure so the wording is asserted rather than assumed.
+fn blocked_trace_lines(attempts: &[SourceAttempt], message: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    // A rate limit is the one failure where retrying the same host later is
+    // right and reconfiguring is wrong. The bare text reads like a
+    // permanent block, so say which it is.
+    if message.contains("429") {
+        out.push(
+            "  = suggest: HTTP 429 is a rate limit, not a policy block — it is transient.              Retry later, and set DOIGET_CONTACT_EMAIL for the polite pool."
+                .to_string(),
+        );
+    }
+    if attempts.is_empty() {
+        return out;
+    }
+    let lead = if doiget_core::orchestrator::nothing_was_consulted(attempts) {
+        "no other source was consulted for this DOI"
+    } else {
+        "the other sources were consulted and offered no alternative copy"
+    };
+    out.push(format!("  = note: {lead}:"));
+    out.extend(
+        doiget_core::orchestrator::render_attempts(attempts)
+            .lines()
+            .map(|l| format!("  {l}")),
+    );
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1944,5 +1986,94 @@ host = "*.uj.edu.pl"
             .map(|(p, _)| p)
             .collect();
         assert_eq!(got, vec!["ams.org".to_string(), "*.ams.org".to_string()]);
+    }
+    /// #445: a 429 reads like a permanent block. It is the one failure
+    /// where retrying the same host later is right and reconfiguring is
+    /// wrong, so the message has to say which it is.
+    #[test]
+    fn a_rate_limited_block_says_the_limit_is_transient() {
+        let joined = blocked_trace_lines(&[], "network error: HTTP 429 from https://ams.org/x.pdf")
+            .join("\n");
+        assert!(joined.contains("429"), "{joined}");
+        assert!(joined.contains("transient"), "{joined}");
+        assert!(
+            joined.contains("Retry later"),
+            "say what to DO, not just what happened:\n{joined}"
+        );
+    }
+
+    /// The converse: a policy denial must not be described as transient,
+    /// or the user retries forever instead of editing the allowlist.
+    #[test]
+    fn a_policy_block_is_not_described_as_transient() {
+        let joined =
+            blocked_trace_lines(&[], "redirect target x.example not in allowlist").join("\n");
+        assert!(
+            !joined.contains("transient"),
+            "an allowlist denial is permanent until reconfigured:\n{joined}"
+        );
+    }
+
+    /// The half of #445 that the #413 trace already answered for
+    /// `NotFound`: *did anything else have it?*
+    #[test]
+    fn a_blocked_leg_reports_which_other_sources_were_consulted() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let attempts = vec![
+            SourceAttempt::new("core", AttemptOutcome::NoRecord),
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: "DOIGET_ENABLE_HAL",
+                },
+            ),
+        ];
+        let joined = blocked_trace_lines(&attempts, "HTTP 429").join("\n");
+        assert!(
+            joined.contains("the other sources were consulted"),
+            "at least one WAS consulted:\n{joined}"
+        );
+        assert!(
+            joined.contains("core") && joined.contains("no record"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("DOIGET_ENABLE_HAL"),
+            "a source that was never asked must still name its switch:\n{joined}"
+        );
+    }
+
+    /// All five flags off is a configuration problem, not a data problem,
+    /// and must not read as "nothing else has this paper".
+    #[test]
+    fn a_blocked_leg_with_nothing_consulted_says_so() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let attempts = vec![
+            SourceAttempt::new(
+                "core",
+                AttemptOutcome::Disabled {
+                    env: "DOIGET_ENABLE_CORE",
+                },
+            ),
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: "DOIGET_ENABLE_HAL",
+                },
+            ),
+        ];
+        let joined = blocked_trace_lines(&attempts, "HTTP 429").join("\n");
+        assert!(
+            joined.contains("no other source was consulted"),
+            "must not imply the paper is unavailable elsewhere:\n{joined}"
+        );
+    }
+
+    /// An arXiv fetch has no optional chain; it must not grow an empty
+    /// note block.
+    #[test]
+    fn no_attempts_means_no_trace_block() {
+        let lines = blocked_trace_lines(&[], "not-a-pdf body");
+        assert!(lines.is_empty(), "{lines:?}");
     }
 }
