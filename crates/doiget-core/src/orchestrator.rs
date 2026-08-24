@@ -1554,7 +1554,7 @@ async fn try_optional_source_oa_fallback(
         tracing::warn!(
             source = name,
             url = raw,
-            "optional source reported an unparseable document URL; keeping Blocked"
+            "optional source reported an unparsable document URL; keeping Blocked"
         );
         return (pdf_leg, pdf_bytes);
     };
