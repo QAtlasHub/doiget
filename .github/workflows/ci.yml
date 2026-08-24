@@ -43,6 +43,12 @@ jobs:
           # secretly depend on `metadata`.
           - "oa-only,metadata,tdm-aps,tdm-elsevier,tdm-springer,tdm-ieee"
           - "oa-only,tdm-aps"
+          # #460: `tdm-ieee` alone did not compile — `TdmGrant::api_key`
+          # is gated on an `any(...)` that listed the first three
+          # publishers and not the fourth, and the union job hid it
+          # because the others were always present. One singleton is not
+          # enough; each new publisher needs its own.
+          - "oa-only,tdm-ieee"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8

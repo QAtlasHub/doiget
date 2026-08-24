@@ -102,6 +102,37 @@ guess and not saying so would be the same defect with a new name.
   spelling that does not add it there leaks its key into `HttpError::HttpStatus`.
   This is a registry that must be maintained by hand, and the module docs say so.
 
+## Addendum, 2026-08-24 (#460) — first contact, without a key
+
+One unauthenticated request settled part of the above:
+
+```text
+GET https://ieeexploreapi.ieee.org/api/v1/search/articles?doi=...&format=json
+HTTP=403  content-type=text/xml
+<h1>Developer Inactive</h1>
+```
+
+**Confirmed:** the base and path. The host resolves and the endpoint is served, so
+the first of the three inferred facts is now an observed one.
+
+**Corrected:** the error body is not JSON, and `format=json` does not make it so.
+The decision above assumed the loud-failure path would be `SourceSchema`; for an
+unauthorised caller it is `HttpError::HttpStatus`, which never reaches the JSON
+parsing at all. The fixture that encoded the wrong assumption
+(`{"error": "Developer Inactive"}`) was a guess and has been replaced by the
+observed body, plus a test on the HTTP branch asserting the status is legible and
+the key is redacted out of it.
+
+**Still unverified:** the 200-response envelope and the rate limits. The
+`(unverified)` marking in `SOURCES.md` §1 stands and now means specifically those
+two, not the endpoint.
+
+Also found while doing this: `tdm-ieee` **did not compile on its own**.
+`TdmGrant::api_key` is gated on an `any(...)` that named the first three publishers
+and not the fourth, and the four-way CI job hid it because the others were always
+present. Fixed, with an `oa-only,tdm-ieee` singleton added to the clippy matrix —
+one singleton job is not enough; each publisher needs its own.
+
 **Revisit** when a run with a real programme key is observed: correct whatever it
 disagrees with, drop the `(unverified)` marking, and record the observed rate
 limits.

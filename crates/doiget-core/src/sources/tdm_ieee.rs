@@ -24,6 +24,27 @@
 //! - the key as an `apikey` **query parameter** (not a header)
 //! - a JSON envelope `{ total_records, total_searched, articles: [...] }`
 //!
+//! ### Observed on 2026-08-24 (#460), without a key
+//!
+//! One unauthenticated request confirmed the first bullet and corrected
+//! the third's failure path:
+//!
+//! ```text
+//! GET /api/v1/search/articles?doi=...&format=json
+//! HTTP=403  content-type=text/xml
+//! <h1>Developer Inactive</h1>
+//! ```
+//!
+//! So the **base and path are right** — the host resolves and the
+//! endpoint is served. But the failure body is **not JSON**, and
+//! `format=json` does not make it so. That also means a 403 is an
+//! `HttpError::HttpStatus` and never reaches the JSON parsing below:
+//! the branch a key-less or not-yet-activated user hits is the HTTP
+//! one, which is why
+//! `an_inactive_key_403_says_so_and_does_not_leak_the_key` exists.
+//!
+//! Still unverified: the 200-response envelope and the rate limits.
+//!
 //! Everything that could be wrong is wrong *loudly*: a response that is
 //! not that shape becomes [`FetchError::SourceSchema`] naming what was
 //! missing and quoting the body, so the first run against a real key
@@ -32,7 +53,7 @@
 //! recorded fixture without touching production.
 //!
 //! Do not promote the `docs/SOURCES.md` row out of its "unverified"
-//! marking until a fetch with a real key has been observed.
+//! marking until a **200** with a real key has been observed.
 //!
 //! ## Three-gate activation
 //!
@@ -364,10 +385,25 @@ mod tests {
         "articles": []
     }"#;
 
-    /// The failure this module is most likely to meet on its first run
-    /// against a real key: a well-formed JSON response in a shape the
-    /// inferred contract did not predict.
-    const SAMPLE_UNEXPECTED_SHAPE: &str = r#"{"error": "Developer Inactive"}"#;
+    /// A 200 whose body is not the inferred envelope. Kept generic — the
+    /// point is that an unrecognised *successful* response must be a
+    /// schema error that quotes what arrived, not a silent miss.
+    const SAMPLE_UNEXPECTED_SHAPE: &str = r#"{"totalfound": 1, "records": []}"#;
+
+    /// The real body IEEE serves an unauthorised caller, observed on
+    /// 2026-08-24 (#460):
+    ///
+    /// ```text
+    /// GET /api/v1/search/articles?doi=...&format=json
+    /// HTTP=403  content-type=text/xml
+    /// <h1>Developer Inactive</h1>
+    /// ```
+    ///
+    /// Note it is NOT JSON, and `format=json` does not change that — the
+    /// fixture this replaced was a JSON guess at it. It is also the
+    /// single most likely first-contact outcome, because a key pending
+    /// programme activation reads exactly like no key at all.
+    const SAMPLE_INACTIVE_KEY_BODY: &str = "<h1>Developer Inactive</h1>";
 
     fn build_test_context(wiremock_host: &str) -> (TempDir, FetchContext) {
         let td = TempDir::new().expect("tempdir");
@@ -486,8 +522,61 @@ mod tests {
         };
         assert!(hint.contains("articles"), "name the missing field: {hint}");
         assert!(
-            hint.contains("Developer Inactive"),
+            hint.contains("totalfound"),
             "quote what actually arrived, or the real shape stays invisible: {hint}"
+        );
+    }
+
+    /// #460: the branch a real user hits first, and the one nothing
+    /// covered.
+    ///
+    /// A 403 is an `HttpError::HttpStatus`, so it never reaches the JSON
+    /// parsing above — the `SourceSchema` test is not this path. Two
+    /// things have to hold on it:
+    ///
+    /// 1. the surfaced text carries the status, so "not activated yet"
+    ///    is distinguishable from "wrong key"; and
+    /// 2. the key is gone. IEEE is query-param auth, so the URL inside
+    ///    `HttpStatus` carries `apikey=` and that string is
+    ///    `tracing`-logged. #457 taught `redact_api_key_query` the
+    ///    `apikey` spelling; this is the end-to-end proof, through the
+    ///    HTTP layer rather than the module-local redactor alone.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn an_inactive_key_403_says_so_and_does_not_leak_the_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/search/articles"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("content-type", "text/xml")
+                    .set_body_string(SAMPLE_INACTIVE_KEY_BODY),
+            )
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = build_test_context(&server.uri());
+        let src = TdmIeeeSource::with_base(Url::parse(&server.uri()).expect("wiremock URI parses"));
+        let profile = profile_with_ieee_grant();
+        let ref_ = Ref::Doi(Doi::parse("10.1109/TSP.2018.2812747").expect("DOI parses"));
+
+        let err = src
+            .fetch(&ref_, &profile, &ctx)
+            .await
+            .expect_err("403 must not look like success");
+        let rendered = err.to_string();
+
+        assert!(
+            rendered.contains("403"),
+            "the status is the only thing telling an inactive key from a wrong one: {rendered}"
+        );
+        assert!(
+            !rendered.contains(TEST_KEY),
+            "the api key must never reach an error string: {rendered}"
+        );
+        assert!(
+            rendered.contains("REDACTED"),
+            "the redaction must be visible, not just absent: {rendered}"
         );
     }
 
