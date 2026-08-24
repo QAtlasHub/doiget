@@ -4442,6 +4442,7 @@ mod tests {
         feature = "tdm-elsevier",
         feature = "tdm-springer"
     ))]
+    #[allow(clippy::vec_init_then_push)]
     fn the_production_client_registers_every_tier_3_source_key() {
         // Any base override takes the test-mode branch, which registers
         // whatever it is handed and would prove nothing.
@@ -4457,23 +4458,27 @@ mod tests {
 
         let client = build_http_client_for_fetch().expect("production client builds");
 
-        let mut checked = 0_usize;
-        for key in [
-            #[cfg(feature = "tdm-aps")]
-            "tdm-aps",
-            #[cfg(feature = "tdm-elsevier")]
-            "tdm-elsevier",
-            #[cfg(feature = "tdm-springer")]
-            "tdm-springer",
-        ] {
+        // Built by push rather than an array literal: with a single
+        // `tdm-*` feature compiled the literal is a one-element loop,
+        // which clippy denies. Same shape as `tier_3_allowlists()`,
+        // and the `vec_init_then_push` allow is on the fn for the same
+        // reason it is there — the pushes are `#[cfg]`-gated, so an
+        // attribute per element is not expressible.
+        let mut keys: Vec<&str> = Vec::new();
+        #[cfg(feature = "tdm-aps")]
+        keys.push("tdm-aps");
+        #[cfg(feature = "tdm-elsevier")]
+        keys.push("tdm-elsevier");
+        #[cfg(feature = "tdm-springer")]
+        keys.push("tdm-springer");
+        assert!(!keys.is_empty(), "the guard must have checked something");
+        for key in keys {
             assert!(
                 client.source_allowlist(key).is_some(),
                 "the production MCP client has no allowlist for `{key}`; a TDM fetch \
                  would die at UnknownSource (#454)"
             );
-            checked += 1;
         }
-        assert!(checked > 0, "the guard must have checked something");
     }
 
     /// Set XDG_CONFIG_HOME / APPDATA / HOME / USERPROFILE so
