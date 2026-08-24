@@ -178,6 +178,28 @@ asked" and from "wrong publisher".
 `DOIGET_SPRINGER_BASE` override the API base, mirroring `DOIGET_CROSSREF_BASE`.
 Intended for tests and for institutional proxies.
 
+### When the publisher refuses the content
+
+The OA chain already tries every location Unpaywall returned, advancing past
+each failure — a 429 on one host does not stop it. What it could not do was
+look beyond that list: when Crossref resolved the DOI, the optional sources
+were skipped entirely, so a rate limit on the single publisher URL ended a run
+with other indexes switched on (#445).
+
+If the content leg is still blocked after the arXiv preprint fallback
+(#325), doiget now asks the **enabled** optional sources whether anyone else
+holds a copy, and tries the document URL they report. Three of them publish
+one: CORE (`downloadUrl`), HAL (`fileMain_s`, gated on `openAccess_bool`) and
+Europe PMC (`fullTextUrlList`). OpenAIRE and DataCite report a DOI resolver or
+a landing page rather than a file, so they contribute no URL — their outcome
+still appears in the attempt trace.
+
+The fetch itself stays on the `oa-publisher` leg, with its allowlist and its
+ADR-0023 denial context, exactly as each source's own docs describe.
+
+This costs a request only when the content leg has **already** failed and the
+user has switched a source on. With no flags set, behaviour is unchanged.
+
 ## 5. Adding a new source
 
 A new source addition requires:

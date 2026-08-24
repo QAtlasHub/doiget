@@ -232,6 +232,31 @@ pub fn first_str<'a>(doc: &'a serde_json::Value, field: &str) -> Option<&'a str>
     })
 }
 
+/// The OA file HAL reports for a deposit, if any (#445).
+///
+/// `fileMain_s` is the deposit's main document on `hal.science`, reached
+/// through the `oa-publisher` key (via `trust_oa_registries`) rather than
+/// this source's own key — the API host and the content host are separate
+/// allowlist entries on purpose.
+///
+/// Gated on `openAccess_bool`: HAL indexes closed deposits too, and a URL
+/// that resolves to a landing page behind a wall is worse than no URL,
+/// because the chain would spend a request and report a confusing failure.
+#[must_use]
+pub fn open_access_pdf_url(record: &serde_json::Value) -> Option<&str> {
+    if record
+        .get("openAccess_bool")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return None;
+    }
+    record
+        .get("fileMain_s")
+        .and_then(serde_json::Value::as_str)
+        .filter(|u| !u.is_empty())
+}
+
 fn truncate_for_hint(body: &[u8]) -> String {
     const MAX: usize = 200;
     let s = String::from_utf8_lossy(body);
