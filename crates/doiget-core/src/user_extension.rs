@@ -514,7 +514,7 @@ fn parse_str(
 /// answer of exactly the kind #441 was about. `DOIGET_STORE_ROOT` needs no
 /// equivalent because the shell expands it before the process starts.
 ///
-/// Kept out of [`parse_str`] so parsing stays a pure function of the file
+/// Kept out of the parser so parsing stays a pure function of the file
 /// text; both the CLI and the MCP resolver call this at the point of use,
 /// which is also what keeps their two answers identical.
 ///
