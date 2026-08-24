@@ -387,6 +387,36 @@ pub fn tier_3_elsevier_allowlist() -> Vec<SourceAllowlist> {
     )]
 }
 
+/// Hard-coded allowlist for the IEEE Xplore TDM source (#430).
+/// Compile-gated by the `tdm-ieee` Cargo feature so default release
+/// binaries never include the host pattern (per ADR-0002 and
+/// `docs/SOURCES.md` §3).
+///
+/// Returned entry:
+/// - `"tdm-ieee"` → `ieeexploreapi.ieee.org` (production base) +
+///   `*.ieee.org` (covers load-balancing subdomains; the redirect
+///   closure denies anything outside the wildcard).
+///
+/// Note the API host is deliberately NOT `ieeexplore.ieee.org`, the web
+/// front end: ADR-0039 records that the front end answers a scripted
+/// client with `202` and an empty body regardless of entitlement, which
+/// is why the TDM API is the supported route at all.
+///
+/// Three-gate activation: Cargo feature compiled in, `DOIGET_KEY_IEEE`
+/// env var present, and `DOIGET_AGREE_TDM_IEEE=1`. The
+/// `CapabilityProfile` gate enforces the env-var pair; this allowlist is
+/// the transport gate.
+#[cfg(feature = "tdm-ieee")]
+pub fn tier_3_ieee_allowlist() -> Vec<SourceAllowlist> {
+    vec![SourceAllowlist::new(
+        "tdm-ieee",
+        vec![
+            "ieeexploreapi.ieee.org".to_string(),
+            "*.ieee.org".to_string(),
+        ],
+    )]
+}
+
 /// Every Tier-3 TDM allowlist this build actually compiled in.
 ///
 /// #454: the three per-publisher builders above had no caller. Both client
@@ -412,6 +442,8 @@ pub fn tier_3_allowlists() -> Vec<SourceAllowlist> {
     out.extend(tier_3_elsevier_allowlist());
     #[cfg(feature = "tdm-springer")]
     out.extend(tier_3_springer_allowlist());
+    #[cfg(feature = "tdm-ieee")]
+    out.extend(tier_3_ieee_allowlist());
     out
 }
 
@@ -1109,15 +1141,20 @@ impl HttpClient {
 /// secret in the query string. Other pairs and their order are
 /// preserved; a URL with no `api_key` pair is rendered unchanged.
 fn redact_api_key_query(url: &url::Url) -> String {
-    const API_KEY_PARAM: &str = "api_key";
-    if url.query_pairs().all(|(k, _)| k != API_KEY_PARAM) {
+    /// Every spelling a source puts a secret under. Springer uses
+    /// `api_key`; IEEE (#430) uses `apikey`, one word. A source that
+    /// invents a third spelling and does not add it here leaks its key
+    /// into `HttpError::HttpStatus`, which is `tracing`-logged.
+    const API_KEY_PARAMS: &[&str] = &["api_key", "apikey"];
+    let is_secret = |k: &str| API_KEY_PARAMS.contains(&k);
+    if url.query_pairs().all(|(k, _)| !is_secret(&k)) {
         return url.to_string();
     }
     let mut redacted = url.clone();
     let pairs: Vec<(String, String)> = url
         .query_pairs()
         .map(|(k, v)| {
-            if k == API_KEY_PARAM {
+            if is_secret(&k) {
                 (k.into_owned(), "REDACTED".to_string())
             } else {
                 (k.into_owned(), v.into_owned())
@@ -1467,7 +1504,8 @@ mod tests {
     #[cfg(any(
         feature = "tdm-aps",
         feature = "tdm-elsevier",
-        feature = "tdm-springer"
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
     ))]
     #[test]
     fn every_tier_3_source_has_a_transport_allowlist_entry() {
@@ -1514,6 +1552,21 @@ mod tests {
             assert!(
                 reg.iter().any(|r| r == src.name()),
                 "source `{}` has no tier_3_springer_allowlist entry; a production fetch would \
+                    fail UnknownSource. registered: {reg:?}",
+                src.name()
+            );
+            checked += 1;
+        }
+        #[cfg(feature = "tdm-ieee")]
+        {
+            let src = crate::sources::tdm_ieee::TdmIeeeSource::new();
+            let reg: Vec<String> = tier_3_ieee_allowlist()
+                .iter()
+                .map(|a| a.source.clone())
+                .collect();
+            assert!(
+                reg.iter().any(|r| r == src.name()),
+                "source `{}` has no tier_3_ieee_allowlist entry; a production fetch would \
                     fail UnknownSource. registered: {reg:?}",
                 src.name()
             );

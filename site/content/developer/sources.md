@@ -32,6 +32,7 @@ weight = 200
 | Springer Nature OA | 3 (institutional) | 5a | API key | <https://dev.springernature.com/> | `--features tdm-springer` + key + agree |
 | APS Harvest TDM | 3 (institutional) | 5b | API key | <https://harvest.aps.org/> | `--features tdm-aps` + key + agree |
 | Elsevier ScienceDirect TDM | 3 (institutional) | 5c | API key | <https://www.elsevier.com/legal/tdmrep> | `--features tdm-elsevier` + key + agree |
+| IEEE Xplore TDM (**unverified**) | 3 (institutional) | 5d | API key | <https://developer.ieee.org/> | `--features tdm-ieee` + key + agree |
 
 ## 2. User responsibility
 
@@ -74,6 +75,7 @@ Tier 3 TDM sources are individually feature-flagged and require user-driven buil
 cargo install doiget --features metadata,tdm-springer
 cargo install doiget --features metadata,tdm-aps
 cargo install doiget --features metadata,tdm-elsevier
+cargo install doiget --features metadata,tdm-ieee
 ```
 
 There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
@@ -142,7 +144,7 @@ There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
 
 Each requires:
 
-1. A Cargo feature compiled in (`tdm-elsevier`, `tdm-aps`, `tdm-springer`).
+1. A Cargo feature compiled in (`tdm-elsevier`, `tdm-aps`, `tdm-springer`, `tdm-ieee`).
 2. The user's API key in `DOIGET_KEY_<PUBLISHER>` env or `[tdm.<publisher>] api_key` in
    credentials.toml.
 3. The agreement env `DOIGET_AGREE_TDM_<PUBLISHER>=1`.
@@ -159,10 +161,31 @@ your Elsevier lookups to APS.
 | `tdm-aps` | `10.1103` |
 | `tdm-elsevier` | `10.1016`, `10.1006`, `10.1053` |
 | `tdm-springer` | `10.1007`, `10.1038`, `10.1057`, `10.1140` |
+| `tdm-ieee` | `10.1109`, `10.23919` |
 
 The lists are deliberately conservative, so a publisher may own a prefix not
 listed. That is visible rather than silent: the fetch error names it, as
 `not consulted (DOI prefix 10.xxxx is not <publisher>)`.
+
+#### IEEE Xplore — an inferred contract (#430)
+
+`tdm-ieee` is the one Tier-3 source whose upstream contract has **not** been
+confirmed against a live programme key. IEEE's programme requires registration
+and a project summary before a key is issued, so the endpoint
+(`https://ieeexploreapi.ieee.org/api/v1/search/articles`), the auth shape (the
+key as an `apikey` **query parameter**, as with Springer rather than the
+`X-API-Key` header APS and Elsevier use) and the response envelope
+(`{ total_records, total_searched, articles: [...] }`) are taken from IEEE's
+public developer portal and SDKs.
+
+The failure mode is loud, not silent: a response in any other shape is a schema
+error naming the missing field and quoting the body, so the first run against a
+real key reports the actual contract. `DOIGET_IEEE_BASE` replays that response
+against a fixture. **Do not drop the "unverified" marking in §1 until such a run
+has been observed.**
+
+Rate limits are likewise unknown; the source is subject to the same hard-coded
+limiter as every other, which may be more or less polite than IEEE requires.
 
 **When they run.** Strictly after Crossref, and only when Crossref produced
 nothing — the same rule the Tier-2 chain follows, so enabling a TDM source can

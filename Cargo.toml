@@ -15,7 +15,7 @@ exclude = [
 ]
 
 [workspace.package]
-version       = "0.8.9-beta.7"
+version       = "0.8.9-beta.8"
 edition       = "2021"
 rust-version  = "1.86"
 license       = "MIT"
@@ -32,7 +32,7 @@ readme        = "README.md"
 # - Tier 1 (Open Access)            : always compiled in.
 # - Tier 2 metadata (Phase 4)       : `metadata`.
 # - Tier 3 TDM (Phase 5, opt-in build, never in published binaries):
-#     `tdm-elsevier`, `tdm-aps`, `tdm-springer`. No `tdm-all` umbrella.
+#     `tdm-elsevier`, `tdm-aps`, `tdm-springer`, `tdm-ieee`. No `tdm-all` umbrella.
 #
 # See docs/SCOPE.md and docs/SOURCES.md.
 # ---------------------------------------------------------------------

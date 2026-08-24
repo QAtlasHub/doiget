@@ -29,6 +29,7 @@ pub struct CapabilityProfile {
     pub tdm_elsevier: Option<TdmGrant>,
     pub tdm_aps: Option<TdmGrant>,
     pub tdm_springer: Option<TdmGrant>,
+    pub tdm_ieee: Option<TdmGrant>,
     pub rate_limits: RateLimits,
 }
 
@@ -48,7 +49,8 @@ pub struct MetadataAccess {
 pub struct TdmGrant {
     // Present only under a `tdm-*` feature (see the note above). `secrecy`
     // 0.10 replaced `Secret<String>` with `SecretString` (= `SecretBox<str>`).
-    #[cfg(any(feature = "tdm-elsevier", feature = "tdm-aps", feature = "tdm-springer"))]
+    #[cfg(any(feature = "tdm-elsevier", feature = "tdm-aps",
+              feature = "tdm-springer", feature = "tdm-ieee"))]
     pub api_key:       SecretString,
     pub agreed_at:     DateTime<Utc>,
     pub agree_env_var: String,            // e.g. "DOIGET_AGREE_TDM_ELSEVIER"
@@ -119,6 +121,7 @@ impl CapabilityProfile {
             tdm_elsevier: read_tdm_grant("DOIGET_AGREE_TDM_ELSEVIER", "DOIGET_KEY_ELSEVIER")?,
             tdm_aps:      read_tdm_grant("DOIGET_AGREE_TDM_APS",      "DOIGET_KEY_APS")?,
             tdm_springer: read_tdm_grant("DOIGET_AGREE_TDM_SPRINGER", "DOIGET_KEY_SPRINGER")?,
+            tdm_ieee:     read_tdm_grant("DOIGET_AGREE_TDM_IEEE",     "DOIGET_KEY_IEEE")?,
             rate_limits:  RateLimits::HARD_CODED,
         })
     }

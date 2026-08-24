@@ -199,11 +199,11 @@ impl Server {
     /// succeed. The spec'd output shape is
     /// `{ oa_enabled, metadata_sources: string[], tdm_enabled,
     /// tdm_elsevier, tdm_aps, tdm_springer, rate_limit_per_sec }`;
-    /// `ok` and `tier_1/2/3` are emitted additively for back-compat.
+    /// `ok`, `tier_1/2/3` and `tdm_ieee` (#430) are emitted additively.
     #[tool(
         description = "WHEN TO USE: Determine which sources the running doiget instance is allowed to use.\n\
                        INPUTS: none.\n\
-                       OUTPUTS: { oa_enabled, metadata_sources, tdm_enabled, tdm_elsevier, tdm_aps, tdm_springer, rate_limit_per_sec } (plus additive ok, tier_1, tier_2, tier_3).\n\
+                       OUTPUTS: { oa_enabled, metadata_sources, tdm_enabled, tdm_elsevier, tdm_aps, tdm_springer, rate_limit_per_sec } (plus additive ok, tier_1, tier_2, tier_3, tdm_ieee).\n\
                        COSTS: <1 ms.\n\
                        SIDE EFFECTS: none.\n\
                        LIMITS: none.",
@@ -4053,7 +4053,9 @@ fn probe_store_writable(path: &camino::Utf8Path) -> bool {
 /// fields and additionally retain `ok` and `tier_1/2/3` as **additive**
 /// fields — the e2e handshake test and pre-#141 agents rely on them and
 /// §7 (a TypeScript object type, structurally open) does not forbid
-/// extra keys. `metadata_sources` is the spec-canonical view of the
+/// extra keys. `tdm_ieee` (#430) joins them on the same footing: a
+/// fourth publisher must not silently change the meaning of the three
+/// booleans §7 names. `metadata_sources` is the spec-canonical view of the
 /// enabled Tier-2 metadata sources.
 ///
 /// - `metadata_sources` reflects the `MetadataAccess` booleans (the
@@ -4090,6 +4092,9 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
     if profile.tdm_springer.is_some() {
         tier_3.push("tdm-springer");
     }
+    if profile.tdm_ieee.is_some() {
+        tier_3.push("tdm-ieee");
+    }
 
     let tdm_enabled = !tier_3.is_empty();
 
@@ -4101,6 +4106,10 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
         "tdm_elsevier": profile.tdm_elsevier.is_some(),
         "tdm_aps": profile.tdm_aps.is_some(),
         "tdm_springer": profile.tdm_springer.is_some(),
+        // Additive per the §7 note that consumers must tolerate extra
+        // keys; the four `tdm_*` booleans named in the contract are all
+        // still present and unchanged (#430).
+        "tdm_ieee": profile.tdm_ieee.is_some(),
         "rate_limit_per_sec": profile.rate_limits.max_fetches_per_second(),
         // -- additive (back-compat; not part of the §7 contract) --
         "ok": true,
@@ -4440,7 +4449,8 @@ mod tests {
     #[cfg(any(
         feature = "tdm-aps",
         feature = "tdm-elsevier",
-        feature = "tdm-springer"
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
     ))]
     #[allow(clippy::vec_init_then_push)]
     fn the_production_client_registers_every_tier_3_source_key() {
@@ -4471,6 +4481,8 @@ mod tests {
         keys.push("tdm-elsevier");
         #[cfg(feature = "tdm-springer")]
         keys.push("tdm-springer");
+        #[cfg(feature = "tdm-ieee")]
+        keys.push("tdm-ieee");
         assert!(!keys.is_empty(), "the guard must have checked something");
         for key in keys {
             assert!(

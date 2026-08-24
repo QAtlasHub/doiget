@@ -75,3 +75,6 @@ pub mod tdm_aps;
 
 #[cfg(feature = "tdm-elsevier")]
 pub mod tdm_elsevier;
+
+#[cfg(feature = "tdm-ieee")]
+pub mod tdm_ieee;

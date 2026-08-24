@@ -639,6 +639,9 @@ fn compile_time_features() -> Vec<&'static str> {
     if cfg!(feature = "tdm-springer") {
         feats.push("tdm-springer");
     }
+    if cfg!(feature = "tdm-ieee") {
+        feats.push("tdm-ieee");
+    }
     feats
 }
 
