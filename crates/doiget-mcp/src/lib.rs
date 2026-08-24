@@ -3969,6 +3969,13 @@ fn resolve_store_root() -> Option<Utf8PathBuf> {
             return Some(Utf8PathBuf::from(s.trim()));
         }
     }
+    // `[store] root` from the same `config.toml` the network gate reads
+    // (#441). Kept in step with the CLI resolver deliberately: a store root
+    // that differs between `doiget fetch` and `doiget serve` would put an
+    // agent's downloads somewhere the user's own commands cannot see.
+    if let Some(root) = store_root_from_config() {
+        return Some(root);
+    }
     // Default: `papers/` under the current working directory (#344 / ADR-0036),
     // so an agent's fetches land where the work is; set DOIGET_STORE_ROOT for a
     // central library.
@@ -3976,6 +3983,18 @@ fn resolve_store_root() -> Option<Utf8PathBuf> {
     Utf8PathBuf::from_path_buf(cwd)
         .ok()
         .map(|d| d.join("papers"))
+}
+
+/// `[store] root` from the user's `config.toml`, if any (#441).
+///
+/// Silent on a malformed file for the same reason as the CLI twin: the
+/// store root is resolved on nearly every tool call, and the parse error
+/// surfaces with a proper diagnostic on the path that owns the file.
+fn store_root_from_config() -> Option<Utf8PathBuf> {
+    let path = config_dir_utf8().ok()?.join("doiget").join("config.toml");
+    let cfg = doiget_core::user_extension::load(&path).ok()?;
+    let raw = cfg.store_root?;
+    Some(doiget_core::user_extension::expand_store_root(&raw))
 }
 
 /// Best-effort writability probe for the resolved store root.

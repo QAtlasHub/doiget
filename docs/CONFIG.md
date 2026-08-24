@@ -49,6 +49,8 @@ A value set higher in the chain overrides any value set lower.
 # ~/.config/doiget/config.toml — all fields optional
 
 [store]
+# Overridden by DOIGET_STORE_ROOT and --store-root (one rung above).
+# A leading `~` is expanded; the env var relies on the shell for that.
 root = "/home/alice/papers"
 
 [cache]
