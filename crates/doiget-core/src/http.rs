@@ -387,6 +387,34 @@ pub fn tier_3_elsevier_allowlist() -> Vec<SourceAllowlist> {
     )]
 }
 
+/// Every Tier-3 TDM allowlist this build actually compiled in.
+///
+/// #454: the three per-publisher builders above had no caller. Both client
+/// builders — `doiget_cli::commands::fetch::build_http_client` and its MCP
+/// twin — assemble the client by naming a list of allowlist functions, and
+/// neither named these. So #444 taught the orchestrator to reach the
+/// sources and the transport then refused a source key it had never been
+/// told about: `UnknownSource { source_key: "tdm-aps" }`, which reads like
+/// an internal error rather than a missing registration.
+///
+/// One function rather than three `#[cfg]` blocks at each call site: a
+/// fourth publisher is then a single edit here, and the two client builders
+/// cannot drift apart — which is the drift that produced this bug.
+///
+/// Empty in a default build, where no Tier-3 feature is compiled in.
+#[must_use]
+pub fn tier_3_allowlists() -> Vec<SourceAllowlist> {
+    #[allow(unused_mut)]
+    let mut out: Vec<SourceAllowlist> = Vec::new();
+    #[cfg(feature = "tdm-aps")]
+    out.extend(tier_3_aps_allowlist());
+    #[cfg(feature = "tdm-elsevier")]
+    out.extend(tier_3_elsevier_allowlist());
+    #[cfg(feature = "tdm-springer")]
+    out.extend(tier_3_springer_allowlist());
+    out
+}
+
 /// Hard-coded Phase 1 allowlist for the synthetic `"oa-publisher"` source —
 /// the publisher / preprint / repository hosts to which Unpaywall's
 /// `best_oa_location.url` (or `url_for_pdf`) typically resolves.
@@ -1426,6 +1454,16 @@ mod tests {
     /// because `new_for_tests_allow_http` registers the key itself — the
     /// DataCite near-miss in 0.8.8. Now that Tier 3 is actually reached,
     /// the same trap applies to it.
+    ///
+    /// **This guard is necessary and not sufficient**, and #454 is the
+    /// proof: it asserts the builder *returns* the key, which stayed true
+    /// for three releases while no client was ever handed the list, so a
+    /// production fetch died at exactly the `UnknownSource` described
+    /// above. The sufficient half is
+    /// `the_production_client_registers_every_tier_3_source_key`, in
+    /// `doiget-cli` and `doiget-mcp` — it asserts the client, which is the
+    /// object the fetch goes through. Keep both: this one localises the
+    /// failure to the list, that one catches the list never arriving.
     #[cfg(any(
         feature = "tdm-aps",
         feature = "tdm-elsevier",

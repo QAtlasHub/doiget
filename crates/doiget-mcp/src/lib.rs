@@ -47,7 +47,8 @@ use doiget_core::dry_run::{
     build_dry_run_envelope, build_fetch_plan, rate_limit_budget as core_rate_limit_budget,
 };
 use doiget_core::http::{
-    fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist, tier_2_allowlist, HttpClient,
+    fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist, tier_2_allowlist,
+    tier_3_allowlists, HttpClient,
 };
 use doiget_core::orchestrator::{
     batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
@@ -3758,6 +3759,10 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
         // OA, always-on. Register `ar5iv.labs.arxiv.org` under the
         // `"ar5iv"` source key so `paper_text::paper_text` can reach it.
         allowlists.extend(fulltext_allowlist());
+        // #454: the Tier-3 transport gate, mirroring the CLI builder.
+        // Empty in a default build; the `CapabilityProfile` grant is
+        // still what decides whether a TDM source is ever called.
+        allowlists.extend(tier_3_allowlists());
 
         // ADR-0028 D2: merge user-extension hosts from
         // `<config_dir>/doiget/config.toml`. Mirrors the CLI path in
@@ -4422,6 +4427,53 @@ mod tests {
              got: {:?}",
             oa.redirect_hosts
         );
+    }
+
+    /// #454: the MCP half of the Tier-3 transport gate.
+    ///
+    /// `build_http_client_for_fetch` is a hand-maintained twin of the CLI
+    /// builder, and the two drifting is what left the Tier-3 allowlists
+    /// with no caller in either. A guard in only one crate would let them
+    /// drift again in the other.
+    #[test]
+    #[serial_test::serial]
+    #[cfg(any(
+        feature = "tdm-aps",
+        feature = "tdm-elsevier",
+        feature = "tdm-springer"
+    ))]
+    fn the_production_client_registers_every_tier_3_source_key() {
+        // Any base override takes the test-mode branch, which registers
+        // whatever it is handed and would prove nothing.
+        let _guards = [
+            EnvGuard::unset("DOIGET_ARXIV_BASE"),
+            EnvGuard::unset("DOIGET_ARXIV_SRC_BASE"),
+            EnvGuard::unset("DOIGET_CROSSREF_BASE"),
+            EnvGuard::unset("DOIGET_UNPAYWALL_BASE"),
+            EnvGuard::unset("DOIGET_OA_PUBLISHER_BASE"),
+            EnvGuard::unset("DOIGET_OPENALEX_BASE"),
+            EnvGuard::unset("DOIGET_AR5IV_BASE"),
+        ];
+
+        let client = build_http_client_for_fetch().expect("production client builds");
+
+        let mut checked = 0_usize;
+        for key in [
+            #[cfg(feature = "tdm-aps")]
+            "tdm-aps",
+            #[cfg(feature = "tdm-elsevier")]
+            "tdm-elsevier",
+            #[cfg(feature = "tdm-springer")]
+            "tdm-springer",
+        ] {
+            assert!(
+                client.source_allowlist(key).is_some(),
+                "the production MCP client has no allowlist for `{key}`; a TDM fetch \
+                 would die at UnknownSource (#454)"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "the guard must have checked something");
     }
 
     /// Set XDG_CONFIG_HOME / APPDATA / HOME / USERPROFILE so
