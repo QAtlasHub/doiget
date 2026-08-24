@@ -563,6 +563,33 @@ impl ProbeVerdict {
     }
 }
 
+/// The `doiget config doctor --network` contact-address block (#443).
+///
+/// Split out as a pure function for the same reason as
+/// `fetch::denial_note_lines`: it is a diagnostic whose exact wording is
+/// the whole point, and a diagnostic nothing asserts on is a diagnostic
+/// that can silently regress.
+///
+/// It used to read `unpaywall  non-polite pool (... may be throttled)`,
+/// which attributes the whole cost of an unset contact address to the
+/// metadata lookup. The 429 that prompted this came from the publisher on
+/// the CONTENT leg. The User-Agent goes out on every request, so the label
+/// has to say every request.
+fn contact_report_lines(contact_email: Option<&str>) -> Vec<String> {
+    match contact_email {
+        Some(e) => vec![format!(
+            "  contact         polite User-Agent as {e} (all outbound requests)"
+        )],
+        None => vec![
+            "  contact         no DOIGET_CONTACT_EMAIL — every outbound request, metadata"
+                .to_string(),
+            "                  AND publisher content, goes out on the non-polite pool and"
+                .to_string(),
+            "                  may be throttled (HTTP 429) or refused".to_string(),
+        ],
+    }
+}
+
 /// `doiget config doctor --network` — the outbound half of the report
 /// (issue #407).
 ///
@@ -594,11 +621,8 @@ async fn network_report(cfg: &ResolvedConfig) {
     );
     eprintln!("                  a proxy fixes addressing, never a bot wall");
 
-    match &cfg.contact_email {
-        Some(e) => eprintln!("  unpaywall       polite pool as {e}"),
-        None => eprintln!(
-            "  unpaywall       non-polite pool (no DOIGET_CONTACT_EMAIL; may be throttled)"
-        ),
+    for line in contact_report_lines(cfg.contact_email.as_deref()) {
+        eprintln!("{line}");
     }
 
     let client = match crate::commands::fetch::build_http_client(None) {
@@ -1193,6 +1217,37 @@ mod tests {
             cfg.store_root_source,
             super::super::StoreRootSource::CwdDefault.label(),
             "a blank root must not be treated as a configured value"
+        );
+    }
+    /// #443: the wording must not pin the cost of an unset contact address
+    /// on the metadata leg — the 429 that prompted this came from the
+    /// publisher, on the content leg.
+    #[test]
+    fn the_contact_advisory_names_every_outbound_request_not_just_unpaywall() {
+        let joined = contact_report_lines(None).join("\n");
+        assert!(
+            joined.contains("every outbound request") && joined.contains("publisher content"),
+            "the advisory must cover the content leg too:\n{joined}"
+        );
+        assert!(
+            !joined.contains("unpaywall"),
+            "naming only unpaywall is the bug:\n{joined}"
+        );
+        assert!(
+            joined.contains("429"),
+            "name the symptom the user will actually see:\n{joined}"
+        );
+    }
+
+    /// The set case says what is in effect, and does not warn.
+    #[test]
+    fn a_set_contact_address_reports_the_polite_pool_without_a_warning() {
+        let joined = contact_report_lines(Some("a@example.org")).join("\n");
+        assert!(joined.contains("a@example.org"), "{joined}");
+        assert!(joined.contains("all outbound requests"), "{joined}");
+        assert!(
+            !joined.contains("429"),
+            "no warning when it is set:\n{joined}"
         );
     }
 }

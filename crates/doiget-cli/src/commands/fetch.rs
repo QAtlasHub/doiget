@@ -1032,6 +1032,85 @@ pub(crate) fn cli_exit_code(code: ErrorCode) -> i32 {
     }
 }
 
+/// Widening suggestions for a refused host, most specific first (#443).
+///
+/// The `= help:` block used to name only the hop that was just refused, so
+/// a publisher whose PDF sits behind `www.x.org -> pubs.x.org` cost the
+/// user one edit-run cycle per hop. Naming the registrable domain too ends
+/// it in one.
+///
+/// It is also the policy-consistent suggestion. The built-in allowlist is
+/// written almost entirely as registrable-domain wildcards
+/// (`*.springer.com`, `*.wiley.com`, `*.aps.org`), and ADR-0027's stated
+/// mitigation for widening the trusted surface is exactly that they are
+/// "bounded registrable-domain wildcards". Suggesting a bare FQDN was both
+/// more work for the user and narrower than the convention the project
+/// applies to itself. The apex is offered alongside the wildcard because a
+/// single-suffix wildcard does not match it — the reason the built-in list
+/// already carries both forms for `doaj.org`, `arxiv.org` and friends.
+///
+/// Conservative by construction: a suggestion is emitted only when the
+/// derived parent is clearly registrable. Getting this exactly right needs
+/// the public suffix list, and a wrong guess here is not cosmetic — it
+/// would invite the user to trust `*.co.uk`.
+fn widening_suggestions(host: &str) -> Vec<(String, &'static str)> {
+    let mut out = vec![(host.to_string(), "this hop only")];
+    let labels: Vec<&str> = host.split('.').filter(|l| !l.is_empty()).collect();
+    if labels.len() < 2 || looks_like_public_suffix(&labels) {
+        return out;
+    }
+    if labels.len() == 2 {
+        // Already the apex: the useful widening is its subdomains.
+        out.push((format!("*.{host}"), "and its subdomains"));
+        return out;
+    }
+    let parent_labels = &labels[1..];
+    if looks_like_public_suffix(parent_labels) {
+        return out;
+    }
+    let parent = parent_labels.join(".");
+    out.push((format!("*.{parent}"), "the whole publisher"));
+    out.push((parent, "apex too (a wildcard does not match it)"));
+    out
+}
+
+/// Whether `labels` looks like a public suffix rather than something a
+/// single organisation registered.
+///
+/// Deliberately crude and deliberately over-cautious: the cost of a false
+/// positive is one missing suggestion, and the cost of a false negative is
+/// telling a user to trust every domain under `co.uk`.
+fn looks_like_public_suffix(labels: &[&str]) -> bool {
+    match labels {
+        // A bare TLD.
+        [_] => true,
+        // `co.uk`, `ac.jp`, `com.au`, … — a known second level under a
+        // two-letter ccTLD. `example.co.uk` has three labels and is NOT
+        // caught here, which is correct.
+        [sld, tld] => {
+            tld.len() == 2
+                && matches!(
+                    *sld,
+                    "co" | "com"
+                        | "ne"
+                        | "net"
+                        | "or"
+                        | "org"
+                        | "ac"
+                        | "edu"
+                        | "gov"
+                        | "go"
+                        | "gr"
+                        | "lg"
+                        | "mil"
+                        | "id"
+                        | "in"
+                )
+        }
+        _ => false,
+    }
+}
+
 /// Build the ADR-0023 `denial_context` advisory lines shared by
 /// [`render_fetch_error`] and [`render_blocked_error`]: the `= note:`
 /// naming what was attempted and what the allowlist held, plus — for
@@ -1079,9 +1158,11 @@ fn denial_note_lines(dc: &DenialContext, config_path: Option<&camino::Utf8Path>)
             .to_string(),
     );
     if dc.attempted.is_some() {
-        out.push(format!(
-            "          [[network.additional_hosts]] host = \"{attempted}\"   # or this one"
-        ));
+        for (pattern, why) in widening_suggestions(attempted) {
+            out.push(format!(
+                "          [[network.additional_hosts]] host = \"{pattern}\"   # {why}"
+            ));
+        }
     }
     out.push("          see docs/CONFIG.md §3.1 for both".to_string());
     out
@@ -1774,5 +1855,94 @@ host = "*.uj.edu.pl"
             b"USER-DATA",
             "the user's file must be left untouched"
         );
+    }
+    /// #443, the reported case: `www.ams.org -> pubs.ams.org` cost two
+    /// edit-run cycles because the help named only the hop that failed.
+    #[test]
+    fn a_refused_hop_also_offers_the_registrable_domain() {
+        let mut dc = denial(DenialReason::RedirectNotInAllowlist);
+        dc.attempted = Some("pubs.ams.org".to_string());
+        let joined = denial_note_lines(&dc, None).join("\n");
+
+        assert!(joined.contains(r#"host = "pubs.ams.org""#), "{joined}");
+        assert!(
+            joined.contains(r#"host = "*.ams.org""#),
+            "the whole-publisher wildcard is what ends the loop in one step:\n{joined}"
+        );
+        assert!(
+            joined.contains(r#"host = "ams.org""#),
+            "a single-suffix wildcard does not match the apex, so offer it too:\n{joined}"
+        );
+    }
+
+    /// A suggestion the config parser would reject is worse than none: the
+    /// user pastes it and gets a second, more confusing error.
+    #[test]
+    fn every_suggestion_is_a_pattern_the_validator_accepts() {
+        for host in [
+            "pubs.ams.org",
+            "www.ams.org",
+            "ams.org",
+            "strathprints.strath.ac.uk",
+            "repository.ruj.uj.edu.pl",
+            "link.springer.com",
+        ] {
+            for (pattern, _) in widening_suggestions(host) {
+                doiget_core::user_extension::validate_pattern(&pattern).unwrap_or_else(|e| {
+                    panic!("suggested `{pattern}` for `{host}`, which the validator rejects: {e:?}")
+                });
+            }
+        }
+    }
+
+    /// The one suggestion that must never appear. Deriving the registrable
+    /// domain by stripping a label is right for `pubs.ams.org` and very
+    /// wrong for `foo.co.uk` — trusting `*.co.uk` is trusting a whole
+    /// country's registry.
+    #[test]
+    fn a_public_suffix_is_never_offered() {
+        for (host, forbidden) in [
+            ("foo.co.uk", "co.uk"),
+            ("foo.ac.jp", "ac.jp"),
+            ("foo.com.au", "com.au"),
+            ("example.org", "org"),
+        ] {
+            let joined: String = widening_suggestions(host)
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                !joined
+                    .split(' ')
+                    .any(|p| p == forbidden || p == format!("*.{forbidden}")),
+                "offered the public suffix `{forbidden}` for `{host}`: {joined}"
+            );
+        }
+    }
+
+    /// `strathprints.strath.ac.uk` — four labels, so the parent
+    /// `strath.ac.uk` is a real registration, not a public suffix.
+    #[test]
+    fn a_four_label_academic_host_still_gets_its_institution_wildcard() {
+        let got: Vec<String> = widening_suggestions("strathprints.strath.ac.uk")
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        assert!(
+            got.iter().any(|p| p == "*.strath.ac.uk"),
+            "expected the institution wildcard; got {got:?}"
+        );
+    }
+
+    /// An apex host has no parent worth naming; the useful widening is
+    /// downward.
+    #[test]
+    fn an_apex_host_offers_its_subdomains() {
+        let got: Vec<String> = widening_suggestions("ams.org")
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(got, vec!["ams.org".to_string(), "*.ams.org".to_string()]);
     }
 }
