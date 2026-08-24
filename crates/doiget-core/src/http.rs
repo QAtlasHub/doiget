@@ -1047,12 +1047,13 @@ impl HttpClient {
                 return Err(HttpError::HttpStatus {
                     status: code,
                     // Issue #146: Springer Nature authenticates via an
-                    // `api_key` URL query parameter (no header path
-                    // upstream). This error string is logged and may
-                    // surface to the user, so strip any `api_key`
-                    // value before it leaves the client. No other
-                    // source puts a secret in the query string, so
-                    // this is a no-op for them.
+                    // `api_key` URL query parameter, and IEEE via
+                    // `apikey` (#430) — neither documents a header
+                    // path. This error string is logged and may
+                    // surface to the user, so strip either spelling
+                    // before it leaves the client. A no-op for every
+                    // other source, none of which puts a secret in
+                    // the query string.
                     url: redact_api_key_query(&final_url),
                 });
             }

@@ -178,11 +178,17 @@ key as an `apikey` **query parameter**, as with Springer rather than the
 (`{ total_records, total_searched, articles: [...] }`) are taken from IEEE's
 public developer portal and SDKs.
 
-The failure mode is loud, not silent: a response in any other shape is a schema
-error naming the missing field and quoting the body, so the first run against a
-real key reports the actual contract. `DOIGET_IEEE_BASE` replays that response
-against a fixture. **Do not drop the "unverified" marking in §1 until such a run
-has been observed.**
+One unauthenticated request on 2026-08-24 (#460) **confirmed the endpoint** — the
+host resolves and `/api/v1/search/articles` is served — and corrected the assumed
+failure shape: an unauthorised caller gets `403` with `content-type: text/xml` and
+a body of `<h1>Developer Inactive</h1>`, not JSON. So `(unverified)` in §1 now means
+specifically **the 200-response envelope and the rate limits**.
+
+The failure mode is loud, not silent: a 403 surfaces with its status and the key
+redacted out of the URL, and a 200 in any other shape is a schema error naming the
+missing field and quoting the body — so the first run against a real key reports the
+actual contract. `DOIGET_IEEE_BASE` replays that response against a fixture. **Do not
+drop the "unverified" marking in §1 until a 200 with a real key has been observed.**
 
 Rate limits are likewise unknown; the source is subject to the same hard-coded
 limiter as every other, which may be more or less polite than IEEE requires.

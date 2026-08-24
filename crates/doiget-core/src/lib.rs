@@ -1033,7 +1033,8 @@ pub struct TdmGrant {
     #[cfg(any(
         feature = "tdm-elsevier",
         feature = "tdm-aps",
-        feature = "tdm-springer"
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
     ))]
     pub api_key: secrecy::SecretString,
     /// Which env var the user used to acknowledge the publisher's ToS.
@@ -1048,7 +1049,8 @@ impl Default for TdmGrant {
             #[cfg(any(
                 feature = "tdm-elsevier",
                 feature = "tdm-aps",
-                feature = "tdm-springer"
+                feature = "tdm-springer",
+                feature = "tdm-ieee"
             ))]
             api_key: secrecy::SecretString::from(String::new()),
             agree_env_var: String::new(),
@@ -1358,7 +1360,8 @@ fn build_tdm_grant(agree_var: &str, key: String) -> TdmGrant {
     #[cfg(any(
         feature = "tdm-elsevier",
         feature = "tdm-aps",
-        feature = "tdm-springer"
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
     ))]
     {
         TdmGrant {
@@ -1370,7 +1373,8 @@ fn build_tdm_grant(agree_var: &str, key: String) -> TdmGrant {
     #[cfg(not(any(
         feature = "tdm-elsevier",
         feature = "tdm-aps",
-        feature = "tdm-springer"
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
     )))]
     {
         let _ = key;
@@ -1646,7 +1650,8 @@ mod tests {
             #[cfg(any(
                 feature = "tdm-elsevier",
                 feature = "tdm-aps",
-                feature = "tdm-springer"
+                feature = "tdm-springer",
+                feature = "tdm-ieee"
             ))]
             {
                 use secrecy::ExposeSecret as _;
