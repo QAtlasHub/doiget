@@ -30,11 +30,32 @@ boundaries.
 
 This is enforced structurally rather than only by documentation:
 
-- Default released binaries include only Open Access sources (Crossref, Unpaywall, arXiv).
+- Default released binaries (`oa-only`) include only Open Access sources. In full,
+  the hosts a default build is able to contact — read off the allowlists the
+  production client is assembled from in
+  `crates/doiget-cli/src/commands/fetch.rs`, not from memory:
+
+  | allowlist | hosts | what it is for |
+  |---|---|---|
+  | `tier_1_allowlist` | `api.crossref.org`, `*.crossref.org`, `api.unpaywall.org`, `arxiv.org`, `export.arxiv.org` | DOI and arXiv resolution |
+  | `oa_publisher_allowlist` | ~20 publisher and repository patterns (`*.springer.com`, `*.nature.com`, `*.wiley.com`, `*.elsevier.com`, `*.sciencedirect.com`, `*.plos.org`, `*.mdpi.com`, `*.frontiersin.org`, `*.biorxiv.org`, `*.medrxiv.org`, `europepmc.org`, `*.nih.gov`, `*.aps.org`, `scipost.org`, …) | following the OA PDF URL an index reported; the host is wherever the OA copy lives (ADR-0027) |
+  | `discovery_allowlist` | `api.openalex.org` | `doiget search` discovery (ADR-0031 D4), **always-on, no env gate** |
+  | `fulltext_allowlist` | `ar5iv.labs.arxiv.org` | `doiget text` structured full text (ADR-0032), **always-on** |
+
+  This list read "Crossref, Unpaywall, arXiv" until #494. **OpenAlex was absent
+  entirely** — a third-party service, not an arXiv subdomain, reached by the shipped
+  binary with no opt-in. `SOURCES.md` had documented both discovery and ar5iv as
+  always-on Tier 1 the whole time; the one document written for publisher legal teams
+  was the one that did not say so.
+
+  A user-supplied `[[network.additional_hosts]]` entry (ADR-0028) can extend the
+  allowlist at runtime. That is the user's own decision about their own network, and
+  it is the only way the set above grows without a rebuild.
 - Institutional / TDM source code paths are gated by Cargo features (`tdm-elsevier`,
-  `tdm-aps`, `tdm-springer`) and are **not present** in the default published binary; a
-  user wishing to enable them must rebuild from source. See [`SCOPE.md`](SCOPE.md) and
-  ADR-0002.
+  `tdm-aps`, `tdm-springer`, `tdm-ieee`) and are **not present** in the default
+  published binary; a user wishing to enable them must rebuild from source. See
+  [`SCOPE.md`](SCOPE.md) and ADR-0002. (`tdm-ieee` landed with ADR-0042 and was
+  missing from this list until #494 — `SOURCES.md` had all four.)
 - Even when compiled in, TDM sources require both an explicit per-publisher
   agreement environment variable (`DOIGET_AGREE_TDM_<PUBLISHER>=1`) **and** a
   user-provided API key. Both must be present, otherwise the source is unavailable at
@@ -115,10 +136,24 @@ These are mechanically enforced by code, type system, Cargo, or CI. Removing
 them requires changing source files that are gated by branch protection.
 
 1. **No bundled credentials.** No publisher API key is shipped in any doiget
-   binary. Credentials are read at runtime from environment variables or
-   `~/.config/doiget/credentials.toml`, wrapped in `secrecy::Secret`, and never
-   logged in raw form. *Enforced by:* `secrecy::Secret` types in
-   `doiget-core`; `tracing` redactor; CI grep for embedded key patterns.
+   binary. Credentials are read at runtime from **environment variables**
+   (`DOIGET_KEY_<PUBLISHER>`), wrapped in `secrecy::Secret`, and never logged in
+   raw form. *Enforced by:* `secrecy::Secret` types in `doiget-core`; the
+   `tracing` redactor.
+
+   Two corrections here (#494):
+
+   - This said credentials are also read from `~/.config/doiget/credentials.toml`.
+     They are not. `CapabilityProfile`'s TDM resolver reads `std::env::var` and
+     nothing else, and no code path opens that file — `docs/CONFIG.md` §6
+     specifies it in full anyway, which is tracked as #509. A user following that
+     section today writes a key into a file doiget ignores.
+   - "*CI grep for embedded key patterns*" was listed as enforcement. **No such
+     check exists.** `posture-lint.yml` greps for marketing terms, HTTP-server
+     imports, telemetry imports and non-rustls TLS backends; there is no secret
+     scanner in the tree. §6a is defined as controls a machine enforces, so an
+     enforcement clause that names nothing does not belong in it. The safeguard
+     itself stands on the type-level ones that are real.
 
 2. **Opt-in TDM agreement (per-publisher).** Each TDM-class source requires
    the user to set `DOIGET_AGREE_TDM_<PUBLISHER>=1` AND provide
@@ -127,8 +162,8 @@ them requires changing source files that are gated by branch protection.
    resolution algorithm ([`CAPABILITY.md`](CAPABILITY.md) §2 rules 2 and 3).
 
 3. **Compile-time feature gating.** Each TDM source is behind a Cargo feature
-   (`tdm-elsevier`, `tdm-aps`, `tdm-springer`). Default builds and crates.io
-   artifacts contain no TDM source code. *Enforced by:* `Cargo.toml`
+   (`tdm-elsevier`, `tdm-aps`, `tdm-springer`, `tdm-ieee`). Default builds and
+   crates.io artifacts contain no TDM source code. *Enforced by:* `Cargo.toml`
    `[features]` declarations; `posture-lint.yml` import-pattern grep;
    ADR-0002.
 
