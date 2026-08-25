@@ -1007,9 +1007,89 @@ impl RateLimits {
     }
 
     /// Per-source backoff in milliseconds between consecutive requests.
+    ///
+    /// The floor that applies to every source. A source whose vendor
+    /// publishes something stricter gets that instead -- see
+    /// [`Self::backoff_ms_for`].
     pub const fn per_source_backoff_ms(&self) -> u64 {
         self.per_source_backoff_ms
     }
+
+    /// The minimum gap between two requests to `source`, in milliseconds.
+    ///
+    /// [`Self::per_source_backoff_ms`] unless [`SOURCE_RATE_OVERRIDES`]
+    /// names a stricter value, in which case the stricter one wins. Never
+    /// looser: `docs/SOURCES.md` promises doiget adopts a stricter vendor
+    /// guideline at the per-source level rather than relaxing the global
+    /// cap, and `max` here is what makes that promise structural instead of
+    /// a matter of getting every table entry right.
+    #[must_use]
+    pub fn backoff_ms_for(&self, source: &str) -> u64 {
+        match source_rate(source) {
+            Some(r) => r.min_interval_ms.max(self.per_source_backoff_ms),
+            None => self.per_source_backoff_ms,
+        }
+    }
+
+    /// The concurrency ceiling for `source`.
+    ///
+    /// Clamped to [`Self::max_concurrent_fetches`], so a table entry can
+    /// only ever tighten the global cap.
+    #[must_use]
+    pub fn max_concurrent_for(&self, source: &str) -> u32 {
+        match source_rate(source) {
+            Some(r) => r.max_concurrent.min(self.max_concurrent_fetches),
+            None => self.max_concurrent_fetches,
+        }
+    }
+}
+
+/// A vendor-published rate guideline stricter than the global cap.
+///
+/// Library constants selected by source key, never caller-supplied:
+/// `docs/LEGAL.md` §6a safeguard 5 makes [`RateLimits`] unsynthesizable by
+/// downstream code on purpose, and a per-source table that took values from
+/// a caller would hand back exactly what that safeguard withholds.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct SourceRate {
+    /// Minimum milliseconds between two requests to this source.
+    pub min_interval_ms: u64,
+    /// Maximum simultaneous requests to this source.
+    pub max_concurrent: u32,
+}
+
+/// Sources whose published terms are stricter than the global cap.
+///
+/// #493. The global cap is 5 requests/second and 5 concurrent, against
+/// arXiv's published *"make no more than one request every three seconds,
+/// and limit requests to a single connection at a time"* -- 15x the rate
+/// and 5x the concurrency. Three places in the tree asserted the global cap
+/// "comfortably respects" it.
+///
+/// A table rather than a config knob, and consulted through
+/// [`RateLimits::backoff_ms_for`] rather than read directly, so an entry can
+/// only ever tighten.
+///
+/// Keys are [`crate::source::Source::name`] values.
+pub const SOURCE_RATE_OVERRIDES: &[(&str, SourceRate)] = &[(
+    // <https://info.arxiv.org/help/api/tou.html>, read 2026-08-25. The
+    // limit is collective across every machine under the caller's control,
+    // and circumventing it may have access blocked.
+    "arxiv",
+    SourceRate {
+        min_interval_ms: 3_000,
+        max_concurrent: 1,
+    },
+)];
+
+/// The override for `source`, if any.
+#[must_use]
+pub fn source_rate(source: &str) -> Option<SourceRate> {
+    SOURCE_RATE_OVERRIDES
+        .iter()
+        .find(|(k, _)| *k == source)
+        .map(|(_, r)| *r)
 }
 
 /// A successful TDM grant.

@@ -12,6 +12,14 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[legal]** arXiv is fetched at the rate its Terms of Use publish — one request
+  every three seconds over a single connection — instead of 15x that rate and 5x
+  the concurrency. `RateLimits` had no per-source dimension at all, and three
+  places in the tree, including `docs/SOURCES.md`, asserted the global 5/sec cap
+  "comfortably respects" the guideline. §6 of the same document promised doiget
+  would adopt a stricter vendor value per source; the promise was real and the
+  mechanism did not exist (#493, ADR-0045).
+
 - **[cli]** Every ref-taking command emits the `docs/ERRORS.md` §3 contract
   line — `error[INVALID_REF]: invalid ref: …` — for an unparsable input.
   #119 gave `fetch` the contract and nothing generalised it, so `info`,
@@ -84,6 +92,15 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[core]** `SOURCE_RATE_OVERRIDES` plus `RateLimits::backoff_ms_for` /
+  `max_concurrent_for`. Library constants keyed by source name — never
+  caller-supplied, since `docs/LEGAL.md` §6a safeguard 5 makes `RateLimits`
+  unsynthesizable on purpose. An entry can only ever TIGHTEN: the accessors take
+  the stricter of the global value and the entry, and a test pins the table so an
+  entry that would be silently ignored fails the build (#493, ADR-0045).
+- **[core]** `RateLimiter::pace` for additional requests inside one attempt.
+  arXiv's terms cap requests and one arXiv attempt issues two — the Atom feed,
+  then the PDF — so the second was previously unpaced (#493).
 - **[cli]** `list-recent --missing-pdf` lists only the metadata-only entries —
   "which of my batch need retrying?" without reading a fifty-row table by eye
   (#481).
