@@ -76,7 +76,7 @@ enough to defer, which is how five accumulated.
 
 The boundary: if the replacement is *the same document at a new address*, it is a
 pointer fix. If it is a *different document* — as the Elsevier row was, moving from a
-mis-cited opt-out protocol to the actual API policy — then the claim about where the
+wrongly cited opt-out protocol to the actual API policy — then the claim about where the
 vendor states its terms changed, and that is D1.
 
 **D4 — Rot is made visible on a schedule, not per PR.**
