@@ -45,7 +45,8 @@ This is enforced structurally rather than only by documentation:
   agreement environment variable (`DOIGET_AGREE_TDM_<PUBLISHER>=1`) **and** a
   user-provided API key. Both must be present, otherwise the source is unavailable at
   runtime. See [`CAPABILITY.md`](CAPABILITY.md).
-- A hard-coded rate limit (5 concurrent fetches, 5/second) prevents bulk-scraping
+- A hard-coded rate limit (5 concurrent fetches, 5/second — stricter still for
+  sources whose terms say so, e.g. arXiv at 1 request / 3 s) prevents bulk-scraping
   patterns and cannot be overridden by configuration.
 
 ## 3. Tool-neutrality framing
@@ -147,8 +148,22 @@ them requires changing source files that are gated by branch protection.
    `MAX_FETCHES_PER_SECOND = 5.0` are library constants. The struct
    `RateLimits` exposes only `HARD_CODED`; field visibility is `pub(crate)`,
    so external callers cannot synthesize a `RateLimits` with different
-   values. *Enforced by:* `pub(crate)` field visibility,
-   `#[non_exhaustive]` on `RateLimits`, smoke tests in `lib.rs::tests`.
+   values.
+
+   Those two are the **ceiling**, not the whole limit. A source whose vendor
+   publishes something stricter is held to the stricter value, from the
+   `SOURCE_RATE_OVERRIDES` table (ADR-0045) — arXiv, for instance, at one
+   request every three seconds over a single connection. Table entries are
+   library constants for the same reason `RateLimits` is: an override a
+   caller could supply would hand back exactly what this safeguard
+   withholds. `RateLimits::backoff_ms_for` and `max_concurrent_for` return
+   the stricter of the global value and the entry, so an entry can only ever
+   tighten. *Enforced by:* `pub(crate)` field visibility,
+   `#[non_exhaustive]` on `RateLimits`, the `max`/`min` in those two
+   accessors, and smoke tests in `lib.rs::tests` and
+   `rate_limiter.rs::tests` — including one that fails the build if a table
+   entry is looser than the global cap and would therefore be silently
+   ignored.
 
 ### 6b. Policy commitments (3)
 
