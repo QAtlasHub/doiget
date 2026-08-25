@@ -13,7 +13,7 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 ### Fixed
 
 - **[cli]** Every ref-taking command emits the `docs/ERRORS.md` §3 contract
-  line — `error[INVALID_REF]: invalid ref: …` — for an unparseable input.
+  line — `error[INVALID_REF]: invalid ref: …` — for an unparsable input.
   #119 gave `fetch` the contract and nothing generalised it, so `info`,
   `link`, `cite`, `text`, `tag`, `bib`, `csl` and `source` each printed a raw
   `anyhow` dump: a bare `Error:` plus a `Caused by:` chain leaking internal

@@ -58,7 +58,7 @@ pub fn parse_ref_or_exit(input: &str) -> anyhow::Result<doiget_core::Ref> {
 /// their own exit code.
 ///
 /// `fetch` exits 1 (`cli_exit_code(InvalidRef)`) and `graph` exits 2,
-/// citing `docs/ERRORS.md` §4 "misuse" -- and §4 does say an unparseable
+/// citing `docs/ERRORS.md` §4 "misuse" -- and §4 does say an unparsable
 /// argument is misuse, so they disagree and `graph` is the one following
 /// the table. Filed separately rather than changed here: #477 is about the
 /// message, `fetch`'s exit 1 is pinned by a named test, and quietly moving

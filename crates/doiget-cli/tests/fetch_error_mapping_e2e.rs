@@ -33,7 +33,7 @@ fn fetch_invalid_ref_emits_cargo_style_error_and_exit_1() {
 // ---- #477: the contract is not "fetch has a code", it is "the CLI has" ---
 
 /// Every ref-taking command emits an `error[CODE]:` first stderr line for
-/// an unparseable input.
+/// an unparsable input.
 ///
 /// This is the assertion that matters. #119 gave `fetch` the contract and
 /// nothing generalised it, so eight sibling commands spent four releases
@@ -46,32 +46,37 @@ fn fetch_invalid_ref_emits_cargo_style_error_and_exit_1() {
 #[test]
 fn every_ref_taking_command_emits_the_error_code_contract() {
     // `verify` is excluded: it takes a FILE PATH, not a ref, so an
-    // unparseable value is a missing file rather than a bad ref. It gets
+    // unparsable value is a missing file rather than a bad ref. It gets
     // the `error:` misuse form instead -- see the test below.
-    const COMMANDS: &[&[&str]] = &[
-        &["fetch"],
-        &["info"],
-        &["link"],
-        &["cite"],
-        &["text"],
-        &["bib"],
-        &["csl"],
+    let mut commands: Vec<Vec<&str>> = vec![
+        vec!["fetch"],
+        vec!["info"],
+        vec!["link"],
+        vec!["cite"],
+        vec!["text"],
+        vec!["bib"],
+        vec!["csl"],
         // `source` needs `--out`; the ref is still the last positional.
-        &["source", "--out", "."],
-        &["graph"],
-        &["tag"],
+        vec!["source", "--out", "."],
+        vec!["tag"],
     ];
+    // `graph` only exists in a `citation` build, and CI's default job runs
+    // plain `oa-only` -- where the subcommand is absent and clap answers
+    // "unrecognized subcommand", which is not this contract's business.
+    if cfg!(feature = "citation") {
+        commands.push(vec!["graph"]);
+    }
 
     let td = TempDir::new().expect("tempdir");
     let root = td.path().to_str().expect("utf-8");
 
     let mut broken: Vec<String> = Vec::new();
-    for argv in COMMANDS {
+    for argv in &commands {
         let mut cmd = Command::cargo_bin("doiget").expect("doiget binary built");
         cmd.env("DOIGET_STORE_ROOT", root)
             .env("DOIGET_LOG_PATH", "")
             .env("DOIGET_CONTACT_EMAIL", "test@example.com")
-            .args(*argv)
+            .args(argv)
             .arg("not a doi");
         let out = cmd.output().expect("run doiget");
         let stderr = String::from_utf8_lossy(&out.stderr);
