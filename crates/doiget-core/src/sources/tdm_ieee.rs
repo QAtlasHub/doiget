@@ -434,7 +434,7 @@ mod tests {
     const TEST_KEY: &str = "test-key-xyz";
 
     fn profile_with_ieee_grant() -> CapabilityProfile {
-        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        let mut p = CapabilityProfile::for_tests();
         p.tdm_ieee = Some(TdmGrant {
             // Issue #153: the key flows through the grant, not the env
             // var, so the fixture seeds it directly.
@@ -447,7 +447,7 @@ mod tests {
 
     /// Grant whose key is empty — exercises the fail-closed branch.
     fn profile_with_empty_key_grant() -> CapabilityProfile {
-        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        let mut p = CapabilityProfile::for_tests();
         p.tdm_ieee = Some(TdmGrant {
             api_key: secrecy::SecretString::from(String::new()),
             agree_env_var: "DOIGET_AGREE_TDM_IEEE".to_string(),
@@ -622,7 +622,7 @@ mod tests {
     async fn fetch_without_grant_is_not_eligible() {
         let (_td, ctx) = build_test_context("http://127.0.0.1:1");
         let src = TdmIeeeSource::with_base(Url::parse("http://127.0.0.1:1").expect("parses"));
-        let profile = CapabilityProfile::from_env().expect("clean env never errors");
+        let profile = CapabilityProfile::for_tests();
         let ref_ = Ref::Doi(Doi::parse("10.1109/example").expect("DOI parses"));
 
         let err = src

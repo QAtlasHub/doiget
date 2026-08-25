@@ -277,7 +277,7 @@ mod tests {
     }
 
     fn profile_with_s2_enabled() -> CapabilityProfile {
-        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        let mut p = CapabilityProfile::for_tests();
         p.metadata = MetadataAccess {
             openalex: false,
             semantic_scholar: true,
@@ -347,7 +347,7 @@ mod tests {
     async fn fetch_without_capability_flag_is_not_eligible() {
         let (_td, ctx) = build_test_context("http://127.0.0.1:1");
         let src = S2Source::with_base(Url::parse("http://127.0.0.1:1").expect("URI parses"), None);
-        let profile = CapabilityProfile::from_env().expect("clean env never errors");
+        let profile = CapabilityProfile::for_tests();
         let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("DOI parses"));
 
         assert!(

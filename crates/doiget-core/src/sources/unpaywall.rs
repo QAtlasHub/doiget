@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn unpaywall_can_serve_returns_true_for_doi() {
         let s = UnpaywallSource::new(TEST_EMAIL.to_string());
-        let profile = CapabilityProfile::from_env().expect("profile");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi(TEST_DOI.to_string()));
         assert!(s.can_serve(&profile, &r));
     }
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn unpaywall_can_serve_returns_false_for_arxiv() {
         let s = UnpaywallSource::new(TEST_EMAIL.to_string());
-        let profile = CapabilityProfile::from_env().expect("profile");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Arxiv(ArxivId("2401.12345".to_string()));
         assert!(!s.can_serve(&profile, &r));
     }
@@ -291,7 +291,7 @@ mod tests {
         let host = host_of(&server.uri());
         let (_td, ctx) = build_test_context(&host);
         let s = UnpaywallSource::with_base(base_of(&server.uri()), TEST_EMAIL.to_string());
-        let profile = CapabilityProfile::from_env().expect("profile");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi(TEST_DOI.to_string()));
 
         let res = s.fetch(&r, &profile, &ctx).await.expect("fetch ok");
@@ -316,7 +316,7 @@ mod tests {
         let host = host_of(&server.uri());
         let (_td, ctx) = build_test_context(&host);
         let s = UnpaywallSource::with_base(base_of(&server.uri()), TEST_EMAIL.to_string());
-        let profile = CapabilityProfile::from_env().expect("profile");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi(TEST_DOI.to_string()));
 
         let res = s.fetch(&r, &profile, &ctx).await.expect("fetch ok");
@@ -344,7 +344,7 @@ mod tests {
         let host = host_of(&server.uri());
         let (_td, ctx) = build_test_context(&host);
         let s = UnpaywallSource::with_base(base_of(&server.uri()), TEST_EMAIL.to_string());
-        let profile = CapabilityProfile::from_env().expect("profile");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi(TEST_DOI.to_string()));
 
         let res = s.fetch(&r, &profile, &ctx).await.expect("fetch ok");
@@ -373,7 +373,7 @@ mod tests {
         let host = host_of(&server.uri());
         let (_td, ctx) = build_test_context(&host);
         let s = UnpaywallSource::with_base(base_of(&server.uri()), TEST_EMAIL.to_string());
-        let profile = CapabilityProfile::from_env().expect("profile");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi(TEST_DOI.to_string()));
 
         let res = s.fetch(&r, &profile, &ctx).await.expect("fetch ok");
@@ -386,7 +386,7 @@ mod tests {
         // gate fires first.
         let (_td, ctx) = build_test_context("127.0.0.1");
         let s = UnpaywallSource::new(TEST_EMAIL.to_string());
-        let profile = CapabilityProfile::from_env().expect("profile");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Arxiv(ArxivId("2401.12345".to_string()));
 
         let err = s
@@ -414,7 +414,7 @@ mod tests {
         let host = host_of(&server.uri());
         let (td, ctx) = build_test_context(&host);
         let s = UnpaywallSource::with_base(base_of(&server.uri()), TEST_EMAIL.to_string());
-        let profile = CapabilityProfile::from_env().expect("profile");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi(TEST_DOI.to_string()));
 
         let _res = s.fetch(&r, &profile, &ctx).await.expect("fetch ok");
@@ -475,7 +475,7 @@ mod tests {
         let host = host_of(&server.uri());
         let (_td, ctx) = build_test_context(&host);
         let s = UnpaywallSource::with_base(base_of(&server.uri()), TEST_EMAIL.to_string());
-        let profile = CapabilityProfile::from_env().expect("profile");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi(TEST_DOI.to_string()));
 
         let err = s

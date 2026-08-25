@@ -363,7 +363,7 @@ mod tests {
     }
 
     fn profile(core: bool) -> CapabilityProfile {
-        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        let mut p = CapabilityProfile::for_tests();
         p.metadata = MetadataAccess {
             openalex: false,
             semantic_scholar: false,

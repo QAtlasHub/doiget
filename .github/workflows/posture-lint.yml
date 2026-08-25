@@ -64,6 +64,31 @@ jobs:
             exit 1
           fi
 
+      - name: CapabilityProfile::from_env in tests must be serialised (#456)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `from_env()` reads process-global env. A test that calls it races
+          # any `#[serial]` test holding `DOIGET_KEY_*` without its agreement
+          # var, and loses with `KeyButNotAgreed` — `#[serial]` on the WRITER
+          # serialises marked tests against each other and does nothing about
+          # unmarked readers. It also makes the suite fail on a developer
+          # machine that exports `DOIGET_KEY_ELSEVIER`.
+          #
+          # So outside `lib.rs` (which owns the env-resolution tests), a file
+          # that calls `from_env()` must also carry `serial`. Tests that only
+          # want a default profile use `CapabilityProfile::for_tests()`, which
+          # reads no environment at all.
+          bad=0
+          while IFS= read -r f; do
+            [ "$f" = "crates/doiget-core/src/lib.rs" ] && continue
+            if ! grep -q 'serial' "$f"; then
+              echo "::error file=$f::posture-lint: calls CapabilityProfile::from_env() with no #[serial] in the file; use CapabilityProfile::for_tests() for a default profile (#456)"
+              bad=1
+            fi
+          done < <(grep -rl 'CapabilityProfile::from_env()' --include='*.rs' crates/doiget-core/src || true)
+          [ "$bad" -eq 0 ]
+
       - name: LICENSE is verbatim SPDX MIT (no trailing prose)
         shell: bash
         run: |
