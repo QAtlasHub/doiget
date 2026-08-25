@@ -2059,7 +2059,7 @@ host = "*.uj.edu.pl"
             SourceAttempt::new(
                 "hal",
                 AttemptOutcome::Disabled {
-                    env: "DOIGET_ENABLE_HAL",
+                    env: &["DOIGET_ENABLE_HAL"],
                 },
             ),
         ];
@@ -2087,13 +2087,13 @@ host = "*.uj.edu.pl"
             SourceAttempt::new(
                 "core",
                 AttemptOutcome::Disabled {
-                    env: "DOIGET_ENABLE_CORE",
+                    env: &["DOIGET_ENABLE_CORE"],
                 },
             ),
             SourceAttempt::new(
                 "hal",
                 AttemptOutcome::Disabled {
-                    env: "DOIGET_ENABLE_HAL",
+                    env: &["DOIGET_ENABLE_HAL"],
                 },
             ),
         ];

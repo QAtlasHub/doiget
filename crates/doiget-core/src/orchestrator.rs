@@ -25,6 +25,7 @@ use crate::sources::arxiv::ArxivSource;
 use crate::sources::crossref::CrossrefSource;
 use crate::sources::unpaywall::UnpaywallSource;
 use crate::store::{DoigetExtension, Metadata, Store};
+use crate::DenialContext;
 use crate::{ArxivId, CapabilityProfile, Doi, Ref, Safekey, MAX_BATCH_REFS, SCHEMA_VERSION};
 
 /// Outcome of a successful [`metadata_only`] call.
@@ -1725,7 +1726,7 @@ async fn try_tdm_content_fallback(
     struct ContentEntry<'a> {
         name: &'static str,
         /// What the user must set, rendered verbatim into the trace.
-        enable_hint: &'static str,
+        enable_hint: &'static [&'static str],
         /// DOI prefixes this publisher registered (ADR-0041).
         prefixes: &'static [&'static str],
         /// Human name, for the wrong-publisher message.
@@ -1779,7 +1780,7 @@ async fn try_tdm_content_fallback(
     #[cfg(feature = "tdm-aps")]
     chain.push(ContentEntry {
         name: "tdm-aps",
-        enable_hint: "DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS",
+        enable_hint: &["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"],
         prefixes: crate::sources::tdm_aps::PUBLISHER_PREFIXES,
         publisher: "American Physical Society (APS)",
         src: &aps,
@@ -1787,7 +1788,7 @@ async fn try_tdm_content_fallback(
     #[cfg(feature = "tdm-elsevier")]
     chain.push(ContentEntry {
         name: "tdm-elsevier",
-        enable_hint: "DOIGET_KEY_ELSEVIER + DOIGET_AGREE_TDM_ELSEVIER",
+        enable_hint: &["DOIGET_KEY_ELSEVIER", "DOIGET_AGREE_TDM_ELSEVIER"],
         prefixes: crate::sources::tdm_elsevier::PUBLISHER_PREFIXES,
         publisher: "Elsevier BV",
         src: &elsevier,
@@ -1795,7 +1796,7 @@ async fn try_tdm_content_fallback(
     #[cfg(feature = "tdm-springer")]
     chain.push(ContentEntry {
         name: "tdm-springer",
-        enable_hint: "DOIGET_KEY_SPRINGER + DOIGET_AGREE_TDM_SPRINGER",
+        enable_hint: &["DOIGET_KEY_SPRINGER", "DOIGET_AGREE_TDM_SPRINGER"],
         prefixes: crate::sources::tdm_springer::PUBLISHER_PREFIXES,
         publisher: "Springer Nature",
         src: &springer,
@@ -1803,7 +1804,7 @@ async fn try_tdm_content_fallback(
     #[cfg(feature = "tdm-ieee")]
     chain.push(ContentEntry {
         name: "tdm-ieee",
-        enable_hint: "DOIGET_KEY_IEEE + DOIGET_AGREE_TDM_IEEE",
+        enable_hint: &["DOIGET_KEY_IEEE", "DOIGET_AGREE_TDM_IEEE"],
         prefixes: crate::sources::tdm_ieee::PUBLISHER_PREFIXES,
         publisher: "IEEE",
         src: &ieee,
@@ -3699,8 +3700,15 @@ pub enum AttemptOutcome {
     /// Runtime flag unset — **not consulted**. Carries the env var so the
     /// message can name the exact thing the user has to change.
     Disabled {
-        /// e.g. `"DOIGET_ENABLE_HAL"`.
-        env: &'static str,
+        /// Every variable that has to be set, e.g.
+        /// `["DOIGET_ENABLE_HAL"]` or
+        /// `["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"]`.
+        ///
+        /// A list rather than a string because Tier 3 needs two, and
+        /// joining them into `"A + B"` put a separator on the #459 wire
+        /// that a consumer would have had to split on — which is the
+        /// thing the `detail()` / `wire()` split exists to avoid (#470).
+        env: &'static [&'static str],
     },
     /// This source cannot serve this kind of ref at all (e.g. an arXiv id
     /// handed to a DOI-only resolver). Not a misconfiguration.
@@ -3727,6 +3735,20 @@ pub enum AttemptOutcome {
         /// Source-specific detail, e.g. the access-rights code observed.
         detail: String,
     },
+    /// **Consulted**, and refused by a policy control with a structured
+    /// reason: a redirect off the allowlist, an insecure redirect, an
+    /// oversized body, a not-a-PDF (ADR-0023).
+    ///
+    /// Distinct from [`Self::Failed`] because the [`DenialContext`] is what
+    /// [`crate::remediation::for_denial`] consumes. `PdfLegStatus::Blocked`
+    /// kept it end to end and the MCP layer turned it into a remediation;
+    /// per-source rows flattened the same information to prose, so the
+    /// richest and most actionable case degraded to text on a wire that
+    /// #459 advertises as machine-readable (#470).
+    Denied {
+        /// The structured denial, verbatim.
+        denial: DenialContext,
+    },
     /// **Consulted.** The request itself failed (transport, auth, schema).
     Failed {
         /// Rendered error.
@@ -3747,7 +3769,11 @@ impl AttemptOutcome {
     pub fn was_consulted(&self) -> bool {
         matches!(
             self,
-            Self::NoRecord | Self::NotOpenAccess { .. } | Self::Failed { .. } | Self::Resolved
+            Self::NoRecord
+                | Self::NotOpenAccess { .. }
+                | Self::Denied { .. }
+                | Self::Failed { .. }
+                | Self::Resolved
         )
     }
 
@@ -3770,6 +3796,7 @@ impl AttemptOutcome {
             Self::NotNeeded => "not_consulted_not_needed",
             Self::NoRecord => "consulted_no_record",
             Self::NotOpenAccess { .. } => "consulted_not_open_access",
+            Self::Denied { .. } => "consulted_denied",
             Self::Failed { .. } => "consulted_failed",
             Self::Resolved => "consulted_resolved",
         }
@@ -3783,10 +3810,34 @@ impl AttemptOutcome {
     #[must_use]
     pub fn detail(&self) -> Option<&str> {
         match self {
-            Self::Disabled { env } => Some(env),
+            // `Disabled` and `Denied` carry structure, not a string.
+            // See `required_env` and `denial`; `attempts_to_value` renders
+            // both, and still emits a joined `detail` for each so the #459
+            // wire stays backwards compatible.
+            Self::Disabled { .. } | Self::Denied { .. } => None,
             Self::WrongPublisher { detail }
             | Self::NotOpenAccess { detail }
             | Self::Failed { detail } => Some(detail),
+            _ => None,
+        }
+    }
+
+    /// The variables a `Disabled` row needs set, in the order the user
+    /// should set them. `None` for every other outcome.
+    #[must_use]
+    pub fn required_env(&self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::Disabled { env } => Some(env),
+            _ => None,
+        }
+    }
+
+    /// The structured denial behind a `Denied` row, which is what
+    /// [`crate::remediation::for_denial`] takes. `None` otherwise.
+    #[must_use]
+    pub fn denial(&self) -> Option<&DenialContext> {
+        match self {
+            Self::Denied { denial } => Some(denial),
             _ => None,
         }
     }
@@ -3796,7 +3847,9 @@ impl AttemptOutcome {
     #[must_use]
     pub fn render(&self) -> String {
         match self {
-            Self::Disabled { env } => format!("not consulted (set {env} to enable)"),
+            Self::Disabled { env } => {
+                format!("not consulted (set {} to enable)", env.join(" + "))
+            }
             Self::NotApplicable => "not consulted (cannot serve this ref kind)".to_string(),
             Self::WrongPublisher { detail } => format!("not consulted ({detail})"),
             Self::NotNeeded => "not consulted (an earlier source answered)".to_string(),
@@ -3804,6 +3857,13 @@ impl AttemptOutcome {
             Self::NotOpenAccess { detail } => {
                 format!("consulted: found, not open access ({detail})")
             }
+            // `{:?}` on the reason: `render` is explicitly prose (`wire`
+            // is the stable token), and the attempted host is the part a
+            // human acts on.
+            Self::Denied { denial } => match &denial.attempted {
+                Some(a) => format!("consulted: refused ({:?}, {a})", denial.reason),
+                None => format!("consulted: refused ({:?})", denial.reason),
+            },
             Self::Failed { detail } => format!("consulted: failed ({detail})"),
             Self::Resolved => "consulted: resolved".to_string(),
         }
@@ -3851,6 +3911,21 @@ pub fn attempts_to_value(attempts: &[SourceAttempt]) -> serde_json::Value {
                 o.insert("outcome".into(), serde_json::json!(a.outcome.wire()));
                 if let Some(d) = a.outcome.detail() {
                     o.insert("detail".into(), serde_json::json!(d));
+                }
+                if let Some(env) = a.outcome.required_env() {
+                    // `detail` stays a joined string so a #459-era consumer
+                    // reads the same field it always did; `required_env` is
+                    // the form that does not need splitting.
+                    o.insert("detail".into(), serde_json::json!(env.join(" + ")));
+                    o.insert("required_env".into(), serde_json::json!(env));
+                }
+                if let Some(dc) = a.outcome.denial() {
+                    o.insert("detail".into(), serde_json::json!(a.outcome.render()));
+                    o.insert("denial_context".into(), serde_json::json!(dc));
+                    let rem = crate::remediation::for_denial(dc);
+                    if !rem.is_empty() {
+                        o.insert("remediation".into(), serde_json::json!(rem));
+                    }
                 }
                 o.insert(
                     "consulted".into(),
@@ -3908,9 +3983,200 @@ fn classify_attempt(e: &FetchError) -> AttemptOutcome {
                 detail: hint.clone(),
             }
         }
-        other => AttemptOutcome::Failed {
-            detail: other.to_string(),
+        // A policy refusal before the untyped fallback (#470). The
+        // conversion already exists and yields exactly the reason /
+        // attempted / expected / hop_index that `remediation::for_denial`
+        // consumes; `classify_attempt` used to walk straight past it and
+        // stringify.
+        //
+        // `CapabilityNotGranted` is deliberately excluded. It is produced
+        // by a source's defensive gate BEFORE any request goes out, and
+        // `Denied` reports `was_consulted() == true` — which is the exact
+        // predicate the #442 reachability tests assert on. Routing it here
+        // would make a source that was never contacted claim it was. The
+        // orchestrator already reports that state as `Disabled`, which
+        // also names the variables to set.
+        other => match Option::<DenialContext>::from(other) {
+            Some(denial) if denial.reason != crate::DenialReason::CapabilityNotGranted => {
+                AttemptOutcome::Denied { denial }
+            }
+            _ => AttemptOutcome::Failed {
+                detail: other.to_string(),
+            },
         },
+    }
+}
+
+// Gated exactly as `classify_attempt` is, not more narrowly. Gating these
+// on `metadata` alone left the new code compiled but untested under the
+// coverage job's feature set (`tdm-*` without `metadata`) -- a smaller copy
+// of the same "is this actually exercised?" question #442/#458 are about,
+// and the reason `codecov/patch` failed on this PR.
+#[cfg(all(
+    test,
+    any(
+        feature = "metadata",
+        feature = "tdm-elsevier",
+        feature = "tdm-aps",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    )
+))]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod attempt_denial_tests {
+    use super::*;
+
+    use crate::http::HttpError;
+    use crate::DenialReason;
+
+    fn redirect_denial() -> FetchError {
+        FetchError::Http(HttpError::RedirectDenied {
+            source_key: "hal".to_string(),
+            host: "cdn.example.org".to_string(),
+            expected_hosts: vec!["hal.science".to_string()],
+        })
+    }
+
+    /// #470. A redirect denial on a metadata-chain source used to flatten
+    /// to `Failed { detail: "..." }` -- an untyped string on a wire #459
+    /// advertises as machine-readable, for the one case that is richest and
+    /// most actionable.
+    #[test]
+    fn a_policy_refusal_keeps_its_denial_context() {
+        let outcome = classify_attempt(&redirect_denial());
+        let denial = outcome
+            .denial()
+            .expect("a redirect denial must survive classification");
+        assert_eq!(denial.reason, DenialReason::RedirectNotInAllowlist);
+        assert_eq!(denial.attempted.as_deref(), Some("cdn.example.org"));
+        assert_eq!(outcome.wire(), "consulted_denied");
+        assert!(
+            outcome.was_consulted(),
+            "a refusal means a request went out"
+        );
+    }
+
+    /// The point of keeping it: `remediation::for_denial` becomes reachable
+    /// from a per-source row, so the row can tell the user what to change.
+    /// `PdfLegStatus::Blocked` could already do this; the rows could not.
+    #[test]
+    fn a_denied_row_carries_a_remediation_on_the_wire() {
+        let attempts = vec![SourceAttempt::new(
+            "hal",
+            classify_attempt(&redirect_denial()),
+        )];
+        let v = attempts_to_value(&attempts);
+        let row = &v[0];
+
+        assert_eq!(row["outcome"], serde_json::json!("consulted_denied"));
+        assert_eq!(
+            row["denial_context"]["reason"],
+            serde_json::json!("redirect_not_in_allowlist"),
+            "row: {row}"
+        );
+        let rem = row["remediation"]
+            .as_array()
+            .unwrap_or_else(|| panic!("a redirect denial has a config channel; row: {row}"));
+        assert!(!rem.is_empty());
+        assert!(
+            row["detail"].is_string(),
+            "`detail` must stay populated for a #459-era consumer; row: {row}"
+        );
+    }
+
+    /// `CapabilityNotGranted` is produced BEFORE any request goes out, so
+    /// routing it to `Denied` would make a source that was never contacted
+    /// report `was_consulted() == true` -- the predicate the #442
+    /// reachability tests rest on.
+    #[test]
+    fn an_ungranted_capability_is_not_reported_as_consulted_and_denied() {
+        let outcome = classify_attempt(&FetchError::NotEligible {
+            source_key: "tdm-aps".into(),
+        });
+        assert!(
+            outcome.denial().is_none(),
+            "got {outcome:?}: this never reached the network"
+        );
+        assert_eq!(outcome.wire(), "consulted_failed");
+    }
+
+    /// The accessors are a narrowing, so the negative case matters as much
+    /// as the positive one: a caller that treated `denial()` as
+    /// "is this a failure" would mishandle every `Failed` row.
+    #[test]
+    fn the_accessors_narrow_rather_than_generalise() {
+        let failed = AttemptOutcome::Failed {
+            detail: "connection reset".to_string(),
+        };
+        assert!(failed.denial().is_none());
+        assert!(failed.required_env().is_none());
+        assert!(failed.detail().is_some());
+
+        let disabled = AttemptOutcome::Disabled {
+            env: &["DOIGET_ENABLE_HAL"],
+        };
+        assert!(disabled.denial().is_none());
+        assert!(
+            disabled.detail().is_none(),
+            "`Disabled` carries structure; the joined string is built at the wire"
+        );
+        assert!(!disabled.was_consulted());
+        assert_eq!(
+            disabled.render(),
+            "not consulted (set DOIGET_ENABLE_HAL to enable)"
+        );
+    }
+
+    /// `attempted` is optional on a `DenialContext`, and the size cap has
+    /// no host to name. The prose has to hold either way.
+    #[test]
+    fn a_denial_without_an_attempted_host_still_renders() {
+        let outcome = AttemptOutcome::Denied {
+            denial: DenialContext {
+                reason: DenialReason::SizeCapExceeded,
+                source: Some("core".to_string()),
+                attempted: None,
+                expected: None,
+                hop_index: None,
+                cap: None,
+                actual: None,
+            },
+        };
+        assert_eq!(outcome.render(), "consulted: refused (SizeCapExceeded)");
+
+        // No config channel for a size cap, so no remediation key -- as
+        // opposed to an empty array, which would read as "we looked and
+        // there is nothing you can do" without saying so.
+        let v = attempts_to_value(&[SourceAttempt::new("core", outcome)]);
+        assert!(v[0].get("remediation").is_none(), "row: {}", v[0]);
+        assert!(v[0].get("denial_context").is_some(), "row: {}", v[0]);
+    }
+
+    /// #470's second half. Tier 3 needs two variables, and joining them
+    /// into `"A + B"` meant a consumer had to split on the separator --
+    /// exactly what the `detail()` / `wire()` split exists to avoid.
+    #[test]
+    fn a_disabled_row_lists_its_variables_instead_of_joining_them() {
+        let attempts = vec![SourceAttempt::new(
+            "tdm-aps",
+            AttemptOutcome::Disabled {
+                env: &["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"],
+            },
+        )];
+        let v = attempts_to_value(&attempts);
+        let row = &v[0];
+
+        assert_eq!(
+            row["required_env"],
+            serde_json::json!(["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"]),
+            "row: {row}"
+        );
+        // Unchanged for anyone already reading it.
+        assert_eq!(
+            row["detail"],
+            serde_json::json!("DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS"),
+            "row: {row}"
+        );
     }
 }
 
@@ -3981,12 +4247,20 @@ async fn resolve_optional_chain(
     // that borrows the source, while a `SourceAttempt` holds a `'static`
     // key so the trace can outlive the chain. A test asserts the two agree,
     // so this cannot drift into a lie.
-    let chain: Vec<(&'static str, &'static str, &dyn crate::source::Source)> = vec![
-        ("datacite", "DOIGET_ENABLE_DATACITE", &datacite),
-        ("europe-pmc", "DOIGET_ENABLE_EUROPE_PMC", &epmc),
-        ("openaire", "DOIGET_ENABLE_OPENAIRE", &openaire),
-        ("hal", "DOIGET_ENABLE_HAL", &hal),
-        ("core", "DOIGET_ENABLE_CORE", &core),
+    // `&'static [&'static str]` rather than a single var: `AttemptOutcome::
+    // Disabled` now carries the whole list, because Tier 3 needs two and a
+    // joined string put a separator on the #459 wire (#470). Tier 2 needs
+    // one, which is a one-element list.
+    let chain: Vec<(
+        &'static str,
+        &'static [&'static str],
+        &dyn crate::source::Source,
+    )> = vec![
+        ("datacite", &["DOIGET_ENABLE_DATACITE"], &datacite),
+        ("europe-pmc", &["DOIGET_ENABLE_EUROPE_PMC"], &epmc),
+        ("openaire", &["DOIGET_ENABLE_OPENAIRE"], &openaire),
+        ("hal", &["DOIGET_ENABLE_HAL"], &hal),
+        ("core", &["DOIGET_ENABLE_CORE"], &core),
     ];
 
     let mut resolved: Option<(&'static str, Value)> = None;
@@ -4075,7 +4349,7 @@ async fn resolve_tdm_chain(
     struct Entry<'a> {
         name: &'static str,
         /// What the user must set, rendered verbatim into the trace.
-        enable_hint: &'static str,
+        enable_hint: &'static [&'static str],
         /// DOI prefixes this publisher registered.
         prefixes: &'static [&'static str],
         /// Human name, for the wrong-publisher message.
@@ -4115,7 +4389,7 @@ async fn resolve_tdm_chain(
     #[cfg(feature = "tdm-aps")]
     chain.push(Entry {
         name: "tdm-aps",
-        enable_hint: "DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS",
+        enable_hint: &["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"],
         prefixes: crate::sources::tdm_aps::PUBLISHER_PREFIXES,
         publisher: "American Physical Society (APS)",
         src: &aps,
@@ -4123,7 +4397,7 @@ async fn resolve_tdm_chain(
     #[cfg(feature = "tdm-elsevier")]
     chain.push(Entry {
         name: "tdm-elsevier",
-        enable_hint: "DOIGET_KEY_ELSEVIER + DOIGET_AGREE_TDM_ELSEVIER",
+        enable_hint: &["DOIGET_KEY_ELSEVIER", "DOIGET_AGREE_TDM_ELSEVIER"],
         prefixes: crate::sources::tdm_elsevier::PUBLISHER_PREFIXES,
         publisher: "Elsevier BV",
         src: &elsevier,
@@ -4131,7 +4405,7 @@ async fn resolve_tdm_chain(
     #[cfg(feature = "tdm-springer")]
     chain.push(Entry {
         name: "tdm-springer",
-        enable_hint: "DOIGET_KEY_SPRINGER + DOIGET_AGREE_TDM_SPRINGER",
+        enable_hint: &["DOIGET_KEY_SPRINGER", "DOIGET_AGREE_TDM_SPRINGER"],
         prefixes: crate::sources::tdm_springer::PUBLISHER_PREFIXES,
         publisher: "Springer Nature",
         src: &springer,
@@ -4139,7 +4413,7 @@ async fn resolve_tdm_chain(
     #[cfg(feature = "tdm-ieee")]
     chain.push(Entry {
         name: "tdm-ieee",
-        enable_hint: "DOIGET_KEY_IEEE + DOIGET_AGREE_TDM_IEEE",
+        enable_hint: &["DOIGET_KEY_IEEE", "DOIGET_AGREE_TDM_IEEE"],
         prefixes: crate::sources::tdm_ieee::PUBLISHER_PREFIXES,
         publisher: "IEEE",
         src: &ieee,
@@ -4434,7 +4708,7 @@ mod chain_tests {
         assert_eq!(
             outcome(&attempts, "hal"),
             &AttemptOutcome::Disabled {
-                env: "DOIGET_ENABLE_HAL"
+                env: &["DOIGET_ENABLE_HAL"]
             },
             "a disabled source must name the variable that enables it"
         );
@@ -4951,7 +5225,7 @@ mod tdm_chain_tests {
         assert_eq!(
             o,
             &AttemptOutcome::Disabled {
-                env: "DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS"
+                env: &["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"]
             },
             "a closed Tier-3 gate must name the key AND the agreement"
         );

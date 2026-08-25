@@ -4595,7 +4595,7 @@ mod tests {
             SourceAttempt::new(
                 "hal",
                 AttemptOutcome::Disabled {
-                    env: "DOIGET_ENABLE_HAL",
+                    env: &["DOIGET_ENABLE_HAL"],
                 },
             ),
             SourceAttempt::new("core", AttemptOutcome::NoRecord),
