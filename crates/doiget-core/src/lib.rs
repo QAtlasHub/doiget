@@ -2313,10 +2313,25 @@ mod tests {
     }
 
     #[test]
-    fn ref_parse_bare_without_10_prefix_uses_arxiv_errors() {
-        // Bare ambiguous fallback: ArxivId parser is dispatched and its
-        // error surfaces. `1.2.3` is neither a DOI nor an arXiv shape.
-        assert_eq!(Ref::parse("1.2.3"), Err(RefParseError::InvalidArxivShape));
+    fn ref_parse_bare_without_10_prefix_reports_neither_shape() {
+        // The comment on this test always said the right thing -- "`1.2.3`
+        // is neither a DOI nor an arXiv shape" -- while the assertion said
+        // `InvalidArxivShape`, which is the fallback parser's verdict
+        // rather than the truth about the input (#477). Someone who
+        // mistyped a DOI was told about arXiv id shapes.
+        assert_eq!(Ref::parse("1.2.3"), Err(RefParseError::UnrecognisedShape));
+    }
+
+    #[test]
+    fn an_explicit_arxiv_scheme_still_reports_the_arxiv_shape_error() {
+        // The narrowing in #477 applies ONLY to the ambiguous fall-through.
+        // When the caller declared `arxiv:`, the arXiv parser's verdict IS
+        // the truth about the input, and generalising it there would lose
+        // information rather than gain it.
+        assert_eq!(
+            Ref::parse("arxiv:1.2.3"),
+            Err(RefParseError::InvalidArxivShape)
+        );
     }
 
     #[test]

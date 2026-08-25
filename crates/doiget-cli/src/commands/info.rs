@@ -1,6 +1,7 @@
 //! `doiget info <ref>` subcommand — read-only metadata inspection.
 //!
-//! Reads the metadata TOML for a given [`Ref`] from the [`FsStore`] and
+//! Reads the metadata TOML for a given [`Ref`](doiget_core::Ref) from the
+//! [`FsStore`] and
 //! prints it on stdout. Network access is never required.
 //!
 //! Per [`docs/PUBLIC_API.md`](../../../../docs/PUBLIC_API.md) §2 the read goes
@@ -18,7 +19,8 @@ use super::resolve_store_root;
 /// Run the `info` subcommand against the configured store.
 ///
 /// `input` is the user-supplied ref string (e.g. `"10.1234/example"`,
-/// `"arxiv:2401.12345"`, or any of the schemes accepted by [`Ref::parse`]).
+/// `"arxiv:2401.12345"`, or any of the schemes accepted by
+/// [`Ref::parse`](doiget_core::Ref::parse)).
 ///
 /// On success, the entry's [`Metadata`](doiget_core::store::Metadata) is
 /// written to stdout as TOML. On a missing entry, the function returns an
