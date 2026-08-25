@@ -15,7 +15,7 @@ exclude = [
 ]
 
 [workspace.package]
-version       = "0.8.10-beta.1"
+version       = "0.8.10-beta.2"
 edition       = "2021"
 rust-version  = "1.86"
 license       = "MIT"
@@ -41,9 +41,9 @@ features-doc-link = "docs/SOURCES.md"
 
 [workspace.dependencies]
 # Core
-doiget-core = { path = "crates/doiget-core", version = "0.8.10-beta.1" }
-doiget-cli  = { path = "crates/doiget-cli", version = "0.8.10-beta.1" }
-doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.10-beta.1" }
+doiget-core = { path = "crates/doiget-core", version = "0.8.10-beta.2" }
+doiget-cli  = { path = "crates/doiget-cli", version = "0.8.10-beta.2" }
+doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.10-beta.2" }
 
 # Async runtime — features are deliberately limited (avoid `full`).
 tokio = { version = "1", default-features = false, features = [
@@ -180,7 +180,7 @@ proptest    = "1"
 # DOIGET_STORE_ROOT, etc.) within a single test binary. Lifted to
 # workspace deps in #228 review pass A6 so the three member crates
 # (core / cli / mcp) cannot drift on the major version.
-serial_test = "3"
+serial_test = "4"
 
 # Phase 4 (citation graph)
 petgraph = "0.6"
