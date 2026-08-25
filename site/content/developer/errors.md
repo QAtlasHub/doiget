@@ -63,7 +63,7 @@ Wire form (JSON / MCP): `"INVALID_REF"`, `"NO_OA_AVAILABLE"`, etc.
 |---|---|
 | Agent (MCP) | Structured, never throws. On failure: `{ ok: false, error: { code, message, denial_context? } }`. `remediation` and `attempts` are **not** carried here — they belong to the `{ ok: true, … }` envelope, as `pdf.remediation` (present when the PDF leg was blocked) and top-level `attempts`. A blocked PDF leg is an `ok: true` result with a failed leg, not an `ok: false` call. |
 | Researcher (CLI human) | `cargo`-style stderr: `error[E0007]: rate limited from unpaywall: retry after 1s`. Exit code 1. |
-| CI / Batch (CLI `--json`) | JSON Lines record per ref with `{"ok":false, "error":{"code":"...","message":"...","denial_context":{...}?,"remediation":[...]?,"attempts":[...]?}}`. Exit code = number of failures (capped at 255). |
+| CI / Batch (CLI `--json`) | JSON Lines record per ref with `{"ok":false, "error":{"code":"...","message":"...","denial_context":{...}?,"remediation":[...]?,"attempts":[...]?}}`. Exit code = number of failures (capped at 255). **Records are emitted in completion order, not input order** — see below. |
 | Library (Rust) | `Err(FetchError)` (typed via `thiserror`). |
 
 ### 3.1 Structured `denial_context` (NORMATIVE; ADR-0023)
@@ -131,6 +131,22 @@ Emitted only for reasons with a configuration channel — `redirect_not_in_allow
 `host_in_block_list`. A `size_cap_exceeded` or `capability_not_granted` denial carries no
 `remediation`, because offering a host to trust would send the caller after a fix that
 cannot work.
+
+### 3.2a `batch --json` record order (NORMATIVE)
+
+Records are written as each ref **completes**. `batch` runs up to
+`RateLimits::HARD_CODED.max_concurrent_fetches()` fetches at once and emits each
+record when its task finishes, so stdout is in completion order and reordering is
+the normal case rather than a rare one: a parse error returns instantly, a 1 MB PDF
+does not.
+
+**Key on the `ref` field.** Zipping stdout against the input file positionally is the
+obvious thing to write, it works on a small or uniform batch, and the first time a
+fetch is slow it attaches a result to the wrong DOI with no error anywhere (#479).
+
+Input order would cost buffering the whole run before emitting anything, which
+would end streaming for large batches. The order is not going to change; consumers
+that need input order must sort by `ref` themselves.
 
 ### 3.3 Structured `attempts` (NORMATIVE; ADR-0043)
 

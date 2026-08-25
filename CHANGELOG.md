@@ -12,6 +12,22 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[cli]** `config path` and `config show` print when stdout is not a terminal.
+  They were absent from the ADR-0017 artifact classification, so an implicit
+  non-TTY Quiet silenced them: `doiget config path` from a pipe produced zero
+  bytes and exited 0, which made the documented way to locate your config file
+  answer a script, a CI step or an agent with silence *and* success. Explicit
+  Quiet still silences them (#476, ADR-0017 Amendment 1/2).
+- **[cli]** The human denial help names the one trust flag that covers the
+  attempted host, and says so when neither does. It listed both unconditionally
+  while `remediation::for_denial` — the MCP and `batch --json` path — already
+  computed which one applied, so the agent got a better diagnostic than the
+  human. `*.strath.ac.uk` is covered by `trust_academic_repos` only; following
+  `trust_oa_registries` there cost a round (#478).
+- **[cli]** `widening_suggestions` describes `*.parent` as "the whole domain".
+  It said "the whole publisher", which is wrong for the case that fires most
+  often: every host in the built-in academic list is a university (#478).
+
 - **[diagnostics]** A per-source attempt row keeps its `DenialContext`, so
   `remediation` is reachable from it. `classify_attempt` flattened everything that
   was not a `NotFound` or an access refusal into `Failed { detail: "<prose>" }` —
@@ -44,6 +60,11 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[docs]** `batch --json` record order is stated in `docs/ERRORS.md` §3.2a and
+  in `batch --help`: records are emitted as refs complete, not in input order, and
+  `ref` is the key. Nothing said so, and zipping stdout against the input file
+  positionally is the obvious thing to write — it works until one fetch is slow,
+  then attaches a result to the wrong DOI with no error anywhere (#479).
 - **[errors]** `AttemptOutcome::Disabled` carries `&'static [&'static str]` and the
   wire gains `required_env`. Tier 3 needs two variables and the code joined them
   into `"A + B"`, which put a separator on the #459 wire that a consumer had to

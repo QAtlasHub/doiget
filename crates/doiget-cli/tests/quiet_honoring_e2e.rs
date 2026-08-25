@@ -115,6 +115,42 @@ fn config_path_quiet_produces_no_stdout() {
         .stdout(predicate::str::is_empty());
 }
 
+// ---- #476: implicit (non-TTY) Quiet must NOT silence `config` ---------
+//
+// `assert_cmd` always gives the child a pipe, never a terminal, so these
+// exercise exactly the state the bug was reported in: no mode flag, no
+// `DOIGET_MODE`, stdout not a TTY. Before #476 both printed zero bytes and
+// exited 0 -- the documented way to locate your config file answering a
+// script, a CI step or an agent with silence AND success.
+//
+// The pair above (explicit `--mode quiet`) is what must keep working; these
+// are what must stop being suppressed. Both halves matter: fixing this by
+// making `config` unconditionally loud would break #203.
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn config_path_prints_when_stdout_is_not_a_tty() {
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .env("DOIGET_CONTACT_EMAIL", "test@example.com")
+        .args(["config", "path"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("config.toml"));
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn config_show_prints_when_stdout_is_not_a_tty() {
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .env("DOIGET_CONTACT_EMAIL", "test@example.com")
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty().not());
+}
+
 // ---- audit-log Quiet + chain issues: exit non-zero, stdout empty ------
 //
 // Self-review for #207 §2: tampered-log under Quiet must still raise
