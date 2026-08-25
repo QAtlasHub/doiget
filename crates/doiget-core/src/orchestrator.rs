@@ -4786,9 +4786,14 @@ mod tdm_chain_tests {
             .iter()
             .map(|r| r.url.path().to_string())
             .collect();
+        // The prefix APS publishes, not the one this repo happens to
+        // build. #484 shipped `/v2/article/` past every test in the tree
+        // precisely because each of them was written from the
+        // implementation's output.
+        const APS_DOCUMENTED_PREFIX: &str = "/v2/journals/articles/";
         assert!(
-            paths.iter().any(|p| p.contains("/v2/article/")),
-            "fetch_paper never reached tdm-aps; paths were {paths:?}"
+            paths.iter().any(|p| p.contains(APS_DOCUMENTED_PREFIX)),
+            "fetch_paper never reached tdm-aps at its documented endpoint; paths were {paths:?}"
         );
 
         // Evidence 2: and the trace says so, in terms an operator can act

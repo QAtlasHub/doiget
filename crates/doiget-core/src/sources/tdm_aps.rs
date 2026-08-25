@@ -1,5 +1,5 @@
 //! APS Harvest TDM source — DOI metadata via the
-//! `/v2/article/<DOI>` endpoint (Phase 5b / Tier 3).
+//! `/v2/journals/articles/<DOI>` endpoint (Phase 5b / Tier 3).
 //!
 //! Spec: `docs/SOURCES.md` §1 Tier 3 row + §4 "TDM sources (Phase 5)",
 //! `docs/CAPABILITY.md` §2, ADR-0002 (per-publisher Cargo features),
@@ -72,7 +72,7 @@ const DEFAULT_BASE: &str = "https://harvest.aps.org";
 /// from the error message rather than looking like a lookup failure.
 pub(crate) const PUBLISHER_PREFIXES: &[&str] = &["10.1103"];
 
-/// APS Harvest [`Source`] impl — DOI → `/v2/article/<DOI>` JSON
+/// APS Harvest [`Source`] impl — DOI → `/v2/journals/articles/<DOI>` JSON
 /// record.
 #[derive(Clone, Debug)]
 pub struct TdmApsSource {
@@ -97,12 +97,27 @@ impl TdmApsSource {
         Self { base }
     }
 
-    /// Build the `/v2/article/<doi>` URL.
+    /// Build the `/v2/journals/articles/<doi>` URL.
     ///
-    /// APS encodes the DOI directly in the path; the `/` separator
-    /// in the DOI suffix must be percent-encoded.
+    /// The DOI goes into the path with its `/` separators intact. APS
+    /// publishes the shape verbatim:
+    ///
+    /// ```text
+    /// curl -H 'Accept: application/pdf'     ///   http://harvest.aps.org/v2/journals/articles/10.1103/PhysRevX.5.021001
+    /// ```
+    ///
+    /// Every other byte outside the RFC 3986 unreserved set is still
+    /// percent-encoded, because a DOI suffix may legally contain
+    /// characters (`;`, `<`, spaces) that are not safe in a path even
+    /// though `/` is.
+    ///
+    /// #484: this used to be `/v2/article/<percent-encoded DOI>`, which
+    /// is not an endpoint APS serves — `%2F` and the missing `journals/`
+    /// segment would each have produced a 404 on their own. Nothing
+    /// caught it because the wiremock stubs asserted the path this
+    /// function built rather than the one APS documents.
     fn request_url(&self, doi: &crate::Doi) -> Result<Url, FetchError> {
-        let path = format!("/v2/article/{}", percent_encode_path_segment(doi.as_str()));
+        let path = format!("/v2/journals/articles/{}", encode_doi_path(doi.as_str()));
         self.base.join(&path).map_err(|e| FetchError::SourceSchema {
             hint: format!("tdm-aps URL construction failed: {e}"),
         })
@@ -226,13 +241,13 @@ impl Source for TdmApsSource {
 
 /// Percent-encode a path segment, preserving the RFC 3986 unreserved
 /// set. `/` and other reserved characters are percent-encoded.
-fn percent_encode_path_segment(segment: &str) -> String {
-    let mut out = String::with_capacity(segment.len());
-    for b in segment.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+fn encode_doi_path(doi: &str) -> String {
+    let mut out = String::with_capacity(doi.len());
+    for b in doi.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/') {
             out.push(b as char);
         } else {
-            out.push_str(&format!("%{:02X}", b));
+            out.push_str(&format!("%{b:02X}"));
         }
     }
     out
@@ -305,6 +320,12 @@ mod tests {
 
     const TEST_KEY: &str = "aps-test-key-xyz";
 
+    /// The path the stubs match, spelled the way APS documents it rather
+    /// than the way `request_url` happens to build it. See
+    /// [`request_url_matches_the_published_aps_example`] for why the
+    /// distinction is load-bearing (#484).
+    const APS_ARTICLE_PATH: &str = "/v2/journals/articles/10.1103/PhysRevX.10.011001";
+
     fn profile_with_aps_grant() -> CapabilityProfile {
         let mut p = CapabilityProfile::for_tests();
         p.tdm_aps = Some(TdmGrant {
@@ -321,8 +342,7 @@ mod tests {
     async fn fetch_doi_returns_article_object() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            // APS path with percent-encoded DOI (`/` → `%2F`).
-            .and(path("/v2/article/10.1103%2FPhysRevX.10.011001"))
+            .and(path(APS_ARTICLE_PATH))
             // Slice 20: X-API-Key header MUST be present on the wire.
             .and(header("x-api-key", TEST_KEY))
             .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_ARTICLE_HIT))
@@ -367,7 +387,7 @@ mod tests {
     async fn fetch_non_object_returns_source_schema() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v2/article/10.1103%2FPhysRevX.10.011001"))
+            .and(path(APS_ARTICLE_PATH))
             .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_BAD_SHAPE))
             .mount(&server)
             .await;
@@ -411,5 +431,49 @@ mod tests {
                 "declared prefix {p} must be served"
             );
         }
+    }
+
+    /// The request URL is what APS publishes, byte for byte.
+    ///
+    /// This is the check the two wiremock tests below cannot make. A stub
+    /// written from `request_url`'s output asserts only that the
+    /// implementation agrees with itself — it stays green for any path, as
+    /// long as both sides move together. That is how `/v2/article/<DOI>`
+    /// survived to be shipped (#484).
+    ///
+    /// So the expectation here is a constant transcribed from the vendor's
+    /// own example, and it is deliberately not built from anything in this
+    /// module.
+    #[test]
+    fn request_url_matches_the_published_aps_example() {
+        // Verbatim from <https://harvest.aps.org/docs/harvest-api>:
+        //
+        //   curl -D - -H 'Accept: application/pdf'         //     http://harvest.aps.org/v2/journals/articles/10.1103/PhysRevX.5.021001
+        //
+        // Transcribed to https because `DEFAULT_BASE` pins TLS; the path
+        // and the DOI encoding are unchanged.
+        const PUBLISHED: &str =
+            "https://harvest.aps.org/v2/journals/articles/10.1103/PhysRevX.5.021001";
+
+        let src = TdmApsSource::new();
+        let doi = Doi::parse("10.1103/PhysRevX.5.021001").expect("DOI parses");
+
+        assert_eq!(
+            src.request_url(&doi).expect("URL builds").as_str(),
+            PUBLISHED,
+            "the URL must match APS's published example, not this module's idea of it"
+        );
+    }
+
+    /// A DOI suffix may carry characters that are not path-safe. `/` stays,
+    /// everything outside the RFC 3986 unreserved set does not.
+    #[test]
+    fn encode_doi_path_keeps_slashes_and_escapes_the_rest() {
+        assert_eq!(
+            encode_doi_path("10.1103/PhysRevX.5.021001"),
+            "10.1103/PhysRevX.5.021001"
+        );
+        assert_eq!(encode_doi_path("10.1103/a b"), "10.1103/a%20b");
+        assert_eq!(encode_doi_path("10.1103/x;y"), "10.1103/x%3By");
     }
 }
