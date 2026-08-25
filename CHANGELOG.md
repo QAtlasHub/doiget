@@ -57,6 +57,12 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 - **[transport]** `HttpClient::fetch_pdf_with_headers`. The magic-byte check is not
   optional on a credentialed endpoint: publisher error pages and WAF holding
   responses are 200s with a body.
+- **[ci]** `dco.yml` fails a PR whose commits lack a well-formed `Signed-off-by`
+  trailer. Merge commits and bot authors are exempt — GitHub writes the former, and
+  neither Dependabot nor github-actions is a legal person who could certify a
+  license grant. Deliberately not a required status check: it blocks in its own job,
+  so a missing sign-off is visible before a human merges without disturbing the
+  auto-merge chain (ADR-0045 D4).
 
 ### Changed
 
@@ -78,6 +84,16 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   put an open-licence claim on a file obtained by a route it does not describe.
 - **[docs]** ADR-0044, which also records that ADR-0041's rejection of
   Crossref-based publisher routing rested on a premise this change removes.
+- **[docs]** `CONTRIBUTING.md`'s one-line "your contribution is MIT" clause becomes a
+  Contributor License Agreement: a sublicensable copyright grant permitting
+  distribution under any license terms, an Apache-ICLA-shaped patent grant with
+  defensive termination, and a written promise that public releases stay under an
+  OSI-approved open source license. Inbound = outbound made the outbound license a
+  one-way door — changing it later needs permission from every past contributor, and
+  one unreachable contributor pins it forever. doiget is at the single moment when
+  reopening that door costs nothing: `git shortlog -sne --all` lists exactly one
+  human. Assent is a commit sign-off, and the change is not retroactive — everything
+  merged before it stays MIT-only (ADR-0045).
 
 ### Retracted
 

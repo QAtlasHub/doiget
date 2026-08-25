@@ -241,7 +241,91 @@ By participating in this project, you agree to abide by the
 [Contributor Covenant](https://www.contributor-covenant.org/) v2.1. Reports of
 unacceptable behavior may be sent to the maintainer at the contact email above.
 
-## License
+## Contributor License Agreement
 
-By submitting a PR, you agree that your contribution is licensed under the MIT License
-(see [LICENSE](LICENSE)).
+doiget's public releases are, and will remain, available under an OSI-approved open
+source license — today the MIT License (see [LICENSE](LICENSE)). That promise binds the
+maintainer, not you, and it is written here so it is checkable.
+
+The grant below is broader than "MIT in, MIT out". It exists so the project can change
+its outbound license later — a copyleft core with separately licensed connectors, say —
+without having to find and re-ask every past contributor. The alternatives that were
+considered and rejected are recorded in
+[ADR-0045](docs/DECISIONS/0045-contributor-license-agreement.md).
+
+### 1. Copyright grant
+
+You grant the maintainer (Sota Shimozono) and recipients of software distributed by the
+project a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+copyright license to reproduce, prepare derivative works of, publicly display, publicly
+perform, sublicense, and distribute your contribution and such derivative works, **under
+any license terms, including terms that differ from those in effect when you
+contributed**.
+
+You keep your copyright. This is a license, not an assignment, and it is non-exclusive:
+your contribution remains yours to use anywhere else, under any terms you like.
+
+### 2. Patent grant
+
+You grant the maintainer and recipients of software distributed by the project a
+perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable (except as
+stated below) patent license to make, have made, use, offer to sell, sell, import, and
+otherwise transfer your contribution. This license covers only those patent claims
+licensable by you that are necessarily infringed by your contribution alone, or by the
+combination of your contribution with the project.
+
+If any entity institutes patent litigation alleging that your contribution, or the
+project it was contributed to, constitutes direct or contributory patent infringement,
+every patent license granted to that entity under this section terminates as of the date
+the litigation is filed.
+
+### 3. What you certify
+
+By signing off (§4) you certify that:
+
+1. The contribution is your original work, or you have the right to submit it under this
+   agreement — including, where the work is not entirely yours, that its license is
+   compatible with this grant and that you have identified that license and its origin
+   in the contribution itself.
+2. You are legally entitled to grant the licenses above. If your employer holds rights
+   to intellectual property you create, you have permission to contribute on their
+   behalf, or your employer has waived those rights.
+3. You know of no third-party claim, patent, or license that your contribution
+   infringes.
+
+Tooling does not change this. A patch drafted with AI assistance is still submitted
+under your certification, and item 1 is yours to satisfy.
+
+If any of this later turns out to be untrue, tell the maintainer (see
+[CONTACT.md](CONTACT.md)) rather than leaving it in the tree.
+
+### 4. How you agree: commit sign-off
+
+Put a `Signed-off-by` trailer on every commit in your PR, with your real name and an
+email address you control:
+
+```bash
+git commit -s -m "fix(store): ..."
+#   -s writes:  Signed-off-by: Your Name <you@example.com>
+#               taken from your git user.name / user.email
+
+git rebase --signoff origin/next   # sign off commits you already made
+```
+
+A sign-off means: *"I agree to the Contributor License Agreement in this file, as it
+read when I contributed."*
+
+The trailer is deliberately the whole mechanism. It lives in `git log`, so the record is
+auditable from a clone alone, and no signature service has to outlive the project.
+[`dco.yml`](.github/workflows/dco.yml) checks it on every PR; commits authored by bots
+and merge commits created by GitHub are exempt.
+
+### 5. Scope
+
+This section governs contributions to this repository. It does not change the terms
+under which you received doiget, and it is not retroactive — contributions merged before
+it was added are licensed under the MIT License alone, per the text it replaces.
+
+**This is not legal advice, and the maintainer is not a lawyer.** If your employer needs
+a countersigned agreement rather than a commit trailer, contact the maintainer before
+opening a PR.

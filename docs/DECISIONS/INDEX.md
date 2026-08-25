@@ -61,6 +61,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0042 | `tdm-ieee` ships against an inferred contract, marked unverified | Accepted (0.8.9) | `feat/430-tdm-ieee` | #430 |
 | 0043 | The machine-readable surfaces carry the trace and the remediation | Accepted (0.8.9) | `feat/459-machine-readable-diagnostics` | #459 |
 | 0044 | Tier-3 TDM sources are consulted on a blocked content leg, not on a Crossref miss | Accepted | `feat/458-tdm-content-leg` | #458 |
+| 0045 | Contributions carry a relicensable grant, recorded as a commit sign-off | Accepted | `chore/cla-relicensing-grant` | - |
 
 ## Conventions
 
