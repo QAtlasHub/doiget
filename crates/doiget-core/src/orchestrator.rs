@@ -4007,7 +4007,21 @@ fn classify_attempt(e: &FetchError) -> AttemptOutcome {
     }
 }
 
-#[cfg(all(test, feature = "metadata"))]
+// Gated exactly as `classify_attempt` is, not more narrowly. Gating these
+// on `metadata` alone left the new code compiled but untested under the
+// coverage job's feature set (`tdm-*` without `metadata`) -- a smaller copy
+// of the same "is this actually exercised?" question #442/#458 are about,
+// and the reason `codecov/patch` failed on this PR.
+#[cfg(all(
+    test,
+    any(
+        feature = "metadata",
+        feature = "tdm-elsevier",
+        feature = "tdm-aps",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    )
+))]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod attempt_denial_tests {
     use super::*;
