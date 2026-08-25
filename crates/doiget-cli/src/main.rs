@@ -253,6 +253,12 @@ enum Command {
         link: Option<Utf8PathBuf>,
     },
     /// Fetch many refs from a newline-separated text file.
+    ///
+    /// With `--json`, records are written as each ref COMPLETES, not in
+    /// input order: up to 5 fetches run concurrently and a parse error
+    /// returns instantly where a 1 MB PDF does not. Key on the `ref` field
+    /// of each record; zipping stdout against the input file positionally
+    /// attaches results to the wrong DOI (#479).
     Batch {
         /// Path to a file containing one ref per line.
         path: String,
@@ -769,7 +775,10 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             action,
             network,
             force,
-        }) => doiget_cli::commands::config::run(action, mode, network, force).await,
+        }) => {
+            doiget_cli::commands::config::run(action, mode, network, force, out.quiet_was_explicit)
+                .await
+        }
         Some(Command::Info { ref_ }) => {
             doiget_cli::commands::info::run(ref_, mode, out.quiet_was_explicit)
         }
