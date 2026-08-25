@@ -12,6 +12,24 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[legal]** `docs/LEGAL.md` §2 declares the default binary's whole network surface.
+  It said "Crossref, Unpaywall, arXiv"; a default `oa-only` build also registers
+  `oa_publisher_allowlist` (~20 publisher/repository patterns), `api.openalex.org`
+  (discovery, ADR-0031, always-on) and `ar5iv.labs.arxiv.org` (ADR-0032, always-on).
+  **OpenAlex was absent entirely** — a third-party service contacted by the shipped
+  binary with no opt-in — and the one document written for publisher legal teams was
+  the one that did not say so (#494, ADR-0047).
+- **[legal]** `docs/LEGAL.md` lists all four TDM features. `tdm-ieee` landed with
+  ADR-0042 and was missing from §2 and §6a.3; `SOURCES.md` had it (#494).
+- **[legal]** §6a.1 no longer claims credentials are read from
+  `~/.config/doiget/credentials.toml`. They are not — the resolver reads
+  `std::env::var` and nothing else, and no code path opens that file. `CONFIG.md` §6
+  specifies it in full regardless, which is #509 (#494, ADR-0047).
+- **[legal]** §6a.1's "*Enforced by: CI grep for embedded key patterns*" is removed.
+  **No such check exists.** §6a is defined as controls a machine enforces, as opposed
+  to §6b policy commitments, so an enforcement clause naming nothing was in the wrong
+  section — the same defect as the §6 safeguard-8 citation in #496 (#494, ADR-0047).
+
 - **[docs]** Five of the sixteen ToS links in `docs/SOURCES.md` §1 no longer led to
   terms — two 404s, one redirect to a docs-domain root, one to a Swagger schema, one
   to a portal root. The Elsevier entry was wrong before it died: `legal/tdmrep` is the
