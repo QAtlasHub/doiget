@@ -64,6 +64,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0045 | Per-source rate limits, taken as the stricter of the vendor's terms and the global cap | Accepted | `fix/493-per-source-rate-limits` | #493 |
 | 0046 | In SOURCES.md, a claim about a vendor is normative; the URL where the vendor says it is a pointer | Accepted | `docs/495-496-sources-accuracy` | #495, #496 |
 | 0047 | LEGAL.md's claims are read off the code, and an "enforced control" must name enforcement that exists | Accepted | `docs/494-legal-network-surface` | #494 |
+| 0048 | The access ceiling is written down, and widening it amends the written form | Accepted | `docs/497-access-invariant` | #497 |
 
 ## Conventions
 

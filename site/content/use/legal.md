@@ -70,6 +70,81 @@ This is enforced structurally rather than only by documentation:
   sources whose terms say so, e.g. arXiv at 1 request / 3 s) prevents bulk-scraping
   patterns and cannot be overridden by configuration.
 
+## 2a. Access ceiling (binding constraint)
+
+§1 and §2 say what doiget does **not** do. This says what it **may** do, because an
+unstated ceiling cannot be checked — and the next feature that widens the content leg
+would widen it against nothing. Two widenings already shipped without anyone deciding
+the ceiling had moved (see "How this changed", below), which is what #497 is about.
+
+Written to be **falsifiable by reading the code**, not aspirational. Every clause below
+names where it is enforced.
+
+### The ceiling
+
+Given a ref, doiget attempts retrieval from exactly two kinds of location:
+
+**(a) A location an enabled source reported.** The URL appears verbatim in a response
+doiget received from a source that both the build and the runtime capability profile
+have enabled. In practice: Unpaywall's `best_oa_location` / `oa_locations` (Tier 1),
+and — only when the content leg was already blocked — CORE's `downloadUrl`, HAL's
+`fileMain_s` (gated on `openAccess_bool`), or Europe PMC's `fullTextUrlList`, each
+behind its own `DOIGET_ENABLE_*` flag.
+*Enforced by:* `orchestrator::optional_source_oa_url`, which dispatches to one
+per-source extractor and returns `None` for any other source name.
+
+**(b) An endpoint built from a vendor's own documented URL scheme, for the identifier
+the user supplied.** arXiv's `/pdf/<id>.pdf` and `/api/query?id_list=<id>`; ar5iv's
+`/html/<id>`; a Tier-3 publisher's documented TDM endpoint for a DOI whose registrant
+prefix says that publisher issued it.
+*Enforced by:* the `*_url` constructors in each source module, each of which is a
+`base.join(<documented path>)` and nothing else.
+
+**There is no third kind.** doiget does not derive a candidate URL from the *content*
+of a document it fetched — no link-following, no scraping, no `href` extraction — and
+does not guess a publisher URL pattern the publisher has not documented.
+
+### What bounds both, on every request and every redirect hop
+
+1. **Host allowlist.** The host must match the per-source allowlist. A redirect to a
+   host off the list fails as `RedirectDenied`; a non-`https` redirect fails as
+   `InsecureRedirect`; hop count is capped. This applies to every hop, not only the
+   first. *Enforced by:* the `reqwest::redirect::Policy::custom` closure in
+   `crates/doiget-core/src/http.rs`; ADR-0027.
+2. **Credential and consent, Tier 3 only.** The Cargo feature must be compiled in, the
+   user must supply their own API key, and the user must separately set
+   `DOIGET_AGREE_TDM_<PUBLISHER>=1`. All three, or the source is unavailable.
+   *Enforced by:* §6a.2, §6a.3, §6a.4.
+3. **Prefix scoping, Tier 3 only.** A publisher's endpoint is asked only about DOIs its
+   own registrant prefix covers, so enabling one TDM source does not disclose an
+   unrelated reading list to that publisher. *Enforced by:* `PUBLISHER_PREFIXES` per
+   source, checked before credentials; ADR-0041, ADR-0044.
+4. **Every attempt is recorded.** Consulted or not, and why. *Enforced by:*
+   `SourceAttempt` / `attempts_to_value`; ADR-0029, ADR-0043.
+
+### How this changed, and why it is still defensible
+
+The rule this project operated under informally was **"never go beyond what Unpaywall
+reports"**. That was clean and checkable, and it is no longer what the code does. The
+ceiling rose twice, both times deliberately, both times with an ADR, and neither time
+was this document updated to say so:
+
+- **ADR-0044** — when the OA content leg is blocked, an enabled Tier-3 source is asked
+  for the bytes. For `tdm-aps` that returns a PDF. Unpaywall never listed that location.
+- **#445 / ADR-0029** — when the OA chain and the arXiv preprint fallback are both
+  exhausted, the enabled optional sources are asked whether anyone else holds a copy,
+  and the URL they report is tried.
+
+Neither is improper. But the argument for them is **not** "we never exceed Unpaywall" —
+that argument is simply false now. The real argument is the one written above: every
+leg is a publisher-sanctioned API or an index the user switched on, reached at a host
+on the allowlist, under the user's own credential where one is required, with the
+attempt recorded.
+
+**A change that widens (a) or (b) amends this section in the same PR.** That is the
+point of writing it down: ADR-0044 could not have been reviewed against a ceiling that
+existed only as a shared belief.
+
 ## 3. Tool-neutrality framing
 
 doiget is positioned as a **general-purpose automation tool** in the sense familiar from

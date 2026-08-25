@@ -10,6 +10,16 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Added
+
+- **[legal]** `docs/LEGAL.md` §2a states the **access ceiling** — what doiget may
+  attempt for a given ref, and what bounds it. §1 and §2 said only what doiget does
+  *not* do, so the positive limit existed as a shared belief: *"never go beyond what
+  Unpaywall reports"*. That belief is false. The ceiling rose twice, deliberately and
+  with ADRs — ADR-0044's Tier-3 content leg and #445's optional-source fall-through —
+  and neither could be reviewed against a limit that was never written down. Every
+  clause names the code that enforces it (#497, ADR-0048).
+
 ### Fixed
 
 - **[legal]** `docs/LEGAL.md` §2 declares the default binary's whole network surface.

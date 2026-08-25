@@ -34,6 +34,10 @@ weight = 200
 | Elsevier ScienceDirect TDM | 3 (institutional) | 5c | API key | <https://www.elsevier.com/about/policies-and-standards/text-and-data-mining> | `--features tdm-elsevier` + key + agree |
 | IEEE Xplore TDM (**unverified**) | 3 (institutional) | 5d | API key | <https://developer.ieee.org/> | `--features tdm-ieee` + key + agree |
 
+The ceiling on all of this — what doiget may attempt for a given ref, and what bounds
+it — is [`LEGAL.md`](LEGAL.md) §2a. A change that lets doiget try a location it could
+not try before amends that section in the same PR (#497, ADR-0048).
+
 ### 1.1 When Tier 3 is consulted (ADR-0044)
 
 Tier-3 sources are asked two different questions at two different points, and the
