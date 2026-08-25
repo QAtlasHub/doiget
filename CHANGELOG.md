@@ -12,6 +12,23 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[cli]** Every ref-taking command emits the `docs/ERRORS.md` §3 contract
+  line — `error[INVALID_REF]: invalid ref: …` — for an unparseable input.
+  #119 gave `fetch` the contract and nothing generalised it, so `info`,
+  `link`, `cite`, `text`, `tag`, `bib`, `csl` and `source` each printed a raw
+  `anyhow` dump: a bare `Error:` plus a `Caused by:` chain leaking internal
+  error types that are in no contract, on a surface whose callers are told
+  they can key off `error[CODE]:`. One renderer now, and a table-driven e2e
+  that fails by naming the command that regressed (#477).
+- **[cli]** `verify` renders a missing input file as `error: failed to read
+  reference file …` with exit 2 rather than an `anyhow` dump. It takes a path,
+  not a ref, and the closed `ErrorCode` set describes fetch outcomes — so it
+  gets the misuse form the CLI already uses elsewhere (#477).
+- **[core]** An input with neither a scheme nor a `10.` prefix reports
+  `RefParseError::UnrecognisedShape` — "neither a DOI … nor an arXiv id" —
+  instead of the arXiv parser's verdict. `Ref::parse` falls through to arXiv,
+  so someone who mistyped a DOI was told about arXiv id shapes (#477).
+
 - **[cli]** `list-recent` and `search --local` show whether a PDF was actually
   stored. A metadata-only entry — what a blocked content leg leaves behind —
   rendered identically to a fetched paper, and the inventory command is the only

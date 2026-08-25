@@ -263,7 +263,13 @@ impl Ref {
         if s.starts_with("10.") {
             return Doi::parse(s).map(Ref::Doi);
         }
-        ArxivId::parse(s).map(Ref::Arxiv)
+        // Last resort. The input declared no scheme and has no `10.`
+        // prefix, so trying arXiv is a guess -- and reporting the guess's
+        // failure verbatim tells a user who mistyped a DOI about arXiv
+        // (#477). Report what is actually known: it matched neither.
+        ArxivId::parse(s)
+            .map(Ref::Arxiv)
+            .map_err(|_| RefParseError::UnrecognisedShape)
     }
 }
 
@@ -524,6 +530,14 @@ pub enum RefParseError {
     /// Input matched neither the new-style nor old-style arXiv shape.
     #[error("input does not match any known arXiv id shape")]
     InvalidArxivShape,
+    /// Input carried no scheme and no `10.` prefix, so it could have been
+    /// either kind of ref, and it was neither.
+    ///
+    /// #477: the fall-through used to report [`Self::InvalidArxivShape`],
+    /// so someone who mistyped a DOI was told about arXiv. The input names
+    /// no shape, so neither should the error.
+    #[error("input is neither a DOI (expected '10.<registrant>/<suffix>') nor an arXiv id")]
+    UnrecognisedShape,
 }
 
 impl From<RefParseError> for ErrorCode {

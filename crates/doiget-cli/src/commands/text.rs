@@ -45,7 +45,7 @@ pub async fn run(
     mode: OutputMode,
     quiet_was_explicit: bool,
 ) -> Result<()> {
-    let parsed = Ref::parse(&ref_).with_context(|| format!("invalid ref {ref_:?}"))?;
+    let parsed = super::parse_ref_or_exit(&ref_)?;
     let id: ArxivId = match parsed {
         Ref::Arxiv(a) => a,
         Ref::Doi(_) => {

@@ -146,8 +146,22 @@ impl VerifyStatus {
 /// Entry point for `doiget verify <path> [--format] [--strict]`.
 pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMode) -> Result<()> {
     let fmt = parse_format(&format)?;
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("failed to read reference file {path}"))?;
+    // #477: the misuse form, not a raw `anyhow` dump. `docs/ERRORS.md` §4
+    // classes an unusable argument as misuse (exit 2), and the closed
+    // `ErrorCode` set has no member for "your input file is missing" -- it
+    // describes fetch outcomes. Inventing one would be a wire change to a
+    // NORMATIVE closed set and deserves its own decision, so this uses the
+    // bare `error:` misuse shape the CLI already uses elsewhere (e.g.
+    // `config --network` applied to the wrong action).
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) => {
+            super::output::print_err(format_args!(
+                "error: failed to read reference file {path}: {e}"
+            ));
+            return Err(anyhow::Error::new(super::fetch::CliExit(2)));
+        }
+    };
     let entries = parse_input(&text, fmt, Some(Utf8Path::new(&path)));
 
     // Resolve effective policy: CLI `--strict` is the strictest setting,

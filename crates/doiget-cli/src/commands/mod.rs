@@ -21,6 +21,57 @@
 //!
 //! Other subcommands (`serve`) land in separate PRs.
 
+/// Parse a ref, or render the failure in the `docs/ERRORS.md` §3
+/// "Researcher (CLI human)" form and return the CLI exit error.
+///
+/// #477. `error[CODE]: message` held on `fetch` alone -- #119 did it there
+/// and nowhere else -- while `info`, `link`, `cite`, `text`, `tag`, `bib`,
+/// `csl` and `source` each wrote their own `with_context("invalid ref: …")`
+/// and let `anyhow` print a bare `Error:` plus a `Caused by:` chain. The
+/// closed error-code set is a load-bearing promise of this project: a
+/// caller is told it can key off `error[CODE]:`, and on eight of nine
+/// commands there was no code to key off, while the `Caused by:` chain
+/// leaked internal error types that are in no contract.
+///
+/// Same shape as `render_fetch_error` and for the same reason -- one
+/// renderer, so a future change to the contract cannot reach some call
+/// sites and miss others.
+///
+/// # Errors
+///
+/// Always, when parsing fails: an [`anyhow::Error`] wrapping
+/// [`CliExit`](fetch::CliExit) with the `INVALID_REF` exit code. The
+/// message has already been written to stderr.
+pub fn parse_ref_or_exit(input: &str) -> anyhow::Result<doiget_core::Ref> {
+    match doiget_core::Ref::parse(input) {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            render_ref_parse_error(&e);
+            Err(anyhow::Error::new(fetch::CliExit(fetch::cli_exit_code(
+                doiget_core::ErrorCode::InvalidRef,
+            ))))
+        }
+    }
+}
+
+/// The renderer on its own, for the two call sites that already choose
+/// their own exit code.
+///
+/// `fetch` exits 1 (`cli_exit_code(InvalidRef)`) and `graph` exits 2,
+/// citing `docs/ERRORS.md` §4 "misuse" -- and §4 does say an unparseable
+/// argument is misuse, so they disagree and `graph` is the one following
+/// the table. Filed separately rather than changed here: #477 is about the
+/// message, `fetch`'s exit 1 is pinned by a named test, and quietly moving
+/// an exit code is how a script breaks without anyone noticing.
+///
+/// One renderer either way, which is the part that was missing.
+pub fn render_ref_parse_error(e: &doiget_core::RefParseError) {
+    output::print_err(format_args!(
+        "error[{}]: invalid ref: {e}",
+        doiget_core::ErrorCode::InvalidRef.as_wire()
+    ));
+}
+
 pub mod audit_log;
 pub mod batch;
 pub mod bib;

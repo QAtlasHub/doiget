@@ -725,10 +725,7 @@ pub async fn run_with_options(
     let ref_ = match Ref::parse(&input) {
         Ok(r) => r,
         Err(e) => {
-            print_err(format_args!(
-                "error[{}]: invalid ref: {e}",
-                ErrorCode::InvalidRef.as_wire()
-            ));
+            super::render_ref_parse_error(&e);
             return Err(anyhow::Error::new(CliExit(cli_exit_code(
                 ErrorCode::InvalidRef,
             ))));

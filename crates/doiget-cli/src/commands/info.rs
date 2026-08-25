@@ -12,7 +12,6 @@ use std::io::Write;
 use anyhow::{bail, Context, Result};
 
 use doiget_core::store::{FsStore, Store};
-use doiget_core::Ref;
 
 use super::resolve_store_root;
 
@@ -34,7 +33,7 @@ pub fn run(input: String, mode: super::output::OutputMode, quiet_was_explicit: b
     // caller needs. `Json` serialises `Metadata` directly (it carries
     // `Serialize`); the wire form is the field-name JSON of the on-disk
     // TOML (#204).
-    let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
+    let ref_ = super::parse_ref_or_exit(&input)?;
     let safekey = ref_.safekey();
 
     let store_root = resolve_store_root()?;
