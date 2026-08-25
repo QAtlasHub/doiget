@@ -1,0 +1,139 @@
+name: tos-links
+
+# #495 — the ToS column of `docs/SOURCES.md` §1 rots silently.
+#
+# Five of sixteen links were dead or pointing at the wrong document when the
+# 2026-08-25 audit checked them, and nothing had noticed. `docs/SOURCES.md` is
+# `Status: NORMATIVE (user responsibility advisory)`: its whole job is telling a
+# user where each source states its terms, so a 404 there is a broken promise
+# rather than a cosmetic defect.
+#
+# SCHEDULE ONLY, deliberately. A per-PR check would turn an unrelated PR red
+# because a publisher reorganised their website overnight — the wrong failure
+# mode, and the one that trains people to ignore a check. On a schedule, rot
+# opens an issue instead.
+#
+# Third-party Actions are SHA-pinned (repo invariant / ADR-0013 supply-chain).
+
+on:
+  schedule:
+    # Monthly, 1st at 07:15 UTC. Offset from audit.yml (weekly Mon 07:00),
+    # supply-chain.yml (Wed) and codeql.yml (Tue) so the scans do not pile up.
+    # Monthly rather than weekly: publisher sites move on a scale of months,
+    # and every run is outbound traffic to people who did not ask for it.
+    - cron: "15 7 1 * *"
+  # Manual trigger, so a row can be re-checked after a fix without waiting a
+  # month.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tos-links
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: ToS links in SOURCES.md resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      report: ${{ steps.check.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+
+      - name: Request every link in the source matrix
+        id: check
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # Only the §1 matrix: start at its header row, stop at the first
+          # line that is not a table row.
+          mapfile -t urls < <(
+            awk '/^\| Source \| Tier \|/{inmatrix=1; next}
+                 inmatrix && !/^\|/{exit}
+                 inmatrix' docs/SOURCES.md \
+              | grep -oE '<https://[^>]+>' \
+              | tr -d '<>' \
+              | sort -u
+          )
+
+          if [ "${#urls[@]}" -eq 0 ]; then
+            # Fail loudly rather than report a clean sweep of nothing. A table
+            # reformat that silently emptied this list would otherwise look
+            # exactly like "every link is healthy".
+            echo "::error::extracted zero URLs from the SOURCES.md matrix — the table shape changed and this check is no longer looking at anything"
+            exit 1
+          fi
+
+          echo "checking ${#urls[@]} links"
+          bad=""
+          for u in "${urls[@]}"; do
+            # Follow redirects: a 301 to the vendor's new canonical page is
+            # fine. The FINAL status and FINAL url are both reported, so a
+            # link that now lands somewhere unrelated is visible even at 200.
+            out=$(curl -sSL --max-time 30 --retry 2 --retry-delay 5 \
+                    -o /dev/null -w '%{http_code} %{url_effective}' "$u" || echo "000 -")
+            code=${out%% *}
+            final=${out#* }
+            if [ "$code" = "200" ]; then
+              printf '  ok   %s\n' "$u"
+              if [ "$final" != "$u" ]; then
+                printf '       -> redirected to %s\n' "$final"
+              fi
+            else
+              printf '  FAIL %s (%s)\n' "$u" "$code"
+              bad="${bad}- \`${u}\` -> HTTP ${code}"$'\n'
+            fi
+          done
+
+          if [ -n "$bad" ]; then
+            {
+              echo "report<<REPORT_EOF"
+              echo "$bad"
+              echo "REPORT_EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "::error::one or more ToS links in docs/SOURCES.md did not return 200"
+            exit 1
+          fi
+
+  notify-cron-failure:
+    name: notify (cron failure)
+    needs: [check]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPORT: ${{ needs.check.outputs.report }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body=$(cat <<BODY
+          The scheduled \`tos-links\` check found a link in the \`docs/SOURCES.md\` source
+          matrix that did not return 200.
+
+          ${REPORT}
+
+          Run: ${RUN_URL}
+
+          \`docs/SOURCES.md\` is NORMATIVE and its stated job is to point at each source's
+          terms, so a dead entry is a broken promise rather than a cosmetic defect (#495).
+          Replace it with a page that states the terms — prefer a terms or policy page
+          over API docs or a schema URL.
+
+          Opened automatically; close it once the row is corrected.
+          BODY
+          )
+          gh issue create \
+            --title "docs: a ToS link in SOURCES.md no longer resolves ($(date -u +%Y-%m-%d))" \
+            --label "documentation,automated" \
+            --body "$body" \
+            --repo "${{ github.repository }}"

@@ -12,6 +12,24 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[docs]** Five of the sixteen ToS links in `docs/SOURCES.md` §1 no longer led to
+  terms — two 404s, one redirect to a docs-domain root, one to a Swagger schema, one
+  to a portal root. The Elsevier entry was wrong before it died: `legal/tdmrep` is the
+  W3C TDM **Reservation** Protocol, by which a rightsholder signals an opt-out *from*
+  mining, not Elsevier's API terms. All sixteen now resolve, measured (#495, ADR-0046).
+- **[docs]** `docs/SOURCES.md` no longer implies Springer restricts full text. Springer
+  publishes a Full Text (TDM) API and an Open Access API; staying metadata-only there
+  is doiget's conservative choice. The old sentence named Elsevier, Springer and IEEE
+  together with only Elsevier's reason attached, so the weaker cases inherited the
+  stronger one's justification (#496).
+- **[docs]** CORE's key is no longer called "optional". Unregistered use is a
+  token-cost tier — roughly a hundred simple queries a day — so a run can stop working
+  and "optional" gave the reader nothing to diagnose that with (#496).
+- **[docs]** The rate cap cites `LEGAL.md` §6a safeguard 5, the enforced control,
+  instead of §6b safeguard 8, which is marketing-language self-policing. The old
+  citation sent a reader looking for the enforcement basis to the section that has
+  none (#496).
+
 - **[legal]** arXiv is fetched at the rate its Terms of Use publish — one request
   every three seconds over a single connection — instead of 15x that rate and 5x
   the concurrency. `RateLimits` had no per-source dimension at all, and three
@@ -92,6 +110,17 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[docs]** `docs/SOURCES.md` §6.1 records what each vendor publishes as a rate limit
+  and what doiget does about it. §6 promised doiget adopts a stricter vendor guideline
+  per source while recording no vendor's limit anywhere, so the promise could not be
+  checked against anything. Springer's figures are left **blank and labelled** rather
+  than guessed — their page renders through JavaScript and the audit could not read
+  them, and a plausible wrong number destroys the table's only value (#496, ADR-0046).
+- **[ci]** `tos-links.yml` requests every §1 link monthly and opens an issue on any
+  non-200. Schedule-only by design: a publisher reorganising their site overnight must
+  not turn an unrelated PR red. It fails loudly if it extracts zero URLs, because a
+  table reformat that emptied the list would otherwise look exactly like a clean sweep
+  (#495, ADR-0046).
 - **[core]** `SOURCE_RATE_OVERRIDES` plus `RateLimits::backoff_ms_for` /
   `max_concurrent_for`. Library constants keyed by source name — never
   caller-supplied, since `docs/LEGAL.md` §6a safeguard 5 makes `RateLimits`
