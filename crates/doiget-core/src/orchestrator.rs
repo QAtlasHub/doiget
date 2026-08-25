@@ -1411,6 +1411,27 @@ async fn fetch_paper_doi(
         license = fl;
     }
 
+    // #458: the licence tracks the artifact that actually landed, not the
+    // work. That is already how the arXiv fallback behaves -- it overwrites
+    // `license` with the preprint's, because a CC-BY record about the
+    // published version says nothing about the file on disk.
+    //
+    // A TDM copy came from the publisher under an agreement the user
+    // signed, by a route the OA licence does not describe; carrying
+    // Unpaywall's `cc-by` forward would put an open-licence claim on it.
+    // doiget does not guess licences (`docs/SOURCES.md` -- Tier-2 sources
+    // report `unknown` rather than infer), and the APS record's licence
+    // field describes the article, not this retrieval. So: `unknown`.
+    #[cfg(any(
+        feature = "tdm-elsevier",
+        feature = "tdm-aps",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    ))]
+    if matches!(pdf_leg, PdfLegStatus::TdmFetched { .. }) {
+        license = "unknown".to_string();
+    }
+
     // Issue #120: Crossref is non-fatal, but if it failed AND the OA
     // PDF leg produced nothing, writing a DOI-only stub entry would
     // mask a total failure and violate the "explain why" promise.
@@ -4693,7 +4714,7 @@ mod tdm_chain_tests {
 
     use camino::Utf8PathBuf;
     use tempfile::TempDir;
-    use wiremock::matchers::method;
+    use wiremock::matchers::{header, method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::http::HttpClient;
@@ -5030,6 +5051,315 @@ mod tdm_chain_tests {
             "the trace must record tdm-aps as consulted; got:
 {hint}"
         );
+    }
+    // -----------------------------------------------------------------
+    // #458 — the CONTENT leg. Everything above this line drives the
+    // metadata stage (Crossref missed); these drive the state #458 was
+    // actually reported in: Crossref answered fine, and the PDF is what
+    // could not be had.
+    // -----------------------------------------------------------------
+
+    /// The mock has to serve Crossref, Unpaywall, the OA host AND the TDM
+    /// endpoint, so every one of those source keys needs an allowlist
+    /// entry. `ctx_for` above registers only the `tdm-*` keys, which is
+    /// why its tests can only ever 404 their way to the chain.
+    fn ctx_for_content(host: &str) -> (TempDir, FetchContext) {
+        let td = TempDir::new().expect("tempdir");
+        let dir = Utf8PathBuf::try_from(td.path().to_path_buf()).expect("utf-8");
+        let http = Arc::new(HttpClient::new_for_tests_allow_http_multi(&[
+            ("crossref", host),
+            ("unpaywall", host),
+            ("oa-publisher", host),
+            ("tdm-aps", host),
+            ("tdm-elsevier", host),
+            ("tdm-springer", host),
+            ("tdm-ieee", host),
+        ]));
+        let session_id = "01J0000000000000000000CNT".to_string();
+        let log = Arc::new(
+            ProvenanceLog::open(dir.join("t.jsonl"), session_id.clone()).expect("log opens"),
+        );
+        (
+            td,
+            FetchContext {
+                http,
+                rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+                log,
+                session_id,
+                cache_root: None,
+            },
+        )
+    }
+
+    /// Minimal Crossref envelope. Its job here is simply to SUCCEED, which
+    /// is what makes `resolve_tdm_chain` record `NotNeeded` for every
+    /// Tier-3 entry — the short circuit #458 is about.
+    fn crossref_body() -> serde_json::Value {
+        serde_json::json!({
+            "status": "ok",
+            "message": {
+                "title": ["A paper APS published"],
+                "author": [{ "family": "Doe", "given": "Jane" }],
+                "issued": { "date-parts": [[2026, 1, 1]] },
+                "container-title": ["Physical Review X"],
+                "type": "journal-article"
+            }
+        })
+    }
+
+    /// Unpaywall reports an OA copy that will turn out to be unreachable.
+    /// `license` is deliberately `cc-by`: if the TDM copy inherited it,
+    /// the store would carry an open-licence claim about a file obtained
+    /// under a signed agreement.
+    fn unpaywall_body(oa_url: &str) -> serde_json::Value {
+        serde_json::json!({
+            "doi": "10.1103/PhysRevX.10.011001",
+            "is_oa": true,
+            "title": "A paper APS published",
+            "best_oa_location": {
+                "url": oa_url,
+                "url_for_pdf": oa_url,
+                "license": "cc-by"
+            }
+        })
+    }
+
+    const PDF_BYTES: &[u8] = b"%PDF-1.7\nthe publisher's own copy\n%%EOF\n";
+
+    /// Mount Crossref (answers), Unpaywall (points at a dead OA URL), the
+    /// dead OA URL itself, and whatever APS should reply with.
+    ///
+    /// Registration order matters: wiremock takes the first mock that
+    /// matches, so the Unpaywall catch-all goes last.
+    async fn mount_oa_blocked(server: &MockServer, aps: ResponseTemplate) {
+        let oa_url = format!("{}/oa/file.pdf", server.uri());
+        Mock::given(method("GET"))
+            .and(path_regex("^/works/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(crossref_body()))
+            .mount(server)
+            .await;
+        // The PDF representation of the APS article endpoint. Matched on
+        // `Accept` so it cannot be confused with the metadata-stage call
+        // to the same path — if the two were conflated this test would
+        // pass without the content leg existing at all.
+        Mock::given(method("GET"))
+            .and(path_regex("^/v2/journals/articles/"))
+            .and(header("accept", "application/pdf"))
+            .respond_with(aps)
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/oa/file.pdf"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(unpaywall_body(&oa_url)))
+            .mount(server)
+            .await;
+    }
+
+    fn aps_pdf_requests(reqs: &[wiremock::Request]) -> usize {
+        reqs.iter()
+            .filter(|r| {
+                r.url.path().starts_with("/v2/journals/articles/")
+                    && r.headers
+                        .get("accept")
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|v| v.contains("application/pdf"))
+            })
+            .count()
+    }
+
+    /// THE regression for #458.
+    ///
+    /// Crossref answers, so the metadata-stage chain records `NotNeeded`
+    /// for every Tier-3 source exactly as it always did. The OA copy is
+    /// refused. Before this change that was the end of it — byte-identical
+    /// output with the TDM gates open and closed, which is the report.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn tdm_content_leg_serves_the_pdf_when_the_oa_route_is_blocked() {
+        let server = MockServer::start().await;
+        mount_oa_blocked(
+            &server,
+            ResponseTemplate::new(200).set_body_bytes(PDF_BYTES),
+        )
+        .await;
+
+        let _bases = BaseGuard::to(&server.uri());
+        let _oa = OaBaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for_content(&server.address().to_string());
+
+        let store_td = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::try_from(store_td.path().to_path_buf()).expect("utf-8");
+        let store = crate::store::FsStore::new(root.clone()).expect("store");
+
+        let ref_ = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("doi"));
+        let outcome = fetch_paper(&ref_, &all_gates_open(), &ctx, &store, &root)
+            .await
+            .expect("the TDM content leg should have supplied the PDF");
+
+        // Evidence 1: a PDF request actually went out to APS. Asserted on
+        // the mock's record rather than on the return value, because
+        // "reached" is the whole question (#442).
+        let reqs = server.received_requests().await.expect("recorded");
+        assert_eq!(
+            aps_pdf_requests(&reqs),
+            1,
+            "expected exactly one Accept: application/pdf request to the APS article endpoint; \
+             paths were {:?}",
+            reqs.iter().map(|r| r.url.path()).collect::<Vec<_>>()
+        );
+
+        // Evidence 2: the leg says where the bytes came from.
+        match &outcome.pdf_leg {
+            PdfLegStatus::TdmFetched {
+                source,
+                original_block,
+            } => {
+                assert_eq!(source, "tdm-aps");
+                assert!(
+                    !original_block.is_empty(),
+                    "the OA refusal must be carried forward, not discarded"
+                );
+            }
+            other => panic!("expected TdmFetched, got {other:?}"),
+        }
+
+        // Evidence 3: provenance names the publisher, not `oa-publisher`.
+        assert_eq!(outcome.source, "tdm-aps");
+        assert_eq!(outcome.size_bytes, PDF_BYTES.len() as u64);
+
+        // Evidence 4: and it does not claim the file is CC-BY. Unpaywall
+        // said `cc-by` about the OA location we never got; this file came
+        // from the publisher under an agreement, by a route that licence
+        // does not describe.
+        assert_eq!(
+            outcome.license, "unknown",
+            "a TDM-retrieved copy must not inherit the OA location's licence"
+        );
+    }
+
+    /// Prefix scoping still holds on the new path (ADR-0041). An Elsevier
+    /// DOI must not cause a request to APS — the disclosure argument for
+    /// the whole feature depends on it, and the new consultation point
+    /// fires far more often than the old one.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn tdm_content_leg_is_not_consulted_for_another_publishers_doi() {
+        let server = MockServer::start().await;
+        mount_oa_blocked(
+            &server,
+            ResponseTemplate::new(200).set_body_bytes(PDF_BYTES),
+        )
+        .await;
+
+        let _bases = BaseGuard::to(&server.uri());
+        let _oa = OaBaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for_content(&server.address().to_string());
+
+        let store_td = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::try_from(store_td.path().to_path_buf()).expect("utf-8");
+        let store = crate::store::FsStore::new(root.clone()).expect("store");
+
+        // An Elsevier prefix, with the APS gate wide open.
+        let ref_ = Ref::Doi(Doi::parse("10.1016/j.physrep.2020.01.001").expect("doi"));
+        let _ = fetch_paper(&ref_, &all_gates_open(), &ctx, &store, &root).await;
+
+        let reqs = server.received_requests().await.expect("recorded");
+        assert_eq!(
+            aps_pdf_requests(&reqs),
+            0,
+            "an Elsevier DOI reached the APS content endpoint; paths were {:?}",
+            reqs.iter().map(|r| r.url.path()).collect::<Vec<_>>()
+        );
+    }
+
+    /// The zero-request test above proves nothing reached APS. It cannot
+    /// prove WHICH gate stopped it: `Source::can_serve` checks the prefix
+    /// too, so deleting the orchestrator check leaves that test green.
+    ///
+    /// What only the orchestrator produces is the DISTINCTION. ADR-0041
+    /// checks the prefix before credentials precisely so a foreign DOI
+    /// reads as `WrongPublisher` rather than `Disabled` -- otherwise the
+    /// trace tells the user to go and find an API key that would not have
+    /// helped, which is the failure #438 added the trace to prevent.
+    ///
+    /// Mirrors `a_foreign_doi_is_wrong_publisher_not_disabled`, which
+    /// makes the same assertion about the metadata chain.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn content_leg_reports_a_foreign_doi_as_wrong_publisher_not_disabled() {
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for_content(&server.address().to_string());
+
+        let doi = Doi::parse("10.1016/j.physrep.2020.01.001").expect("doi");
+        let blocked = PdfLegStatus::Blocked {
+            code: crate::ErrorCode::NetworkError,
+            message: "the open route refused us".to_string(),
+            denial: None,
+            suggested_arxiv_id: None,
+        };
+        let mut attempts: Vec<SourceAttempt> = Vec::new();
+
+        let (leg, bytes) =
+            try_tdm_content_fallback(&doi, blocked, None, &all_gates_open(), &ctx, &mut attempts)
+                .await;
+
+        assert!(bytes.is_none(), "no publisher owns this DOI here");
+        assert!(matches!(leg, PdfLegStatus::Blocked { .. }));
+        assert!(
+            matches!(outcome(&attempts, "tdm-aps"), AttemptOutcome::WrongPublisher { .. }),
+            "an Elsevier DOI must read as WrongPublisher for tdm-aps, not Disabled; got {attempts:?}"
+        );
+    }
+
+    /// A 200 that is not a PDF must not become `<safekey>.pdf`, and must
+    /// not displace the OA refusal the user has to act on.
+    ///
+    /// This is the case `fetch_bytes_with_headers` would have gotten
+    /// wrong: publisher error pages and WAF holding responses are 200s
+    /// with a body.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn tdm_content_leg_rejects_a_non_pdf_body_and_keeps_the_original_block() {
+        let server = MockServer::start().await;
+        mount_oa_blocked(
+            &server,
+            ResponseTemplate::new(200).set_body_string("<html>Access denied</html>"),
+        )
+        .await;
+
+        let _bases = BaseGuard::to(&server.uri());
+        let _oa = OaBaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for_content(&server.address().to_string());
+
+        let store_td = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::try_from(store_td.path().to_path_buf()).expect("utf-8");
+        let store = crate::store::FsStore::new(root.clone()).expect("store");
+
+        let ref_ = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("doi"));
+        let outcome = fetch_paper(&ref_, &all_gates_open(), &ctx, &store, &root)
+            .await
+            .expect("a metadata-only outcome is still an outcome");
+
+        // The request went out...
+        let reqs = server.received_requests().await.expect("recorded");
+        assert_eq!(aps_pdf_requests(&reqs), 1);
+
+        // ...and the HTML did not become a PDF.
+        match &outcome.pdf_leg {
+            PdfLegStatus::Blocked { message, .. } => {
+                assert!(
+                    !message.is_empty(),
+                    "the ORIGINAL OA refusal must survive, not the TDM failure"
+                );
+            }
+            other => panic!("expected the original Blocked leg to survive, got {other:?}"),
+        }
+        assert_eq!(outcome.size_bytes, 0, "nothing should have been stored");
     }
 }
 

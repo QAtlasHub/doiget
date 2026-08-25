@@ -10,6 +10,40 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Fixed
+
+- **[orchestrator]** A Tier-3 TDM source is consulted when the **content leg** is
+  blocked, not only when Crossref missed. It was asked the metadata question all
+  along, and Crossref answers that question readily for a publisher's own DOIs — so
+  for exactly the DOIs these sources exist to serve, the chain recorded `NotNeeded`
+  and no request ever went out. Signing an agreement, obtaining a key and building
+  with the feature produced byte-identical output (#458, ADR-0044).
+
+### Added
+
+- **[source]** `tdm-aps` returns the article PDF. APS documents single-request
+  retrieval with `Accept: application/pdf`, which makes it the only Tier-3
+  publisher whose full-text contract is both public and PDF-shaped — Elsevier does
+  not permit non-open-access PDF retrieval through its APIs at all (#458, ADR-0044).
+- **[core]** `Source::fetch_content`, defaulted to `Ok(None)`. "Metadata-only" was
+  previously expressed by setting `pdf_bytes: None` and saying so in a doc-comment,
+  which the orchestrator could not read — so it could not tell a source with nothing
+  to offer from one it had never asked.
+- **[transport]** `HttpClient::fetch_pdf_with_headers`. The magic-byte check is not
+  optional on a credentialed endpoint: publisher error pages and WAF holding
+  responses are 200s with a body.
+
+### Changed
+
+- **[errors]** `PdfLegStatus::TdmFetched` is distinct from `Fetched`, and the stored
+  source label names the publisher rather than `oa-publisher`. A TDM copy did not
+  come from an OA host and carries an agreement's terms.
+- **[core]** A TDM-retrieved artifact reports `license = "unknown"`. Unpaywall's
+  licence describes an OA location that was never reached; carrying it forward would
+  put an open-licence claim on a file obtained by a route it does not describe.
+- **[docs]** ADR-0044, which also records that ADR-0041's rejection of
+  Crossref-based publisher routing rested on a premise this change removes.
+
 ### Retracted
 
 - **[docs]** The 0.8.9 entry claimed the Tier-3 chain runs even when Crossref answers. It
