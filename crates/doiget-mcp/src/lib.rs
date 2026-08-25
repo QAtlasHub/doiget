@@ -4021,12 +4021,32 @@ fn resolve_store_root() -> Option<Utf8PathBuf> {
 
 /// `[store] root` from the user's `config.toml`, if any (#441).
 ///
-/// Silent on a malformed file for the same reason as the CLI twin: the
-/// store root is resolved on nearly every tool call, and the parse error
-/// surfaces with a proper diagnostic on the path that owns the file.
+/// Warns on a malformed file rather than staying silent, for the reason the
+/// #468 review established against the CLI twin: only ONE function in this
+/// crate builds the HTTP client, so the "the parse error surfaces on the
+/// network path" justification does not hold for `doiget_info`,
+/// `doiget_search_local`, `doiget_list_recent` or `doiget_tag`.
+///
+/// The consequences are worse here than on the CLI, because an agent cannot
+/// see a shell. `doiget_info` returns `metadata: null` for a paper the user
+/// already has, which per this server's own tool description tells the agent
+/// to fetch it again; and `doiget_tag` writes into the wrong store and
+/// returns `ok: true`.
+///
+/// stdout stays clean either way (ADR-0001) — `tracing` is wired to stderr.
 fn store_root_from_config() -> Option<Utf8PathBuf> {
     let path = config_dir_utf8().ok()?.join("doiget").join("config.toml");
-    let cfg = doiget_core::user_extension::load(&path).ok()?;
+    let cfg = match doiget_core::user_extension::load(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                path = %path,
+                error = %e,
+                "config.toml could not be read; [store] root ignored and the default store                  root used instead"
+            );
+            return None;
+        }
+    };
     let raw = cfg.store_root?;
     Some(doiget_core::user_extension::expand_store_root(&raw))
 }
@@ -4681,5 +4701,76 @@ mod tests {
                 None => std::env::remove_var(self.var),
             }
         }
+    }
+    /// #468 review: the CLI has three tests pinning the `[store] root`
+    /// resolution ORDER; this crate had none, even though it carries a
+    /// hand-duplicated copy of the resolver rather than calling the CLI's.
+    ///
+    /// That is the #454 shape — two independent copies of the same logic,
+    /// one of them unguarded — repeated one PR later, and it matters more
+    /// here: `doiget_tag` WRITES metadata into whatever root this returns,
+    /// and reports `ok: true` either way.
+    ///
+    /// The load-bearing assertion is the negative one. Comparing only
+    /// against the configured path would also pass if the config were
+    /// ignored and the test happened to run from that directory.
+    #[test]
+    #[serial_test::serial]
+    fn store_root_in_config_beats_the_cwd_default() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg_root = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+        let doiget_dir = cfg_root.join("doiget");
+        std::fs::create_dir_all(doiget_dir.as_std_path()).expect("mk dir");
+
+        let lib = tempfile::TempDir::new().expect("tempdir");
+        let library = camino::Utf8Path::from_path(lib.path())
+            .expect("utf8 tempdir")
+            .as_str()
+            .replace('\u{5c}', "/");
+        std::fs::write(
+            doiget_dir.join("config.toml").as_std_path(),
+            format!("[store]\nroot = \"{library}\"\n"),
+        )
+        .expect("write config.toml");
+
+        let _guards = scoped_env_for_user_extension(cfg_root.as_str());
+        let _no_env_root = EnvGuard::unset("DOIGET_STORE_ROOT");
+
+        let got = resolve_store_root().expect("resolves on a normal host");
+
+        let cwd_default = camino::Utf8PathBuf::try_from(std::env::current_dir().expect("cwd"))
+            .expect("utf8 cwd")
+            .join("papers");
+        assert_ne!(
+            got, cwd_default,
+            "the config value was ignored and the cwd default answered instead"
+        );
+        assert_eq!(
+            got.as_str().replace('\u{5c}', "/"),
+            library,
+            "[store] root must win over the cwd default, as it does on the CLI"
+        );
+    }
+
+    /// The rung above it still wins, so adding the config rung did not
+    /// demote the env var.
+    #[test]
+    #[serial_test::serial]
+    fn env_beats_store_root_in_config_on_the_mcp_surface() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg_root = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+        let doiget_dir = cfg_root.join("doiget");
+        std::fs::create_dir_all(doiget_dir.as_std_path()).expect("mk dir");
+        std::fs::write(
+            doiget_dir.join("config.toml").as_std_path(),
+            "[store]\nroot = \"/from/config\"\n",
+        )
+        .expect("write config.toml");
+
+        let _guards = scoped_env_for_user_extension(cfg_root.as_str());
+        let _env_root = EnvGuard::set("DOIGET_STORE_ROOT", "/from/env");
+
+        let got = resolve_store_root().expect("resolves");
+        assert_eq!(got.as_str(), "/from/env");
     }
 }

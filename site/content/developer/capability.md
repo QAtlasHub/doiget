@@ -193,6 +193,8 @@ fn read_tdm_grant(agree_var: &str, key_var: &str) -> Result<Option<TdmGrant>, Ca
 | `DOIGET_KEY_APS` | secret string | APS API key. |
 | `DOIGET_AGREE_TDM_SPRINGER` | `=1` | Acknowledges Springer Nature OA ToS. |
 | `DOIGET_KEY_SPRINGER` | secret string | Springer API key. |
+| `DOIGET_AGREE_TDM_IEEE` | `=1` | Acknowledges IEEE TDM ToS. |
+| `DOIGET_KEY_IEEE` | secret string | IEEE Xplore API key. |
 
 > **Note (ADR-0031):** `DOIGET_ENABLE_OPENALEX` gates the OpenAlex
 > *enrichment* / citation-graph source only (`/works/doi:…`,

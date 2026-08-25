@@ -152,13 +152,36 @@ pub(crate) fn resolve_store_root_with_source() -> Result<(Utf8PathBuf, StoreRoot
 
 /// `[store] root` from the user's `config.toml`, if any.
 ///
-/// Deliberately silent on a malformed file: the store root is resolved by
-/// every subcommand, and a parse error surfaces with a proper diagnostic on
-/// the network path that owns this file. Failing every command here would
-/// turn one bad line into a total outage.
+/// Does not fail the command on a malformed file — the store root is
+/// resolved by every subcommand, and one bad line should not be a total
+/// outage — but it does NOT stay quiet about it.
+///
+/// The previous comment here justified silence by claiming "a parse error
+/// surfaces with a proper diagnostic on the network path that owns this
+/// file". The #468 review checked that claim and it is false for most
+/// callers: `list-recent`, `search`, `info`, `tag`, `bib` and `csl` never
+/// build an HTTP client, so that diagnostic never runs for them. TOML fails
+/// the whole document, so a typo anywhere — even under `[network]` — makes
+/// `[store] root` unreadable, and the command silently used `./papers`
+/// under the cwd as though nothing had been configured.
+///
+/// `search` then reports zero results, indistinguishable from an empty
+/// library. Worse, `tag` **writes** metadata into the wrong store and
+/// reports success. A warning is the minimum; the resolved source is also
+/// reported by `config doctor`.
 fn store_root_from_config() -> Option<Utf8PathBuf> {
     let path = user_config_path()?;
-    let cfg = doiget_core::user_extension::load(&path).ok()?;
+    let cfg = match doiget_core::user_extension::load(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                path = %path,
+                error = %e,
+                "config.toml could not be read; [store] root ignored and the default store                  root used instead. Run `doiget config doctor` to see which root is in effect."
+            );
+            return None;
+        }
+    };
     let raw = cfg.store_root?;
     Some(doiget_core::user_extension::expand_store_root(&raw))
 }

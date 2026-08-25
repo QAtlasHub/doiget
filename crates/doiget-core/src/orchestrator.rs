@@ -1178,8 +1178,12 @@ async fn fetch_paper_doi(
     )))]
     let tdm_meta: Option<Value> = None;
 
+    // The resolved pair is KEPT, not mapped away. When Crossref failed this
+    // pass ran for real, and the OA fallback below needs its payload — the
+    // old code discarded it and re-ran the whole chain to get it back,
+    // paying a second live round against five APIs (#468 review).
     #[cfg(feature = "metadata")]
-    let optional_meta = resolve_optional_chain(
+    let optional_resolved = resolve_optional_chain(
         ref_,
         profile,
         ctx,
@@ -1187,9 +1191,12 @@ async fn fetch_paper_doi(
         &mut extracted,
         &mut attempts,
     )
-    .await
-    .map(|(_, m)| m)
-    .or(tdm_meta);
+    .await;
+    #[cfg(feature = "metadata")]
+    let optional_meta = optional_resolved
+        .as_ref()
+        .map(|(_, m)| m.clone())
+        .or(tdm_meta);
     #[cfg(not(feature = "metadata"))]
     let optional_meta: Option<Value> = tdm_meta;
     let _ = &optional_meta;
@@ -1356,8 +1363,16 @@ async fn fetch_paper_doi(
     // #445: and if that did not help either, ask whoever else is switched
     // on. Additive by construction — see the fn docs.
     #[cfg(feature = "metadata")]
-    let (pdf_leg, pdf_bytes) =
-        try_optional_source_oa_fallback(doi, pdf_leg, pdf_bytes, profile, ctx, &mut attempts).await;
+    let (pdf_leg, pdf_bytes) = try_optional_source_oa_fallback(
+        doi,
+        pdf_leg,
+        pdf_bytes,
+        profile,
+        ctx,
+        &mut attempts,
+        optional_resolved.as_ref().map(|(n, m)| (*n, m)),
+    )
+    .await;
     if let Some(fl) = fallback_license {
         license = fl;
     }
@@ -1533,26 +1548,52 @@ async fn try_optional_source_oa_fallback(
     profile: &CapabilityProfile,
     ctx: &FetchContext,
     attempts: &mut Vec<SourceAttempt>,
+    already_resolved: Option<(&'static str, &Value)>,
 ) -> (PdfLegStatus, Option<Vec<u8>>) {
     if pdf_bytes.is_some() || !matches!(pdf_leg, PdfLegStatus::Blocked { .. }) {
         return (pdf_leg, pdf_bytes);
     }
 
-    // Reaching here means Crossref answered (a Crossref failure with no PDF
-    // returns NotFound further up), so `attempts` is a row of `NotNeeded`
-    // that carries no information. Running the chain for real replaces it
-    // with what actually happened.
-    let ref_ = Ref::Doi(doi.clone());
-    let mut discard = CrossrefFields::default();
-    let mut fresh: Vec<SourceAttempt> = Vec::new();
-    let resolved =
-        resolve_optional_chain(&ref_, profile, ctx, false, &mut discard, &mut fresh).await;
-    if !fresh.is_empty() {
-        *attempts = fresh;
-    }
-
-    let Some((name, meta)) = resolved else {
-        return (pdf_leg, pdf_bytes);
+    // Two cases, and conflating them was the bug the #468 review caught.
+    //
+    // An earlier comment here claimed "reaching this point means Crossref
+    // answered, because a Crossref failure returns NotFound further up".
+    // That is false: the NotFound short-circuit is further DOWN, after this
+    // call. `pdf_leg` comes from the Unpaywall-derived OA chain, which is
+    // independent of Crossref (#120 — Crossref is non-fatal), so this runs
+    // in both cases.
+    //
+    // Crossref FAILED: the chain at the top of `fetch_paper_doi` already ran
+    // for real and `attempts` holds its genuine outcomes. Re-running cost a
+    // second live round against five third-party APIs and then overwrote
+    // those outcomes with a second, possibly different answer. Reuse what it
+    // resolved instead.
+    //
+    // Crossref ANSWERED: the chain short-circuited, so every Tier-2 row is
+    // `NotNeeded` and carries nothing. Run it for real — but swap out only
+    // those rows. The old `*attempts = fresh` replaced the WHOLE vector,
+    // deleting the Tier-3 rows `resolve_tdm_chain` had recorded. In a
+    // `metadata` + `tdm-*` build that erased the answer to "was tdm-ieee
+    // consulted?" from the trace, from the MCP envelope and from
+    // `batch --json` — the exact question #413/#445 added the trace to
+    // answer.
+    let (name, meta) = match already_resolved {
+        Some((n, m)) => (n, m.clone()),
+        None => {
+            let ref_ = Ref::Doi(doi.clone());
+            let mut discard = CrossrefFields::default();
+            let mut fresh: Vec<SourceAttempt> = Vec::new();
+            let r =
+                resolve_optional_chain(&ref_, profile, ctx, false, &mut discard, &mut fresh).await;
+            if !fresh.is_empty() {
+                attempts.retain(|a| !fresh.iter().any(|f| f.source == a.source));
+                attempts.extend(fresh);
+            }
+            match r {
+                Some((n, m)) => (n, m),
+                None => return (pdf_leg, pdf_bytes),
+            }
+        }
     };
     let Some(raw) = optional_source_oa_url(name, &meta) else {
         tracing::debug!(
@@ -4966,6 +5007,42 @@ mod oa_fallthrough_tests {
             matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. }),
             "without a fallback source this must still be Blocked; got {:?}",
             outcome.pdf_leg
+        );
+    }
+    /// #468 review: the fall-through used to do `*attempts = fresh`, which
+    /// replaced the WHOLE trace and deleted the Tier-3 rows
+    /// `resolve_tdm_chain` had already recorded.
+    ///
+    /// The row's outcome does not matter here — what matters is that the
+    /// row still EXISTS. Its absence is what made "was tdm-ieee consulted?"
+    /// unanswerable from `attempts`, from the MCP envelope and from
+    /// `batch --json`, which is the question the trace was added to answer.
+    ///
+    /// Needs `metadata` AND a `tdm-*` feature, because the bug only appears
+    /// when both chains have written to the same vector. CI builds exactly
+    /// that combination.
+    #[cfg(feature = "tdm-ieee")]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn the_fallback_preserves_the_tier_3_rows_it_used_to_delete() {
+        let server = server_with_a_rate_limited_publisher_and_a_repository_copy().await;
+        let (outcome, paths) = run_fetch(&server, true).await;
+
+        // The fall-through must actually have fired, or this proves nothing.
+        assert!(
+            paths.iter().any(|p| p == "/v3/search/works"),
+            "the fallback did not run, so this test cannot see the bug; paths were {paths:?}"
+        );
+
+        let sources: Vec<&str> = outcome.attempts.iter().map(|a| a.source).collect();
+        assert!(
+            sources.contains(&"tdm-ieee"),
+            "the Tier-3 row was dropped from the trace by the fallback; trace held {sources:?}"
+        );
+        // And the Tier-2 rows the fallback re-ran are still there too.
+        assert!(
+            sources.contains(&"core"),
+            "the refreshed Tier-2 rows are missing; trace held {sources:?}"
         );
     }
 }

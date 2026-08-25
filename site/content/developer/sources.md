@@ -203,8 +203,8 @@ Every outcome, consulted or not, is recorded in the attempt trace attached to a
 failed fetch, so "asked and had nothing" is always distinguishable from "never
 asked" and from "wrong publisher".
 
-**Pointing them elsewhere.** `DOIGET_APS_BASE`, `DOIGET_ELSEVIER_BASE` and
-`DOIGET_SPRINGER_BASE` override the API base, mirroring `DOIGET_CROSSREF_BASE`.
+**Pointing them elsewhere.** `DOIGET_APS_BASE`, `DOIGET_ELSEVIER_BASE`,
+`DOIGET_SPRINGER_BASE` and `DOIGET_IEEE_BASE` override the API base, mirroring `DOIGET_CROSSREF_BASE`.
 Intended for tests and for institutional proxies.
 
 ### When the publisher refuses the content
