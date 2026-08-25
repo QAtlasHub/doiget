@@ -10,6 +10,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Retracted
+
+- **[docs]** The 0.8.9 entry claimed the Tier-3 chain runs even when Crossref answers. It
+  does not. `resolve_tdm_chain` still short-circuits every entry to `NotNeeded` the moment
+  `crossref_answered` is true, so a configured TDM key still yields byte-identical output
+  for the DOIs the chain exists to serve, and #458 is open. The bullet is struck from
+  `## [0.8.9]` below and the GitHub Release body carries a correction; the `v0.8.9` tag
+  annotation is immutable and still states it. The notes were assembled by grepping
+  `main..next` for `Closes` and `Refs` and reading both as "fixed" — PR #466 wrote
+  `Refs #458` about an adjacent `cfg`-gate fix, deliberately and correctly. The two
+  keywords are not interchangeable when assembling release notes (#472).
+
 ## [0.8.9] - 2026-08-25
 
 0.8.8 shipped five optional sources that were never called. 0.8.9 is what happened
@@ -22,6 +34,9 @@ reached?** The answer was no, four more times.
 | #454 | their transport allowlists | all passed | **no** — never registered in the production client |
 | #458 | the Tier-3 chain | all passed | **no** — skipped whenever Crossref answered |
 | #441 | `[store] root` in `config.toml` | all passed | **no** — the config rung did not exist |
+
+Three of the four are fixed below. **#458 is diagnosed but not fixed** and remains open;
+this release originally claimed otherwise — see the retraction under `## [Unreleased]`.
 
 Every one was documented as working. `SOURCES.md` described the three gates that make
 a TDM source available; ADR-0036 stated the store-root resolution order; `config init`
@@ -41,9 +56,6 @@ All true on paper, all false in the binary.
   source would otherwise have failed `UnknownSource`; the unit tests could not see it,
   because the test client registers the key itself — the same trap DataCite nearly hit
   in 0.8.8 (#454).
-- **[orchestrator]** The Tier-3 chain runs even when Crossref answers. A publisher's own
-  record is the entire point of holding its credentials, and Crossref resolves those
-  DOIs readily, so the chain never ran for the DOIs it exists to serve (#458).
 - **[config]** `[store] root` in `config.toml` is honoured, between the env var and the
   cwd default (#441, ADR-0036 Amendment 1). `config doctor` now names which rung
   answered: a setting that is present but unread resolves to the cwd default, and the
