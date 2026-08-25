@@ -55,7 +55,7 @@ Wire form (JSON / MCP): `"INVALID_REF"`, `"NO_OA_AVAILABLE"`, etc.
 
 | Persona | Surface |
 |---|---|
-| Agent (MCP) | Structured `{ ok: false, error: { code, message, denial_context?, remediation?, attempts? } }`. Never throws. |
+| Agent (MCP) | Structured, never throws. On failure: `{ ok: false, error: { code, message, denial_context? } }`. `remediation` and `attempts` are **not** carried here — they belong to the `{ ok: true, … }` envelope, as `pdf.remediation` (present when the PDF leg was blocked) and top-level `attempts`. A blocked PDF leg is an `ok: true` result with a failed leg, not an `ok: false` call. |
 | Researcher (CLI human) | `cargo`-style stderr: `error[E0007]: rate limited from unpaywall: retry after 1s`. Exit code 1. |
 | CI / Batch (CLI `--json`) | JSON Lines record per ref with `{"ok":false, "error":{"code":"...","message":"...","denial_context":{...}?,"remediation":[...]?,"attempts":[...]?}}`. Exit code = number of failures (capped at 255). |
 | Library (Rust) | `Err(FetchError)` (typed via `thiserror`). |
@@ -147,8 +147,16 @@ The resolution trace introduced in #413/#438, previously CLI text only.
 every consumer has — *did anyone else look?* — and requiring them to memorise which of
 eight tokens implies it invites the confusion the trace exists to end.
 
-The field is **absent** when no trace is available, never `[]`. "We have no trace" and
-"the trace is empty" are different, and were the same observable before #413.
+"We have no trace" and "the trace is empty" are different, and were the same
+observable before #413. Both surfaces keep them apart, by different means — check
+the one you are parsing:
+
+| surface | no trace available | trace exists but empty |
+|---|---|---|
+| CLI `batch --json` | the `attempts` key is **absent** | `[]` |
+| MCP envelope | the `attempts` key is **present**, valued `null` | `[]` |
+
+Neither ever renders "no trace" as `[]`.
 
 ## 4. CLI exit codes
 

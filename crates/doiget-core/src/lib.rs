@@ -1071,6 +1071,17 @@ impl Default for TdmGrant {
 /// rely on the resolution rules in `from_env`. `Default` is **not yet**
 /// implemented; Phase 1 will add it once the field set stabilizes.
 #[derive(Debug, Clone)]
+///
+/// **Correction (#468 review).** An earlier version of the note above said
+/// the type's safety guarantees "rely on the resolution rules in
+/// `from_env`", protected by `#[non_exhaustive]`. That overstates what the
+/// attribute does: it blocks struct-literal construction across a crate
+/// boundary, but every field here is `pub`, and `from_env` hands back an
+/// owned value — so a downstream caller has always been able to obtain a
+/// profile and then assign to `tdm_aps` directly. `#[non_exhaustive]` buys
+/// forward-compatibility for adding fields, not an authorization boundary.
+/// Whether one is wanted is tracked separately; it is not a property this
+/// type has today, and claiming it did was the problem.
 #[non_exhaustive]
 pub struct CapabilityProfile {
     /// Tier 1 OA sources are always permitted.
@@ -1131,9 +1142,18 @@ impl CapabilityProfile {
     /// Deliberately not `Default`: the type-level docs defer that to Phase 1
     /// "once the field set stabilizes", and a public `Default` would invite
     /// production code to skip the resolution rules.
-    #[doc(hidden)]
+    ///
+    /// `#[cfg(test)]`, not merely `#[doc(hidden)]`. The #468 review pointed
+    /// out that `#[doc(hidden)] pub` hides a function from rendered docs and
+    /// from nothing else — it would still be compiled into every published
+    /// build of this crate and callable by any downstream consumer, which is
+    /// exactly what the paragraph above says a public constructor must not
+    /// be. All 47 call sites are unit tests inside this crate (no
+    /// integration test, no fuzz target, no other crate), so the gate costs
+    /// nothing and the constructor does not exist in a release build.
+    #[cfg(test)]
     #[must_use]
-    pub fn for_tests() -> Self {
+    pub(crate) fn for_tests() -> Self {
         Self {
             oa: AlwaysOn,
             // Every `DOIGET_ENABLE_*` unset — the same all-false shape

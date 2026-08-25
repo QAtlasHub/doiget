@@ -10,6 +10,75 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-08-25
+
+0.8.8 shipped five optional sources that were never called. 0.8.9 is what happened
+when the same question was asked of everything else: **is this code actually
+reached?** The answer was no, four more times.
+
+| | the component | its unit tests | actually reached |
+|---|---|---|---|
+| #442 | the three Tier-3 TDM sources | all passed | **no** — zero callers |
+| #454 | their transport allowlists | all passed | **no** — never registered in the production client |
+| #458 | the Tier-3 chain | all passed | **no** — skipped whenever Crossref answered |
+| #441 | `[store] root` in `config.toml` | all passed | **no** — the config rung did not exist |
+
+Every one was documented as working. `SOURCES.md` described the three gates that make
+a TDM source available; ADR-0036 stated the store-root resolution order; `config init`
+wrote `[store] root` into the template it generates and `config doctor` recommended it.
+All true on paper, all false in the binary.
+
+### Fixed
+
+- **[ci]** The Tier-3 surface is compiled and tested at all. No job built `tdm-*` — not
+  clippy, not test, not rustdoc — and `--all-features` appears in no workflow. Roughly
+  1100 lines, including the #146 credential-redaction regression, had never run once
+  (#440).
+- **[orchestrator]** The three Tier-3 TDM sources are reached by the production fetch
+  path, and scoped to the DOI prefixes their publisher registered, so enabling
+  `tdm-aps` does not disclose every lookup to APS (#442, ADR-0041).
+- **[transport]** Their allowlists are registered in the production client. A reached
+  source would otherwise have failed `UnknownSource`; the unit tests could not see it,
+  because the test client registers the key itself — the same trap DataCite nearly hit
+  in 0.8.8 (#454).
+- **[orchestrator]** The Tier-3 chain runs even when Crossref answers. A publisher's own
+  record is the entire point of holding its credentials, and Crossref resolves those
+  DOIs readily, so the chain never ran for the DOIs it exists to serve (#458).
+- **[config]** `[store] root` in `config.toml` is honoured, between the env var and the
+  cwd default (#441, ADR-0036 Amendment 1). `config doctor` now names which rung
+  answered: a setting that is present but unread resolves to the cwd default, and the
+  two coincide whenever you run from the directory you configured.
+- **[cli]** The `redirect_not_in_allowlist` help suggests the registrable domain and the
+  apex, not only the hop that was just refused. A publisher redirect chain used to cost
+  one edit-run cycle per hop (#443).
+- **[test]** 46 tests no longer read process-global environment. `from_env()` returns
+  `Err(KeyButNotAgreed)` while any other test holds `DOIGET_KEY_*` without its agreement
+  var, and `#[serial]` on that writer does nothing about unmarked readers — which is why
+  `coverage` failed on one commit and passed on a re-run of the same commit (#456).
+
+### Added
+
+- **[source]** **IEEE Xplore TDM**, opt-in behind the `tdm-ieee` Cargo feature plus a key
+  and a recorded agreement (#430, ADR-0042). Shipped against an inferred contract because
+  the programme gates the real one, and corrected from first contact (#460).
+- **[orchestrator]** When the publisher refuses the content leg, doiget asks the enabled
+  optional sources whether anyone else holds a copy (#445). The OA chain already advanced
+  past a 429 — what it could not do was look beyond Unpaywall's list, and with Crossref
+  having answered, that list was the whole candidate set.
+- **[cli]** The resolution trace is emitted when the content leg is blocked, not only on
+  `NOT_FOUND`. "Found nowhere" and "found at one host that refused me" raise the same
+  next question. A 429 is named as transient, because it is the one failure where
+  retrying the same host later is right and reconfiguring is wrong (#445).
+- **[errors]** The trace and its remediation are carried into the MCP envelope and
+  `batch --json`, so an agent can read them instead of scraping stderr (#459, ADR-0043).
+
+### Changed
+
+- **[core]** `CapabilityProfile` gains `for_tests()`, a `#[doc(hidden)]` constructor that
+  builds the clean-environment profile without reading the environment.
+- **[docs]** ADR-0041 (publisher prefix scoping), ADR-0042 (shipping against an inferred
+  contract), ADR-0043 (machine-readable diagnostics), and Amendment 1 to ADR-0036.
+
 ## [0.8.8] - 2026-08-23
 
 ### Fixed
