@@ -169,7 +169,7 @@ fn search_returns_no_match_for_unknown_query() {
         .expect("doiget search stdout was not UTF-8");
     // Header only, no data rows.
     assert_eq!(
-        stdout, "safekey\tyear\ttitle\tfetched_at\n",
+        stdout, "safekey\tyear\ttitle\tfetched_at\tpdf\n",
         "no-match search should produce header-only stdout, got:\n{stdout}"
     );
 }
