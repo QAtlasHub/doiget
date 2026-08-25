@@ -226,9 +226,114 @@ fn list_recent_on_empty_store_prints_only_header() {
     let stdout = String::from_utf8(assert.get_output().stdout.clone())
         .expect("doiget list-recent stdout was not UTF-8");
     assert_eq!(
-        stdout, "safekey\tyear\ttitle\tfetched_at\n",
+        stdout, "safekey\tyear\ttitle\tfetched_at\tpdf\n",
         "empty store should produce header-only stdout, got:\n{stdout}"
     );
+}
+
+// ---- #481: the inventory must distinguish a stub from a paper ----------
+
+/// Seed one entry with a stored PDF and one metadata-only entry
+/// (`size_bytes = 0`), which is exactly what a blocked content leg leaves
+/// behind.
+fn store_with_one_stub() -> (TempDir, Utf8PathBuf) {
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8_path(&dir).join("papers");
+    let store = FsStore::new(root.clone()).expect("FsStore::new");
+
+    let (k1, m1) = fixture("gotpdf", "A Paper We Actually Have", 2024, 2024);
+    store.write(&k1, &m1, None).expect("seed fetched entry");
+
+    let (k2, mut m2) = fixture("nopdf", "A Paper We Only Know About", 2023, 2023);
+    if let Some(d) = m2.doiget.as_mut() {
+        // What `fetch` writes when the content leg was blocked: the record
+        // is real, the bytes are not.
+        d.size_bytes = 0;
+    }
+    store
+        .write(&k2, &m2, None)
+        .expect("seed metadata-only entry");
+
+    (dir, root)
+}
+
+/// #481. Two entries, one with a PDF and one without, must not render
+/// alike. Before the `pdf` column they did -- and `list-recent` is the only
+/// command that answers "what do I have?" without being told the ref, so it
+/// was the one place the distinction was unrecoverable.
+#[test]
+fn list_recent_distinguishes_a_metadata_only_entry_from_a_fetched_one() {
+    let (_guard, root) = store_with_one_stub();
+    let assert = doiget(&root).args(["list-recent"]).assert().success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf-8");
+
+    let have = stdout
+        .lines()
+        .find(|l| l.contains("A Paper We Actually Have"))
+        .unwrap_or_else(|| panic!("missing fetched row in:\n{stdout}"));
+    let stub = stdout
+        .lines()
+        .find(|l| l.contains("A Paper We Only Know About"))
+        .unwrap_or_else(|| panic!("missing metadata-only row in:\n{stdout}"));
+
+    assert!(
+        have.ends_with("1.2 kB"),
+        "a stored PDF must show its size; got:\n{have}"
+    );
+    assert!(
+        stub.ends_with('-'),
+        "a metadata-only entry must be visibly different; got:\n{stub}"
+    );
+}
+
+/// The column answers "which are stubs?" one row at a time. `--missing-pdf`
+/// answers it for a fifty-ref batch, which is the case that produced the
+/// report.
+#[test]
+fn list_recent_missing_pdf_lists_only_the_stubs() {
+    let (_guard, root) = store_with_one_stub();
+    let assert = doiget(&root)
+        .args(["list-recent", "--missing-pdf"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf-8");
+
+    assert!(
+        stdout.contains("A Paper We Only Know About"),
+        "the stub must be listed; got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("A Paper We Actually Have"),
+        "a fetched paper is not missing its PDF; got:\n{stdout}"
+    );
+}
+
+/// The JSON surface carries it too, and carries `has_pdf` beside
+/// `size_bytes` so a consumer does not have to know that `0` and `null`
+/// both mean "no PDF" while meaning different things about the entry.
+#[test]
+fn list_recent_json_carries_size_bytes_and_has_pdf() {
+    let (_guard, root) = store_with_one_stub();
+    let assert = doiget(&root)
+        .args(["--mode", "json", "list-recent"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf-8");
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let entries = v["entries"].as_array().expect("entries array");
+
+    let stub = entries
+        .iter()
+        .find(|e| e["title"].as_str() == Some("A Paper We Only Know About"))
+        .unwrap_or_else(|| panic!("stub missing from {stdout}"));
+    assert_eq!(stub["size_bytes"], serde_json::json!(0));
+    assert_eq!(stub["has_pdf"], serde_json::json!(false));
+
+    let have = entries
+        .iter()
+        .find(|e| e["title"].as_str() == Some("A Paper We Actually Have"))
+        .unwrap_or_else(|| panic!("fetched entry missing from {stdout}"));
+    assert_eq!(have["has_pdf"], serde_json::json!(true));
 }
 
 // ---- #204 JSON-mode coverage --------------------------------------------

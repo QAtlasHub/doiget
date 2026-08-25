@@ -165,6 +165,7 @@ impl FsStore {
                 title: md.title,
                 year: md.year,
                 fetched_at: md.doiget.as_ref().map(|d| d.fetched_at),
+                size_bytes: md.doiget.as_ref().map(|d| d.size_bytes),
             });
             if hits.len() >= limit {
                 break;
@@ -289,6 +290,7 @@ impl Store for FsStore {
                     title: md.title,
                     year: md.year,
                     fetched_at: md.doiget.as_ref().map(|d| d.fetched_at),
+                    size_bytes: md.doiget.as_ref().map(|d| d.size_bytes),
                 });
                 if hits.len() >= limit {
                     break;
@@ -783,7 +785,8 @@ fn read_all_entries(metadata_dir: &Utf8Path) -> Result<Vec<EntryInfo>, StoreErro
             safekey,
             title: md.title,
             year: md.year,
-            fetched_at: md.doiget.map(|d| d.fetched_at),
+            fetched_at: md.doiget.as_ref().map(|d| d.fetched_at),
+            size_bytes: md.doiget.as_ref().map(|d| d.size_bytes),
         });
     }
     Ok(out)

@@ -12,6 +12,13 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[cli]** `list-recent` and `search --local` show whether a PDF was actually
+  stored. A metadata-only entry — what a blocked content leg leaves behind —
+  rendered identically to a fetched paper, and the inventory command is the only
+  one that answers "what do I have?" without being told the ref in advance. Batch
+  fifty refs with ten blocked, come back later, and the natural conclusion is
+  fifty papers (#481, #118).
+
 - **[cli]** `config path` and `config show` print when stdout is not a terminal.
   They were absent from the ADR-0017 artifact classification, so an implicit
   non-TTY Quiet silenced them: `doiget config path` from a pipe produced zero
@@ -60,6 +67,14 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[cli]** `list-recent --missing-pdf` lists only the metadata-only entries —
+  "which of my batch need retrying?" without reading a fifty-row table by eye
+  (#481).
+- **[core]** `EntryInfo` gains `size_bytes: Option<u64>` and `has_pdf()`. The
+  `list-recent --mode json` envelope carries both: `0` and `null` both mean "no
+  PDF" while meaning different things about the entry, and a consumer should not
+  have to know that. The `pdf` column is APPENDED to the human table, not
+  inserted — column order is stable for `cut(1)` by contract (#481).
 - **[docs]** `batch --json` record order is stated in `docs/ERRORS.md` §3.2a and
   in `batch --help`: records are emitted as refs complete, not in input order, and
   `ref` is the key. Nothing said so, and zipping stdout against the input file
