@@ -263,7 +263,13 @@ impl Ref {
         if s.starts_with("10.") {
             return Doi::parse(s).map(Ref::Doi);
         }
-        ArxivId::parse(s).map(Ref::Arxiv)
+        // Last resort. The input declared no scheme and has no `10.`
+        // prefix, so trying arXiv is a guess -- and reporting the guess's
+        // failure verbatim tells a user who mistyped a DOI about arXiv
+        // (#477). Report what is actually known: it matched neither.
+        ArxivId::parse(s)
+            .map(Ref::Arxiv)
+            .map_err(|_| RefParseError::UnrecognisedShape)
     }
 }
 
@@ -524,6 +530,14 @@ pub enum RefParseError {
     /// Input matched neither the new-style nor old-style arXiv shape.
     #[error("input does not match any known arXiv id shape")]
     InvalidArxivShape,
+    /// Input carried no scheme and no `10.` prefix, so it could have been
+    /// either kind of ref, and it was neither.
+    ///
+    /// #477: the fall-through used to report [`Self::InvalidArxivShape`],
+    /// so someone who mistyped a DOI was told about arXiv. The input names
+    /// no shape, so neither should the error.
+    #[error("input is neither a DOI (expected '10.<registrant>/<suffix>') nor an arXiv id")]
+    UnrecognisedShape,
 }
 
 impl From<RefParseError> for ErrorCode {
@@ -2299,10 +2313,25 @@ mod tests {
     }
 
     #[test]
-    fn ref_parse_bare_without_10_prefix_uses_arxiv_errors() {
-        // Bare ambiguous fallback: ArxivId parser is dispatched and its
-        // error surfaces. `1.2.3` is neither a DOI nor an arXiv shape.
-        assert_eq!(Ref::parse("1.2.3"), Err(RefParseError::InvalidArxivShape));
+    fn ref_parse_bare_without_10_prefix_reports_neither_shape() {
+        // The comment on this test always said the right thing -- "`1.2.3`
+        // is neither a DOI nor an arXiv shape" -- while the assertion said
+        // `InvalidArxivShape`, which is the fallback parser's verdict
+        // rather than the truth about the input (#477). Someone who
+        // mistyped a DOI was told about arXiv id shapes.
+        assert_eq!(Ref::parse("1.2.3"), Err(RefParseError::UnrecognisedShape));
+    }
+
+    #[test]
+    fn an_explicit_arxiv_scheme_still_reports_the_arxiv_shape_error() {
+        // The narrowing in #477 applies ONLY to the ambiguous fall-through.
+        // When the caller declared `arxiv:`, the arXiv parser's verdict IS
+        // the truth about the input, and generalising it there would lose
+        // information rather than gain it.
+        assert_eq!(
+            Ref::parse("arxiv:1.2.3"),
+            Err(RefParseError::InvalidArxivShape)
+        );
     }
 
     #[test]
