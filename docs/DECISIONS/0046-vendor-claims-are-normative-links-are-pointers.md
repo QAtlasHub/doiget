@@ -4,7 +4,7 @@
 - **Status:** Accepted
 - **Supersedes:** -
 - **Refines:** [0014](0014-docs-class-system.md) — which requires an ADR for changes to NORMATIVE content, without saying whether a URL is content
-- **Source:** #495 (five of sixteen ToS links dead or wrong), #496 (CORE, Springer, rate limits, a mis-aimed cross-reference), #498 (the 2026-08-25 vendor-terms audit)
+- **Source:** #495 (five of sixteen ToS links dead or wrong), #496 (CORE, Springer, rate limits, a cross-reference pointing at the wrong safeguard), #498 (the 2026-08-25 vendor-terms audit)
 
 ## Context
 
