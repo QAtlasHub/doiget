@@ -4088,7 +4088,7 @@ mod attempt_denial_tests {
 
     /// The accessors are a narrowing, so the negative case matters as much
     /// as the positive one: a caller that treated `denial()` as
-    /// "is this a failure" would mis-handle every `Failed` row.
+    /// "is this a failure" would mishandle every `Failed` row.
     #[test]
     fn the_accessors_narrow_rather_than_generalise() {
         let failed = AttemptOutcome::Failed {
