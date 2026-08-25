@@ -3953,8 +3953,8 @@ fn resolve_log_path() -> anyhow::Result<Utf8PathBuf> {
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerInfo {
         // Both `ServerInfo` and `Implementation` are `#[non_exhaustive]`
-        // in rmcp 1.6, so we go through the public builders rather than
-        // struct-literal construction.
+        // (since rmcp 1.6, still so in 3.x), so we go through the public
+        // builders rather than struct-literal construction.
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_server_info(Implementation::new("doiget", VERSION))

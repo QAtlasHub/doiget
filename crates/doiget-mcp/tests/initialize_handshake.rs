@@ -56,9 +56,16 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
     let server_info = client
         .peer_info()
         .expect("server_info populated after initialize");
-    assert_eq!(server_info.server_info.name, "doiget");
+    // rmcp 3.x made `InitializeResult::server_info` an `Option<Implementation>`
+    // (2.x had it by value). A server that omits it still initializes, so the
+    // presence assertion has to be explicit or this check evaporates.
+    let implementation = server_info
+        .server_info
+        .as_ref()
+        .expect("server_info populated after initialize");
+    assert_eq!(implementation.name, "doiget");
     assert!(
-        !server_info.server_info.version.is_empty(),
+        !implementation.version.is_empty(),
         "server version must not be empty"
     );
     // `instructions` is set by `Server::get_info`. Assert it mentions
@@ -796,5 +803,90 @@ async fn doiget_metadata_only_network_failure_returns_network_error_envelope() -
     server_handle.await??;
     drop(env);
     drop(td);
+    Ok(())
+}
+
+/// The tool safety annotations shipped in 0.8.6 survive on the wire.
+///
+/// `#[tool(annotations(...))]` is consumed entirely by the rmcp macro and
+/// nothing in this crate reads it back, so a macro-syntax or model change in
+/// an rmcp major (2.x -> 3.x, #452) can drop every hint with the build still
+/// green and every other test still passing. An agent reading `tools/list`
+/// would then see 22 unannotated tools and have to assume the worst of each.
+///
+/// Asserted through `tools/list` over the real transport rather than by
+/// inspecting the router, because the serialised form is what a client sees.
+#[tokio::test]
+async fn tools_list_carries_the_safety_annotations() -> anyhow::Result<()> {
+    let profile = CapabilityProfile::from_env().expect("clean env never errors");
+    let server = Server::new(profile);
+    let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+
+    let server_handle = tokio::spawn(async move {
+        let service = server.serve(server_transport).await?;
+        service.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = ().serve(client_transport).await?;
+
+    let tools = client.peer().list_all_tools().await?;
+    assert!(!tools.is_empty(), "tools/list returned nothing");
+
+    let unannotated: Vec<&str> = tools
+        .iter()
+        .filter(|t| t.annotations.is_none())
+        .map(|t| t.name.as_ref())
+        .collect();
+    assert!(
+        unannotated.is_empty(),
+        "these tools reached the wire with no annotations: {unannotated:?}"
+    );
+
+    let hints = |name: &str| {
+        tools
+            .iter()
+            .find(|t| t.name.as_ref() == name)
+            .unwrap_or_else(|| panic!("tools/list is missing {name}"))
+            .annotations
+            .clone()
+            .unwrap_or_else(|| panic!("{name} has no annotations"))
+    };
+
+    // Reads local state only. Asserting the values, not just presence: an
+    // annotations struct that survived as all-`None` fields would pass the
+    // presence check above while telling a client nothing.
+    let health = hints("doiget_health");
+    assert_eq!(
+        health.read_only_hint,
+        Some(true),
+        "doiget_health is read-only (#406)"
+    );
+    assert_eq!(
+        health.open_world_hint,
+        Some(false),
+        "doiget_health touches no network"
+    );
+
+    // Writes into the store and talks to the open internet — the opposite
+    // corner of the same matrix.
+    let fetch = hints("doiget_fetch_paper");
+    assert_eq!(
+        fetch.read_only_hint,
+        Some(false),
+        "doiget_fetch_paper writes to the store"
+    );
+    assert_eq!(
+        fetch.open_world_hint,
+        Some(true),
+        "doiget_fetch_paper resolves against arbitrary publisher hosts"
+    );
+    assert_eq!(
+        fetch.destructive_hint,
+        Some(false),
+        "doiget_fetch_paper never removes stored data"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
     Ok(())
 }

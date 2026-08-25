@@ -175,15 +175,15 @@ version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.darling]]
-version = "0.23.0"
+version = "0.24.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.darling_core]]
-version = "0.23.0"
+version = "0.24.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.darling_macro]]
-version = "0.23.0"
+version = "0.24.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.deadpool]]
@@ -567,7 +567,7 @@ version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmcp]]
-version = "2.2.0"
+version = "3.1.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmcp-macros]]
@@ -575,7 +575,7 @@ version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmcp-macros]]
-version = "2.2.0"
+version = "3.1.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.roman-numerals-rs]]
