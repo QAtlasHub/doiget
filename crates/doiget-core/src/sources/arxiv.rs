@@ -682,7 +682,7 @@ mod tests {
     }
 
     fn profile() -> CapabilityProfile {
-        CapabilityProfile::from_env().expect("Phase 0 stub profile")
+        CapabilityProfile::for_tests()
     }
 
     // -----------------------------------------------------------------

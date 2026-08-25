@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn crossref_can_serve_returns_true_for_doi() {
         let s = CrossrefSource::new("test@example.org".into());
-        let profile = CapabilityProfile::from_env().expect("clean env");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi::parse("10.1234/example").unwrap());
         assert!(s.can_serve(&profile, &r));
     }
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn crossref_can_serve_returns_false_for_arxiv() {
         let s = CrossrefSource::new("test@example.org".into());
-        let profile = CapabilityProfile::from_env().expect("clean env");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Arxiv(ArxivId::parse("2401.12345").unwrap());
         assert!(!s.can_serve(&profile, &r));
     }
@@ -401,7 +401,7 @@ mod tests {
         let host = server_host(&server);
         let s = crossref_for(&server);
         let (_td, ctx) = build_test_context(&host);
-        let profile = CapabilityProfile::from_env().expect("clean env");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi::parse("10.1234/example").unwrap());
 
         let res = s.fetch(&r, &profile, &ctx).await.expect("fetch ok");
@@ -424,7 +424,7 @@ mod tests {
             "test@example.org".into(),
         );
         let (_td, ctx) = build_test_context("127.0.0.1");
-        let profile = CapabilityProfile::from_env().expect("clean env");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Arxiv(ArxivId::parse("2401.12345").unwrap());
 
         let err = s.fetch(&r, &profile, &ctx).await.expect_err("not eligible");
@@ -451,7 +451,7 @@ mod tests {
         let host = server_host(&server);
         let s = crossref_for(&server);
         let (_td, ctx) = build_test_context(&host);
-        let profile = CapabilityProfile::from_env().expect("clean env");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi::parse("10.1234/example").unwrap());
 
         let _res = s.fetch(&r, &profile, &ctx).await.expect("fetch ok");
@@ -482,7 +482,7 @@ mod tests {
         let host = server_host(&server);
         let s = crossref_for(&server);
         let (_td, ctx) = build_test_context(&host);
-        let profile = CapabilityProfile::from_env().expect("clean env");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi::parse("10.1234/example").unwrap());
 
         let err = s.fetch(&r, &profile, &ctx).await.expect_err("404 errors");
@@ -506,7 +506,7 @@ mod tests {
         let host = server_host(&server);
         let s = crossref_for(&server);
         let (_td, ctx) = build_test_context(&host);
-        let profile = CapabilityProfile::from_env().expect("clean env");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi::parse("10.1234/example").unwrap());
 
         let err = s

@@ -1109,6 +1109,44 @@ pub enum CapabilityError {
 }
 
 impl CapabilityProfile {
+    /// The profile a clean environment produces, built WITHOUT reading the
+    /// environment (#456).
+    ///
+    /// Most tests want "a default profile", not "whatever the environment
+    /// says". Calling [`Self::from_env`] for that couples them to a
+    /// process-global they do not control, and the coupling is not
+    /// hypothetical: `from_env` returns `Err(KeyButNotAgreed)` while any
+    /// other test holds `DOIGET_KEY_*` set without its agreement var, so a
+    /// reader that lands inside that window panics on `.expect("profile")`.
+    /// `#[serial]` on the writer cannot help — it serialises marked tests
+    /// against each other, and the readers were unmarked.
+    ///
+    /// It also makes the tests deterministic on a developer machine that
+    /// happens to export `DOIGET_KEY_ELSEVIER`, which `#[serial]` cannot fix
+    /// at all.
+    ///
+    /// Tests that genuinely exercise env resolution must keep
+    /// [`Self::from_env`] **and** carry `#[serial_test::serial]`.
+    ///
+    /// Deliberately not `Default`: the type-level docs defer that to Phase 1
+    /// "once the field set stabilizes", and a public `Default` would invite
+    /// production code to skip the resolution rules.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn for_tests() -> Self {
+        Self {
+            oa: AlwaysOn,
+            // Every `DOIGET_ENABLE_*` unset — the same all-false shape
+            // `from_env` produces with a clean environment.
+            metadata: MetadataAccess::default(),
+            tdm_elsevier: None,
+            tdm_aps: None,
+            tdm_springer: None,
+            tdm_ieee: None,
+            rate_limits: RateLimits::HARD_CODED,
+        }
+    }
+
     /// Read the runtime profile from environment variables.
     ///
     /// Implements the resolution algorithm specified in

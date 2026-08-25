@@ -2786,7 +2786,7 @@ mod tests {
             session_id: "01J0000000000000000000TEST".into(),
             cache_root: None,
         };
-        let profile = CapabilityProfile::from_env().expect("clean env");
+        let profile = CapabilityProfile::for_tests();
         let store = FsStore::new(store_root.clone()).expect("fs store");
 
         let n = MAX_BATCH_REFS + 1;
@@ -4039,7 +4039,7 @@ mod chain_tests {
     }
 
     fn all_off() -> CapabilityProfile {
-        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        let mut p = CapabilityProfile::for_tests();
         p.metadata = MetadataAccess {
             openalex: false,
             semantic_scholar: false,
@@ -4398,7 +4398,7 @@ mod tdm_singleton_reach_tests {
         assert!(!cases.is_empty(), "the guard must have checked something");
 
         let (_td, c) = ctx();
-        let profile = CapabilityProfile::from_env().expect("clean env never errors");
+        let profile = CapabilityProfile::for_tests();
 
         for (name, doi) in cases {
             let ref_ = Ref::Doi(Doi::parse(doi).expect("doi"));
@@ -4537,7 +4537,7 @@ mod tdm_chain_tests {
     }
 
     fn all_gates_open() -> CapabilityProfile {
-        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        let mut p = CapabilityProfile::for_tests();
         p.tdm_aps = Some(grant("DOIGET_AGREE_TDM_APS"));
         p.tdm_elsevier = Some(grant("DOIGET_AGREE_TDM_ELSEVIER"));
         p.tdm_springer = Some(grant("DOIGET_AGREE_TDM_SPRINGER"));
@@ -4546,7 +4546,7 @@ mod tdm_chain_tests {
     }
 
     fn all_gates_closed() -> CapabilityProfile {
-        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        let mut p = CapabilityProfile::for_tests();
         p.tdm_aps = None;
         p.tdm_elsevier = None;
         p.tdm_springer = None;

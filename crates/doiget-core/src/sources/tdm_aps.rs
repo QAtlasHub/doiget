@@ -306,7 +306,7 @@ mod tests {
     const TEST_KEY: &str = "aps-test-key-xyz";
 
     fn profile_with_aps_grant() -> CapabilityProfile {
-        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        let mut p = CapabilityProfile::for_tests();
         p.tdm_aps = Some(TdmGrant {
             // Issue #153: key flows through the grant, not the env var.
             api_key: secrecy::SecretString::from(TEST_KEY.to_string()),
@@ -348,7 +348,7 @@ mod tests {
     async fn fetch_without_grant_is_not_eligible() {
         let (_td, ctx) = build_test_context("http://127.0.0.1:1");
         let src = TdmApsSource::with_base(Url::parse("http://127.0.0.1:1").expect("parses"));
-        let profile = CapabilityProfile::from_env().expect("clean env never errors");
+        let profile = CapabilityProfile::for_tests();
         let ref_ = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("DOI parses"));
 
         assert!(

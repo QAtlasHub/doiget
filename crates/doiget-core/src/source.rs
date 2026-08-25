@@ -414,7 +414,7 @@ mod tests {
         // Trait-shape pin: a `Source` impl is dyn-safe and can be boxed.
         let s: Box<dyn Source> = Box::new(MockSource);
         assert_eq!(s.name(), "mock");
-        let profile = CapabilityProfile::from_env().expect("Phase 0 stub");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi("10.1234/example".to_string()));
         assert!(s.can_serve(&profile, &r));
 
@@ -428,7 +428,7 @@ mod tests {
         // Direct dispatch (not through `dyn`) to exercise the async fn
         // body and assert the populated FetchResult fields.
         let s = MockSource;
-        let profile = CapabilityProfile::from_env().expect("Phase 0 stub");
+        let profile = CapabilityProfile::for_tests();
         let r = Ref::Doi(Doi("10.1234/example".to_string()));
         let (_td, ctx) = build_test_context();
 
