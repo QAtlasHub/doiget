@@ -132,17 +132,44 @@ The resolution trace introduced in #413/#438, previously CLI text only.
 
 ```jsonc
 "attempts": [
-  { "source": "hal",  "outcome": "not_consulted_disabled", "detail": "DOIGET_ENABLE_HAL", "consulted": false },
-  { "source": "core", "outcome": "consulted_no_record",                                   "consulted": true  }
+  { "source": "hal", "outcome": "not_consulted_disabled",
+    "detail": "DOIGET_ENABLE_HAL", "required_env": ["DOIGET_ENABLE_HAL"], "consulted": false },
+  { "source": "tdm-aps", "outcome": "not_consulted_disabled",
+    "detail": "DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS",
+    "required_env": ["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"], "consulted": false },
+  { "source": "core", "outcome": "consulted_denied",
+    "detail": "consulted: refused (RedirectNotInAllowlist, cdn.example.org)",
+    "denial_context": { "reason": "redirect_not_in_allowlist", "attempted": "cdn.example.org",
+                        "expected": ["core.ac.uk"], "hop_index": 1 },
+    "remediation": [ /* … */ ], "consulted": true }
 ]
 ```
 
 `outcome` is a **closed** enum:
 `not_consulted_disabled`, `not_consulted_not_applicable`,
 `not_consulted_wrong_publisher`, `not_consulted_not_needed`, `consulted_no_record`,
-`consulted_not_open_access`, `consulted_failed`, `consulted_resolved`.
+`consulted_not_open_access`, `consulted_denied`, `consulted_failed`,
+`consulted_resolved`.
 
 `detail` is present only for the variants carrying one, and is opaque text.
+
+**`required_env`** (#470) accompanies `not_consulted_disabled`: the variables to set,
+as a list. `detail` carries the same set joined with `" + "` and is retained for
+compatibility — do not parse it. Tier-3 sources need two variables and Tier-2 one,
+which is why the joined form was a separator a consumer had to split on.
+
+**`denial_context`** and **`remediation`** (#470) accompany `consulted_denied`, and
+carry the same ADR-0023 structure the blocked PDF leg already carried. Before this,
+a redirect denial, an oversized body or a not-a-PDF on a *metadata-chain* source —
+the richest and most actionable failures — flattened into `consulted_failed` with an
+opaque string, on a surface documented as machine-readable. `remediation` is omitted
+when the denial reason has no configuration channel (`InsecureScheme` has none:
+the fix for an `http://` redirect is not to trust the host).
+
+`consulted_denied` is a *refusal by a policy control*, distinct from
+`consulted_failed` (transport, auth, schema). `CapabilityNotGranted` is **not** a
+`consulted_denied`: it is produced before any request goes out, so reporting it as
+consulted would misstate reach.
 `consulted` is redundant with `outcome` and present anyway: it is the single question
 every consumer has — *did anyone else look?* — and requiring them to memorise which of
 eight tokens implies it invites the confusion the trace exists to end.

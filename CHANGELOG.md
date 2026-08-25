@@ -12,6 +12,15 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[diagnostics]** A per-source attempt row keeps its `DenialContext`, so
+  `remediation` is reachable from it. `classify_attempt` flattened everything that
+  was not a `NotFound` or an access refusal into `Failed { detail: "<prose>" }` —
+  so a redirect denial, oversized body or not-a-PDF on a *metadata-chain* source,
+  the richest and most actionable failures, became an untyped string on a surface
+  #459 advertises as machine-readable. The blocked PDF leg had carried the same
+  structure end to end since #459; the two mechanisms now agree (#470, ADR-0023,
+  ADR-0043).
+
 - **[orchestrator]** A Tier-3 TDM source is consulted when the **content leg** is
   blocked, not only when Crossref missed. It was asked the metadata question all
   along, and Crossref answers that question readily for a publisher's own DOIs — so
@@ -35,6 +44,11 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[errors]** `AttemptOutcome::Disabled` carries `&'static [&'static str]` and the
+  wire gains `required_env`. Tier 3 needs two variables and the code joined them
+  into `"A + B"`, which put a separator on the #459 wire that a consumer had to
+  split on — the thing the `detail()` / `wire()` split exists to avoid. `detail`
+  still carries the joined form, so nothing that reads it today breaks (#470).
 - **[errors]** `PdfLegStatus::TdmFetched` is distinct from `Fetched`, and the stored
   source label names the publisher rather than `oa-publisher`. A TDM copy did not
   come from an OA host and carries an agreement's terms.
