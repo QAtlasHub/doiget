@@ -120,8 +120,14 @@ There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
 
 ### arXiv
 
-- Public, no-auth API, but the API has a 3-second-per-request rate guideline. doiget's
-  global 5/sec cap respects this.
+- Public, no-auth API. Its [Terms of Use](https://info.arxiv.org/help/api/tou.html)
+  cap requests at **one every three seconds, over a single connection**, collectively
+  across every machine under the caller's control.
+- doiget applies that per-source, via `SOURCE_RATE_OVERRIDES` (ADR-0045). One arXiv
+  *attempt* issues two *requests* — the Atom feed, then the PDF — and both are paced,
+  because the guideline counts requests.
+- This page previously claimed the global 5/sec cap "respects this". It did not: the
+  effective rate was 15x the guideline and the concurrency 5x (#493).
 - doiget uses arXiv for: arXiv id → PDF + metadata. The parsed metadata
   also carries the **published DOI** and **journal reference** when the
   submitter supplied them (`<arxiv:doi>` / `<arxiv:journal_ref>`) — the
@@ -272,5 +278,15 @@ doiget's defaults are designed to be on the polite side of every source we know 
 - `User-Agent: doiget/<version> (+https://github.com/QAtlasHub/doiget)`.
 - Honors `Retry-After` headers (treats 429 as `RATE_LIMITED` with the indicated wait).
 
-If a source publishes a stricter rate guideline, doiget will adopt the stricter value at
-the per-source level rather than relax the global cap.
+If a source publishes a stricter rate guideline, doiget adopts the stricter value at
+the per-source level rather than relaxing the global cap. This is now mechanical rather
+than a promise: `RateLimits::backoff_ms_for` and `max_concurrent_for` take the stricter
+of the global setting and the source's entry in `SOURCE_RATE_OVERRIDES`, so an entry can
+only ever tighten (ADR-0045).
+
+| source | interval | connections | published terms |
+|---|---|---|---|
+| `arxiv` | 3 s | 1 | <https://info.arxiv.org/help/api/tou.html> |
+
+Every other source uses the global 200 ms floor and the global concurrency cap. Sources
+whose vendor limits are not yet recorded are tracked in #496.
