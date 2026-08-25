@@ -883,6 +883,31 @@ impl HttpClient {
         self.fetch_inner(source, url, &[], true).await
     }
 
+    /// [`Self::fetch_pdf`] with request headers, for sources that
+    /// authenticate by header rather than by query parameter.
+    ///
+    /// This is the pairing the Tier-3 content leg needs (#458): APS Harvest
+    /// wants `X-API-Key` *and* `Accept: application/pdf` on the same request
+    /// that must be magic-byte checked. `fetch_bytes_with_headers` would
+    /// send the headers and skip the check, which is exactly how a
+    /// publisher error page or a WAF holding response — both 200s with a
+    /// body — would end up written to `<safekey>.pdf`.
+    ///
+    /// Header values are sent on the wire only; they are never logged and
+    /// never echoed into an error message (#146).
+    ///
+    /// # Errors
+    ///
+    /// Any [`HttpError`] variant including [`HttpError::NotAPdf`].
+    pub async fn fetch_pdf_with_headers(
+        &self,
+        source: &str,
+        url: Url,
+        headers: &[(&str, &str)],
+    ) -> Result<(Bytes, Url), HttpError> {
+        self.fetch_inner(source, url, headers, true).await
+    }
+
     /// Single diagnostic request against `url`, reporting what came back
     /// instead of turning it into an error.
     ///

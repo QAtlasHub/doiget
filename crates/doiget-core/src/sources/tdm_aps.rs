@@ -44,6 +44,8 @@ use secrecy::ExposeSecret;
 use url::Url;
 
 use crate::provenance::{Capability, LogEvent, LogResult, RowInput};
+use bytes::Bytes;
+
 use crate::source::{FetchContext, FetchError, FetchResult, Source};
 use crate::{CapabilityProfile, Ref};
 
@@ -237,10 +239,74 @@ impl Source for TdmApsSource {
             metadata_json: Some(envelope),
         })
     }
+
+    /// APS serves the article PDF from the same endpoint as the JSON
+    /// record; `Accept` selects the representation. Both are documented
+    /// against `/v2/journals/articles/{id}` (#484).
+    ///
+    /// Returns `Ok(None)` — "not me" — rather than an error whenever a
+    /// gate is shut, so the orchestrator can tell "APS declined" apart
+    /// from "APS was never eligible". The gates are re-checked here even
+    /// though the caller checks them: a source that trusts its caller is
+    /// one refactor away from not being checked at all, which is the
+    /// double-gate pattern the other Tier-3 entry points already use.
+    async fn fetch_content(
+        &self,
+        ref_: &Ref,
+        profile: &CapabilityProfile,
+        ctx: &FetchContext,
+    ) -> Result<Option<Bytes>, FetchError> {
+        let Ref::Doi(doi) = ref_ else {
+            return Ok(None);
+        };
+        // Grant present AND the DOI is one APS registered (ADR-0041).
+        if !self.can_serve(profile, ref_) {
+            return Ok(None);
+        }
+        let Some(grant) = profile.tdm_aps.as_ref() else {
+            return Ok(None);
+        };
+        let api_key = grant.api_key.expose_secret();
+        if api_key.is_empty() {
+            return Ok(None);
+        }
+
+        let _permit = ctx.rate_limiter.acquire(self.name()).await;
+
+        let url = self.request_url(doi)?;
+        // `fetch_pdf_with_headers`, not `fetch_bytes_with_headers`: the
+        // magic-byte check is the only thing standing between an APS
+        // error page and a file called `<safekey>.pdf`.
+        let (bytes, _final_url) = ctx
+            .http
+            .fetch_pdf_with_headers(
+                self.name(),
+                url,
+                &[("X-API-Key", api_key), ("Accept", "application/pdf")],
+            )
+            .await?;
+
+        let canonical = ref_.promote(self.name(), None).digest_hex();
+        ctx.log.append(RowInput {
+            event: LogEvent::Fetch,
+            result: LogResult::Ok,
+            capability: Capability::TdmAps,
+            ref_: Some(doi.as_str()),
+            source: Some(self.name()),
+            error_code: None,
+            size_bytes: Some(bytes.len() as u64),
+            license: None,
+            store_path: None,
+            canonical_digest: Some(&canonical),
+        })?;
+
+        Ok(Some(bytes))
+    }
 }
 
-/// Percent-encode a path segment, preserving the RFC 3986 unreserved
-/// set. `/` and other reserved characters are percent-encoded.
+/// Percent-encode a DOI for use as a URL path, preserving the RFC 3986
+/// unreserved set **and** `/`, which APS carries raw (#484). Every other
+/// reserved or non-ASCII byte is escaped.
 fn encode_doi_path(doi: &str) -> String {
     let mut out = String::with_capacity(doi.len());
     for b in doi.bytes() {

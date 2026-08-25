@@ -770,6 +770,23 @@ pub enum PdfLegStatus {
         /// and audit trail context).
         original_block: String,
     },
+    /// The OA chain was blocked and a Tier-3 TDM source served the
+    /// publisher's own copy under the user's TDM agreement (#458).
+    ///
+    /// Distinct from [`Self::Fetched`] on purpose. The bytes did not come
+    /// from an OA host, they are not necessarily openly licensed, and the
+    /// user obtained them under an agreement they signed — provenance
+    /// that says `oa-publisher` here would be wrong in all three
+    /// respects.
+    TdmFetched {
+        /// The Tier-3 source that served it (`"tdm-aps"`, ...). Matches
+        /// [`crate::source::Source::name`].
+        source: String,
+        /// The OA-chain error that triggered the fallback, kept for the
+        /// audit trail — the user still needs to know the open route
+        /// failed even though the fetch succeeded.
+        original_block: String,
+    },
 }
 
 /// What `fetch_paper` wrote to disk and how.
@@ -1373,6 +1390,23 @@ async fn fetch_paper_doi(
         optional_resolved.as_ref().map(|(n, m)| (*n, m)),
     )
     .await;
+
+    // #458: and if even that found nothing, ask the publisher itself.
+    //
+    // This is the second Tier-3 consultation point, and the one that
+    // matters. `resolve_tdm_chain` above runs when *Crossref* missed,
+    // which is a question about metadata. The gap a TDM agreement is
+    // obtained to close is about bytes, and it opens here -- after
+    // Crossref answered perfectly well and the content leg still failed.
+    #[cfg(any(
+        feature = "tdm-elsevier",
+        feature = "tdm-aps",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    ))]
+    let (pdf_leg, pdf_bytes) =
+        try_tdm_content_fallback(doi, pdf_leg, pdf_bytes, profile, ctx, &mut attempts).await;
+
     if let Some(fl) = fallback_license {
         license = fl;
     }
@@ -1407,14 +1441,17 @@ async fn fetch_paper_doi(
         }
     }
 
-    let is_preprint_fallback = matches!(pdf_leg, PdfLegStatus::PreprintFallback { .. });
     let (final_source_label, size_bytes, pdf_path_relative, pdf_staged) = match &pdf_bytes {
         Some(bytes) => {
             let staged = stage_pdf_to_tempfile(bytes)?;
-            let label = if is_preprint_fallback {
-                "arxiv".to_string()
-            } else {
-                "oa-publisher".to_string()
+            // Derived from the leg rather than from a boolean: #458 added a
+            // third way to end up holding bytes, and a two-valued flag
+            // would have quietly labelled the publisher's TDM copy
+            // `oa-publisher`.
+            let label = match &pdf_leg {
+                PdfLegStatus::PreprintFallback { .. } => "arxiv".to_string(),
+                PdfLegStatus::TdmFetched { source, .. } => source.clone(),
+                _ => "oa-publisher".to_string(),
             };
             (
                 label,
@@ -1631,6 +1668,193 @@ async fn try_optional_source_oa_fallback(
             (pdf_leg, pdf_bytes)
         }
     }
+}
+
+/// #458: the publisher's own copy, once the open routes are exhausted.
+///
+/// Triggered by a blocked *content* leg -- the trigger #445 already built
+/// for the optional OA chain, and the one Tier 3 always needed.
+/// `resolve_tdm_chain` fires on a Crossref miss instead, so for the DOIs
+/// these sources exist to serve -- ones Crossref resolves readily -- it
+/// recorded `NotNeeded` for every entry and no request ever went out.
+///
+/// Additive, like its two siblings: on any failure the ORIGINAL block is
+/// kept. The publisher's refusal on the open route is what the user has to
+/// act on; burying it under a second failure from the TDM endpoint would
+/// answer a question they did not ask.
+///
+/// Disclosure stays bounded exactly as ADR-0041 bounds it -- a source is
+/// only ever told about DOIs its own publisher registered. What rises is
+/// the frequency of consultation, not its scope.
+#[cfg(any(
+    feature = "tdm-elsevier",
+    feature = "tdm-aps",
+    feature = "tdm-springer",
+    feature = "tdm-ieee"
+))]
+#[allow(clippy::vec_init_then_push)]
+async fn try_tdm_content_fallback(
+    doi: &Doi,
+    pdf_leg: PdfLegStatus,
+    pdf_bytes: Option<Vec<u8>>,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    attempts: &mut Vec<SourceAttempt>,
+) -> (PdfLegStatus, Option<Vec<u8>>) {
+    struct ContentEntry<'a> {
+        name: &'static str,
+        /// What the user must set, rendered verbatim into the trace.
+        enable_hint: &'static str,
+        /// DOI prefixes this publisher registered (ADR-0041).
+        prefixes: &'static [&'static str],
+        /// Human name, for the wrong-publisher message.
+        publisher: &'static str,
+        src: &'a dyn crate::source::Source,
+    }
+
+    if pdf_bytes.is_some() {
+        return (pdf_leg, pdf_bytes);
+    }
+    let PdfLegStatus::Blocked {
+        message: ref blocked_message,
+        ..
+    } = pdf_leg
+    else {
+        return (pdf_leg, pdf_bytes);
+    };
+    let original_block = blocked_message.clone();
+
+    let ref_ = Ref::Doi(doi.clone());
+
+    #[cfg(feature = "tdm-aps")]
+    let aps = optional_base("DOIGET_APS_BASE").map_or_else(
+        crate::sources::tdm_aps::TdmApsSource::new,
+        crate::sources::tdm_aps::TdmApsSource::with_base,
+    );
+    #[cfg(feature = "tdm-elsevier")]
+    let elsevier = optional_base("DOIGET_ELSEVIER_BASE").map_or_else(
+        crate::sources::tdm_elsevier::TdmElsevierSource::new,
+        crate::sources::tdm_elsevier::TdmElsevierSource::with_base,
+    );
+    #[cfg(feature = "tdm-springer")]
+    let springer = optional_base("DOIGET_SPRINGER_BASE").map_or_else(
+        crate::sources::tdm_springer::TdmSpringerSource::new,
+        crate::sources::tdm_springer::TdmSpringerSource::with_base,
+    );
+    #[cfg(feature = "tdm-ieee")]
+    let ieee = optional_base("DOIGET_IEEE_BASE").map_or_else(
+        crate::sources::tdm_ieee::TdmIeeeSource::new,
+        crate::sources::tdm_ieee::TdmIeeeSource::with_base,
+    );
+
+    // Not a `vec![]` literal: each entry is `#[cfg]`-gated on its own
+    // publisher feature, and attribute-per-element inside a vec literal is
+    // not expressible. Same shape as `resolve_tdm_chain`; the
+    // `vec_init_then_push` allow is on the fn because the lint's span runs
+    // from the `let` across every push, so a statement-level attribute does
+    // not cover it.
+    #[allow(unused_mut)]
+    let mut chain: Vec<ContentEntry<'_>> = Vec::new();
+    #[cfg(feature = "tdm-aps")]
+    chain.push(ContentEntry {
+        name: "tdm-aps",
+        enable_hint: "DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS",
+        prefixes: crate::sources::tdm_aps::PUBLISHER_PREFIXES,
+        publisher: "American Physical Society (APS)",
+        src: &aps,
+    });
+    #[cfg(feature = "tdm-elsevier")]
+    chain.push(ContentEntry {
+        name: "tdm-elsevier",
+        enable_hint: "DOIGET_KEY_ELSEVIER + DOIGET_AGREE_TDM_ELSEVIER",
+        prefixes: crate::sources::tdm_elsevier::PUBLISHER_PREFIXES,
+        publisher: "Elsevier BV",
+        src: &elsevier,
+    });
+    #[cfg(feature = "tdm-springer")]
+    chain.push(ContentEntry {
+        name: "tdm-springer",
+        enable_hint: "DOIGET_KEY_SPRINGER + DOIGET_AGREE_TDM_SPRINGER",
+        prefixes: crate::sources::tdm_springer::PUBLISHER_PREFIXES,
+        publisher: "Springer Nature",
+        src: &springer,
+    });
+    #[cfg(feature = "tdm-ieee")]
+    chain.push(ContentEntry {
+        name: "tdm-ieee",
+        enable_hint: "DOIGET_KEY_IEEE + DOIGET_AGREE_TDM_IEEE",
+        prefixes: crate::sources::tdm_ieee::PUBLISHER_PREFIXES,
+        publisher: "IEEE",
+        src: &ieee,
+    });
+
+    // Replace the metadata-stage row rather than appending a second one.
+    // That row says `NotNeeded`, which was true of the metadata question
+    // and is now false of the one being asked.
+    fn record(attempts: &mut Vec<SourceAttempt>, name: &'static str, outcome: AttemptOutcome) {
+        attempts.retain(|a| a.source != name);
+        attempts.push(SourceAttempt::new(name, outcome));
+    }
+
+    for e in chain {
+        debug_assert_eq!(e.name, e.src.name(), "chain name must match Source::name");
+
+        // Prefix BEFORE credentials, per ADR-0041: a DOI this publisher
+        // never registered is not a configuration problem, and reporting
+        // it as one would send the user after an API key that would not
+        // have helped.
+        if !e.prefixes.contains(&doi.prefix()) {
+            record(
+                attempts,
+                e.name,
+                AttemptOutcome::WrongPublisher {
+                    detail: format!("DOI prefix {} is not {}", doi.prefix(), e.publisher),
+                },
+            );
+            continue;
+        }
+        if !e.src.can_serve(profile, &ref_) {
+            record(
+                attempts,
+                e.name,
+                AttemptOutcome::Disabled { env: e.enable_hint },
+            );
+            continue;
+        }
+
+        match e.src.fetch_content(&ref_, profile, ctx).await {
+            // A metadata-only source. It has nothing to say about the
+            // content question, so its metadata-stage row is left alone
+            // rather than overwritten with a verdict it never gave.
+            Ok(None) => {}
+            Ok(Some(bytes)) => {
+                tracing::info!(
+                    source = e.name,
+                    doi = %doi.as_str(),
+                    size = bytes.len(),
+                    "OA routes exhausted; the publisher served its own copy under the user's TDM agreement (#458)"
+                );
+                record(attempts, e.name, AttemptOutcome::Resolved);
+                return (
+                    PdfLegStatus::TdmFetched {
+                        source: e.name.to_string(),
+                        original_block,
+                    },
+                    Some(bytes.to_vec()),
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    source = e.name,
+                    error = %err,
+                    "TDM content leg failed; keeping the original block"
+                );
+                record(attempts, e.name, classify_attempt(&err));
+            }
+        }
+    }
+
+    (pdf_leg, pdf_bytes)
 }
 
 /// Auto preprint fallback (issue #325). Called after the DOI OA PDF chain
