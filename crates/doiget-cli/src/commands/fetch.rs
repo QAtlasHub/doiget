@@ -597,6 +597,18 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
                 label, outcome.size_bytes, arxiv_id, outcome.path
             ));
         }
+        // #458: the publisher served its own copy under the user's TDM
+        // agreement. Named explicitly rather than left to the `_` arm
+        // below, which would have printed the same line as a plain OA
+        // fetch -- the user needs to know the open route failed and which
+        // agreement was drawn on, because that is the one with terms
+        // attached.
+        PdfLegStatus::TdmFetched { source, .. } => {
+            print_success(format_args!(
+                "fetched {} ({} bytes) via {} under your TDM agreement (no open copy available) -> {}",
+                label, outcome.size_bytes, source, outcome.path
+            ));
+        }
         // Issue #145: `Blocked` is NO LONGER a success outcome. It is
         // intercepted in `fetch_one` BEFORE `emit_success_line` is
         // called and rendered via `render_blocked_error` with a
@@ -814,7 +826,9 @@ fn emit_link_result(ref_: &Ref, outcome: &FetchPaperOutcome, dir: &Utf8Path) {
     };
     if !matches!(
         outcome.pdf_leg,
-        PdfLegStatus::Fetched | PdfLegStatus::PreprintFallback { .. }
+        PdfLegStatus::Fetched
+            | PdfLegStatus::PreprintFallback { .. }
+            | PdfLegStatus::TdmFetched { .. }
     ) {
         print_success(format_args!(
             "note: --link skipped for {label} (no PDF — metadata-only fetch)"

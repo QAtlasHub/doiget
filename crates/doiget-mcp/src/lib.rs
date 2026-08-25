@@ -3242,6 +3242,18 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
     match leg {
         PdfLegStatus::Fetched => json!({ "status": "fetched" }),
         PdfLegStatus::NoOaUrl => json!({ "status": "no_oa_url" }),
+        // #458. Explicit, because the `_` arm at the bottom renders
+        // `{"status": "unknown"}` -- an agent would be told nothing about
+        // a PDF that exists, came from the publisher rather than an open
+        // host, and carries the terms of a TDM agreement.
+        PdfLegStatus::TdmFetched {
+            source,
+            original_block,
+        } => json!({
+            "status": "tdm_fetched",
+            "source": source,
+            "original_block": original_block,
+        }),
         PdfLegStatus::Blocked {
             code,
             message,

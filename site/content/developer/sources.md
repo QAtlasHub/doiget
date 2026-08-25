@@ -30,9 +30,38 @@ weight = 200
 | CORE | 2 (metadata) | 4 | optional free key (`DOIGET_CORE_API_KEY`) | <https://core.ac.uk/terms> | `--features metadata` + `DOIGET_ENABLE_CORE` |
 | Europe PMC | 2 (metadata) | 4 | none | <https://europepmc.org/About> | `--features metadata` + `DOIGET_ENABLE_EUROPE_PMC` |
 | Springer Nature OA | 3 (institutional) | 5a | API key | <https://dev.springernature.com/> | `--features tdm-springer` + key + agree |
-| APS Harvest TDM | 3 (institutional) | 5b | API key | <https://harvest.aps.org/> | `--features tdm-aps` + key + agree |
+| APS Harvest TDM (**serves PDFs**) | 3 (institutional) | 5b | API key | <https://harvest.aps.org/> | `--features tdm-aps` + key + agree |
 | Elsevier ScienceDirect TDM | 3 (institutional) | 5c | API key | <https://www.elsevier.com/legal/tdmrep> | `--features tdm-elsevier` + key + agree |
 | IEEE Xplore TDM (**unverified**) | 3 (institutional) | 5d | API key | <https://developer.ieee.org/> | `--features tdm-ieee` + key + agree |
+
+### 1.1 When Tier 3 is consulted (ADR-0044)
+
+Tier-3 sources are asked two different questions at two different points, and the
+distinction is what #458 was about:
+
+| point | question | trigger |
+|---|---|---|
+| metadata stage | "who can tell me about this DOI?" | Crossref found nothing |
+| **content stage** | "who will give me the bytes?" | the OA content leg was **blocked** |
+
+The second is the one a TDM agreement is obtained for. Until ADR-0044 it did not
+exist, so for a publisher-registered DOI — which Crossref resolves readily — an
+enabled TDM source was never consulted at all and enabling it changed nothing
+observable.
+
+**`tdm-aps` returns PDF bytes** at the content stage; APS documents single-request
+retrieval with `Accept: application/pdf`. The stored file reports
+`license = "unknown"`: it came from the publisher under your agreement, not from the
+OA location whose licence Unpaywall reported, and doiget does not guess licences.
+
+`tdm-elsevier`, `tdm-springer` and `tdm-ieee` remain metadata-only. For Elsevier
+that is its own policy — retrieval of non-open-access article PDFs through the
+ScienceDirect APIs is not permitted, and a non-OA article yields a first-page
+preview rather than the article.
+
+Disclosure is bounded exactly as before: a source is only ever told about DOIs its
+own publisher registered (ADR-0041). What rises with ADR-0044 is how often it is
+asked, not what it is told.
 
 ## 2. User responsibility
 
