@@ -24,9 +24,13 @@ default  = ["oa-only"]
 oa-only  = ["doiget-core/oa-only"]
 metadata = ["doiget-core/metadata"]
 citation = ["doiget-core/citation"]
-tdm-elsevier = ["doiget-core/tdm-elsevier"]
-tdm-aps      = ["doiget-core/tdm-aps"]
-tdm-springer = ["doiget-core/tdm-springer"]
+# The `doiget-mcp/*` half matters: `doiget serve` builds its client
+# through the MCP twin of `build_http_client`, so a CLI-only feature
+# would leave the MCP surface without the Tier-3 transport gate (#454).
+tdm-elsevier = ["doiget-core/tdm-elsevier", "doiget-mcp/tdm-elsevier"]
+tdm-aps      = ["doiget-core/tdm-aps", "doiget-mcp/tdm-aps"]
+tdm-springer = ["doiget-core/tdm-springer", "doiget-mcp/tdm-springer"]
+tdm-ieee     = ["doiget-core/tdm-ieee", "doiget-mcp/tdm-ieee"]
 
 [dependencies]
 doiget-core        = { workspace = true }

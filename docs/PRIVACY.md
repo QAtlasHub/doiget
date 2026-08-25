@@ -60,9 +60,20 @@ its use of these APIs polite.
 - `--features metadata`: **Europe PMC** (<https://www.ebi.ac.uk>, biomedical OA full
   text). Inert until `DOIGET_ENABLE_EUROPE_PMC` is set; queried by exact DOI only.
   No key or account.
-- `--features tdm-springer | tdm-aps | tdm-elsevier`: the respective publisher
-  text-and-data-mining APIs, used **only with your own API key and explicit
-  agreement**. doiget bundles no keys and shares none.
+- `--features tdm-springer | tdm-aps | tdm-elsevier | tdm-ieee`: the respective
+  publisher text-and-data-mining APIs, used **only with your own API key and
+  explicit agreement**. doiget bundles no keys and shares none. Each is consulted
+  **only for DOI prefixes that publisher registered** (ADR-0041) — enabling
+  `tdm-aps` does not disclose your Elsevier or IEEE lookups to APS — and only
+  after Crossref failed to resolve the DOI. Since a publisher is asked only about
+  DOIs it issued, and resolving such a DOI goes through it anyway, enabling one of
+  these tells that publisher nothing it could not already observe.
+
+  Two of them — `tdm-springer` and `tdm-ieee` (<https://ieeexploreapi.ieee.org>) —
+  send the key as a **URL query parameter**, because neither upstream documents a
+  header-auth path. It is therefore visible to that publisher's own server-side and
+  proxy logs. doiget strips it from every URL it keeps: the metadata record, the
+  provenance log and any error text (issue #146).
 
 ## What is stored locally
 

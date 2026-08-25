@@ -47,7 +47,8 @@ use doiget_core::dry_run::{
     build_dry_run_envelope, build_fetch_plan, rate_limit_budget as core_rate_limit_budget,
 };
 use doiget_core::http::{
-    fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist, tier_2_allowlist, HttpClient,
+    fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist, tier_2_allowlist,
+    tier_3_allowlists, HttpClient,
 };
 use doiget_core::orchestrator::{
     batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
@@ -198,11 +199,11 @@ impl Server {
     /// succeed. The spec'd output shape is
     /// `{ oa_enabled, metadata_sources: string[], tdm_enabled,
     /// tdm_elsevier, tdm_aps, tdm_springer, rate_limit_per_sec }`;
-    /// `ok` and `tier_1/2/3` are emitted additively for back-compat.
+    /// `ok`, `tier_1/2/3` and `tdm_ieee` (#430) are emitted additively.
     #[tool(
         description = "WHEN TO USE: Determine which sources the running doiget instance is allowed to use.\n\
                        INPUTS: none.\n\
-                       OUTPUTS: { oa_enabled, metadata_sources, tdm_enabled, tdm_elsevier, tdm_aps, tdm_springer, rate_limit_per_sec } (plus additive ok, tier_1, tier_2, tier_3).\n\
+                       OUTPUTS: { oa_enabled, metadata_sources, tdm_enabled, tdm_elsevier, tdm_aps, tdm_springer, rate_limit_per_sec } (plus additive ok, tier_1, tier_2, tier_3, tdm_ieee).\n\
                        COSTS: <1 ms.\n\
                        SIDE EFFECTS: none.\n\
                        LIMITS: none.",
@@ -547,7 +548,10 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: User wants to download a paper PDF given a DOI or arXiv id.\n\
                        INPUTS: ref (DOI or arXiv id), dry_run (optional bool).\n\
-                       OUTPUTS: { ok: true, ref, source, path, license, size_bytes, schema_version } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, ref, error }.\n\
+                       OUTPUTS: { ok: true, ref, source, path, license, size_bytes, schema_version, pdf, attempts } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, ref, error }.\n\
+                       READ `pdf.status` — `ok: true` does NOT mean a PDF landed. `fetched` = PDF on disk; `no_oa_url` = metadata only, no free copy exists; `blocked` = a free copy EXISTS but was refused.\n\
+                       ON `blocked`: do not report the paper as unavailable. `pdf.remediation` lists the config changes that would lift it, narrowest first — `additional_host` entries go under [[network.additional_hosts]] in the config file, a `trust_flag` is a [network] boolean. Show them to the user and let them choose; both widen the trusted download surface.\n\
+                       `attempts` says which other sources were consulted and which were never asked (`consulted: false` + `detail` naming the env var to set). Use it before concluding a paper is not indexed anywhere.\n\
                        COSTS: 1-3 s network call (or 0 when dry_run). May fail if not Open Access.\n\
                        SIDE EFFECTS: Writes PDF (or metadata-only TOML) to the store. Appends a row to the provenance log (unless dry_run).\n\
                        LIMITS: Max 5 fetches/sec (global). Use doiget_batch_fetch for >5 refs.",
@@ -3261,6 +3265,17 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
                     "denial_context".into(),
                     denial_context_to_value(dc, "fetch_paper_pdf_leg"),
                 );
+                // #459: `denial_context` says what was refused. This says
+                // what to do about it — the same suggestions the CLI's
+                // `= help:` block prints, from the same core function.
+                //
+                // Without it an agent sees a refusal and 24 patterns that
+                // are not the host, and reports "not available" for a
+                // paper that one line of config would have fetched.
+                let r = doiget_core::remediation::for_denial(dc);
+                if !r.is_empty() {
+                    o.insert("remediation".into(), json!(r));
+                }
             }
             if let Some(arxiv_id) = suggested_arxiv_id {
                 o.insert("suggested_arxiv_id".into(), json!(arxiv_id));
@@ -3308,7 +3323,22 @@ fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> V
         "year": outcome.year,
         // Issue #118: never a silent metadata-only success.
         "pdf": pdf_leg_json(&outcome.pdf_leg),
+        // #459: the #438 resolution trace. "We asked and it had nothing"
+        // and "we never asked" need different actions, and until now only
+        // the CLI was told which had happened. `null` rather than `[]`
+        // when there is no trace, so "unavailable" stays distinguishable
+        // from "empty".
+        "attempts": attempts_json(&outcome.attempts),
     })
+}
+
+/// Serialise the resolution trace, or `null` when there is none.
+fn attempts_json(attempts: &[doiget_core::orchestrator::SourceAttempt]) -> Value {
+    if attempts.is_empty() {
+        Value::Null
+    } else {
+        doiget_core::orchestrator::attempts_to_value(attempts)
+    }
 }
 
 /// Build the `{ok:false, ref, error:{code, message}}` envelope for
@@ -3758,6 +3788,10 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
         // OA, always-on. Register `ar5iv.labs.arxiv.org` under the
         // `"ar5iv"` source key so `paper_text::paper_text` can reach it.
         allowlists.extend(fulltext_allowlist());
+        // #454: the Tier-3 transport gate, mirroring the CLI builder.
+        // Empty in a default build; the `CapabilityProfile` grant is
+        // still what decides whether a TDM source is ever called.
+        allowlists.extend(tier_3_allowlists());
 
         // ADR-0028 D2: merge user-extension hosts from
         // `<config_dir>/doiget/config.toml`. Mirrors the CLI path in
@@ -3969,6 +4003,13 @@ fn resolve_store_root() -> Option<Utf8PathBuf> {
             return Some(Utf8PathBuf::from(s.trim()));
         }
     }
+    // `[store] root` from the same `config.toml` the network gate reads
+    // (#441). Kept in step with the CLI resolver deliberately: a store root
+    // that differs between `doiget fetch` and `doiget serve` would put an
+    // agent's downloads somewhere the user's own commands cannot see.
+    if let Some(root) = store_root_from_config() {
+        return Some(root);
+    }
     // Default: `papers/` under the current working directory (#344 / ADR-0036),
     // so an agent's fetches land where the work is; set DOIGET_STORE_ROOT for a
     // central library.
@@ -3976,6 +4017,38 @@ fn resolve_store_root() -> Option<Utf8PathBuf> {
     Utf8PathBuf::from_path_buf(cwd)
         .ok()
         .map(|d| d.join("papers"))
+}
+
+/// `[store] root` from the user's `config.toml`, if any (#441).
+///
+/// Warns on a malformed file rather than staying silent, for the reason the
+/// #468 review established against the CLI twin: only ONE function in this
+/// crate builds the HTTP client, so the "the parse error surfaces on the
+/// network path" justification does not hold for `doiget_info`,
+/// `doiget_search_local`, `doiget_list_recent` or `doiget_tag`.
+///
+/// The consequences are worse here than on the CLI, because an agent cannot
+/// see a shell. `doiget_info` returns `metadata: null` for a paper the user
+/// already has, which per this server's own tool description tells the agent
+/// to fetch it again; and `doiget_tag` writes into the wrong store and
+/// returns `ok: true`.
+///
+/// stdout stays clean either way (ADR-0001) — `tracing` is wired to stderr.
+fn store_root_from_config() -> Option<Utf8PathBuf> {
+    let path = config_dir_utf8().ok()?.join("doiget").join("config.toml");
+    let cfg = match doiget_core::user_extension::load(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                path = %path,
+                error = %e,
+                "config.toml could not be read; [store] root ignored and the default store                  root used instead"
+            );
+            return None;
+        }
+    };
+    let raw = cfg.store_root?;
+    Some(doiget_core::user_extension::expand_store_root(&raw))
 }
 
 /// Best-effort writability probe for the resolved store root.
@@ -4029,7 +4102,9 @@ fn probe_store_writable(path: &camino::Utf8Path) -> bool {
 /// fields and additionally retain `ok` and `tier_1/2/3` as **additive**
 /// fields — the e2e handshake test and pre-#141 agents rely on them and
 /// §7 (a TypeScript object type, structurally open) does not forbid
-/// extra keys. `metadata_sources` is the spec-canonical view of the
+/// extra keys. `tdm_ieee` (#430) joins them on the same footing: a
+/// fourth publisher must not silently change the meaning of the three
+/// booleans §7 names. `metadata_sources` is the spec-canonical view of the
 /// enabled Tier-2 metadata sources.
 ///
 /// - `metadata_sources` reflects the `MetadataAccess` booleans (the
@@ -4066,6 +4141,9 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
     if profile.tdm_springer.is_some() {
         tier_3.push("tdm-springer");
     }
+    if profile.tdm_ieee.is_some() {
+        tier_3.push("tdm-ieee");
+    }
 
     let tdm_enabled = !tier_3.is_empty();
 
@@ -4077,6 +4155,10 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
         "tdm_elsevier": profile.tdm_elsevier.is_some(),
         "tdm_aps": profile.tdm_aps.is_some(),
         "tdm_springer": profile.tdm_springer.is_some(),
+        // Additive per the §7 note that consumers must tolerate extra
+        // keys; the four `tdm_*` booleans named in the contract are all
+        // still present and unchanged (#430).
+        "tdm_ieee": profile.tdm_ieee.is_some(),
         "rate_limit_per_sec": profile.rate_limits.max_fetches_per_second(),
         // -- additive (back-compat; not part of the §7 contract) --
         "ok": true,
@@ -4405,6 +4487,176 @@ mod tests {
         );
     }
 
+    /// #459: a blocked PDF leg must say what would lift it.
+    ///
+    /// Before this the envelope carried `denial_context` — the host and
+    /// the 24 patterns that are not it — and nothing else. An agent that
+    /// cannot find the one-line fix reports "this paper is not
+    /// available", which for the DOI in ADR-0043 is false: it fetches
+    /// after `trust_academic_repos = true`.
+    #[test]
+    fn a_blocked_leg_carries_the_remediation_that_would_lift_it() {
+        use doiget_core::{DenialContext, DenialReason};
+
+        let leg = PdfLegStatus::Blocked {
+            code: ErrorCode::NetworkError,
+            message: "redirect target strathprints.strath.ac.uk not in allowlist".to_string(),
+            denial: Some(DenialContext {
+                reason: DenialReason::RedirectNotInAllowlist,
+                source: Some("oa-publisher".to_string()),
+                attempted: Some("strathprints.strath.ac.uk".to_string()),
+                expected: Some(vec!["*.arxiv.org".to_string()]),
+                hop_index: None,
+                cap: None,
+                actual: None,
+            }),
+            suggested_arxiv_id: None,
+        };
+        let v = pdf_leg_json(&leg);
+        let rem = v["remediation"]
+            .as_array()
+            .expect("a redirect denial must carry remediation");
+
+        assert!(
+            rem.iter().any(|x| x["value"] == "*.strath.ac.uk"),
+            "the #443 registrable-domain widening must reach MCP too: {v}"
+        );
+        let flag = rem
+            .iter()
+            .find(|x| x["kind"] == "trust_flag")
+            .expect("an *.ac.uk host must surface the curated flag");
+        assert_eq!(flag["value"], "trust_academic_repos");
+        assert!(
+            flag["note"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("*.ac.uk"),
+            "name the pattern that matched, or the flag reads as a guess: {flag}"
+        );
+    }
+
+    /// The converse: a denial with no configuration channel must offer
+    /// nothing. Suggesting a host to trust for an oversized body sends
+    /// the caller after a fix that cannot work.
+    #[test]
+    fn a_denial_with_no_config_channel_carries_no_remediation() {
+        use doiget_core::{DenialContext, DenialReason};
+
+        let leg = PdfLegStatus::Blocked {
+            code: ErrorCode::NetworkError,
+            message: "body exceeded the size cap".to_string(),
+            denial: Some(DenialContext {
+                reason: DenialReason::SizeCapExceeded,
+                source: Some("oa-publisher".to_string()),
+                attempted: None,
+                expected: None,
+                hop_index: None,
+                cap: Some(104_857_600),
+                actual: Some(209_715_200),
+            }),
+            suggested_arxiv_id: None,
+        };
+        let v = pdf_leg_json(&leg);
+        assert!(
+            v.get("remediation").is_none(),
+            "a size cap is not fixed by trusting a host: {v}"
+        );
+        assert!(
+            v.get("denial_context").is_some(),
+            "the denial context itself must still be there: {v}"
+        );
+    }
+
+    /// #459: the trace, and the distinction it exists to make. Absent
+    /// rather than `[]` when unavailable — #413 was filed because those
+    /// two were the same observable.
+    #[test]
+    fn attempts_json_distinguishes_no_trace_from_an_empty_one() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+
+        assert!(
+            attempts_json(&[]).is_null(),
+            "no trace must be null, not an empty array"
+        );
+
+        let a = attempts_json(&[
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: "DOIGET_ENABLE_HAL",
+                },
+            ),
+            SourceAttempt::new("core", AttemptOutcome::NoRecord),
+        ]);
+        let rows = a.as_array().expect("array");
+        assert_eq!(rows[0]["outcome"], "not_consulted_disabled");
+        assert_eq!(
+            rows[0]["detail"], "DOIGET_ENABLE_HAL",
+            "name the var to set, or the agent cannot act on it"
+        );
+        assert_eq!(rows[0]["consulted"], false);
+        assert_eq!(rows[1]["outcome"], "consulted_no_record");
+        assert_eq!(
+            rows[1]["consulted"], true,
+            "asked-and-empty is not the same as never-asked"
+        );
+    }
+
+    /// #454: the MCP half of the Tier-3 transport gate.
+    ///
+    /// `build_http_client_for_fetch` is a hand-maintained twin of the CLI
+    /// builder, and the two drifting is what left the Tier-3 allowlists
+    /// with no caller in either. A guard in only one crate would let them
+    /// drift again in the other.
+    #[test]
+    #[serial_test::serial]
+    #[cfg(any(
+        feature = "tdm-aps",
+        feature = "tdm-elsevier",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    ))]
+    #[allow(clippy::vec_init_then_push)]
+    fn the_production_client_registers_every_tier_3_source_key() {
+        // Any base override takes the test-mode branch, which registers
+        // whatever it is handed and would prove nothing.
+        let _guards = [
+            EnvGuard::unset("DOIGET_ARXIV_BASE"),
+            EnvGuard::unset("DOIGET_ARXIV_SRC_BASE"),
+            EnvGuard::unset("DOIGET_CROSSREF_BASE"),
+            EnvGuard::unset("DOIGET_UNPAYWALL_BASE"),
+            EnvGuard::unset("DOIGET_OA_PUBLISHER_BASE"),
+            EnvGuard::unset("DOIGET_OPENALEX_BASE"),
+            EnvGuard::unset("DOIGET_AR5IV_BASE"),
+        ];
+
+        let client = build_http_client_for_fetch().expect("production client builds");
+
+        // Built by push rather than an array literal: with a single
+        // `tdm-*` feature compiled the literal is a one-element loop,
+        // which clippy denies. Same shape as `tier_3_allowlists()`,
+        // and the `vec_init_then_push` allow is on the fn for the same
+        // reason it is there — the pushes are `#[cfg]`-gated, so an
+        // attribute per element is not expressible.
+        let mut keys: Vec<&str> = Vec::new();
+        #[cfg(feature = "tdm-aps")]
+        keys.push("tdm-aps");
+        #[cfg(feature = "tdm-elsevier")]
+        keys.push("tdm-elsevier");
+        #[cfg(feature = "tdm-springer")]
+        keys.push("tdm-springer");
+        #[cfg(feature = "tdm-ieee")]
+        keys.push("tdm-ieee");
+        assert!(!keys.is_empty(), "the guard must have checked something");
+        for key in keys {
+            assert!(
+                client.source_allowlist(key).is_some(),
+                "the production MCP client has no allowlist for `{key}`; a TDM fetch \
+                 would die at UnknownSource (#454)"
+            );
+        }
+    }
+
     /// Set XDG_CONFIG_HOME / APPDATA / HOME / USERPROFILE so
     /// `config_dir_utf8()` resolves to the supplied directory on
     /// every supported test host. Returns guards that restore prior
@@ -4449,5 +4701,76 @@ mod tests {
                 None => std::env::remove_var(self.var),
             }
         }
+    }
+    /// #468 review: the CLI has three tests pinning the `[store] root`
+    /// resolution ORDER; this crate had none, even though it carries a
+    /// hand-duplicated copy of the resolver rather than calling the CLI's.
+    ///
+    /// That is the #454 shape — two independent copies of the same logic,
+    /// one of them unguarded — repeated one PR later, and it matters more
+    /// here: `doiget_tag` WRITES metadata into whatever root this returns,
+    /// and reports `ok: true` either way.
+    ///
+    /// The load-bearing assertion is the negative one. Comparing only
+    /// against the configured path would also pass if the config were
+    /// ignored and the test happened to run from that directory.
+    #[test]
+    #[serial_test::serial]
+    fn store_root_in_config_beats_the_cwd_default() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg_root = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+        let doiget_dir = cfg_root.join("doiget");
+        std::fs::create_dir_all(doiget_dir.as_std_path()).expect("mk dir");
+
+        let lib = tempfile::TempDir::new().expect("tempdir");
+        let library = camino::Utf8Path::from_path(lib.path())
+            .expect("utf8 tempdir")
+            .as_str()
+            .replace('\u{5c}', "/");
+        std::fs::write(
+            doiget_dir.join("config.toml").as_std_path(),
+            format!("[store]\nroot = \"{library}\"\n"),
+        )
+        .expect("write config.toml");
+
+        let _guards = scoped_env_for_user_extension(cfg_root.as_str());
+        let _no_env_root = EnvGuard::unset("DOIGET_STORE_ROOT");
+
+        let got = resolve_store_root().expect("resolves on a normal host");
+
+        let cwd_default = camino::Utf8PathBuf::try_from(std::env::current_dir().expect("cwd"))
+            .expect("utf8 cwd")
+            .join("papers");
+        assert_ne!(
+            got, cwd_default,
+            "the config value was ignored and the cwd default answered instead"
+        );
+        assert_eq!(
+            got.as_str().replace('\u{5c}', "/"),
+            library,
+            "[store] root must win over the cwd default, as it does on the CLI"
+        );
+    }
+
+    /// The rung above it still wins, so adding the config rung did not
+    /// demote the env var.
+    #[test]
+    #[serial_test::serial]
+    fn env_beats_store_root_in_config_on_the_mcp_surface() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg_root = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+        let doiget_dir = cfg_root.join("doiget");
+        std::fs::create_dir_all(doiget_dir.as_std_path()).expect("mk dir");
+        std::fs::write(
+            doiget_dir.join("config.toml").as_std_path(),
+            "[store]\nroot = \"/from/config\"\n",
+        )
+        .expect("write config.toml");
+
+        let _guards = scoped_env_for_user_extension(cfg_root.as_str());
+        let _env_root = EnvGuard::set("DOIGET_STORE_ROOT", "/from/env");
+
+        let got = resolve_store_root().expect("resolves");
+        assert_eq!(got.as_str(), "/from/env");
     }
 }

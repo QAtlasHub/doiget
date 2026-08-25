@@ -35,6 +35,20 @@ jobs:
         features:
           - "oa-only"
           - "oa-only,citation"
+          # Tier 3 (ADR-0002). Opt-in builds only, so nothing here ever
+          # reaches a published binary — but until this entry existed the
+          # three `tdm-*` modules were compiled by NO job at all, and could
+          # have rotted silently. The union matches the documented install
+          # shape (`SOURCES.md` §3); the singleton proves `tdm-*` does not
+          # secretly depend on `metadata`.
+          - "oa-only,metadata,tdm-aps,tdm-elsevier,tdm-springer,tdm-ieee"
+          - "oa-only,tdm-aps"
+          # #460: `tdm-ieee` alone did not compile — `TdmGrant::api_key`
+          # is gated on an `any(...)` that listed the first three
+          # publishers and not the fourth, and the union job hid it
+          # because the others were always present. One singleton is not
+          # enough; each new publisher needs its own.
+          - "oa-only,tdm-ieee"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
@@ -92,6 +106,40 @@ jobs:
       # citation_graph e2e test unvalidated.
       - run: cargo test --workspace --all-targets --no-default-features --features oa-only,citation
 
+  test-tdm:
+    name: test (tdm features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          cache-bin: false
+      # The Tier-3 tests (~1100 lines of wiremock coverage across
+      # tdm_springer / tdm_aps / tdm_elsevier) ran in NO CI job before this.
+      # They are the only thing standing between a credential-handling
+      # source and a silent regression, so they have to actually run.
+      - run: cargo test --workspace --all-targets --no-default-features --features oa-only,metadata,tdm-aps,tdm-elsevier,tdm-springer,tdm-ieee
+      # #458: the union job above cannot see a publisher missing from the
+      # chain's `#[cfg]` gate, because the other three satisfy it. That is
+      # how `tdm-ieee` shipped with `resolve_tdm_chain` compiled out from
+      # under it — source, allowlist, grant and docs all present, and no
+      # code left that calls any of them.
+      #
+      # One singleton per publisher, ubuntu only: the reach test is
+      # `any(...)`-gated so each build exercises exactly the publisher it
+      # compiled, and a missing gate is a compile error rather than a
+      # silent no-op.
+      - name: Tier-3 singletons (each publisher alone)
+        run: |
+          for f in tdm-aps tdm-elsevier tdm-springer tdm-ieee; do
+            echo "::group::oa-only,$f"
+            cargo test -p doiget-core --no-default-features --features "oa-only,$f"
+            echo "::endgroup::"
+          done
+
   msrv:
     # MSRV is pinned in rust-toolchain.toml / Cargo.toml; the job name
     # deliberately omits the version literal so the label cannot drift.
@@ -122,3 +170,7 @@ jobs:
       # without CI noticing. Release binaries ship `oa-only,citation`, so the
       # docs for that surface have to build too.
       - run: cargo doc --workspace --no-deps --no-default-features --features oa-only,citation
+      # Same reasoning for Tier 3: these modules carry the longest
+      # doc-comments in the tree (three-gate activation, credential
+      # hygiene) and none of it was ever rendered.
+      - run: cargo doc --workspace --no-deps --no-default-features --features oa-only,metadata,tdm-aps,tdm-elsevier,tdm-springer,tdm-ieee

@@ -49,6 +49,28 @@ use crate::{CapabilityProfile, Ref};
 /// Production Elsevier ScienceDirect API base URL.
 const DEFAULT_BASE: &str = "https://api.elsevier.com";
 
+/// DOI registrant prefixes Elsevier BV actually owns.
+///
+/// #442: without this the source answered `can_serve` for ANY DOI, so
+/// wiring it into the chain would have sent every lookup — including
+/// DOIs belonging to other publishers — to Elsevier BV. That is a
+/// politeness problem (`docs/SOURCES.md` §6) and a privacy one
+/// (`docs/PRIVACY.md`): it would disclose the user's whole reading list
+/// to a publisher who has no part in it.
+///
+/// Scoped to the DOIs this publisher registered, the disclosure is
+/// nil — resolving such a DOI goes through them anyway.
+///
+/// Verified against the Crossref registrant registry
+/// (`api.crossref.org/prefixes/<prefix>`) on 2026-08-23.
+/// `10.1016` is the bulk of ScienceDirect; `10.1006` and `10.1053` are legacy Academic Press / Mosby imprints Elsevier absorbed.
+///
+/// Deliberately conservative: a publisher may own prefixes not listed
+/// here. A miss is not silent — it is recorded in the attempt trace as
+/// `not consulted (DOI prefix ... is not ...)`, so it is diagnosable
+/// from the error message rather than looking like a lookup failure.
+pub(crate) const PUBLISHER_PREFIXES: &[&str] = &["10.1016", "10.1006", "10.1053"];
+
 /// Elsevier ScienceDirect [`Source`] impl — DOI →
 /// `/content/article/doi/<DOI>?httpAccept=application/json` JSON
 /// record.
@@ -113,7 +135,14 @@ impl Source for TdmElsevierSource {
     }
 
     fn can_serve(&self, profile: &CapabilityProfile, ref_: &Ref) -> bool {
-        profile.tdm_elsevier.is_some() && matches!(ref_, Ref::Doi(_))
+        let Ref::Doi(doi) = ref_ else {
+            return false;
+        };
+        // Both halves matter: the grant is the user's opt-in, the prefix
+        // keeps that opt-in from leaking unrelated DOIs to the publisher
+        // (#442). The orchestrator checks the same two conditions so it
+        // can tell them apart in the trace; this is the defensive mirror.
+        profile.tdm_elsevier.is_some() && PUBLISHER_PREFIXES.contains(&doi.prefix())
     }
 
     async fn fetch(
@@ -293,7 +322,7 @@ mod tests {
     const TEST_KEY: &str = "els-test-key-xyz";
 
     fn profile_with_elsevier_grant() -> CapabilityProfile {
-        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        let mut p = CapabilityProfile::for_tests();
         p.tdm_elsevier = Some(TdmGrant {
             // Issue #153: key flows through the grant, not the env var.
             api_key: secrecy::SecretString::from(TEST_KEY.to_string()),
@@ -337,7 +366,7 @@ mod tests {
     async fn fetch_without_grant_is_not_eligible() {
         let (_td, ctx) = build_test_context("http://127.0.0.1:1");
         let src = TdmElsevierSource::with_base(Url::parse("http://127.0.0.1:1").expect("parses"));
-        let profile = CapabilityProfile::from_env().expect("clean env never errors");
+        let profile = CapabilityProfile::for_tests();
         let ref_ = Ref::Doi(Doi::parse("10.1016/j.example.2024.001").expect("DOI parses"));
 
         assert!(
@@ -371,5 +400,35 @@ mod tests {
 
         let err = result.expect_err("missing wrapper must surface as SourceSchema");
         assert!(matches!(err, FetchError::SourceSchema { .. }));
+    }
+    /// #442: the grant is the user's opt-in; the prefix keeps that opt-in
+    /// from disclosing unrelated DOIs to Elsevier BV. Asserted with the grant
+    /// PRESENT so the prefix is the only thing under test — otherwise a
+    /// false `can_serve` would prove nothing about scoping.
+    #[test]
+    fn can_serve_is_scoped_to_this_publishers_prefixes() {
+        let src = TdmElsevierSource::new();
+        let profile = profile_with_elsevier_grant();
+
+        let own = Ref::Doi(Doi::parse("10.1016/j.example.2024.001").expect("DOI parses"));
+        assert!(
+            src.can_serve(&profile, &own),
+            "must serve its own publisher's DOI when the grant is present"
+        );
+
+        let foreign = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("DOI parses"));
+        assert!(
+            !src.can_serve(&profile, &foreign),
+            "must NOT serve a APS DOI even with a valid grant -- that would disclose an \
+                unrelated lookup to Elsevier BV"
+        );
+
+        for p in PUBLISHER_PREFIXES {
+            let doi = Doi::parse(&format!("{p}/probe")).expect("DOI parses");
+            assert!(
+                src.can_serve(&profile, &Ref::Doi(doi)),
+                "declared prefix {p} must be served"
+            );
+        }
     }
 }

@@ -287,7 +287,7 @@ mod tests {
         // Build a clean profile, then flip the openalex flag. We avoid
         // touching the real env vars so the test runs single-threaded
         // without `serial_test`.
-        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        let mut p = CapabilityProfile::for_tests();
         p.metadata = MetadataAccess {
             openalex: true,
             semantic_scholar: false,
@@ -355,7 +355,7 @@ mod tests {
             "doiget@localhost".to_string(),
         );
         // Profile with metadata.openalex == false (default).
-        let profile = CapabilityProfile::from_env().expect("clean env never errors");
+        let profile = CapabilityProfile::for_tests();
         let ref_ = Ref::Doi(Doi::parse("10.1234/example").expect("DOI parses"));
 
         assert!(

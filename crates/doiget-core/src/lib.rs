@@ -25,6 +25,7 @@ pub mod paper_text;
 pub mod provenance;
 pub mod rate_limiter;
 pub mod refs;
+pub mod remediation;
 pub mod resolver_cache;
 pub mod source;
 pub mod sources;
@@ -124,6 +125,19 @@ pub struct Doi(pub(crate) String);
 pub struct ArxivId(pub(crate) String);
 
 impl Doi {
+    /// The DOI registrant prefix — everything before the first `/`, e.g.
+    /// `"10.1103"` for `10.1103/PhysRevLett.116.061102`.
+    ///
+    /// Used to scope publisher-specific Tier-3 TDM sources to the DOIs
+    /// their publisher actually registered (#442). `Doi` is only ever
+    /// constructed through [`Doi::parse`], which requires the
+    /// `10.<registrant>/<suffix>` shape, so the `/` is always present;
+    /// the fallback returns the whole string rather than panicking.
+    #[must_use]
+    pub fn prefix(&self) -> &str {
+        self.0.split_once('/').map_or(self.0.as_str(), |(p, _)| p)
+    }
+
     /// Returns the DOI as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -1020,7 +1034,8 @@ pub struct TdmGrant {
     #[cfg(any(
         feature = "tdm-elsevier",
         feature = "tdm-aps",
-        feature = "tdm-springer"
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
     ))]
     pub api_key: secrecy::SecretString,
     /// Which env var the user used to acknowledge the publisher's ToS.
@@ -1035,7 +1050,8 @@ impl Default for TdmGrant {
             #[cfg(any(
                 feature = "tdm-elsevier",
                 feature = "tdm-aps",
-                feature = "tdm-springer"
+                feature = "tdm-springer",
+                feature = "tdm-ieee"
             ))]
             api_key: secrecy::SecretString::from(String::new()),
             agree_env_var: String::new(),
@@ -1055,6 +1071,17 @@ impl Default for TdmGrant {
 /// rely on the resolution rules in `from_env`. `Default` is **not yet**
 /// implemented; Phase 1 will add it once the field set stabilizes.
 #[derive(Debug, Clone)]
+///
+/// **Correction (#468 review).** An earlier version of the note above said
+/// the type's safety guarantees "rely on the resolution rules in
+/// `from_env`", protected by `#[non_exhaustive]`. That overstates what the
+/// attribute does: it blocks struct-literal construction across a crate
+/// boundary, but every field here is `pub`, and `from_env` hands back an
+/// owned value — so a downstream caller has always been able to obtain a
+/// profile and then assign to `tdm_aps` directly. `#[non_exhaustive]` buys
+/// forward-compatibility for adding fields, not an authorization boundary.
+/// Whether one is wanted is tracked separately; it is not a property this
+/// type has today, and claiming it did was the problem.
 #[non_exhaustive]
 pub struct CapabilityProfile {
     /// Tier 1 OA sources are always permitted.
@@ -1067,6 +1094,8 @@ pub struct CapabilityProfile {
     pub tdm_aps: Option<TdmGrant>,
     /// Tier 3 grants are populated only when both env var and feature compile-in are set.
     pub tdm_springer: Option<TdmGrant>,
+    /// Tier 3 grants are populated only when both env var and feature compile-in are set.
+    pub tdm_ieee: Option<TdmGrant>,
     /// Hard-coded rate limits for this process.
     pub rate_limits: RateLimits,
 }
@@ -1091,6 +1120,53 @@ pub enum CapabilityError {
 }
 
 impl CapabilityProfile {
+    /// The profile a clean environment produces, built WITHOUT reading the
+    /// environment (#456).
+    ///
+    /// Most tests want "a default profile", not "whatever the environment
+    /// says". Calling [`Self::from_env`] for that couples them to a
+    /// process-global they do not control, and the coupling is not
+    /// hypothetical: `from_env` returns `Err(KeyButNotAgreed)` while any
+    /// other test holds `DOIGET_KEY_*` set without its agreement var, so a
+    /// reader that lands inside that window panics on `.expect("profile")`.
+    /// `#[serial]` on the writer cannot help — it serialises marked tests
+    /// against each other, and the readers were unmarked.
+    ///
+    /// It also makes the tests deterministic on a developer machine that
+    /// happens to export `DOIGET_KEY_ELSEVIER`, which `#[serial]` cannot fix
+    /// at all.
+    ///
+    /// Tests that genuinely exercise env resolution must keep
+    /// [`Self::from_env`] **and** carry `#[serial_test::serial]`.
+    ///
+    /// Deliberately not `Default`: the type-level docs defer that to Phase 1
+    /// "once the field set stabilizes", and a public `Default` would invite
+    /// production code to skip the resolution rules.
+    ///
+    /// `#[cfg(test)]`, not merely `#[doc(hidden)]`. The #468 review pointed
+    /// out that `#[doc(hidden)] pub` hides a function from rendered docs and
+    /// from nothing else — it would still be compiled into every published
+    /// build of this crate and callable by any downstream consumer, which is
+    /// exactly what the paragraph above says a public constructor must not
+    /// be. All 47 call sites are unit tests inside this crate (no
+    /// integration test, no fuzz target, no other crate), so the gate costs
+    /// nothing and the constructor does not exist in a release build.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn for_tests() -> Self {
+        Self {
+            oa: AlwaysOn,
+            // Every `DOIGET_ENABLE_*` unset — the same all-false shape
+            // `from_env` produces with a clean environment.
+            metadata: MetadataAccess::default(),
+            tdm_elsevier: None,
+            tdm_aps: None,
+            tdm_springer: None,
+            tdm_ieee: None,
+            rate_limits: RateLimits::HARD_CODED,
+        }
+    }
+
     /// Read the runtime profile from environment variables.
     ///
     /// Implements the resolution algorithm specified in
@@ -1217,6 +1293,12 @@ impl CapabilityProfile {
             "tdm-springer",
             cfg!(feature = "tdm-springer"),
         )?;
+        let tdm_ieee = resolve_tdm_grant(
+            "DOIGET_AGREE_TDM_IEEE",
+            "DOIGET_KEY_IEEE",
+            "tdm-ieee",
+            cfg!(feature = "tdm-ieee"),
+        )?;
 
         Ok(Self {
             oa: AlwaysOn,
@@ -1224,6 +1306,7 @@ impl CapabilityProfile {
             tdm_elsevier,
             tdm_aps,
             tdm_springer,
+            tdm_ieee,
             rate_limits: RateLimits::HARD_CODED,
         })
     }
@@ -1336,7 +1419,8 @@ fn build_tdm_grant(agree_var: &str, key: String) -> TdmGrant {
     #[cfg(any(
         feature = "tdm-elsevier",
         feature = "tdm-aps",
-        feature = "tdm-springer"
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
     ))]
     {
         TdmGrant {
@@ -1348,7 +1432,8 @@ fn build_tdm_grant(agree_var: &str, key: String) -> TdmGrant {
     #[cfg(not(any(
         feature = "tdm-elsevier",
         feature = "tdm-aps",
-        feature = "tdm-springer"
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
     )))]
     {
         let _ = key;
@@ -1624,7 +1709,8 @@ mod tests {
             #[cfg(any(
                 feature = "tdm-elsevier",
                 feature = "tdm-aps",
-                feature = "tdm-springer"
+                feature = "tdm-springer",
+                feature = "tdm-ieee"
             ))]
             {
                 use secrecy::ExposeSecret as _;

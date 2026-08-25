@@ -24,6 +24,15 @@ default = []
 # advertises 12 tools instead of 13 in that build.
 citation = ["doiget-core/citation"]
 
+# Tier 3 — opt-in build only, never published (ADR-0002). doiget-mcp has
+# no TDM code of its own; these exist so `build_http_client_for_fetch`
+# compiles the same Tier-3 transport registration the CLI does, and so
+# the #454 guard over that registration is compiled at all.
+tdm-elsevier = ["doiget-core/tdm-elsevier"]
+tdm-aps      = ["doiget-core/tdm-aps"]
+tdm-springer = ["doiget-core/tdm-springer"]
+tdm-ieee     = ["doiget-core/tdm-ieee"]
+
 [dependencies]
 doiget-core        = { workspace = true }
 tokio              = { workspace = true }

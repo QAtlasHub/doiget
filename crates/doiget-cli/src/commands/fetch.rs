@@ -49,9 +49,12 @@ use super::output::print_err;
 #[cfg(feature = "citation")]
 use doiget_core::http::tier_2_allowlist;
 use doiget_core::http::{
-    discovery_allowlist, fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist, HttpClient,
+    discovery_allowlist, fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist,
+    tier_3_allowlists, HttpClient,
 };
-use doiget_core::orchestrator::{fetch_paper as core_fetch_paper, FetchPaperOutcome, PdfLegStatus};
+use doiget_core::orchestrator::{
+    fetch_paper as core_fetch_paper, FetchPaperOutcome, PdfLegStatus, SourceAttempt,
+};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
 use doiget_core::source::{FetchContext, FetchError};
@@ -263,6 +266,13 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
         // the runtime gate; the allowlist is the transport gate.
         #[cfg(feature = "citation")]
         allowlists.extend(tier_2_allowlist());
+        // #454: the Tier-3 transport gate. #444 made the orchestrator
+        // reach these sources; without this line the fetch it then issues
+        // under `tdm-aps` / `tdm-elsevier` / `tdm-springer` dies at
+        // `UnknownSource`. Empty in a default build (ADR-0002 — no Tier-3
+        // feature is compiled into published binaries), so this is a
+        // no-op for the shipped surface.
+        allowlists.extend(tier_3_allowlists());
 
         // ADR-0028 D2: merge user-extension hosts from
         // `<config_dir>/doiget/config.toml`. See
@@ -1032,6 +1042,12 @@ pub(crate) fn cli_exit_code(code: ErrorCode) -> i32 {
     }
 }
 
+// `widening_suggestions` / `looks_like_public_suffix` moved to
+// `doiget_core::remediation` in #459 so the MCP and `batch --json`
+// surfaces render the same suggestions this block does, rather than a
+// second implementation of them. #454 is the recent lesson about two
+// surfaces each keeping their own copy of a rule.
+
 /// Build the ADR-0023 `denial_context` advisory lines shared by
 /// [`render_fetch_error`] and [`render_blocked_error`]: the `= note:`
 /// naming what was attempted and what the allowlist held, plus — for
@@ -1079,9 +1095,11 @@ fn denial_note_lines(dc: &DenialContext, config_path: Option<&camino::Utf8Path>)
             .to_string(),
     );
     if dc.attempted.is_some() {
-        out.push(format!(
-            "          [[network.additional_hosts]] host = \"{attempted}\"   # or this one"
-        ));
+        for (pattern, why) in doiget_core::remediation::widening_suggestions(attempted) {
+            out.push(format!(
+                "          [[network.additional_hosts]] host = \"{pattern}\"   # {why}"
+            ));
+        }
     }
     out.push("          see docs/CONFIG.md §3.1 for both".to_string());
     out
@@ -1172,6 +1190,47 @@ fn render_blocked_error(
             arxiv_id
         ));
     }
+    for line in blocked_trace_lines(&outcome.attempts, message) {
+        print_err(format_args!("{line}"));
+    }
+}
+
+/// The `= note:`/`= suggest:` block appended to a blocked PDF leg (#445).
+///
+/// #413 attached the resolution trace to `NotFound` only. But "found
+/// nowhere" and "found at one host that refused me" raise the same next
+/// question — *did anything else have it?* — and only the first one got an
+/// answer. A user with five optional sources enabled saw a bare 429 and no
+/// indication that none of the five had been consulted.
+///
+/// Pure so the wording is asserted rather than assumed.
+fn blocked_trace_lines(attempts: &[SourceAttempt], message: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    // A rate limit is the one failure where retrying the same host later is
+    // right and reconfiguring is wrong. The bare text reads like a
+    // permanent block, so say which it is.
+    if message.contains("429") {
+        out.push(
+            "  = suggest: HTTP 429 is a rate limit, not a policy block — it is transient. Retry \
+                later, and set DOIGET_CONTACT_EMAIL for the polite pool."
+                .to_string(),
+        );
+    }
+    if attempts.is_empty() {
+        return out;
+    }
+    let lead = if doiget_core::orchestrator::nothing_was_consulted(attempts) {
+        "no other source was consulted for this DOI"
+    } else {
+        "the other sources were consulted and offered no alternative copy"
+    };
+    out.push(format!("  = note: {lead}:"));
+    out.extend(
+        doiget_core::orchestrator::render_attempts(attempts)
+            .lines()
+            .map(|l| format!("  {l}")),
+    );
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1183,6 +1242,99 @@ fn render_blocked_error(
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    /// Save an env var and restore it on drop.
+    ///
+    /// Both client-builder tests below have to clear the
+    /// `DOIGET_*_BASE` overrides to reach the production branch, and
+    /// leaving one cleared would silently reroute an unrelated test.
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+    impl EnvGuard {
+        fn save(key: &'static str) -> Self {
+            Self {
+                key,
+                prev: std::env::var(key).ok(),
+            }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    /// #454: the guard the list-level one in `http.rs` cannot be.
+    ///
+    /// `every_tier_3_source_has_a_transport_allowlist_entry` asserts that
+    /// `tier_3_aps_allowlist()` *contains* `"tdm-aps"`. It says nothing
+    /// about whether anything hands that list to a client, and for three
+    /// releases nothing did — so the assertion passed while a production
+    /// fetch returned `UnknownSource { source_key: "tdm-aps" }`.
+    ///
+    /// This asserts the object the fetch actually goes through. It cannot
+    /// pass for the reason that one did, because there is no list here to
+    /// be right about in isolation.
+    #[test]
+    #[serial]
+    #[cfg(any(
+        feature = "tdm-aps",
+        feature = "tdm-elsevier",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    ))]
+    #[allow(clippy::vec_init_then_push)]
+    fn the_production_client_registers_every_tier_3_source_key() {
+        // Every base override must be clear or `build_http_client` takes
+        // the test-mode branch, which registers whatever it is given and
+        // would prove nothing.
+        let _g: Vec<EnvGuard> = [
+            "DOIGET_ARXIV_BASE",
+            "DOIGET_CROSSREF_BASE",
+            "DOIGET_UNPAYWALL_BASE",
+            "DOIGET_OA_PUBLISHER_BASE",
+            "DOIGET_OPENALEX_BASE",
+            "DOIGET_AR5IV_BASE",
+        ]
+        .iter()
+        .map(|k| {
+            let g = EnvGuard::save(k);
+            std::env::remove_var(k);
+            g
+        })
+        .collect();
+
+        let client = build_http_client(None).expect("production client builds");
+
+        // Built by push rather than an array literal: with a single
+        // `tdm-*` feature compiled the literal is a one-element loop,
+        // which clippy denies. Same shape as `tier_3_allowlists()`,
+        // and the `vec_init_then_push` allow is on the fn for the same
+        // reason it is there — the pushes are `#[cfg]`-gated, so an
+        // attribute per element is not expressible.
+        let mut keys: Vec<&str> = Vec::new();
+        #[cfg(feature = "tdm-aps")]
+        keys.push("tdm-aps");
+        #[cfg(feature = "tdm-elsevier")]
+        keys.push("tdm-elsevier");
+        #[cfg(feature = "tdm-springer")]
+        keys.push("tdm-springer");
+        #[cfg(feature = "tdm-ieee")]
+        keys.push("tdm-ieee");
+        assert!(!keys.is_empty(), "the guard must have checked something");
+        for key in keys {
+            assert!(
+                client.source_allowlist(key).is_some(),
+                "the production client has no allowlist for `{key}`; the orchestrator \
+                 reaches this source and the fetch would die at UnknownSource (#454)"
+            );
+        }
+    }
 
     #[test]
     fn new_session_id_is_26_chars() {
@@ -1231,29 +1383,10 @@ host = "*.uj.edu.pl"
         drop(f);
 
         // Save + override env so `config_dir_utf8()` lands on the
-        // tempdir. Restored on Drop by EnvGuard. We also clear the
+        // tempdir. Restored on Drop by `EnvGuard` (module-level since
+        // #454, which needed the same save/restore). We also clear the
         // five `DOIGET_*_BASE` env vars to force the production
         // branch of `build_http_client`.
-        struct EnvGuard {
-            key: &'static str,
-            prev: Option<String>,
-        }
-        impl EnvGuard {
-            fn save(key: &'static str) -> Self {
-                Self {
-                    key,
-                    prev: std::env::var(key).ok(),
-                }
-            }
-        }
-        impl Drop for EnvGuard {
-            fn drop(&mut self) {
-                match &self.prev {
-                    Some(v) => std::env::set_var(self.key, v),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
         let _g0 = EnvGuard::save("XDG_CONFIG_HOME");
         let _g1 = EnvGuard::save("APPDATA");
         let _g2 = EnvGuard::save("HOME");
@@ -1774,5 +1907,194 @@ host = "*.uj.edu.pl"
             b"USER-DATA",
             "the user's file must be left untouched"
         );
+    }
+    /// #443, the reported case: `www.ams.org -> pubs.ams.org` cost two
+    /// edit-run cycles because the help named only the hop that failed.
+    #[test]
+    fn a_refused_hop_also_offers_the_registrable_domain() {
+        let mut dc = denial(DenialReason::RedirectNotInAllowlist);
+        dc.attempted = Some("pubs.ams.org".to_string());
+        let joined = denial_note_lines(&dc, None).join("\n");
+
+        assert!(joined.contains(r#"host = "pubs.ams.org""#), "{joined}");
+        assert!(
+            joined.contains(r#"host = "*.ams.org""#),
+            "the whole-publisher wildcard is what ends the loop in one step:\n{joined}"
+        );
+        assert!(
+            joined.contains(r#"host = "ams.org""#),
+            "a single-suffix wildcard does not match the apex, so offer it too:\n{joined}"
+        );
+    }
+
+    /// A suggestion the config parser would reject is worse than none: the
+    /// user pastes it and gets a second, more confusing error.
+    #[test]
+    fn every_suggestion_is_a_pattern_the_validator_accepts() {
+        for host in [
+            "pubs.ams.org",
+            "www.ams.org",
+            "ams.org",
+            "strathprints.strath.ac.uk",
+            "repository.ruj.uj.edu.pl",
+            "link.springer.com",
+        ] {
+            for (pattern, _) in doiget_core::remediation::widening_suggestions(host) {
+                doiget_core::user_extension::validate_pattern(&pattern).unwrap_or_else(|e| {
+                    panic!("suggested `{pattern}` for `{host}`, which the validator rejects: {e:?}")
+                });
+            }
+        }
+    }
+
+    /// The one suggestion that must never appear. Deriving the registrable
+    /// domain by stripping a label is right for `pubs.ams.org` and very
+    /// wrong for `foo.co.uk` — trusting `*.co.uk` is trusting a whole
+    /// country's registry.
+    #[test]
+    fn a_public_suffix_is_never_offered() {
+        for (host, forbidden) in [
+            ("foo.co.uk", "co.uk"),
+            ("foo.ac.jp", "ac.jp"),
+            ("foo.com.au", "com.au"),
+            ("example.org", "org"),
+        ] {
+            let joined: String = doiget_core::remediation::widening_suggestions(host)
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                !joined
+                    .split(' ')
+                    .any(|p| p == forbidden || p == format!("*.{forbidden}")),
+                "offered the public suffix `{forbidden}` for `{host}`: {joined}"
+            );
+        }
+    }
+
+    /// `strathprints.strath.ac.uk` — four labels, so the parent
+    /// `strath.ac.uk` is a real registration, not a public suffix.
+    #[test]
+    fn a_four_label_academic_host_still_gets_its_institution_wildcard() {
+        let got: Vec<String> =
+            doiget_core::remediation::widening_suggestions("strathprints.strath.ac.uk")
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect();
+        assert!(
+            got.iter().any(|p| p == "*.strath.ac.uk"),
+            "expected the institution wildcard; got {got:?}"
+        );
+    }
+
+    /// An apex host has no parent worth naming; the useful widening is
+    /// downward.
+    #[test]
+    fn an_apex_host_offers_its_subdomains() {
+        let got: Vec<String> = doiget_core::remediation::widening_suggestions("ams.org")
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(got, vec!["ams.org".to_string(), "*.ams.org".to_string()]);
+    }
+    /// #445: a 429 reads like a permanent block. It is the one failure
+    /// where retrying the same host later is right and reconfiguring is
+    /// wrong, so the message has to say which it is.
+    #[test]
+    fn a_rate_limited_block_says_the_limit_is_transient() {
+        let joined = blocked_trace_lines(&[], "network error: HTTP 429 from https://ams.org/x.pdf")
+            .join("\n");
+        assert!(joined.contains("429"), "{joined}");
+        assert!(joined.contains("transient"), "{joined}");
+        assert!(
+            joined.contains("Retry later"),
+            "say what to DO, not just what happened:\n{joined}"
+        );
+        // A lost `\` line continuation leaves the source indentation
+        // inside the literal, and every test above still passes because
+        // each only asserts `contains`. Nothing in this block is
+        // column-aligned, so an internal double space is that bug.
+        for line in blocked_trace_lines(&[], "network error: HTTP 429 from https://ams.org/x.pdf") {
+            assert!(
+                !line.trim_start().contains("  "),
+                "a lost line continuation left source indentation in the message:\n{line}"
+            );
+        }
+    }
+
+    /// The converse: a policy denial must not be described as transient,
+    /// or the user retries forever instead of editing the allowlist.
+    #[test]
+    fn a_policy_block_is_not_described_as_transient() {
+        let joined =
+            blocked_trace_lines(&[], "redirect target x.example not in allowlist").join("\n");
+        assert!(
+            !joined.contains("transient"),
+            "an allowlist denial is permanent until reconfigured:\n{joined}"
+        );
+    }
+
+    /// The half of #445 that the #413 trace already answered for
+    /// `NotFound`: *did anything else have it?*
+    #[test]
+    fn a_blocked_leg_reports_which_other_sources_were_consulted() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let attempts = vec![
+            SourceAttempt::new("core", AttemptOutcome::NoRecord),
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: "DOIGET_ENABLE_HAL",
+                },
+            ),
+        ];
+        let joined = blocked_trace_lines(&attempts, "HTTP 429").join("\n");
+        assert!(
+            joined.contains("the other sources were consulted"),
+            "at least one WAS consulted:\n{joined}"
+        );
+        assert!(
+            joined.contains("core") && joined.contains("no record"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("DOIGET_ENABLE_HAL"),
+            "a source that was never asked must still name its switch:\n{joined}"
+        );
+    }
+
+    /// All five flags off is a configuration problem, not a data problem,
+    /// and must not read as "nothing else has this paper".
+    #[test]
+    fn a_blocked_leg_with_nothing_consulted_says_so() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let attempts = vec![
+            SourceAttempt::new(
+                "core",
+                AttemptOutcome::Disabled {
+                    env: "DOIGET_ENABLE_CORE",
+                },
+            ),
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: "DOIGET_ENABLE_HAL",
+                },
+            ),
+        ];
+        let joined = blocked_trace_lines(&attempts, "HTTP 429").join("\n");
+        assert!(
+            joined.contains("no other source was consulted"),
+            "must not imply the paper is unavailable elsewhere:\n{joined}"
+        );
+    }
+
+    /// An arXiv fetch has no optional chain; it must not grow an empty
+    /// note block.
+    #[test]
+    fn no_attempts_means_no_trace_block() {
+        let lines = blocked_trace_lines(&[], "not-a-pdf body");
+        assert!(lines.is_empty(), "{lines:?}");
     }
 }

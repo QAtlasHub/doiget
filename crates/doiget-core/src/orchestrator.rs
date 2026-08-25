@@ -843,6 +843,17 @@ pub struct FetchPaperOutcome {
     pub authors: Vec<String>,
     /// Publication year, when known (#344 identity confirmation).
     pub year: Option<i32>,
+    /// One [`SourceAttempt`] per optional source, consulted or not (#445).
+    ///
+    /// #413 attached this trace to `NotFound` only, so the question it
+    /// exists to answer — *did anything else have this paper?* — went
+    /// unanswered on the outcome where a user is most likely to ask it: an
+    /// OA copy was located at a host that then refused to serve it. "Found
+    /// nowhere" and "found at one host that refused me" have the same next
+    /// step, so they get the same trace.
+    ///
+    /// Empty for an arXiv ref, which has no optional chain.
+    pub attempts: Vec<SourceAttempt>,
 }
 
 impl FetchPaperOutcome {
@@ -881,6 +892,7 @@ impl FetchPaperOutcome {
             title: String::new(),
             authors: Vec::new(),
             year: None,
+            attempts: Vec::new(),
         }
     }
 }
@@ -1077,6 +1089,8 @@ async fn fetch_paper_arxiv(
         title: metadata.title.clone(),
         authors: metadata.authors.clone(),
         year: metadata.year,
+        // arXiv resolves directly; the optional chain is a DOI concept.
+        attempts: Vec::new(),
     })
 }
 
@@ -1133,18 +1147,58 @@ async fn fetch_paper_doi(
     // different problems with different fixes.
     #[allow(unused_mut)]
     let mut attempts: Vec<SourceAttempt> = Vec::new();
+
+    // Tier 3 before Tier 2 (#442). For a DOI its publisher registered,
+    // the publisher's own API is the authoritative record — and it is the
+    // one the user went and got credentials for. Prefix-scoped, so an
+    // enabled TDM source is only ever told about DOIs its publisher
+    // already knows it issued.
+    // Every `tdm-*` feature must be named here. #457 added `tdm-ieee`
+    // to the chain body and not to these two gates, so a build with
+    // `--features tdm-ieee` alone compiled the source, the allowlist and
+    // the capability grant, and then `#[cfg]`-ed away the only code that
+    // calls any of it. Fourth instance of #442's shape.
+    #[cfg(any(
+        feature = "tdm-elsevier",
+        feature = "tdm-aps",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    ))]
+    let tdm_meta = resolve_tdm_chain(ref_, profile, ctx, cross.is_some(), &mut attempts).await;
+    // The `not(...)` half has to name the same four features as the
+    // `any(...)` above, or a build with only the omitted one compiles
+    // BOTH arms: the real call, then this shadow over it. That is what
+    // `--features tdm-ieee` did — `unused variable: tdm_meta`, and the
+    // chain's result silently discarded.
+    #[cfg(not(any(
+        feature = "tdm-elsevier",
+        feature = "tdm-aps",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    )))]
+    let tdm_meta: Option<Value> = None;
+
+    // The resolved pair is KEPT, not mapped away. When Crossref failed this
+    // pass ran for real, and the OA fallback below needs its payload — the
+    // old code discarded it and re-ran the whole chain to get it back,
+    // paying a second live round against five APIs (#468 review).
     #[cfg(feature = "metadata")]
-    let optional_meta = resolve_optional_chain(
+    let optional_resolved = resolve_optional_chain(
         ref_,
         profile,
         ctx,
-        cross.is_some(),
+        cross.is_some() || tdm_meta.is_some(),
         &mut extracted,
         &mut attempts,
     )
     .await;
+    #[cfg(feature = "metadata")]
+    let optional_meta = optional_resolved
+        .as_ref()
+        .map(|(_, m)| m.clone())
+        .or(tdm_meta);
     #[cfg(not(feature = "metadata"))]
-    let optional_meta: Option<Value> = None;
+    let optional_meta: Option<Value> = tdm_meta;
     let _ = &optional_meta;
 
     // Unpaywall second — license enrichment + OA URL chain discovery.
@@ -1305,6 +1359,20 @@ async fn fetch_paper_doi(
     // it under the DOI safekey instead of returning Blocked.
     let (pdf_leg, pdf_bytes, arxiv_id_for_metadata, fallback_license) =
         try_arxiv_preprint_fallback(doi, pdf_leg, pdf_bytes, profile, ctx).await;
+
+    // #445: and if that did not help either, ask whoever else is switched
+    // on. Additive by construction — see the fn docs.
+    #[cfg(feature = "metadata")]
+    let (pdf_leg, pdf_bytes) = try_optional_source_oa_fallback(
+        doi,
+        pdf_leg,
+        pdf_bytes,
+        profile,
+        ctx,
+        &mut attempts,
+        optional_resolved.as_ref().map(|(n, m)| (*n, m)),
+    )
+    .await;
     if let Some(fl) = fallback_license {
         license = fl;
     }
@@ -1430,7 +1498,139 @@ async fn fetch_paper_doi(
         title: metadata.title.clone(),
         authors: metadata.authors.clone(),
         year: metadata.year,
+        attempts,
     })
+}
+
+/// Which OA content URL an optional source reported, if any (#445).
+///
+/// Only the three sources that publish a direct document URL contribute.
+/// OpenAIRE's `urls[]` and DataCite's `url` point at a DOI resolver or a
+/// landing page, not a file — handing those to the OA chain would spend a
+/// request to arrive at a page the chain cannot read, and report a
+/// confusing failure. A source that contributes nothing is not a silent
+/// gap: it still appears in the attempt trace with its own outcome.
+#[cfg(feature = "metadata")]
+fn optional_source_oa_url<'a>(source: &str, meta: &'a Value) -> Option<&'a str> {
+    match source {
+        "core" => crate::sources::core_oa::open_access_pdf_url(meta),
+        "hal" => crate::sources::hal::open_access_pdf_url(meta),
+        "europe-pmc" => crate::sources::europepmc::open_access_pdf_url(meta),
+        _ => None,
+    }
+}
+
+/// Last resort for a blocked content leg: ask the enabled optional sources
+/// whether anyone else holds a copy (#445).
+///
+/// The OA chain already tries every location Unpaywall returned, advancing
+/// past each failure — so a 429 does not stop it. What stopped the reported
+/// run is that the candidate list can only ever contain Unpaywall's
+/// locations. Crossref had answered, so the optional chain was skipped
+/// entirely, and a rate limit on the single AMS URL ended a run with four
+/// other indexes switched on.
+///
+/// Each of those sources already surfaces a document URL and each module
+/// says, in its own docs, that the fetch belongs to the `oa-publisher`
+/// leg — `europepmc::open_access_pdf_url` was written for exactly this and
+/// had no caller. This is that caller.
+///
+/// Deliberately last, after the #325 arXiv fallback, so the change is
+/// purely additive: every run that succeeded before still succeeds by the
+/// same route. It costs a request only when the content leg has ALREADY
+/// failed and the user has switched a source on, so a default build with
+/// no flags set is byte-identical.
+#[cfg(feature = "metadata")]
+async fn try_optional_source_oa_fallback(
+    doi: &Doi,
+    pdf_leg: PdfLegStatus,
+    pdf_bytes: Option<Vec<u8>>,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    attempts: &mut Vec<SourceAttempt>,
+    already_resolved: Option<(&'static str, &Value)>,
+) -> (PdfLegStatus, Option<Vec<u8>>) {
+    if pdf_bytes.is_some() || !matches!(pdf_leg, PdfLegStatus::Blocked { .. }) {
+        return (pdf_leg, pdf_bytes);
+    }
+
+    // Two cases, and conflating them was the bug the #468 review caught.
+    //
+    // An earlier comment here claimed "reaching this point means Crossref
+    // answered, because a Crossref failure returns NotFound further up".
+    // That is false: the NotFound short-circuit is further DOWN, after this
+    // call. `pdf_leg` comes from the Unpaywall-derived OA chain, which is
+    // independent of Crossref (#120 — Crossref is non-fatal), so this runs
+    // in both cases.
+    //
+    // Crossref FAILED: the chain at the top of `fetch_paper_doi` already ran
+    // for real and `attempts` holds its genuine outcomes. Re-running cost a
+    // second live round against five third-party APIs and then overwrote
+    // those outcomes with a second, possibly different answer. Reuse what it
+    // resolved instead.
+    //
+    // Crossref ANSWERED: the chain short-circuited, so every Tier-2 row is
+    // `NotNeeded` and carries nothing. Run it for real — but swap out only
+    // those rows. The old `*attempts = fresh` replaced the WHOLE vector,
+    // deleting the Tier-3 rows `resolve_tdm_chain` had recorded. In a
+    // `metadata` + `tdm-*` build that erased the answer to "was tdm-ieee
+    // consulted?" from the trace, from the MCP envelope and from
+    // `batch --json` — the exact question #413/#445 added the trace to
+    // answer.
+    let (name, meta) = match already_resolved {
+        Some((n, m)) => (n, m.clone()),
+        None => {
+            let ref_ = Ref::Doi(doi.clone());
+            let mut discard = CrossrefFields::default();
+            let mut fresh: Vec<SourceAttempt> = Vec::new();
+            let r =
+                resolve_optional_chain(&ref_, profile, ctx, false, &mut discard, &mut fresh).await;
+            if !fresh.is_empty() {
+                attempts.retain(|a| !fresh.iter().any(|f| f.source == a.source));
+                attempts.extend(fresh);
+            }
+            match r {
+                Some((n, m)) => (n, m),
+                None => return (pdf_leg, pdf_bytes),
+            }
+        }
+    };
+    let Some(raw) = optional_source_oa_url(name, &meta) else {
+        tracing::debug!(
+            source = name,
+            doi = %doi.as_str(),
+            "optional source resolved but reported no document URL"
+        );
+        return (pdf_leg, pdf_bytes);
+    };
+    let Ok(url) = url::Url::parse(raw) else {
+        tracing::warn!(
+            source = name,
+            url = raw,
+            "optional source reported an unparsable document URL; keeping Blocked"
+        );
+        return (pdf_leg, pdf_bytes);
+    };
+
+    tracing::info!(
+        source = name,
+        doi = %doi.as_str(),
+        url = %url,
+        "OA chain exhausted; trying a copy reported by an optional source (#445)"
+    );
+    match try_fetch_oa_pdf(doi, &url, ctx).await {
+        Ok((bytes, _final_url)) => (PdfLegStatus::Fetched, Some(bytes)),
+        Err(e) => {
+            // Keep the ORIGINAL block. The publisher's 429 is what the user
+            // needs to see; a second failure from a repository would bury it.
+            tracing::warn!(
+                source = name,
+                error = %e,
+                "optional-source copy also failed; keeping the original block"
+            );
+            (pdf_leg, pdf_bytes)
+        }
+    }
 }
 
 /// Auto preprint fallback (issue #325). Called after the DOI OA PDF chain
@@ -2627,7 +2827,7 @@ mod tests {
             session_id: "01J0000000000000000000TEST".into(),
             cache_root: None,
         };
-        let profile = CapabilityProfile::from_env().expect("clean env");
+        let profile = CapabilityProfile::for_tests();
         let store = FsStore::new(store_root.clone()).expect("fs store");
 
         let n = MAX_BATCH_REFS + 1;
@@ -3260,6 +3460,17 @@ pub enum AttemptOutcome {
     /// This source cannot serve this kind of ref at all (e.g. an arXiv id
     /// handed to a DOI-only resolver). Not a misconfiguration.
     NotApplicable,
+    /// **Not consulted.** A publisher-specific Tier-3 source was asked
+    /// about a DOI its publisher did not register (#442).
+    ///
+    /// Distinct from [`Self::Disabled`] on purpose: the credentials are
+    /// fine and there is nothing for the user to switch on. Telling them
+    /// to set `DOIGET_KEY_APS` because an Elsevier DOI did not resolve
+    /// would send them after the wrong problem.
+    WrongPublisher {
+        /// e.g. `"DOI prefix 10.1016 is not American Physical Society (APS)"`.
+        detail: String,
+    },
     /// An earlier source in the chain already answered, so this one was
     /// deliberately skipped. Not a failure.
     NotNeeded,
@@ -3295,6 +3506,46 @@ impl AttemptOutcome {
         )
     }
 
+    /// Stable machine token for this outcome (#459).
+    ///
+    /// [`Self::render`] is prose and may be reworded; this is the thing a
+    /// consumer branches on. Kept separate for that reason — the CLI has
+    /// already reworded the trace twice (#413, #438) and a caller keying
+    /// off the sentence would have broken both times.
+    ///
+    /// The two halves of the vocabulary mirror [`Self::was_consulted`]:
+    /// `not_consulted_*` means no request went out, `consulted_*` means one
+    /// did. That distinction is the entire reason this type exists.
+    #[must_use]
+    pub fn wire(&self) -> &'static str {
+        match self {
+            Self::Disabled { .. } => "not_consulted_disabled",
+            Self::NotApplicable => "not_consulted_not_applicable",
+            Self::WrongPublisher { .. } => "not_consulted_wrong_publisher",
+            Self::NotNeeded => "not_consulted_not_needed",
+            Self::NoRecord => "consulted_no_record",
+            Self::NotOpenAccess { .. } => "consulted_not_open_access",
+            Self::Failed { .. } => "consulted_failed",
+            Self::Resolved => "consulted_resolved",
+        }
+    }
+
+    /// The variant's free-text payload, when it has one.
+    ///
+    /// Carried separately from [`Self::wire`] so a consumer gets the
+    /// actionable specifics — which env var, which prefix, which error —
+    /// without parsing them back out of the rendered sentence.
+    #[must_use]
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            Self::Disabled { env } => Some(env),
+            Self::WrongPublisher { detail }
+            | Self::NotOpenAccess { detail }
+            | Self::Failed { detail } => Some(detail),
+            _ => None,
+        }
+    }
+
     /// One-line rendering, phrased so consulted and not-consulted cannot
     /// be misread for one another.
     #[must_use]
@@ -3302,6 +3553,7 @@ impl AttemptOutcome {
         match self {
             Self::Disabled { env } => format!("not consulted (set {env} to enable)"),
             Self::NotApplicable => "not consulted (cannot serve this ref kind)".to_string(),
+            Self::WrongPublisher { detail } => format!("not consulted ({detail})"),
             Self::NotNeeded => "not consulted (an earlier source answered)".to_string(),
             Self::NoRecord => "consulted: no record".to_string(),
             Self::NotOpenAccess { detail } => {
@@ -3331,6 +3583,40 @@ impl SourceAttempt {
     }
 }
 
+/// The trace as JSON, for the machine-readable surfaces (#459).
+///
+/// One object per source: `{ source, outcome, detail?, consulted }`.
+///
+/// `consulted` is redundant with `outcome` and present anyway. It is the
+/// single question every consumer of this array actually has — "did anyone
+/// else look?" — and making them memorise which of eight tokens implies it
+/// invites the exact confusion the type was introduced to end.
+///
+/// Built here rather than by `#[derive(Serialize)]` on the types: both are
+/// `#[non_exhaustive]` public API, and deriving would make every future
+/// variant a wire change by default instead of by decision.
+#[must_use]
+pub fn attempts_to_value(attempts: &[SourceAttempt]) -> serde_json::Value {
+    serde_json::Value::Array(
+        attempts
+            .iter()
+            .map(|a| {
+                let mut o = serde_json::Map::new();
+                o.insert("source".into(), serde_json::json!(a.source));
+                o.insert("outcome".into(), serde_json::json!(a.outcome.wire()));
+                if let Some(d) = a.outcome.detail() {
+                    o.insert("detail".into(), serde_json::json!(d));
+                }
+                o.insert(
+                    "consulted".into(),
+                    serde_json::json!(a.outcome.was_consulted()),
+                );
+                serde_json::Value::Object(o)
+            })
+            .collect(),
+    )
+}
+
 /// Render a whole trace as an `= note:`-style block.
 ///
 /// Ordered as the chain ran, so reading top to bottom tells you how far
@@ -3358,7 +3644,13 @@ pub fn nothing_was_consulted(attempts: &[SourceAttempt]) -> bool {
 /// Keeps the classification in one place so every source in the chain
 /// reports the same way: a clean miss must not be recorded as a failure,
 /// and an access refusal must not be recorded as a miss.
-#[cfg(feature = "metadata")]
+#[cfg(any(
+    feature = "metadata",
+    feature = "tdm-elsevier",
+    feature = "tdm-aps",
+    feature = "tdm-springer",
+    feature = "tdm-ieee"
+))]
 fn classify_attempt(e: &FetchError) -> AttemptOutcome {
     match e {
         FetchError::NotFound { .. } => AttemptOutcome::NoRecord,
@@ -3379,7 +3671,13 @@ fn classify_attempt(e: &FetchError) -> AttemptOutcome {
 
 /// Whether a `SourceSchema` hint describes an access refusal rather than a
 /// malformed response.
-#[cfg(feature = "metadata")]
+#[cfg(any(
+    feature = "metadata",
+    feature = "tdm-elsevier",
+    feature = "tdm-aps",
+    feature = "tdm-springer",
+    feature = "tdm-ieee"
+))]
 fn is_access_refusal(hint: &str) -> bool {
     hint.contains("not open access") || hint.contains("openAccess")
 }
@@ -3403,7 +3701,7 @@ async fn resolve_optional_chain(
     crossref_answered: bool,
     extracted: &mut CrossrefFields,
     attempts: &mut Vec<SourceAttempt>,
-) -> Option<Value> {
+) -> Option<(&'static str, Value)> {
     // Built eagerly so the trace lists every source in a fixed order even
     // when none is consulted — an empty trace would be indistinguishable
     // from "no chain exists", which is the confusion this whole mechanism
@@ -3446,7 +3744,7 @@ async fn resolve_optional_chain(
         ("core", "DOIGET_ENABLE_CORE", &core),
     ];
 
-    let mut resolved: Option<Value> = None;
+    let mut resolved: Option<(&'static str, Value)> = None;
 
     for (name, env, src) in chain {
         debug_assert_eq!(name, src.name(), "chain name must match Source::name");
@@ -3475,7 +3773,7 @@ async fn resolve_optional_chain(
                     *extracted = extract_optional_fields(name, meta);
                 }
                 attempts.push(SourceAttempt::new(name, AttemptOutcome::Resolved));
-                resolved = r.metadata_json;
+                resolved = r.metadata_json.map(|m| (name, m));
             }
             Err(e) => {
                 tracing::debug!(source = name, error = %e, "optional source did not resolve");
@@ -3486,9 +3784,179 @@ async fn resolve_optional_chain(
     resolved
 }
 
+/// Run the Tier-3 TDM chain and record one [`SourceAttempt`] per
+/// compiled-in publisher, consulted or not.
+///
+/// #442: these sources shipped with no caller at all. Implemented,
+/// feature-gated, allowlisted, tested — and unreachable, so satisfying
+/// all three documented gates changed nothing. This is the caller.
+///
+/// Separate from [`resolve_optional_chain`] rather than folded into it,
+/// for two reasons. The `tdm-*` features are independent of `metadata`
+/// (ADR-0002), so a `--features tdm-aps` build must reach its source
+/// without dragging in the Tier-2 chain. And the gate semantics differ:
+/// Tier 2 is one `DOIGET_ENABLE_*` flag, Tier 3 is a key plus a
+/// recorded agreement.
+///
+/// Ordered before the Tier-2 OA aggregators: for a DOI its publisher
+/// registered, the publisher's own API is the authoritative record, and
+/// the user paid and agreed specifically to use it.
+///
+/// Like the Tier-2 chain this runs strictly AFTER Crossref and only when
+/// Crossref produced nothing, so enabling a TDM source can never change
+/// a resolution that already works.
+///
+/// `CrossrefFields` are deliberately NOT extracted here. Each publisher
+/// returns its own shape and guessing a mapping risks a wrong title,
+/// which is worse than a missing one — the same stance the OA
+/// aggregators take. The payload is returned as `metadata_json` only.
+#[cfg(any(
+    feature = "tdm-elsevier",
+    feature = "tdm-aps",
+    feature = "tdm-springer",
+    feature = "tdm-ieee"
+))]
+// `chain` is built by `#[cfg]`-gated pushes rather than a `vec![]`
+// literal: an attribute per element inside a vec literal is not
+// expressible, and which entries exist depends on the feature set.
+#[allow(clippy::vec_init_then_push)]
+async fn resolve_tdm_chain(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    crossref_answered: bool,
+    attempts: &mut Vec<SourceAttempt>,
+) -> Option<Value> {
+    struct Entry<'a> {
+        name: &'static str,
+        /// What the user must set, rendered verbatim into the trace.
+        enable_hint: &'static str,
+        /// DOI prefixes this publisher registered.
+        prefixes: &'static [&'static str],
+        /// Human name, for the wrong-publisher message.
+        publisher: &'static str,
+        src: &'a dyn crate::source::Source,
+    }
+
+    // Base overrides mirror `crossref_source_from_env` and the Tier-2
+    // chain. Tier 3 had none, which is precisely why no test could point
+    // one of these anywhere and therefore why none could prove reach.
+    #[cfg(feature = "tdm-aps")]
+    let aps = optional_base("DOIGET_APS_BASE").map_or_else(
+        crate::sources::tdm_aps::TdmApsSource::new,
+        crate::sources::tdm_aps::TdmApsSource::with_base,
+    );
+    #[cfg(feature = "tdm-elsevier")]
+    let elsevier = optional_base("DOIGET_ELSEVIER_BASE").map_or_else(
+        crate::sources::tdm_elsevier::TdmElsevierSource::new,
+        crate::sources::tdm_elsevier::TdmElsevierSource::with_base,
+    );
+    #[cfg(feature = "tdm-springer")]
+    let springer = optional_base("DOIGET_SPRINGER_BASE").map_or_else(
+        crate::sources::tdm_springer::TdmSpringerSource::new,
+        crate::sources::tdm_springer::TdmSpringerSource::with_base,
+    );
+    #[cfg(feature = "tdm-ieee")]
+    let ieee = optional_base("DOIGET_IEEE_BASE").map_or_else(
+        crate::sources::tdm_ieee::TdmIeeeSource::new,
+        crate::sources::tdm_ieee::TdmIeeeSource::with_base,
+    );
+
+    // Not a `vec![]` literal: each entry is `#[cfg]`-gated on its own
+    // publisher feature, and attribute-per-element inside a vec literal
+    // is not expressible.
+    #[allow(unused_mut)]
+    let mut chain: Vec<Entry<'_>> = Vec::new();
+    #[cfg(feature = "tdm-aps")]
+    chain.push(Entry {
+        name: "tdm-aps",
+        enable_hint: "DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS",
+        prefixes: crate::sources::tdm_aps::PUBLISHER_PREFIXES,
+        publisher: "American Physical Society (APS)",
+        src: &aps,
+    });
+    #[cfg(feature = "tdm-elsevier")]
+    chain.push(Entry {
+        name: "tdm-elsevier",
+        enable_hint: "DOIGET_KEY_ELSEVIER + DOIGET_AGREE_TDM_ELSEVIER",
+        prefixes: crate::sources::tdm_elsevier::PUBLISHER_PREFIXES,
+        publisher: "Elsevier BV",
+        src: &elsevier,
+    });
+    #[cfg(feature = "tdm-springer")]
+    chain.push(Entry {
+        name: "tdm-springer",
+        enable_hint: "DOIGET_KEY_SPRINGER + DOIGET_AGREE_TDM_SPRINGER",
+        prefixes: crate::sources::tdm_springer::PUBLISHER_PREFIXES,
+        publisher: "Springer Nature",
+        src: &springer,
+    });
+    #[cfg(feature = "tdm-ieee")]
+    chain.push(Entry {
+        name: "tdm-ieee",
+        enable_hint: "DOIGET_KEY_IEEE + DOIGET_AGREE_TDM_IEEE",
+        prefixes: crate::sources::tdm_ieee::PUBLISHER_PREFIXES,
+        publisher: "IEEE",
+        src: &ieee,
+    });
+
+    let mut resolved: Option<Value> = None;
+
+    for e in chain {
+        debug_assert_eq!(e.name, e.src.name(), "chain name must match Source::name");
+
+        if crossref_answered || resolved.is_some() {
+            attempts.push(SourceAttempt::new(e.name, AttemptOutcome::NotNeeded));
+            continue;
+        }
+        let Ref::Doi(doi) = ref_ else {
+            attempts.push(SourceAttempt::new(e.name, AttemptOutcome::NotApplicable));
+            continue;
+        };
+        // Prefix BEFORE credentials. A DOI this publisher never
+        // registered is not a configuration problem, and reporting it as
+        // one would tell the user to go find an API key that would not
+        // have helped.
+        if !e.prefixes.contains(&doi.prefix()) {
+            attempts.push(SourceAttempt::new(
+                e.name,
+                AttemptOutcome::WrongPublisher {
+                    detail: format!("DOI prefix {} is not {}", doi.prefix(), e.publisher),
+                },
+            ));
+            continue;
+        }
+        if !e.src.can_serve(profile, ref_) {
+            attempts.push(SourceAttempt::new(
+                e.name,
+                AttemptOutcome::Disabled { env: e.enable_hint },
+            ));
+            continue;
+        }
+
+        match e.src.fetch(ref_, profile, ctx).await {
+            Ok(r) => {
+                attempts.push(SourceAttempt::new(e.name, AttemptOutcome::Resolved));
+                resolved = r.metadata_json;
+            }
+            Err(err) => {
+                tracing::debug!(source = e.name, error = %err, "TDM source did not resolve");
+                attempts.push(SourceAttempt::new(e.name, classify_attempt(&err)));
+            }
+        }
+    }
+    resolved
+}
+
 /// Read a `DOIGET_*_BASE` override, warning rather than failing on a
 /// malformed value — a bad override must not take the source offline.
-#[cfg(feature = "metadata")]
+#[cfg(any(
+    feature = "metadata",
+    feature = "tdm-elsevier",
+    feature = "tdm-aps",
+    feature = "tdm-springer",
+    feature = "tdm-ieee"
+))]
 fn optional_base(env: &str) -> Option<url::Url> {
     let raw = std::env::var(env).ok()?;
     match url::Url::parse(&raw) {
@@ -3612,7 +4080,7 @@ mod chain_tests {
     }
 
     fn all_off() -> CapabilityProfile {
-        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        let mut p = CapabilityProfile::for_tests();
         p.metadata = MetadataAccess {
             openalex: false,
             semantic_scholar: false,
@@ -3871,5 +4339,710 @@ mod chain_tests {
             .await
             .expect("recorded")
             .is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #442: is the Tier-3 chain actually reached?
+// ---------------------------------------------------------------------------
+//
+// These sources shipped implemented, gated, allowlisted and unit-tested,
+// and no production code called them. Every unit test passed, because
+// each drove its own `Source` impl directly. So the assertions here are
+// about REACH: `server.received_requests()` is the only evidence that a
+// source was consulted, and the attempt trace is the only way an operator
+// can tell "consulted and empty" from "never consulted" from "consulted
+// about another publisher's DOI".
+//
+// Gated on all three publishers because the tests name all three. The
+// single-feature CI job still compiles `resolve_tdm_chain` itself, which
+// is what that job is for.
+
+// ---------------------------------------------------------------------------
+// #458: is the chain reachable with ONE publisher compiled?
+// ---------------------------------------------------------------------------
+//
+// The suite below needs all four features, so it only ever runs in the
+// union CI job — where the gates are satisfied by the other three no
+// matter what the fourth is missing. That is exactly how `tdm-ieee`
+// shipped with the chain `#[cfg]`-ed away from it: the source, the
+// allowlist, the capability grant and the docs all existed, and the only
+// code that calls any of them was compiled out.
+//
+// This module is gated on `any(...)`, so it compiles in every singleton
+// job. It does not need a mock, a key or a grant — merely naming
+// `resolve_tdm_chain` fails the build when the caller's gate omits the
+// compiled publisher, which is the whole bug.
+
+#[cfg(all(
+    test,
+    any(
+        feature = "tdm-aps",
+        feature = "tdm-elsevier",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    )
+))]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod tdm_singleton_reach_tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use camino::Utf8PathBuf;
+    use tempfile::TempDir;
+
+    use crate::http::HttpClient;
+    use crate::provenance::ProvenanceLog;
+    use crate::rate_limiter::RateLimiter;
+    use crate::{CapabilityProfile, Doi, RateLimits, Ref};
+
+    fn ctx() -> (TempDir, FetchContext) {
+        let td = TempDir::new().expect("tempdir");
+        let dir = Utf8PathBuf::try_from(td.path().to_path_buf()).expect("utf-8");
+        let session_id = "01J0000000000000000000SNG".to_string();
+        let log = Arc::new(
+            ProvenanceLog::open(dir.join("t.jsonl"), session_id.clone()).expect("log opens"),
+        );
+        let c = FetchContext {
+            http: Arc::new(HttpClient::new_for_tests_allow_http(
+                "tdm-probe",
+                "127.0.0.1:1",
+            )),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+            log,
+            session_id,
+            cache_root: None,
+        };
+        (td, c)
+    }
+
+    /// Every compiled publisher must appear in the trace for a DOI it
+    /// registered — with the gates CLOSED, so no request goes out and no
+    /// credential is needed. A source missing here is one the production
+    /// path cannot reach, whatever its own unit tests say.
+    #[tokio::test]
+    #[serial_test::serial]
+    #[allow(clippy::vec_init_then_push)]
+    async fn every_compiled_publisher_is_in_the_chain() {
+        // Pushed rather than an array literal because each entry is
+        // `#[cfg]`-gated, which is not expressible inside one.
+        let mut cases: Vec<(&str, &str)> = Vec::new();
+        #[cfg(feature = "tdm-aps")]
+        cases.push(("tdm-aps", "10.1103/PhysRevX.10.011001"));
+        #[cfg(feature = "tdm-elsevier")]
+        cases.push(("tdm-elsevier", "10.1016/j.example.2024.001"));
+        #[cfg(feature = "tdm-springer")]
+        cases.push(("tdm-springer", "10.1007/s00220-024-05001-x"));
+        #[cfg(feature = "tdm-ieee")]
+        cases.push(("tdm-ieee", "10.1109/TSP.2018.2812747"));
+        assert!(!cases.is_empty(), "the guard must have checked something");
+
+        let (_td, c) = ctx();
+        let profile = CapabilityProfile::for_tests();
+
+        for (name, doi) in cases {
+            let ref_ = Ref::Doi(Doi::parse(doi).expect("doi"));
+            let mut attempts = Vec::new();
+            resolve_tdm_chain(&ref_, &profile, &c, false, &mut attempts).await;
+            assert!(
+                attempts.iter().any(|a| a.source == name),
+                "`{name}` is compiled but absent from the chain for its own DOI {doi}; \
+                 the production path cannot reach it. attempts: {attempts:?}"
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    test,
+    feature = "tdm-aps",
+    feature = "tdm-elsevier",
+    feature = "tdm-springer",
+    feature = "tdm-ieee"
+))]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod tdm_chain_tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use camino::Utf8PathBuf;
+    use tempfile::TempDir;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::http::HttpClient;
+    use crate::provenance::ProvenanceLog;
+    use crate::rate_limiter::RateLimiter;
+    use crate::{CapabilityProfile, Doi, RateLimits, Ref, TdmGrant};
+
+    /// Point every TDM base at the mock; restore on drop. Process-global,
+    /// so every test using it is serialised.
+    struct BaseGuard(Vec<(&'static str, Option<String>)>);
+    impl BaseGuard {
+        fn to(uri: &str) -> Self {
+            const VARS: &[&str] = &[
+                "DOIGET_APS_BASE",
+                "DOIGET_ELSEVIER_BASE",
+                "DOIGET_SPRINGER_BASE",
+                "DOIGET_IEEE_BASE",
+            ];
+            Self(
+                VARS.iter()
+                    .map(|v| {
+                        let old = std::env::var(v).ok();
+                        std::env::set_var(v, uri);
+                        (*v, old)
+                    })
+                    .collect(),
+            )
+        }
+    }
+    impl Drop for BaseGuard {
+        fn drop(&mut self) {
+            for (v, old) in &self.0 {
+                match old {
+                    Some(o) => std::env::set_var(v, o),
+                    None => std::env::remove_var(v),
+                }
+            }
+        }
+    }
+
+    /// Crossref / Unpaywall / arXiv also have to be pinned, or the test
+    /// silently escapes to the live internet -- which is how the first
+    /// run of the #442 probe produced a real paper title from a mock that
+    /// had received zero requests.
+    struct OaBaseGuard(Vec<(&'static str, Option<String>)>);
+    impl OaBaseGuard {
+        fn to(uri: &str) -> Self {
+            const VARS: &[&str] = &[
+                "DOIGET_CROSSREF_BASE",
+                "DOIGET_UNPAYWALL_BASE",
+                "DOIGET_ARXIV_BASE",
+            ];
+            Self(
+                VARS.iter()
+                    .map(|v| {
+                        let old = std::env::var(v).ok();
+                        std::env::set_var(v, uri);
+                        (*v, old)
+                    })
+                    .collect(),
+            )
+        }
+    }
+    impl Drop for OaBaseGuard {
+        fn drop(&mut self) {
+            for (v, old) in &self.0 {
+                match old {
+                    Some(o) => std::env::set_var(v, o),
+                    None => std::env::remove_var(v),
+                }
+            }
+        }
+    }
+
+    fn ctx_for(host: &str) -> (TempDir, FetchContext) {
+        let td = TempDir::new().expect("tempdir");
+        let dir = Utf8PathBuf::try_from(td.path().to_path_buf()).expect("utf-8");
+        let http = Arc::new(HttpClient::new_for_tests_allow_http_multi(&[
+            ("tdm-aps", host),
+            ("tdm-elsevier", host),
+            ("tdm-springer", host),
+            ("tdm-ieee", host),
+        ]));
+        let session_id = "01J0000000000000000000TDM".to_string();
+        let log = Arc::new(
+            ProvenanceLog::open(dir.join("t.jsonl"), session_id.clone()).expect("log opens"),
+        );
+        (
+            td,
+            FetchContext {
+                http,
+                rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+                log,
+                session_id,
+                cache_root: None,
+            },
+        )
+    }
+
+    fn grant(agree_var: &str) -> TdmGrant {
+        TdmGrant {
+            api_key: secrecy::SecretString::from("test-key".to_string()),
+            agree_env_var: agree_var.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn all_gates_open() -> CapabilityProfile {
+        let mut p = CapabilityProfile::for_tests();
+        p.tdm_aps = Some(grant("DOIGET_AGREE_TDM_APS"));
+        p.tdm_elsevier = Some(grant("DOIGET_AGREE_TDM_ELSEVIER"));
+        p.tdm_springer = Some(grant("DOIGET_AGREE_TDM_SPRINGER"));
+        p.tdm_ieee = Some(grant("DOIGET_AGREE_TDM_IEEE"));
+        p
+    }
+
+    fn all_gates_closed() -> CapabilityProfile {
+        let mut p = CapabilityProfile::for_tests();
+        p.tdm_aps = None;
+        p.tdm_elsevier = None;
+        p.tdm_springer = None;
+        p.tdm_ieee = None;
+        p
+    }
+
+    fn outcome<'a>(attempts: &'a [SourceAttempt], name: &str) -> &'a AttemptOutcome {
+        &attempts
+            .iter()
+            .find(|a| a.source == name)
+            .unwrap_or_else(|| panic!("no attempt recorded for {name}; got {attempts:?}"))
+            .outcome
+    }
+
+    /// THE regression for #442. Each publisher's own DOI must actually
+    /// reach that publisher's source — proven by the mock having received
+    /// a request, not by any assertion about return values.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn every_tdm_source_is_reached_for_its_own_publishers_doi() {
+        for (doi, expected) in [
+            ("10.1103/PhysRevX.10.011001", "tdm-aps"),
+            ("10.1016/j.example.2024.001", "tdm-elsevier"),
+            ("10.1007/s00220-024-05001-x", "tdm-springer"),
+            ("10.1109/TSP.2018.2812747", "tdm-ieee"),
+            // The conference prefix, which is half of what #407 measured
+            // and the half most likely to be dropped by a later edit.
+            ("10.23919/example.2024.001", "tdm-ieee"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+                .mount(&server)
+                .await;
+            let _bases = BaseGuard::to(&server.uri());
+            let (_td, ctx) = ctx_for(&server.address().to_string());
+
+            let ref_ = Ref::Doi(Doi::parse(doi).expect("doi"));
+            let mut attempts = Vec::new();
+            resolve_tdm_chain(&ref_, &all_gates_open(), &ctx, false, &mut attempts).await;
+
+            let o = outcome(&attempts, expected);
+            assert!(
+                o.was_consulted(),
+                "{expected} was NOT reached for {doi}: {o:?}"
+            );
+            assert_eq!(
+                server.received_requests().await.expect("recorded").len(),
+                1,
+                "{expected} must issue exactly one request for {doi}"
+            );
+        }
+    }
+
+    /// A foreign DOI must be reported as the wrong publisher, NOT as a
+    /// missing credential. Telling the user to go get an APS key because
+    /// an Elsevier DOI failed sends them after a fix that cannot work.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_foreign_doi_is_wrong_publisher_not_disabled() {
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+
+        // An AMS DOI: no compiled-in TDM publisher owns 10.1090. This
+        // was an IEEE DOI until #430 gave 10.1109 an owner — the test
+        // needs a prefix that stays foreign, and ADR-0039 names AMS as
+        // one of the publishers still without a TDM source.
+        let ref_ = Ref::Doi(Doi::parse("10.1090/s0025-5718-04-01692-8").expect("doi"));
+        let mut attempts = Vec::new();
+        resolve_tdm_chain(&ref_, &all_gates_open(), &ctx, false, &mut attempts).await;
+
+        for name in ["tdm-aps", "tdm-elsevier", "tdm-springer", "tdm-ieee"] {
+            let o = outcome(&attempts, name);
+            assert!(
+                matches!(o, AttemptOutcome::WrongPublisher { .. }),
+                "{name} must be WrongPublisher for an AMS DOI, got {o:?}"
+            );
+            assert!(
+                !o.render().contains("DOIGET_KEY"),
+                "must not suggest a credential that would not help: {}",
+                o.render()
+            );
+            assert!(
+                o.render().contains("10.1090"),
+                "the message must name the prefix that did not match: {}",
+                o.render()
+            );
+        }
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded")
+                .is_empty(),
+            "a foreign DOI must cost the publisher nothing"
+        );
+    }
+
+    /// Closed gates must name BOTH things the user has to set. The Tier-2
+    /// chain needs one `DOIGET_ENABLE_*`; Tier 3 needs a key and a
+    /// recorded agreement, and naming only one would stall the user.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn closed_gates_name_the_key_and_the_agreement() {
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+
+        let ref_ = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("doi"));
+        let mut attempts = Vec::new();
+        resolve_tdm_chain(&ref_, &all_gates_closed(), &ctx, false, &mut attempts).await;
+
+        let o = outcome(&attempts, "tdm-aps");
+        assert_eq!(
+            o,
+            &AttemptOutcome::Disabled {
+                env: "DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS"
+            },
+            "a closed Tier-3 gate must name the key AND the agreement"
+        );
+        assert!(!o.was_consulted());
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded")
+                .is_empty(),
+            "closed gates must make NO request"
+        );
+    }
+
+    /// A Crossref hit must cost the publisher nothing, and must not be
+    /// recorded as though the credentials were missing.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_crossref_hit_skips_the_tdm_chain() {
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+
+        let ref_ = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("doi"));
+        let mut attempts = Vec::new();
+        resolve_tdm_chain(&ref_, &all_gates_open(), &ctx, true, &mut attempts).await;
+
+        for name in ["tdm-aps", "tdm-elsevier", "tdm-springer", "tdm-ieee"] {
+            assert_eq!(
+                outcome(&attempts, name),
+                &AttemptOutcome::NotNeeded,
+                "{name} must be NotNeeded -- the gates ARE open"
+            );
+        }
+        assert!(server
+            .received_requests()
+            .await
+            .expect("recorded")
+            .is_empty());
+    }
+    /// The gap the four tests above CANNOT close.
+    ///
+    /// They drive `resolve_tdm_chain` directly, so they would all still
+    /// pass if nothing called it — which is exactly the shape of the bug
+    /// (#442, and #438 before it). This one drives the real entry point,
+    /// `fetch_paper`, and asserts the publisher's API was contacted.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn fetch_paper_actually_reaches_the_tdm_chain() {
+        let server = MockServer::start().await;
+        // Everything 404s: Crossref produces nothing, so the DOI path has
+        // to fall through to the chain. That is the only state in which a
+        // TDM source is supposed to run.
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let _bases = BaseGuard::to(&server.uri());
+        let _oa = OaBaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+
+        let store_td = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::try_from(store_td.path().to_path_buf()).expect("utf-8");
+        let store = crate::store::FsStore::new(root.clone()).expect("store");
+
+        let ref_ = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("doi"));
+        let err = fetch_paper(&ref_, &all_gates_open(), &ctx, &store, &root)
+            .await
+            .expect_err("everything 404s, so the fetch must fail");
+
+        // Evidence 1: the publisher's API was contacted.
+        let paths: Vec<String> = server
+            .received_requests()
+            .await
+            .expect("recorded")
+            .iter()
+            .map(|r| r.url.path().to_string())
+            .collect();
+        assert!(
+            paths.iter().any(|p| p.contains("/v2/article/")),
+            "fetch_paper never reached tdm-aps; paths were {paths:?}"
+        );
+
+        // Evidence 2: and the trace says so, in terms an operator can act
+        // on. A consult that leaves no trace is only half a fix -- the
+        // whole point is being able to tell reach from non-reach by
+        // reading the error.
+        let hint = err.to_string();
+        assert!(
+            hint.contains("tdm-aps") && hint.contains("consulted:"),
+            "the trace must record tdm-aps as consulted; got:
+{hint}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #445: does a blocked content leg actually fall through to another source?
+// ---------------------------------------------------------------------------
+//
+// The reported run had four indexes switched on and consulted none of them,
+// because the candidate list can only contain Unpaywall's locations and
+// Crossref had already answered. So the assertion that matters is REACH:
+// the mock must record a request to the optional source AND to the copy it
+// reported. A `Fetched` outcome alone would not prove which route produced it.
+
+#[cfg(all(test, feature = "metadata"))]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod oa_fallthrough_tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use camino::Utf8PathBuf;
+    use tempfile::TempDir;
+    use wiremock::matchers::{path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::http::HttpClient;
+    use crate::provenance::ProvenanceLog;
+    use crate::rate_limiter::RateLimiter;
+    use crate::{CapabilityProfile, Doi, RateLimits, Ref};
+
+    struct EnvSet(Vec<(&'static str, Option<String>)>);
+    impl EnvSet {
+        fn new(pairs: &[(&'static str, String)]) -> Self {
+            Self(
+                pairs
+                    .iter()
+                    .map(|(k, v)| {
+                        let old = std::env::var(k).ok();
+                        std::env::set_var(k, v);
+                        (*k, old)
+                    })
+                    .collect(),
+            )
+        }
+    }
+    impl Drop for EnvSet {
+        fn drop(&mut self) {
+            for (k, old) in &self.0 {
+                match old {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+
+    /// Crossref answers, Unpaywall points at a host that 429s, CORE holds a
+    /// repository copy.
+    async fn server_with_a_rate_limited_publisher_and_a_repository_copy() -> MockServer {
+        let server = MockServer::start().await;
+        let base = server.uri();
+
+        Mock::given(path_regex("^/works/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                "{\"status\":\"ok\",\"message\":{\"title\":[\"Computing multiple roots\"]}}",
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(path_regex("^/10\\.1090"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                "{{\"doi\":\"10.1090/example\",\"is_oa\":true,\"oa_status\":\"bronze\",\"best_oa_location\":\
+                 {{\"url_for_pdf\":\"{base}/blocked.pdf\",\"license\":\"cc-by\"}}}}"
+            )))
+            .mount(&server)
+            .await;
+        // The publisher rate-limits. This is the failure that used to end
+        // the whole run.
+        Mock::given(path("/blocked.pdf"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+        Mock::given(path("/v3/search/works"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                "{{\"totalHits\":1,\"results\":[{{\"id\":1,\
+                 \"title\":\"Computing multiple roots\",\"doi\":\"10.1090/example\",\
+                 \"downloadUrl\":\"{base}/repo.pdf\"}}]}}"
+            )))
+            .mount(&server)
+            .await;
+        Mock::given(path("/repo.pdf"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(b"%PDF-1.4\nrepository copy\n".to_vec()),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn ctx_for(host: &str) -> (TempDir, FetchContext) {
+        let td = TempDir::new().expect("tempdir");
+        let dir = Utf8PathBuf::try_from(td.path().to_path_buf()).expect("utf-8");
+        let host_only = host.split(':').next().unwrap_or(host);
+        let http = Arc::new(HttpClient::new_for_tests_allow_http_multi(&[
+            ("crossref", host),
+            ("unpaywall", host),
+            // The content leg compares the URL HOST, without the port,
+            // so this entry must be the bare address.
+            ("oa-publisher", host_only),
+            ("core", host),
+        ]));
+        let session_id = "01J000000000000000000FALL".to_string();
+        let log = Arc::new(
+            ProvenanceLog::open(dir.join("t.jsonl"), session_id.clone()).expect("log opens"),
+        );
+        (
+            td,
+            FetchContext {
+                http,
+                rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+                log,
+                session_id,
+                cache_root: None,
+            },
+        )
+    }
+
+    async fn run_fetch(
+        server: &MockServer,
+        core_enabled: bool,
+    ) -> (FetchPaperOutcome, Vec<String>) {
+        let base = server.uri();
+        let mut env = vec![
+            ("DOIGET_CROSSREF_BASE", base.clone()),
+            ("DOIGET_UNPAYWALL_BASE", base.clone()),
+            ("DOIGET_ARXIV_BASE", base.clone()),
+            ("DOIGET_CORE_BASE", base.clone()),
+            ("DOIGET_CONTACT_EMAIL", "test@example.org".to_string()),
+        ];
+        if core_enabled {
+            env.push(("DOIGET_ENABLE_CORE", "1".to_string()));
+        } else {
+            std::env::remove_var("DOIGET_ENABLE_CORE");
+        }
+        let _env = EnvSet::new(&env);
+
+        let profile = CapabilityProfile::from_env().expect("profile");
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+        let store_td = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::try_from(store_td.path().to_path_buf()).expect("utf-8");
+        let store = crate::store::FsStore::new(root.clone()).expect("store");
+
+        let ref_ = Ref::Doi(Doi::parse("10.1090/example").expect("doi"));
+        let outcome = fetch_paper(&ref_, &profile, &ctx, &store, &root)
+            .await
+            .expect("crossref answered, so the fetch resolves either way");
+        let paths = server
+            .received_requests()
+            .await
+            .expect("recorded")
+            .iter()
+            .map(|r| r.url.path().to_string())
+            .collect();
+        (outcome, paths)
+    }
+
+    /// THE regression for #445. A 429 on the only Unpaywall location must
+    /// not end a run with another source switched on.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_rate_limited_publisher_falls_through_to_an_enabled_source() {
+        let server = server_with_a_rate_limited_publisher_and_a_repository_copy().await;
+        let (outcome, paths) = run_fetch(&server, true).await;
+
+        assert!(
+            paths.iter().any(|p| p == "/v3/search/works"),
+            "CORE was never consulted; paths were {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p == "/repo.pdf"),
+            "the copy CORE reported was never fetched; paths were {paths:?}; leg={:?}",
+            outcome.pdf_leg
+        );
+        assert!(
+            matches!(outcome.pdf_leg, PdfLegStatus::Fetched),
+            "the run should have recovered; got {:?}",
+            outcome.pdf_leg
+        );
+    }
+
+    /// The other half of the contract: with no flag set, behaviour is
+    /// unchanged. The fall-through must not spend a request the user did
+    /// not ask for.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn with_no_source_enabled_the_run_is_unchanged() {
+        let server = server_with_a_rate_limited_publisher_and_a_repository_copy().await;
+        let (outcome, paths) = run_fetch(&server, false).await;
+
+        assert!(
+            !paths.iter().any(|p| p == "/v3/search/works"),
+            "a disabled source must cost nothing; paths were {paths:?}"
+        );
+        assert!(
+            matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. }),
+            "without a fallback source this must still be Blocked; got {:?}",
+            outcome.pdf_leg
+        );
+    }
+    /// #468 review: the fall-through used to do `*attempts = fresh`, which
+    /// replaced the WHOLE trace and deleted the Tier-3 rows
+    /// `resolve_tdm_chain` had already recorded.
+    ///
+    /// The row's outcome does not matter here — what matters is that the
+    /// row still EXISTS. Its absence is what made "was tdm-ieee consulted?"
+    /// unanswerable from `attempts`, from the MCP envelope and from
+    /// `batch --json`, which is the question the trace was added to answer.
+    ///
+    /// Needs `metadata` AND a `tdm-*` feature, because the bug only appears
+    /// when both chains have written to the same vector. CI builds exactly
+    /// that combination.
+    #[cfg(feature = "tdm-ieee")]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn the_fallback_preserves_the_tier_3_rows_it_used_to_delete() {
+        let server = server_with_a_rate_limited_publisher_and_a_repository_copy().await;
+        let (outcome, paths) = run_fetch(&server, true).await;
+
+        // The fall-through must actually have fired, or this proves nothing.
+        assert!(
+            paths.iter().any(|p| p == "/v3/search/works"),
+            "the fallback did not run, so this test cannot see the bug; paths were {paths:?}"
+        );
+
+        let sources: Vec<&str> = outcome.attempts.iter().map(|a| a.source).collect();
+        assert!(
+            sources.contains(&"tdm-ieee"),
+            "the Tier-3 row was dropped from the trace by the fallback; trace held {sources:?}"
+        );
+        // And the Tier-2 rows the fallback re-ran are still there too.
+        assert!(
+            sources.contains(&"core"),
+            "the refreshed Tier-2 rows are missing; trace held {sources:?}"
+        );
     }
 }

@@ -61,9 +61,9 @@ Wire form (JSON / MCP): `"INVALID_REF"`, `"NO_OA_AVAILABLE"`, etc.
 
 | Persona | Surface |
 |---|---|
-| Agent (MCP) | Structured `{ ok: false, error: { code, message, denial_context? } }`. Never throws. |
+| Agent (MCP) | Structured, never throws. On failure: `{ ok: false, error: { code, message, denial_context? } }`. `remediation` and `attempts` are **not** carried here — they belong to the `{ ok: true, … }` envelope, as `pdf.remediation` (present when the PDF leg was blocked) and top-level `attempts`. A blocked PDF leg is an `ok: true` result with a failed leg, not an `ok: false` call. |
 | Researcher (CLI human) | `cargo`-style stderr: `error[E0007]: rate limited from unpaywall: retry after 1s`. Exit code 1. |
-| CI / Batch (CLI `--json`) | JSON Lines record per ref with `{"ok":false, "error":{"code":"...","message":"...","denial_context":{...}?}}`. Exit code = number of failures (capped at 255). |
+| CI / Batch (CLI `--json`) | JSON Lines record per ref with `{"ok":false, "error":{"code":"...","message":"...","denial_context":{...}?,"remediation":[...]?,"attempts":[...]?}}`. Exit code = number of failures (capped at 255). |
 | Library (Rust) | `Err(FetchError)` (typed via `thiserror`). |
 
 ### 3.1 Structured `denial_context` (NORMATIVE; ADR-0023)
@@ -103,6 +103,66 @@ renaming or repurposing one is a breaking change.
 
 `error.message` MUST continue to embed the same parameters in human-readable
 form — `denial_context` is a parallel channel, not a replacement.
+
+### 3.2 Structured `remediation` (NORMATIVE; ADR-0043)
+
+`denial_context` says what was refused. `remediation` says what would lift it.
+Both are **optional and additive**; consumers MUST tolerate presence and absence.
+
+```jsonc
+"remediation": [
+  { "kind": "additional_host", "value": "strathprints.strath.ac.uk", "note": "this hop only" },
+  { "kind": "additional_host", "value": "*.strath.ac.uk",            "note": "the whole publisher" },
+  { "kind": "additional_host", "value": "strath.ac.uk",              "note": "apex too (a wildcard does not match it)" },
+  { "kind": "trust_flag",      "value": "trust_academic_repos",
+    "note": "strathprints.strath.ac.uk matches *.ac.uk — UK academic institutions (Universities UK)" }
+]
+```
+
+`kind` is a **closed** enum: `additional_host` (a pattern for
+`[[network.additional_hosts]]`) and `trust_flag` (a `[network]` boolean). Adding a
+variant is a minor semver bump.
+
+The two kinds are deliberately not collapsed into one pasteable string: adding a host
+trusts one publisher, a trust flag trusts a curated class (ADR-0028), and a caller
+choosing between them is making a policy decision on the user's behalf.
+
+Emitted only for reasons with a configuration channel — `redirect_not_in_allowlist` and
+`host_in_block_list`. A `size_cap_exceeded` or `capability_not_granted` denial carries no
+`remediation`, because offering a host to trust would send the caller after a fix that
+cannot work.
+
+### 3.3 Structured `attempts` (NORMATIVE; ADR-0043)
+
+The resolution trace introduced in #413/#438, previously CLI text only.
+
+```jsonc
+"attempts": [
+  { "source": "hal",  "outcome": "not_consulted_disabled", "detail": "DOIGET_ENABLE_HAL", "consulted": false },
+  { "source": "core", "outcome": "consulted_no_record",                                   "consulted": true  }
+]
+```
+
+`outcome` is a **closed** enum:
+`not_consulted_disabled`, `not_consulted_not_applicable`,
+`not_consulted_wrong_publisher`, `not_consulted_not_needed`, `consulted_no_record`,
+`consulted_not_open_access`, `consulted_failed`, `consulted_resolved`.
+
+`detail` is present only for the variants carrying one, and is opaque text.
+`consulted` is redundant with `outcome` and present anyway: it is the single question
+every consumer has — *did anyone else look?* — and requiring them to memorise which of
+eight tokens implies it invites the confusion the trace exists to end.
+
+"We have no trace" and "the trace is empty" are different, and were the same
+observable before #413. Both surfaces keep them apart, by different means — check
+the one you are parsing:
+
+| surface | no trace available | trace exists but empty |
+|---|---|---|
+| CLI `batch --json` | the `attempts` key is **absent** | `[]` |
+| MCP envelope | the `attempts` key is **present**, valued `null` | `[]` |
+
+Neither ever renders "no trace" as `[]`.
 
 ## 4. CLI exit codes
 

@@ -216,6 +216,8 @@ pub enum Capability {
     TdmAps,
     /// Springer TDM (Tier 3, opt-in build).
     TdmSpringer,
+    /// IEEE TDM (Tier 3, opt-in build).
+    TdmIeee,
 }
 
 /// Errors emitted by the provenance log writer. Callers MUST treat any
@@ -1973,6 +1975,7 @@ mod tests {
             (Capability::TdmElsevier, "\"tdm-elsevier\""),
             (Capability::TdmAps, "\"tdm-aps\""),
             (Capability::TdmSpringer, "\"tdm-springer\""),
+            (Capability::TdmIeee, "\"tdm-ieee\""),
         ];
         for (cap, expected) in cases {
             let got = serde_json::to_string(&cap).expect("serialize");

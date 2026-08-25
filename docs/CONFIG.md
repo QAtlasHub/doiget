@@ -49,6 +49,8 @@ A value set higher in the chain overrides any value set lower.
 # ~/.config/doiget/config.toml — all fields optional
 
 [store]
+# Overridden by DOIGET_STORE_ROOT and --store-root (one rung above).
+# A leading `~` is expanded; the env var relies on the shell for that.
 root = "/home/alice/papers"
 
 [cache]
@@ -109,6 +111,17 @@ runs against the built-in allowlist only.
 | `trust_academic_repos` | bool | `false` | Adds 15 curated single-suffix academic wildcards — where institutions host their own **Green OA**. |
 | `trust_oa_registries` | bool | `false` | Adds the curated **OA registries / repositories** — where cross-publisher **Gold OA** is indexed or hosted. |
 | `[[network.additional_hosts]]` | array of tables | empty | Adds individual hosts. `host` is required; `note` is optional and free-text. |
+
+**Prefer the registrable-domain wildcard.** A publisher often redirects across its own
+subdomains — `www.ams.org` → `pubs.ams.org` — so an entry for the exact host that was
+refused buys you one hop and another denial. `*.ams.org` covers the publisher in one
+line, and matches how the built-in list is written (ADR-0027 bounds the trusted surface
+to registrable-domain wildcards for established publishers). Add the apex alongside it
+when the publisher redirects there too: a single-suffix wildcard does **not** match
+`ams.org` itself, which is why the built-in list carries both forms for `doaj.org`,
+`arxiv.org` and `europepmc.org`.
+
+The denial message suggests all three, most specific first (#443).
 
 The two flags are separate because the trust arguments differ — "this institution
 publishes its own work here" is not "this registry indexes open content across
@@ -235,6 +248,15 @@ agreed = true
 [tdm.springer]
 api_key = "..."
 agreed = true
+
+# Requires a build with `--features tdm-ieee`. The endpoint and response
+# shape are INFERRED from IEEE's public developer portal, not confirmed
+# against a live programme key (#430) — a response in another shape is
+# reported as a schema error naming the field and quoting the body,
+# rather than silently returning nothing.
+[tdm.ieee]
+api_key = "..."
+agreed = true
 ```
 
 If both env var and credentials.toml provide the same key, env var wins.
@@ -245,7 +267,10 @@ Being on a subscribing university network does **not** make paywalled content
 fetchable. Two independent things sit in the way, and only one of them is doiget's:
 
 1. **The allowlist.** IEEE, ACM, SIAM and AMS are not on the default `oa-publisher`
-   allowlist, so doiget will not attempt the publisher leg for them at all.
+   allowlist, so doiget will not attempt the publisher leg for them at all. IEEE now
+   has a TDM route instead (`[tdm.ieee]` above, `--features tdm-ieee`) — that is a
+   different host (`ieeexploreapi.ieee.org`, the API) under a different source key,
+   not a widening of `oa-publisher`.
 2. **The publisher's bot wall.** Even from a subscribing address, a scripted client
    commonly gets `202 Accepted` with an **empty body** — a challenge holding response,
    not a paywall and not a 403. The subscription is not the binding constraint; being a

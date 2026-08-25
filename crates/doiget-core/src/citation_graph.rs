@@ -442,7 +442,7 @@ mod tests {
     }
 
     fn profile_with_openalex_enabled() -> CapabilityProfile {
-        let mut p = CapabilityProfile::from_env().expect("clean env never errors");
+        let mut p = CapabilityProfile::for_tests();
         p.metadata = MetadataAccess {
             openalex: true,
             semantic_scholar: false,
@@ -539,7 +539,7 @@ mod tests {
             Url::parse("http://127.0.0.1:1").expect("URI parses"),
             "doiget@localhost".to_string(),
         );
-        let profile = CapabilityProfile::from_env().expect("clean env never errors");
+        let profile = CapabilityProfile::for_tests();
         let seed = Doi::parse("10.1234/seed").expect("DOI parses");
 
         let err = expand(&seed, GraphCaps::default(), &src, &profile, &ctx)

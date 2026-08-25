@@ -25,6 +25,7 @@ citation = ["metadata"]
 tdm-elsevier = ["dep:secrecy"]
 tdm-aps      = ["dep:secrecy"]
 tdm-springer = ["dep:secrecy"]
+tdm-ieee     = ["dep:secrecy"]
 
 [dependencies]
 tokio       = { workspace = true }

@@ -387,6 +387,66 @@ pub fn tier_3_elsevier_allowlist() -> Vec<SourceAllowlist> {
     )]
 }
 
+/// Hard-coded allowlist for the IEEE Xplore TDM source (#430).
+/// Compile-gated by the `tdm-ieee` Cargo feature so default release
+/// binaries never include the host pattern (per ADR-0002 and
+/// `docs/SOURCES.md` §3).
+///
+/// Returned entry:
+/// - `"tdm-ieee"` → `ieeexploreapi.ieee.org` (production base) +
+///   `*.ieee.org` (covers load-balancing subdomains; the redirect
+///   closure denies anything outside the wildcard).
+///
+/// Note the API host is deliberately NOT `ieeexplore.ieee.org`, the web
+/// front end: ADR-0039 records that the front end answers a scripted
+/// client with `202` and an empty body regardless of entitlement, which
+/// is why the TDM API is the supported route at all.
+///
+/// Three-gate activation: Cargo feature compiled in, `DOIGET_KEY_IEEE`
+/// env var present, and `DOIGET_AGREE_TDM_IEEE=1`. The
+/// `CapabilityProfile` gate enforces the env-var pair; this allowlist is
+/// the transport gate.
+#[cfg(feature = "tdm-ieee")]
+pub fn tier_3_ieee_allowlist() -> Vec<SourceAllowlist> {
+    vec![SourceAllowlist::new(
+        "tdm-ieee",
+        vec![
+            "ieeexploreapi.ieee.org".to_string(),
+            "*.ieee.org".to_string(),
+        ],
+    )]
+}
+
+/// Every Tier-3 TDM allowlist this build actually compiled in.
+///
+/// #454: the three per-publisher builders above had no caller. Both client
+/// builders — `doiget_cli::commands::fetch::build_http_client` and its MCP
+/// twin — assemble the client by naming a list of allowlist functions, and
+/// neither named these. So #444 taught the orchestrator to reach the
+/// sources and the transport then refused a source key it had never been
+/// told about: `UnknownSource { source_key: "tdm-aps" }`, which reads like
+/// an internal error rather than a missing registration.
+///
+/// One function rather than three `#[cfg]` blocks at each call site: a
+/// fourth publisher is then a single edit here, and the two client builders
+/// cannot drift apart — which is the drift that produced this bug.
+///
+/// Empty in a default build, where no Tier-3 feature is compiled in.
+#[must_use]
+pub fn tier_3_allowlists() -> Vec<SourceAllowlist> {
+    #[allow(unused_mut)]
+    let mut out: Vec<SourceAllowlist> = Vec::new();
+    #[cfg(feature = "tdm-aps")]
+    out.extend(tier_3_aps_allowlist());
+    #[cfg(feature = "tdm-elsevier")]
+    out.extend(tier_3_elsevier_allowlist());
+    #[cfg(feature = "tdm-springer")]
+    out.extend(tier_3_springer_allowlist());
+    #[cfg(feature = "tdm-ieee")]
+    out.extend(tier_3_ieee_allowlist());
+    out
+}
+
 /// Hard-coded Phase 1 allowlist for the synthetic `"oa-publisher"` source —
 /// the publisher / preprint / repository hosts to which Unpaywall's
 /// `best_oa_location.url` (or `url_for_pdf`) typically resolves.
@@ -987,12 +1047,13 @@ impl HttpClient {
                 return Err(HttpError::HttpStatus {
                     status: code,
                     // Issue #146: Springer Nature authenticates via an
-                    // `api_key` URL query parameter (no header path
-                    // upstream). This error string is logged and may
-                    // surface to the user, so strip any `api_key`
-                    // value before it leaves the client. No other
-                    // source puts a secret in the query string, so
-                    // this is a no-op for them.
+                    // `api_key` URL query parameter, and IEEE via
+                    // `apikey` (#430) — neither documents a header
+                    // path. This error string is logged and may
+                    // surface to the user, so strip either spelling
+                    // before it leaves the client. A no-op for every
+                    // other source, none of which puts a secret in
+                    // the query string.
                     url: redact_api_key_query(&final_url),
                 });
             }
@@ -1081,15 +1142,20 @@ impl HttpClient {
 /// secret in the query string. Other pairs and their order are
 /// preserved; a URL with no `api_key` pair is rendered unchanged.
 fn redact_api_key_query(url: &url::Url) -> String {
-    const API_KEY_PARAM: &str = "api_key";
-    if url.query_pairs().all(|(k, _)| k != API_KEY_PARAM) {
+    /// Every spelling a source puts a secret under. Springer uses
+    /// `api_key`; IEEE (#430) uses `apikey`, one word. A source that
+    /// invents a third spelling and does not add it here leaks its key
+    /// into `HttpError::HttpStatus`, which is `tracing`-logged.
+    const API_KEY_PARAMS: &[&str] = &["api_key", "apikey"];
+    let is_secret = |k: &str| API_KEY_PARAMS.contains(&k);
+    if url.query_pairs().all(|(k, _)| !is_secret(&k)) {
         return url.to_string();
     }
     let mut redacted = url.clone();
     let pairs: Vec<(String, String)> = url
         .query_pairs()
         .map(|(k, v)| {
-            if k == API_KEY_PARAM {
+            if is_secret(&k) {
                 (k.into_owned(), "REDACTED".to_string())
             } else {
                 (k.into_owned(), v.into_owned())
@@ -1421,6 +1487,96 @@ mod tests {
     /// registers the key itself — so the tests could not see the gap, and
     /// only a real fetch would have. Enumerating the names here means
     /// adding a source without its allowlist entry fails at `cargo test`.
+    /// #442 sibling of the Tier-2 guard. A source with no allowlist entry
+    /// fails `UnknownSource` in production while every unit test passes,
+    /// because `new_for_tests_allow_http` registers the key itself — the
+    /// DataCite near-miss in 0.8.8. Now that Tier 3 is actually reached,
+    /// the same trap applies to it.
+    ///
+    /// **This guard is necessary and not sufficient**, and #454 is the
+    /// proof: it asserts the builder *returns* the key, which stayed true
+    /// for three releases while no client was ever handed the list, so a
+    /// production fetch died at exactly the `UnknownSource` described
+    /// above. The sufficient half is
+    /// `the_production_client_registers_every_tier_3_source_key`, in
+    /// `doiget-cli` and `doiget-mcp` — it asserts the client, which is the
+    /// object the fetch goes through. Keep both: this one localises the
+    /// failure to the list, that one catches the list never arriving.
+    #[cfg(any(
+        feature = "tdm-aps",
+        feature = "tdm-elsevier",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    ))]
+    #[test]
+    fn every_tier_3_source_has_a_transport_allowlist_entry() {
+        use crate::source::Source as _;
+        let mut checked = 0_usize;
+
+        #[cfg(feature = "tdm-aps")]
+        {
+            let src = crate::sources::tdm_aps::TdmApsSource::new();
+            let reg: Vec<String> = tier_3_aps_allowlist()
+                .iter()
+                .map(|a| a.source.clone())
+                .collect();
+            assert!(
+                reg.iter().any(|r| r == src.name()),
+                "source `{}` has no tier_3_aps_allowlist entry; a production fetch would fail \
+                    UnknownSource. registered: {reg:?}",
+                src.name()
+            );
+            checked += 1;
+        }
+        #[cfg(feature = "tdm-elsevier")]
+        {
+            let src = crate::sources::tdm_elsevier::TdmElsevierSource::new();
+            let reg: Vec<String> = tier_3_elsevier_allowlist()
+                .iter()
+                .map(|a| a.source.clone())
+                .collect();
+            assert!(
+                reg.iter().any(|r| r == src.name()),
+                "source `{}` has no tier_3_elsevier_allowlist entry; a production fetch would \
+                    fail UnknownSource. registered: {reg:?}",
+                src.name()
+            );
+            checked += 1;
+        }
+        #[cfg(feature = "tdm-springer")]
+        {
+            let src = crate::sources::tdm_springer::TdmSpringerSource::new();
+            let reg: Vec<String> = tier_3_springer_allowlist()
+                .iter()
+                .map(|a| a.source.clone())
+                .collect();
+            assert!(
+                reg.iter().any(|r| r == src.name()),
+                "source `{}` has no tier_3_springer_allowlist entry; a production fetch would \
+                    fail UnknownSource. registered: {reg:?}",
+                src.name()
+            );
+            checked += 1;
+        }
+        #[cfg(feature = "tdm-ieee")]
+        {
+            let src = crate::sources::tdm_ieee::TdmIeeeSource::new();
+            let reg: Vec<String> = tier_3_ieee_allowlist()
+                .iter()
+                .map(|a| a.source.clone())
+                .collect();
+            assert!(
+                reg.iter().any(|r| r == src.name()),
+                "source `{}` has no tier_3_ieee_allowlist entry; a production fetch would \
+                    fail UnknownSource. registered: {reg:?}",
+                src.name()
+            );
+            checked += 1;
+        }
+
+        assert!(checked > 0, "the guard must have checked something");
+    }
+
     #[test]
     #[cfg(feature = "metadata")]
     fn every_tier_2_source_has_a_transport_allowlist_entry() {
@@ -1452,7 +1608,8 @@ mod tests {
         for n in names {
             assert!(
                 registered.iter().any(|r| r == n),
-                "source `{n}` has no tier_2_allowlist entry; a production fetch                  would fail UnknownSource. registered: {registered:?}"
+                "source `{n}` has no tier_2_allowlist entry; a production fetch would fail \
+                    UnknownSource. registered: {registered:?}"
             );
         }
     }

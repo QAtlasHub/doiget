@@ -26,6 +26,7 @@
 | Springer Nature OA | 3 (institutional) | 5a | API key | <https://dev.springernature.com/> | `--features tdm-springer` + key + agree |
 | APS Harvest TDM | 3 (institutional) | 5b | API key | <https://harvest.aps.org/> | `--features tdm-aps` + key + agree |
 | Elsevier ScienceDirect TDM | 3 (institutional) | 5c | API key | <https://www.elsevier.com/legal/tdmrep> | `--features tdm-elsevier` + key + agree |
+| IEEE Xplore TDM (**unverified**) | 3 (institutional) | 5d | API key | <https://developer.ieee.org/> | `--features tdm-ieee` + key + agree |
 
 ## 2. User responsibility
 
@@ -68,6 +69,7 @@ Tier 3 TDM sources are individually feature-flagged and require user-driven buil
 cargo install doiget --features metadata,tdm-springer
 cargo install doiget --features metadata,tdm-aps
 cargo install doiget --features metadata,tdm-elsevier
+cargo install doiget --features metadata,tdm-ieee
 ```
 
 There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
@@ -136,13 +138,90 @@ There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
 
 Each requires:
 
-1. A Cargo feature compiled in (`tdm-elsevier`, `tdm-aps`, `tdm-springer`).
+1. A Cargo feature compiled in (`tdm-elsevier`, `tdm-aps`, `tdm-springer`, `tdm-ieee`).
 2. The user's API key in `DOIGET_KEY_<PUBLISHER>` env or `[tdm.<publisher>] api_key` in
    credentials.toml.
 3. The agreement env `DOIGET_AGREE_TDM_<PUBLISHER>=1`.
 
 If any of the three is missing, the source is unavailable at runtime
 ([`CAPABILITY.md`](CAPABILITY.md) §2).
+
+**Scoped to the publisher's own DOIs.** A TDM source is consulted only for DOI
+prefixes its publisher registered (ADR-0041). Enabling `tdm-aps` does not send
+your Elsevier lookups to APS.
+
+| feature | DOI prefixes consulted |
+|---|---|
+| `tdm-aps` | `10.1103` |
+| `tdm-elsevier` | `10.1016`, `10.1006`, `10.1053` |
+| `tdm-springer` | `10.1007`, `10.1038`, `10.1057`, `10.1140` |
+| `tdm-ieee` | `10.1109`, `10.23919` |
+
+The lists are deliberately conservative, so a publisher may own a prefix not
+listed. That is visible rather than silent: the fetch error names it, as
+`not consulted (DOI prefix 10.xxxx is not <publisher>)`.
+
+#### IEEE Xplore — an inferred contract (#430)
+
+`tdm-ieee` is the one Tier-3 source whose upstream contract has **not** been
+confirmed against a live programme key. IEEE's programme requires registration
+and a project summary before a key is issued, so the endpoint
+(`https://ieeexploreapi.ieee.org/api/v1/search/articles`), the auth shape (the
+key as an `apikey` **query parameter**, as with Springer rather than the
+`X-API-Key` header APS and Elsevier use) and the response envelope
+(`{ total_records, total_searched, articles: [...] }`) are taken from IEEE's
+public developer portal and SDKs.
+
+One unauthenticated request on 2026-08-24 (#460) **confirmed the endpoint** — the
+host resolves and `/api/v1/search/articles` is served — and corrected the assumed
+failure shape: an unauthorised caller gets `403` with `content-type: text/xml` and
+a body of `<h1>Developer Inactive</h1>`, not JSON. So `(unverified)` in §1 now means
+specifically **the 200-response envelope and the rate limits**.
+
+The failure mode is loud, not silent: a 403 surfaces with its status and the key
+redacted out of the URL, and a 200 in any other shape is a schema error naming the
+missing field and quoting the body — so the first run against a real key reports the
+actual contract. `DOIGET_IEEE_BASE` replays that response against a fixture. **Do not
+drop the "unverified" marking in §1 until a 200 with a real key has been observed.**
+
+Rate limits are likewise unknown; the source is subject to the same hard-coded
+limiter as every other, which may be more or less polite than IEEE requires.
+
+**When they run.** Strictly after Crossref, and only when Crossref produced
+nothing — the same rule the Tier-2 chain follows, so enabling a TDM source can
+never change a resolution that already works. Within that step, TDM runs before
+the Tier-2 OA aggregators: for a DOI its publisher registered, the publisher's
+own API is the authoritative record.
+
+Every outcome, consulted or not, is recorded in the attempt trace attached to a
+failed fetch, so "asked and had nothing" is always distinguishable from "never
+asked" and from "wrong publisher".
+
+**Pointing them elsewhere.** `DOIGET_APS_BASE`, `DOIGET_ELSEVIER_BASE`,
+`DOIGET_SPRINGER_BASE` and `DOIGET_IEEE_BASE` override the API base, mirroring `DOIGET_CROSSREF_BASE`.
+Intended for tests and for institutional proxies.
+
+### When the publisher refuses the content
+
+The OA chain already tries every location Unpaywall returned, advancing past
+each failure — a 429 on one host does not stop it. What it could not do was
+look beyond that list: when Crossref resolved the DOI, the optional sources
+were skipped entirely, so a rate limit on the single publisher URL ended a run
+with other indexes switched on (#445).
+
+If the content leg is still blocked after the arXiv preprint fallback
+(#325), doiget now asks the **enabled** optional sources whether anyone else
+holds a copy, and tries the document URL they report. Three of them publish
+one: CORE (`downloadUrl`), HAL (`fileMain_s`, gated on `openAccess_bool`) and
+Europe PMC (`fullTextUrlList`). OpenAIRE and DataCite report a DOI resolver or
+a landing page rather than a file, so they contribute no URL — their outcome
+still appears in the attempt trace.
+
+The fetch itself stays on the `oa-publisher` leg, with its allowlist and its
+ADR-0023 denial context, exactly as each source's own docs describe.
+
+This costs a request only when the content leg has **already** failed and the
+user has switched a source on. With no flags set, behaviour is unchanged.
 
 ## 5. Adding a new source
 
