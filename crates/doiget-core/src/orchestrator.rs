@@ -4086,6 +4086,58 @@ mod attempt_denial_tests {
         assert_eq!(outcome.wire(), "consulted_failed");
     }
 
+    /// The accessors are a narrowing, so the negative case matters as much
+    /// as the positive one: a caller that treated `denial()` as
+    /// "is this a failure" would mis-handle every `Failed` row.
+    #[test]
+    fn the_accessors_narrow_rather_than_generalise() {
+        let failed = AttemptOutcome::Failed {
+            detail: "connection reset".to_string(),
+        };
+        assert!(failed.denial().is_none());
+        assert!(failed.required_env().is_none());
+        assert!(failed.detail().is_some());
+
+        let disabled = AttemptOutcome::Disabled {
+            env: &["DOIGET_ENABLE_HAL"],
+        };
+        assert!(disabled.denial().is_none());
+        assert!(
+            disabled.detail().is_none(),
+            "`Disabled` carries structure; the joined string is built at the wire"
+        );
+        assert!(!disabled.was_consulted());
+        assert_eq!(
+            disabled.render(),
+            "not consulted (set DOIGET_ENABLE_HAL to enable)"
+        );
+    }
+
+    /// `attempted` is optional on a `DenialContext`, and the size cap has
+    /// no host to name. The prose has to hold either way.
+    #[test]
+    fn a_denial_without_an_attempted_host_still_renders() {
+        let outcome = AttemptOutcome::Denied {
+            denial: DenialContext {
+                reason: DenialReason::SizeCapExceeded,
+                source: Some("core".to_string()),
+                attempted: None,
+                expected: None,
+                hop_index: None,
+                cap: None,
+                actual: None,
+            },
+        };
+        assert_eq!(outcome.render(), "consulted: refused (SizeCapExceeded)");
+
+        // No config channel for a size cap, so no remediation key -- as
+        // opposed to an empty array, which would read as "we looked and
+        // there is nothing you can do" without saying so.
+        let v = attempts_to_value(&[SourceAttempt::new("core", outcome)]);
+        assert!(v[0].get("remediation").is_none(), "row: {}", v[0]);
+        assert!(v[0].get("denial_context").is_some(), "row: {}", v[0]);
+    }
+
     /// #470's second half. Tier 3 needs two variables, and joining them
     /// into `"A + B"` meant a consumer had to split on the separator --
     /// exactly what the `detail()` / `wire()` split exists to avoid.
