@@ -251,21 +251,21 @@ mode resolution above.
 
 ## 6. Credentials file
 
+This file carries **API keys only**. The per-publisher agreement is
+environment-only and cannot be given here — see below, and ADR-0050.
+
 ```toml
-# ~/.config/doiget/credentials.toml — optional, alternative to env vars
-# Permissions MUST be 0600 on POSIX; doiget warns at startup otherwise.
+# ~/.config/doiget/credentials.toml — optional.
+# Permissions SHOULD be 0600 on POSIX; doiget warns at startup otherwise.
 
 [tdm.elsevier]
 api_key = "..."
-agreed = true
 
 [tdm.aps]
 api_key = "..."
-agreed = true
 
 [tdm.springer]
 api_key = "..."
-agreed = true
 
 # Requires a build with `--features tdm-ieee`. The endpoint and response
 # shape are INFERRED from IEEE's public developer portal, not confirmed
@@ -274,10 +274,33 @@ agreed = true
 # rather than silently returning nothing.
 [tdm.ieee]
 api_key = "..."
-agreed = true
 ```
 
-If both env var and credentials.toml provide the same key, env var wins.
+**Precedence.** `DOIGET_KEY_<PUBLISHER>` wins over `[tdm.<publisher>] api_key`,
+per §1. A blank value on either rung counts as unset.
+
+**The agreement is not here.** Each TDM source needs
+`DOIGET_AGREE_TDM_<PUBLISHER>=1` **in the environment**, in addition to a key
+from either rung. An `agreed` key in this file is read only so doiget can warn
+that it does nothing; it grants nothing. [`LEGAL.md`](LEGAL.md) §6a.2 makes the
+agreement an *enforced control*, and part of why it is meaningful is that it is
+an act taken in the session that runs the fetch — a boolean written once into a
+file and forgotten is weaker, and weakening it as a side effect of adding a
+convenience is not a trade this file is worth (ADR-0050).
+
+So the three states are:
+
+| key | `DOIGET_AGREE_TDM_<PUB>=1` | result |
+|---|---|---|
+| env or file | yes | grant (if the `tdm-*` feature is compiled in) |
+| env or file | no | `KeyButNotAgreed` — refuses, names the variable |
+| none | yes | `AgreedButNoKey` — refuses, names both |
+
+**Before #509 this file was read by nothing.** It was specified here in full,
+including the `0600` warning, and no code path opened it; a user who followed
+this section wrote their key into a file doiget ignored and then reported the
+source unavailable for want of a key. Both the reader and the permission
+warning exist as of 0.8.11.
 
 ## 6.1 Institutional networks: what works and what does not
 
