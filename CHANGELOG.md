@@ -10,7 +10,42 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-08-27
+
 ### Added
+
+- **[config]** `~/.config/doiget/credentials.toml` is **read**. `docs/CONFIG.md` §6
+  had specified it in full — schema, precedence, a `0600` warning "at startup" — and
+  nothing opened it, so a user who followed a NORMATIVE document wrote their Elsevier
+  key into a file doiget ignored and then reported the source unavailable for want of
+  a key. `[tdm.<publisher>] api_key` now sits one rung below
+  `DOIGET_KEY_<PUBLISHER>`, and the permission warning exists. **The agreement did
+  not move**: `DOIGET_AGREE_TDM_<PUBLISHER>=1` stays environment-only, so it remains
+  an act taken in the session that runs the fetch rather than a boolean written once
+  into a file — an `agreed` key there is parsed only so doiget can warn that it
+  grants nothing (#509, ADR-0050).
+- **[dist]** **npm packages.** `npx -y doiget serve` is now the one-line MCP entry,
+  and `npm i -g doiget` puts the CLI on PATH with no Rust toolchain and no C linker.
+  The four platform binaries ship as `optionalDependencies` carrying the same signed
+  release artifacts, with **no postinstall download** — so it installs under
+  `--ignore-scripts`, through a corporate registry mirror, and inside npm's integrity
+  hashes. A postinstall fetch would have been the shorter route and is the exact
+  supply-chain shape a reviewer is trained to reject. Published by the release
+  workflow over npm Trusted Publishing (OIDC, no long-lived token), after verifying
+  each binary against the release's own `.sha256` (#511).
+- **[dist]** **Claude Code plugin.** `/plugin marketplace add QAtlasHub/doiget` then
+  `/plugin install doiget@doiget`. Self-hosted, so it needs approval from nobody;
+  both manifests pass `claude plugin validate` (#513).
+- **[ci]** `posture-lint` fails when the npm platform mapping drifts. The npm and
+  release vocabularies (`darwin`/`x64` vs `macos`/`x86_64`) are written in three
+  places — the release matrix, `scripts/stage-npm.sh` and the bin shim — and three
+  hand-maintained copies of one table is the #454 / #504 shape (#511).
+- **[dist]** **MCP Registry entry carries packages.** `server.json` was source-only, so
+  `io.github.QAtlasHub/doiget` was discoverable in the registry but not installable
+  from it. It now emits both a `cargo` and an `mcpb` package, and the release signs
+  the `.mcpb` and publishes its `.sha256` alongside — previously the one artifact a
+  user is most likely to double-click was the only one they could not verify
+  (#483).
 
 ### Changed
 
@@ -39,6 +74,26 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   as completed; the README now carries a status table naming what ships, what does
   not (Homebrew, `.deb`, Docker) and what is unverified (the Nix flake's outputs),
   with the remainder tracked in the open #501 (#501).
+- **[docs]** All six `docs/INTEGRATION/` host guides were `PLACEHOLDER (Phase 3)` and
+  told the reader to stop and wait — for a phase that shipped long ago. `claude-code.md`
+  said "Do not copy speculative JSON from elsewhere — wait for the verified Phase 3
+  snippet", which made it worse than a missing page: a missing page invites a guess and
+  this one forbade one. Each guide now carries a working configuration and an explicit
+  **exercised / not exercised** line with a date, rather than a blanket disclaimer
+  (#512).
+- **[docs]** `.cargo/config.toml` advertised `.cargo/config.local.toml` as the
+  per-developer override channel and `.gitignore` reserved the name. Cargo never reads
+  it, and the `include` that would make it real is a hard error before any cargo command
+  when the file is absent — which it is in every fresh clone. Both the promise and the
+  reserved filename are gone; `CONTRIBUTING.md` documents the two mechanisms that work
+  (`$CARGO_HOME/config.toml`, `CARGO_TARGET_DIR`), with the 195 GB this cost on one
+  machine as the reason to bound a shared target directory (#521).
+- **[ci]** The `main → next` back-merge died on a raw GraphQL dump and read as a bare
+  `backmerge / failure` in the Actions list. `gh pr create` is now trapped and its
+  stderr classified — org PAT-lifetime policy, expired token, missing scope, no diff —
+  each emitting an actionable error, with a closing line saying how far behind `next`
+  now is (#426).
+
 ### Fixed
 
 - **[metadata]** `MetadataOnlyOutcome.oa_url` handed callers **Similarity Check and
@@ -51,6 +106,37 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   ADR-0048 D2 draws the line at documented-by-the-vendor versus guessed-by-us. Seven
   real-world fixtures asserted the old value, which is the strongest evidence it was
   behaviour rather than an accident (#517, ADR-0052).
+- **[transport]** In a `--features metadata` build **every Tier-2 optional source died
+  at `UnknownSource`**. `build_http_client` registered `tier_2_allowlist()` under
+  `#[cfg(feature = "citation")]` while the sources it serves — OpenAlex, Semantic
+  Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE, Europe PMC — are compiled under
+  `metadata`, so the chain ran, `can_serve` passed, and the request was rejected for
+  want of an allowlist entry. CI's clippy matrix builds that configuration explicitly.
+  Fixing it also required `doiget-cli`'s `citation` to imply its own `metadata`, which
+  it did not — so `doiget capabilities` had been under-reporting the compiled feature
+  set too. Guarded in both crates by a test that asserts the **client** a fetch goes
+  through, not the list (#516).
+- **[source]** Europe PMC refused any record with `isOpenAccess = N` before consulting
+  `fullTextUrlList`, discarding a **Free PDF at `europepmc.org`** — a host already on
+  the `oa-publisher` allowlist — one line before the code written to find it.
+  `isOpenAccess` describes membership of the bulk OA subset; single-article
+  retrievability is a strictly weaker property Europe PMC reports per entry, and it is
+  now the gate. Measured on 10.1098/rspa.2014.0585 (PMC4277194), whose Free entry
+  returns 670 kB of `application/pdf` (#503).
+- **[config]** `[network] unpaywall_email` was written by `config init`, called STRONGLY
+  RECOMMENDED by the template's own prose, and **read by nothing** — so on a machine
+  configured from the template every request went out as `doiget@localhost` from the
+  non-polite pool, while `config doctor` reported the store root correctly from the same
+  file. The cost is not politeness: the arXiv-preprint fallback fires on what Unpaywall
+  reports, so a throttled answer quietly costs that fallback and the run still exits 0
+  saying `no OA PDF available`. Both addresses now resolve env → `config.toml` →
+  default, `config doctor` names **which rung answered**, and `contact_email` — absent
+  from the generated template entirely — is in it (#504).
+- **[cli/mcp]** The config-directory resolver existed as two hand-maintained copies whose
+  own comment warned that divergence "would silently desync the user-extension allowlist
+  surfaces". They had already diverged: the CLI accepted `XDG_CONFIG_HOME=""` and
+  resolved a **relative** `doiget/config.toml` under the cwd. Consolidated into
+  `doiget_core::user_extension::config_dir`, which keeps blank-is-unset (#504).
 
 ## [0.8.10] - 2026-08-26
 
