@@ -22,7 +22,8 @@ A value set higher in the chain overrides any value set lower.
 | `log.path` | POSIX: `$HOME/.config/doiget/access.log`. Windows: `%APPDATA%\doiget\access.log`. |
 | `log.retention_days` | `90` |
 | `network.user_agent` | `doiget/<version> (+https://github.com/QAtlasHub/doiget)` |
-| `network.unpaywall_email` | unset; if unset, Unpaywall calls go to non-polite pool |
+| `network.contact_email` | unset; if unset, every outbound request identifies as `doiget@localhost` and goes to the non-polite pool |
+| `network.unpaywall_email` | unset; falls back to `network.contact_email` |
 | `network.connect_timeout_sec` | `10` |
 | `network.read_timeout_sec` | `60` |
 | `network.total_timeout_sec` | `300` |
@@ -62,6 +63,12 @@ retention_days = 90
 
 [network]
 user_agent = "doiget/0.1.0 (+https://github.com/QAtlasHub/doiget; user=alice@example.org)"
+# Polite-pool contact for every outbound request. Overridden by
+# DOIGET_CONTACT_EMAIL, one rung above. This is what `doiget config doctor`
+# checks, and `doctor` names which rung answered.
+contact_email = "alice@example.org"
+# Only if Unpaywall should see a different address. Overridden by
+# DOIGET_UNPAYWALL_EMAIL; falls back to contact_email above.
 unpaywall_email = "alice@example.org"
 connect_timeout_sec = 10
 read_timeout_sec = 60
@@ -196,18 +203,29 @@ All `DOIGET_*` env vars use `SCREAMING_SNAKE_CASE`. Boolean env vars accept `1` 
 | `DOIGET_LOG_PATH` | `log.path` |
 | `DOIGET_LOG_RETENTION_DAYS` | `log.retention_days` |
 | `DOIGET_USER_AGENT` | `network.user_agent` |
-| `DOIGET_CONTACT_EMAIL` | Polite-pool contact address; also the default for `DOIGET_UNPAYWALL_EMAIL`. |
+| `DOIGET_CONTACT_EMAIL` | `network.contact_email`. Polite-pool contact address; also the default for `DOIGET_UNPAYWALL_EMAIL`. |
 | `DOIGET_UNPAYWALL_EMAIL` | `network.unpaywall_email` |
 | `DOIGET_MODE` | `output.mode` |
 | `NO_COLOR` | Forces `output.color = "never"` (xdg standard). |
 | `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` | reqwest honors these (system standard). |
 
-With neither email set, doiget still queries Unpaywall — it sends the placeholder
+Both addresses are resolved **per field**, across the §1 chain: the env var, then
+`[network]` in `config.toml`, then the next-broader default. `DOIGET_UNPAYWALL_EMAIL` →
+`[network] unpaywall_email` → whatever `contact_email` resolved to → `doiget@localhost`.
+The more specific field wins at each rung.
+
+With neither set, doiget still queries Unpaywall — it sends the placeholder
 `doiget@localhost`, which lands in the non-polite pool and may be rate-limited or refused.
-Setting `DOIGET_CONTACT_EMAIL` is therefore worth doing before any batch run, and it is what
-`doiget config doctor` flags. It also makes the automatic arXiv preprint fallback reliable:
-when a DOI's OA PDF is blocked, doiget retries via the arXiv preprint that Unpaywall named,
-so a throttled Unpaywall response costs you that fallback too.
+Setting one is worth doing before any batch run, and it is what `doiget config doctor`
+flags. It also makes the automatic arXiv preprint fallback reliable: when a DOI's OA PDF is
+blocked, doiget retries via the arXiv preprint that Unpaywall named, so a throttled
+Unpaywall response costs you that fallback too — and the run still exits 0 saying
+`no OA PDF available`, which is why a degraded search and a true negative looked the same.
+
+`doiget config doctor` reports **which rung answered**, e.g.
+`[ ok ] contact_email set (from: [network] contact_email in config.toml)`. Before #504 the
+file rung did not exist for either address, so a `config.toml` written from the `config init`
+template was inert while `doctor` reported the store root correctly from the same file.
 
 CapabilityProfile-related env vars are documented in [`CAPABILITY.md`](CAPABILITY.md).
 
@@ -233,21 +251,21 @@ mode resolution above.
 
 ## 6. Credentials file
 
+This file carries **API keys only**. The per-publisher agreement is
+environment-only and cannot be given here — see below, and ADR-0050.
+
 ```toml
-# ~/.config/doiget/credentials.toml — optional, alternative to env vars
-# Permissions MUST be 0600 on POSIX; doiget warns at startup otherwise.
+# ~/.config/doiget/credentials.toml — optional.
+# Permissions SHOULD be 0600 on POSIX; doiget warns at startup otherwise.
 
 [tdm.elsevier]
 api_key = "..."
-agreed = true
 
 [tdm.aps]
 api_key = "..."
-agreed = true
 
 [tdm.springer]
 api_key = "..."
-agreed = true
 
 # Requires a build with `--features tdm-ieee`. The endpoint and response
 # shape are INFERRED from IEEE's public developer portal, not confirmed
@@ -256,30 +274,84 @@ agreed = true
 # rather than silently returning nothing.
 [tdm.ieee]
 api_key = "..."
-agreed = true
 ```
 
-If both env var and credentials.toml provide the same key, env var wins.
+**Precedence.** `DOIGET_KEY_<PUBLISHER>` wins over `[tdm.<publisher>] api_key`,
+per §1. A blank value on either rung counts as unset.
+
+**The agreement is not here.** Each TDM source needs
+`DOIGET_AGREE_TDM_<PUBLISHER>=1` **in the environment**, in addition to a key
+from either rung. An `agreed` key in this file is read only so doiget can warn
+that it does nothing; it grants nothing. [`LEGAL.md`](LEGAL.md) §6a.2 makes the
+agreement an *enforced control*, and part of why it is meaningful is that it is
+an act taken in the session that runs the fetch — a boolean written once into a
+file and forgotten is weaker, and weakening it as a side effect of adding a
+convenience is not a trade this file is worth (ADR-0050).
+
+So the three states are:
+
+| key | `DOIGET_AGREE_TDM_<PUB>=1` | result |
+|---|---|---|
+| env or file | yes | grant (if the `tdm-*` feature is compiled in) |
+| env or file | no | `KeyButNotAgreed` — refuses, names the variable |
+| none | yes | `AgreedButNoKey` — refuses, names both |
+
+**Before #509 this file was read by nothing.** It was specified here in full,
+including the `0600` warning, and no code path opened it; a user who followed
+this section wrote their key into a file doiget ignored and then reported the
+source unavailable for want of a key. Both the reader and the permission
+warning exist as of 0.8.11.
 
 ## 6.1 Institutional networks: what works and what does not
 
 Being on a subscribing university network does **not** make paywalled content
-fetchable. Two independent things sit in the way, and only one of them is doiget's:
+fetchable. Three things sit in the way, in this order — and until 0.8.11 this section
+listed only the last two, which meant it sent readers after fixes that could not help.
+
+0. **Nothing is attempted at all**, and this comes first. The fetch path carries only
+   OA locations an enabled source reported. For a closed work there are none, so the
+   leg ends before any host is chosen: not refused, **never attempted**. The run exits
+   **0** with `metadata-only: no OA PDF available`, which reads as "this paper has no
+   OA copy".
+
+   Both blockers below sit behind this one and are never reached, so widening the
+   allowlist or obtaining TDM credentials does not change the outcome for a closed
+   DOI. Until 0.8.11 this section listed only (1) and (2), and therefore sent readers
+   after two fixes that could not help.
+
+   **This is not a bug awaiting a fix.** #517 asked whether Crossref's publisher link
+   could fill the gap. Measured across six live DOIs and eight captured responses,
+   every `link[]` entry Crossref returns is scoped to Similarity Check, syndication or
+   a TDM programme, and none is general-purpose - so following one would mean using a
+   licensed route without the licence. See [`LEGAL.md`](LEGAL.md) §2a(a-i) and
+   ADR-0052. **The supported route for a closed work is a TDM credential (§6)**, which
+   is the licensed version of exactly that.
 
 1. **The allowlist.** IEEE, ACM, SIAM and AMS are not on the default `oa-publisher`
-   allowlist, so doiget will not attempt the publisher leg for them at all. IEEE now
-   has a TDM route instead (`[tdm.ieee]` above, `--features tdm-ieee`) — that is a
-   different host (`ieeexploreapi.ieee.org`, the API) under a different source key,
-   not a widening of `oa-publisher`.
+   allowlist, so the attempt is refused at the redirect policy with
+   `error[CAPABILITY_DENIED] ... redirect_not_in_allowlist` naming the host. IEEE has
+   a TDM route instead (`[tdm.ieee]` above, `--features tdm-ieee`) — a different host
+   (`ieeexploreapi.ieee.org`, the API) under a different source key, not a widening of
+   `oa-publisher` (ADR-0039).
 2. **The publisher's bot wall.** Even from a subscribing address, a scripted client
    commonly gets `202 Accepted` with an **empty body** — a challenge holding response,
    not a paywall and not a 403. The subscription is not the binding constraint; being a
    program is.
 
 So widening the allowlist alone would not fix such a fetch; it would move the failure
-one step later. `HTTPS_PROXY` is honoured (§4), but a proxy fixes *addressing*, never
-the bot wall — and if you are already on the subscribing network, tunnelling elsewhere
-routes you away from your entitlement.
+one step later. That is now demonstrable rather than asserted: the request is formed
+and refused by name, so you can see which of (1) and (2) you are hitting.
+`HTTPS_PROXY` is honoured (§4), but a proxy fixes *addressing*, never the bot wall —
+and if you are already on the subscribing network, tunnelling elsewhere routes you
+away from your entitlement.
+
+**Where this does work.** For a closed work whose publisher **is** on the
+`oa-publisher` allowlist — the physics societies and diamond-OA hosts of ADR-0027, or
+a host you added yourself via `[[network.additional_hosts]]` / `trust_academic_repos`
+/ `trust_oa_registries` — the attempt now goes out, and on an entitled network it can
+succeed. That is not circumvention: the URL is the one Crossref reports, the request
+carries no credential doiget invented, and any access control on the far side applies
+unchanged.
 
 The two routes that do work:
 

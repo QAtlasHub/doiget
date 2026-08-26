@@ -317,6 +317,14 @@ struct RawNetwork {
     /// open-access registry allowlist (issue #405). See [`oa_registry_hosts`].
     #[serde(default)]
     trust_oa_registries: bool,
+    /// `[network] contact_email` — the polite-pool contact address (#504).
+    #[serde(default)]
+    contact_email: Option<String>,
+    /// `[network] unpaywall_email` — written by `config init` since 0.7 and
+    /// parsed by nobody until #504, so every fetch on a machine configured
+    /// from the template went out as `doiget@localhost`.
+    #[serde(default)]
+    unpaywall_email: Option<String>,
     #[serde(flatten)]
     _other: serde::de::IgnoredAny,
 }
@@ -357,6 +365,13 @@ pub struct UserExtensionConfig {
     /// The CLI and MCP resolvers own that step, and both place this rung
     /// below `DOIGET_STORE_ROOT` and above the cwd default (ADR-0036).
     pub store_root: Option<String>,
+    /// `[network] contact_email`, trimmed, when present and non-empty
+    /// (#504). Rung below `DOIGET_CONTACT_EMAIL`.
+    pub contact_email: Option<String>,
+    /// `[network] unpaywall_email`, trimmed, when present and non-empty
+    /// (#504). Rung below `DOIGET_UNPAYWALL_EMAIL`, itself above
+    /// [`Self::contact_email`].
+    pub unpaywall_email: Option<String>,
 }
 
 /// Returns the built-in curated set of academic institution host patterns.
@@ -465,6 +480,13 @@ fn parse_str(
     let raw_net = raw.network.unwrap_or_default();
     let trust_academic_repos = raw_net.trust_academic_repos;
     let trust_oa_registries = raw_net.trust_oa_registries;
+    // Same "blank means unset" rule as `[store] root` below: an empty
+    // address would be sent as an empty `mailto:` and read to the upstream
+    // as no contact at all, which is the state the field exists to avoid.
+    let trim_nonempty =
+        |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let contact_email = trim_nonempty(raw_net.contact_email);
+    let unpaywall_email = trim_nonempty(raw_net.unpaywall_email);
     let raw_hosts = raw_net.additional_hosts;
 
     // Two-phase: collect ALL invalid patterns rather than failing on
@@ -504,7 +526,121 @@ fn parse_str(
         trust_academic_repos,
         trust_oa_registries,
         store_root,
+        contact_email,
+        unpaywall_email,
     })
+}
+
+/// Why the config directory could not be resolved.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ConfigDirError {
+    /// An environment variable is set to a non-UTF-8 value.
+    ///
+    /// An error rather than a fall-through: silently trying the next rung
+    /// would resolve a *different* file from the one the user configured,
+    /// and report success.
+    #[error("{key} is not valid UTF-8")]
+    NotUnicode {
+        /// The offending variable.
+        key: &'static str,
+    },
+    /// None of `XDG_CONFIG_HOME`, `APPDATA`, `HOME` or `USERPROFILE` is set.
+    #[error("neither HOME nor USERPROFILE is set")]
+    NoHome,
+}
+
+/// Read an env var, treating blank as unset and non-UTF-8 as an error.
+fn env_utf8(key: &'static str) -> Result<Option<String>, ConfigDirError> {
+    match std::env::var(key) {
+        Ok(s) if s.is_empty() => Ok(None),
+        Ok(s) => Ok(Some(s)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(ConfigDirError::NotUnicode { key }),
+    }
+}
+
+/// Config-directory resolution: `XDG_CONFIG_HOME`, then `APPDATA`
+/// (Windows), then `$HOME/.config`.
+///
+/// **The single source of truth.** This existed as two hand-maintained
+/// copies — `doiget-cli::commands::fetch::config_dir_utf8` and
+/// `doiget-mcp::config_dir_utf8` — whose own doc comment warned that
+/// divergence "would silently desync the user-extension allowlist
+/// surfaces". They had already diverged: the CLI copy accepted
+/// `XDG_CONFIG_HOME=""` and resolved a *relative* `doiget/config.toml`
+/// under the cwd, while the MCP copy treated blank as unset. Blank-is-
+/// unset is the answer kept here, because a relative config path is a
+/// silent wrong answer of exactly the #441 / #504 kind.
+///
+/// It lives in `doiget-core` because the fetch path needs it: with the
+/// resolver one crate up, `orchestrator` could not read `config.toml` at
+/// all, so every file-based setting had to be re-implemented in the CLI
+/// or go unread. `[network] unpaywall_email` went unread for four
+/// releases for that reason (#504).
+///
+/// No `dirs` dependency — every new dep adds cargo-vet exemption churn,
+/// and `expand_store_root` below already reads `HOME` directly.
+///
+/// # Errors
+///
+/// [`ConfigDirError::NotUnicode`] if a consulted variable is set to a
+/// non-UTF-8 value; [`ConfigDirError::NoHome`] if none is set.
+pub fn config_dir() -> Result<Utf8PathBuf, ConfigDirError> {
+    if let Some(s) = env_utf8("XDG_CONFIG_HOME")? {
+        return Ok(Utf8PathBuf::from(s));
+    }
+    if let Some(s) = env_utf8("APPDATA")? {
+        return Ok(Utf8PathBuf::from(s));
+    }
+    if let Some(s) = env_utf8("HOME")? {
+        return Ok(Utf8PathBuf::from(s).join(".config"));
+    }
+    if let Some(s) = env_utf8("USERPROFILE")? {
+        return Ok(Utf8PathBuf::from(s).join(".config"));
+    }
+    Err(ConfigDirError::NoHome)
+}
+
+/// `<config_dir>/doiget/config.toml` — the one file every reader means.
+///
+/// # Errors
+///
+/// As [`config_dir`].
+pub fn config_path() -> Result<Utf8PathBuf, ConfigDirError> {
+    Ok(config_dir()?.join("doiget").join("config.toml"))
+}
+
+/// The `config.toml` settings, or defaults when it is missing or
+/// unreadable.
+///
+/// Never fails: a caller on the fetch path wants the setting or the
+/// default, and one bad line in a config file must not take a fetch down.
+/// A read or parse failure is logged at `warn` — not swallowed — for the
+/// reason `store_root_from_config` records: TOML fails the whole document,
+/// so a typo anywhere makes every file rung disappear at once, and the
+/// resulting behaviour is indistinguishable from "nothing was configured".
+#[must_use]
+pub fn load_or_default() -> UserExtensionConfig {
+    let path = match config_path() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::debug!(error = %e, "no config directory; config.toml not read");
+            return UserExtensionConfig::default();
+        }
+    };
+    match load(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                path = %path,
+                error = %e,
+                "config.toml could not be read; its settings are ignored and defaults used \
+                 instead. Run `doiget config doctor` to see what is in effect."
+            );
+            UserExtensionConfig::default()
+        }
+    }
 }
 
 /// Turn a raw `[store] root` value into a path, expanding a leading `~`.

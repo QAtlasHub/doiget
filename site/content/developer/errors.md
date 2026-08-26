@@ -212,8 +212,8 @@ Neither ever renders "no trace" as `[]`.
 | Exit | Meaning |
 |---|---|
 | `0` | Success (all refs ok). |
-| `1` | At least one fetch failed. |
-| `2` | Misuse (bad arguments, missing config). |
+| `1` | At least one fetch was attempted and failed. |
+| `2` | Misuse — a bad argument or missing config. Covers both an argv shape `clap` rejects **and** a well-formed argument whose *value* fails validation, which is why `INVALID_REF` and `AMBIGUOUS` are both 2 (ADR-0049). |
 | `3` | Capability denied (no source could serve). |
 | `4` | I/O failure (store / log unwritable). |
 | `64..=78` | `sysexits.h` mapping for select cases. |

@@ -12,30 +12,45 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Added
 
-- **[dist]** **npm packages.** `npx -y doiget serve` is now the one-line MCP entry,
-  and `npm i -g doiget` puts the CLI on PATH with no Rust toolchain and no C linker.
-  The four platform binaries ship as `optionalDependencies` carrying the same signed
-  release artifacts, with **no postinstall download** — so it installs under
-  `--ignore-scripts`, through a corporate registry mirror, and inside npm's integrity
-  hashes. A postinstall fetch would have been the shorter route and is the exact
-  supply-chain shape a reviewer is trained to reject. Published by the release
-  workflow over npm Trusted Publishing (OIDC, no long-lived token), after verifying
-  each binary against the release's own `.sha256` (#511).
-- **[dist]** **Claude Code plugin.** `/plugin marketplace add QAtlasHub/doiget` then
-  `/plugin install doiget@doiget`. Self-hosted, so it needs approval from nobody;
-  both manifests pass `claude plugin validate` (#513).
-- **[ci]** `posture-lint` fails when the npm platform mapping drifts. The npm and
-  release vocabularies (`darwin`/`x64` vs `macos`/`x86_64`) are written in three
-  places — the release matrix, `scripts/stage-npm.sh` and the bin shim — and three
-  hand-maintained copies of one table is the #454 / #504 shape (#511).
-
 ### Changed
+
+- **[cli]** **Breaking for scripts.** An unparsable ref now exits **2** (misuse) on
+  every ref-taking command, not 1. `docs/ERRORS.md` §4 already reserved 1 for "at
+  least one fetch was attempted and failed", and an unparsable ref fetches nothing —
+  but `cli_exit_code` had no `INVALID_REF` arm, so `fetch` and the eight commands
+  #477 converted fell through to the catch-all 1 while `graph` hard-coded the 2 the
+  table prescribes. One binary, two answers for the same input, and a comment at
+  each site asserting agreement with the other. A caller that branched on `$? == 1`
+  to mean "invalid ref" was already wrong: 1 was also every network failure and
+  every other code under the catch-all (#492, ADR-0049).
+
+- **[docs]** `CONFIG.md` §6.1 named two things standing between an entitled network and
+  a paywalled paper — the allowlist, and the publisher bot wall — and **neither was
+  reached**. A third sits in front of both: for a closed work no candidate URL is ever
+  formed, so the leg ends before any host is chosen and the run exits 0 with `no OA PDF
+  available`. The section now leads with that, and says why it is not a bug awaiting a
+  fix: measured across six live DOIs and eight captured responses, **every** Crossref
+  `link[]` entry is programme-scoped and none is general-purpose, so there is nothing
+  legitimate to follow. The supported route for a closed work is a TDM credential
+  (#517, ADR-0052).
 
 - **[docs]** `README.md` no longer points readers at closed issue #247 for the
   install channels it promised. Four of its five did not exist when it was closed
   as completed; the README now carries a status table naming what ships, what does
   not (Homebrew, `.deb`, Docker) and what is unverified (the Nix flake's outputs),
   with the remainder tracked in the open #501 (#501).
+### Fixed
+
+- **[metadata]** `MetadataOnlyOutcome.oa_url` handed callers **Similarity Check and
+  TDM URLs under the name `oa_url`** — to the MCP surface and to anyone reading
+  `metadata_only` output, whose own doc comment invites acting on the field "for
+  separate action". The extractor returned the first `message.link[]` entry with no
+  filtering, and Crossref's `intended-application` distinguishes a general-purpose link
+  from ones a publisher scoped to Similarity Check, syndication or its TDM programme.
+  Only `unspecified` is accepted now; an unlabelled entry is refused too, because
+  ADR-0048 D2 draws the line at documented-by-the-vendor versus guessed-by-us. Seven
+  real-world fixtures asserted the old value, which is the strongest evidence it was
+  behaviour rather than an accident (#517, ADR-0052).
 
 ## [0.8.10] - 2026-08-26
 

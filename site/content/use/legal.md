@@ -87,11 +87,36 @@ Given a ref, doiget attempts retrieval from exactly two kinds of location:
 **(a) A location an enabled source reported.** The URL appears verbatim in a response
 doiget received from a source that both the build and the runtime capability profile
 have enabled. In practice: Unpaywall's `best_oa_location` / `oa_locations` (Tier 1),
-and — only when the content leg was already blocked — CORE's `downloadUrl`, HAL's
+and - only when the content leg was already blocked - CORE's `downloadUrl`, HAL's
 `fileMain_s` (gated on `openAccess_bool`), or Europe PMC's `fullTextUrlList`, each
 behind its own `DOIGET_ENABLE_*` flag.
 *Enforced by:* `orchestrator::optional_source_oa_url`, which dispatches to one
 per-source extractor and returns `None` for any other source name.
+
+**(a-i) Crossref `link[]` is NOT one of them, and this was measured.** #517 asked
+whether the fetch path should carry the publisher link Crossref reports, so that a
+user on a subscribing network reaches the publisher instead of exiting 0 in silence.
+It should not, and the reason is what Crossref actually returns.
+
+Every `link[]` entry carries `intended-application`. `unspecified` would be a general
+full-text link; `text-mining`, `similarity-checking` and `syndication` scope the URL to
+a specific licensed programme. Measured 2026-08-26 across **six live DOIs** (SIAM,
+IEEE, AMS, ACM, Springer Nature, the Royal Society) and the **eight captured
+responses** in `tests/fixtures/real_world/` - 12 entries in total - **not one carried
+`unspecified`.** Every one was `text-mining` or `similarity-checking`.
+
+So Crossref `link[]` is a programme-scoped channel, not a general full-text one.
+Following it would mean using Similarity Check and TDM links without holding those
+licences - and doiget already has the licensed route: its Tier-3 TDM sources, with the
+user's own credential and a recorded per-publisher agreement (§6a.2). The ceiling is
+unchanged (ADR-0052).
+
+*Enforced by:* `orchestrator::extract_crossref_publisher_url`, which accepts only
+`unspecified` and refuses an unlabelled entry as well - an unlabelled link is a guess,
+and the line this section draws is documented-by-the-vendor versus guessed-by-us
+(ADR-0048 D2). Before #517 that function returned the first entry with no filtering,
+so `MetadataOnlyOutcome.oa_url` could hand a caller a Similarity Check URL under the
+name `oa_url`.
 
 **(b) An endpoint built from a vendor's own documented URL scheme, for the identifier
 the user supplied.** arXiv's `/pdf/<id>.pdf` and `/api/query?id_list=<id>`; ar5iv's
@@ -217,30 +242,44 @@ These are mechanically enforced by code, type system, Cargo, or CI. Removing
 them requires changing source files that are gated by branch protection.
 
 1. **No bundled credentials.** No publisher API key is shipped in any doiget
-   binary. Credentials are read at runtime from **environment variables**
-   (`DOIGET_KEY_<PUBLISHER>`), wrapped in `secrecy::Secret`, and never logged in
-   raw form. *Enforced by:* `secrecy::Secret` types in `doiget-core`; the
-   `tracing` redactor.
+   binary. Keys are read at runtime from `DOIGET_KEY_<PUBLISHER>` or, one rung
+   below it, `[tdm.<publisher>] api_key` in `~/.config/doiget/credentials.toml`;
+   either way they are wrapped in `secrecy::Secret` and never logged in raw
+   form. *Enforced by:* `secrecy::Secret` types in `doiget-core`; the `tracing`
+   redactor; `doiget_core::credentials`.
 
-   Two corrections here (#494):
+   Two corrections here (#494), one of which has since been closed the other way:
 
    - This said credentials are also read from `~/.config/doiget/credentials.toml`.
-     They are not. `CapabilityProfile`'s TDM resolver reads `std::env::var` and
-     nothing else, and no code path opens that file — `docs/CONFIG.md` §6
-     specifies it in full anyway, which is tracked as #509. A user following that
-     section today writes a key into a file doiget ignores.
+     At the time they were not — `docs/CONFIG.md` §6 specified the file in full
+     and no code path opened it (#509). **As of 0.8.11 the sentence is true
+     again**, because the reader was built rather than the specification
+     deleted: a long-lived key is better off in a `0600` file than in the
+     environment of every subprocess, and the permission warning §6 promised now
+     exists too (ADR-0050). The **agreement** did not move — see §6a.2.
    - "*CI grep for embedded key patterns*" was listed as enforcement. **No such
      check exists.** `posture-lint.yml` greps for marketing terms, HTTP-server
-     imports, telemetry imports and non-rustls TLS backends; there is no secret
-     scanner in the tree. §6a is defined as controls a machine enforces, so an
-     enforcement clause that names nothing does not belong in it. The safeguard
-     itself stands on the type-level ones that are real.
+     imports, telemetry imports, non-rustls TLS backends and the npm platform
+     mapping; there is no secret scanner in the tree. §6a is defined as controls
+     a machine enforces, so an enforcement clause that names nothing does not
+     belong in it. The safeguard itself stands on the type-level ones that are
+     real.
 
 2. **Opt-in TDM agreement (per-publisher).** Each TDM-class source requires
-   the user to set `DOIGET_AGREE_TDM_<PUBLISHER>=1` AND provide
-   `DOIGET_KEY_<PUBLISHER>`. Missing or partial configurations fail closed at
-   `CapabilityProfile::from_env`. *Enforced by:* `CapabilityProfile`
-   resolution algorithm ([`CAPABILITY.md`](CAPABILITY.md) §2 rules 2 and 3).
+   the user to set `DOIGET_AGREE_TDM_<PUBLISHER>=1` **in the environment**, AND
+   to provide a key (env var or `credentials.toml`, §6a.1). Missing or partial
+   configurations fail closed at `CapabilityProfile::from_env`. *Enforced by:*
+   `CapabilityProfile` resolution algorithm ([`CAPABILITY.md`](CAPABILITY.md) §2
+   rules 2 and 3).
+
+   **The agreement is environment-only, and deliberately did not follow the key
+   into the file** (ADR-0050). Part of what makes this control meaningful is
+   that it is an act taken in the session that runs the fetch; a boolean written
+   once into a config file and forgotten is a weaker consent, and letting a
+   convenience dilute an enforced control is the kind of accident ADR-0048 was
+   written about. An `agreed` key in `credentials.toml` is parsed only so doiget
+   can warn that it grants nothing — a documented field with no reader being the
+   defect #509 was about in the first place.
 
 3. **Compile-time feature gating.** Each TDM source is behind a Cargo feature
    (`tdm-elsevier`, `tdm-aps`, `tdm-springer`, `tdm-ieee`). Default builds and
