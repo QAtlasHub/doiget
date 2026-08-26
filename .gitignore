@@ -38,7 +38,8 @@ lcov.info
 *.crt
 
 # Local config (per-developer)
-.cargo/config.local.toml
+# NOT .cargo/config.local.toml — cargo never reads it, and reserving the name
+# is what made three people believe it worked. See CONTRIBUTING.md.
 .envrc
 .env
 .env.local
