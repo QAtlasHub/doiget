@@ -3906,20 +3906,10 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
 /// case the caller downgrades to "user extension disabled" rather
 /// than failing the whole request.
 fn config_dir_utf8() -> anyhow::Result<Utf8PathBuf> {
-    if let Ok(s) = std::env::var("XDG_CONFIG_HOME") {
-        if !s.is_empty() {
-            return Ok(Utf8PathBuf::from(s));
-        }
-    }
-    if let Ok(s) = std::env::var("APPDATA") {
-        if !s.is_empty() {
-            return Ok(Utf8PathBuf::from(s));
-        }
-    }
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| anyhow::anyhow!("neither HOME nor USERPROFILE is set"))?;
-    Ok(Utf8PathBuf::from(home).join(".config"))
+    // Delegated to `doiget_core::user_extension::config_dir` (#504): this
+    // was the second of three hand-maintained copies, and the CLI's
+    // already disagreed with it about a blank `XDG_CONFIG_HOME`.
+    Ok(doiget_core::user_extension::config_dir()?)
 }
 
 /// Resolve the provenance log path. Mirrors the CLI's precedence

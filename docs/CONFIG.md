@@ -22,7 +22,8 @@ A value set higher in the chain overrides any value set lower.
 | `log.path` | POSIX: `$HOME/.config/doiget/access.log`. Windows: `%APPDATA%\doiget\access.log`. |
 | `log.retention_days` | `90` |
 | `network.user_agent` | `doiget/<version> (+https://github.com/QAtlasHub/doiget)` |
-| `network.unpaywall_email` | unset; if unset, Unpaywall calls go to non-polite pool |
+| `network.contact_email` | unset; if unset, every outbound request identifies as `doiget@localhost` and goes to the non-polite pool |
+| `network.unpaywall_email` | unset; falls back to `network.contact_email` |
 | `network.connect_timeout_sec` | `10` |
 | `network.read_timeout_sec` | `60` |
 | `network.total_timeout_sec` | `300` |
@@ -62,6 +63,12 @@ retention_days = 90
 
 [network]
 user_agent = "doiget/0.1.0 (+https://github.com/QAtlasHub/doiget; user=alice@example.org)"
+# Polite-pool contact for every outbound request. Overridden by
+# DOIGET_CONTACT_EMAIL, one rung above. This is what `doiget config doctor`
+# checks, and `doctor` names which rung answered.
+contact_email = "alice@example.org"
+# Only if Unpaywall should see a different address. Overridden by
+# DOIGET_UNPAYWALL_EMAIL; falls back to contact_email above.
 unpaywall_email = "alice@example.org"
 connect_timeout_sec = 10
 read_timeout_sec = 60
@@ -196,18 +203,29 @@ All `DOIGET_*` env vars use `SCREAMING_SNAKE_CASE`. Boolean env vars accept `1` 
 | `DOIGET_LOG_PATH` | `log.path` |
 | `DOIGET_LOG_RETENTION_DAYS` | `log.retention_days` |
 | `DOIGET_USER_AGENT` | `network.user_agent` |
-| `DOIGET_CONTACT_EMAIL` | Polite-pool contact address; also the default for `DOIGET_UNPAYWALL_EMAIL`. |
+| `DOIGET_CONTACT_EMAIL` | `network.contact_email`. Polite-pool contact address; also the default for `DOIGET_UNPAYWALL_EMAIL`. |
 | `DOIGET_UNPAYWALL_EMAIL` | `network.unpaywall_email` |
 | `DOIGET_MODE` | `output.mode` |
 | `NO_COLOR` | Forces `output.color = "never"` (xdg standard). |
 | `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` | reqwest honors these (system standard). |
 
-With neither email set, doiget still queries Unpaywall — it sends the placeholder
+Both addresses are resolved **per field**, across the §1 chain: the env var, then
+`[network]` in `config.toml`, then the next-broader default. `DOIGET_UNPAYWALL_EMAIL` →
+`[network] unpaywall_email` → whatever `contact_email` resolved to → `doiget@localhost`.
+The more specific field wins at each rung.
+
+With neither set, doiget still queries Unpaywall — it sends the placeholder
 `doiget@localhost`, which lands in the non-polite pool and may be rate-limited or refused.
-Setting `DOIGET_CONTACT_EMAIL` is therefore worth doing before any batch run, and it is what
-`doiget config doctor` flags. It also makes the automatic arXiv preprint fallback reliable:
-when a DOI's OA PDF is blocked, doiget retries via the arXiv preprint that Unpaywall named,
-so a throttled Unpaywall response costs you that fallback too.
+Setting one is worth doing before any batch run, and it is what `doiget config doctor`
+flags. It also makes the automatic arXiv preprint fallback reliable: when a DOI's OA PDF is
+blocked, doiget retries via the arXiv preprint that Unpaywall named, so a throttled
+Unpaywall response costs you that fallback too — and the run still exits 0 saying
+`no OA PDF available`, which is why a degraded search and a true negative looked the same.
+
+`doiget config doctor` reports **which rung answered**, e.g.
+`[ ok ] contact_email set (from: [network] contact_email in config.toml)`. Before #504 the
+file rung did not exist for either address, so a `config.toml` written from the `config init`
+template was inert while `doctor` reported the store root correctly from the same file.
 
 CapabilityProfile-related env vars are documented in [`CAPABILITY.md`](CAPABILITY.md).
 
