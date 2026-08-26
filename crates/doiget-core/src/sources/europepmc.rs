@@ -13,14 +13,30 @@
 //! `CapabilityProfile::from_env` from `DOIGET_ENABLE_EUROPE_PMC`, which
 //! is **off by default** (ADR-0040).
 //!
-//! ## OA subset only
+//! ## Retrievable, not "in the OA subset"
 //!
-//! Europe PMC indexes far more than it can give you: a record can be
-//! `inEPMC = "Y"` — present in the archive — while `isOpenAccess = "N"`,
-//! meaning the full text sits behind the publisher subscription. Only
-//! `isOpenAccess = "Y"` is accepted, and anything else is an explicit
-//! refusal rather than a hit, exactly as #415 requires. `inEPMC` is
-//! deliberately **not** the gate; it answers a different question.
+//! Europe PMC indexes far more than it can give you, and it reports the
+//! difference in three places that do not mean the same thing:
+//!
+//! * `inEPMC = "Y"` — the record is in the archive. It says nothing
+//!   about whether the full text is readable, so it is **not** the gate
+//!   (#415).
+//! * `isOpenAccess = "Y"` — the record is in the bulk OA subset. That is
+//!   a licensing / bulk-rights statement, and it is **reported, not a
+//!   veto** (#503).
+//! * `fullTextUrlList` — per-entry availability. An entry with
+//!   `documentStyle = "pdf"` and `availabilityCode` `F` (Free) or `OA`
+//!   is a specific claim that *this article's* PDF can be retrieved.
+//!
+//! The third is strictly weaker than the second, and it is the one
+//! doiget can act on, so it is the gate. `10.1098/rspa.2014.0585`
+//! (PMC4277194) is the record that motivated the change: `isOpenAccess
+//! = N`, and a 670 kB Free PDF sitting at `europepmc.org` — a host
+//! already on the `oa-publisher` allowlist. The old gate discarded it
+//! one line before `open_access_pdf_url` would have found it.
+//!
+//! A record that advertises no `F`/`OA` PDF entry is an explicit refusal
+//! rather than a hit, exactly as #415 requires.
 //!
 //! ## Retrieval goes through the existing OA chain, not this source
 //!
@@ -161,12 +177,20 @@ impl Source for EuropePmcSource {
             hint: format!("europepmc has no record for {}", doi.as_str()),
         })?;
 
-        // #415: OA subset only, as an explicit refusal rather than a retry.
-        if !is_open_access(record) {
+        // #503: refuse on "advertises nothing retrievable", not on
+        // "outside the OA subset". `isOpenAccess` is a bulk-rights
+        // statement; `fullTextUrlList` reports single-article
+        // retrievability per entry, and the second can be true while the
+        // first is false. Gating on the subset threw away Free PDFs at
+        // `europepmc.org` — already an `oa-publisher` allowlist host —
+        // one line before the code written to find them. The flags stay
+        // in the refusal because they are what a reader checks next.
+        if open_access_pdf_url(record).is_none() {
             return Err(FetchError::SourceSchema {
                 hint: format!(
-                    "europepmc record is indexed but not open access \
-                     (isOpenAccess = {}, inEPMC = {})",
+                    "europepmc record advertises no retrievable PDF: no \
+                     fullTextUrlList entry has documentStyle = pdf with \
+                     availabilityCode F or OA (isOpenAccess = {}, inEPMC = {})",
                     flag(record, "isOpenAccess").unwrap_or("absent"),
                     flag(record, "inEPMC").unwrap_or("absent"),
                 ),
@@ -212,9 +236,14 @@ fn flag<'a>(record: &'a serde_json::Value, name: &str) -> Option<&'a str> {
 /// True only for `isOpenAccess == "Y"`.
 ///
 /// Deliberately **not** `inEPMC`: a record can be in the archive while its
-/// full text is subscription-only, so gating on presence rather than
-/// openness would return records doiget cannot retrieve. Absent counts as
-/// not open.
+/// full text is subscription-only, so presence is not openness. Absent
+/// counts as not open.
+///
+/// Since #503 this is **reported, not a veto**: `isOpenAccess` describes
+/// membership of the bulk OA subset, and `fetch` gates on the strictly
+/// weaker per-entry claim that [`open_access_pdf_url`] reads. The value
+/// still travels to the caller inside `metadata_json`, and still appears
+/// in the refusal message when nothing retrievable is advertised.
 #[must_use]
 pub fn is_open_access(record: &serde_json::Value) -> bool {
     flag(record, "isOpenAccess") == Some("Y")
@@ -322,6 +351,33 @@ mod tests {
         ]}
     }"#;
 
+    /// #503, observed live on 10.1098/rspa.2014.0585 (PMC4277194): the
+    /// record is OUTSIDE the bulk OA subset (`isOpenAccess = N`) and
+    /// still advertises a Free PDF at `europepmc.org`. Fetching that URL
+    /// by hand returned 670 kB of `application/pdf`.
+    const SAMPLE_CLOSED_SUBSET_WITH_FREE_PDF: &str = r#"{
+        "hitCount": 1,
+        "resultList": {"result": [
+            {
+                "id": "PMC4277194",
+                "source": "PMC",
+                "doi": "10.1098/rspa.2014.0585",
+                "title": "Continuous analogues of matrix factorizations.",
+                "pubYear": "2015",
+                "isOpenAccess": "N",
+                "inEPMC": "Y",
+                "fullTextUrlList": {"fullTextUrl": [
+                    {"availability": "Free", "availabilityCode": "F",
+                     "documentStyle": "pdf", "site": "Europe_PMC",
+                     "url": "https://europepmc.org/articles/PMC4277194?pdf=render"},
+                    {"availability": "Subscription required", "availabilityCode": "S",
+                     "documentStyle": "doi", "site": "DOI",
+                     "url": "https://doi.org/10.1098/rspa.2014.0585"}
+                ]}
+            }
+        ]}
+    }"#;
+
     const SAMPLE_EMPTY: &str = r#"{"hitCount": 0, "resultList": {"result": []}}"#;
 
     fn build_test_context(wiremock_host: &str) -> (TempDir, FetchContext) {
@@ -409,10 +465,15 @@ mod tests {
 
     /// The trap this gate exists for. `inEPMC = Y` means the record is in
     /// the archive; it says nothing about whether the full text is
-    /// readable. Gating on presence instead of openness would hand back
-    /// records doiget cannot retrieve.
+    /// readable. Gating on presence would hand back records doiget cannot
+    /// retrieve.
+    ///
+    /// Since #503 the refusal is for the narrower reason — this fixture
+    /// advertises no `fullTextUrlList` at all — and the message must say
+    /// so, or it cannot be told apart from
+    /// `closed_subset_record_with_a_free_pdf_is_accepted` below.
     #[tokio::test]
-    async fn in_epmc_but_not_open_access_is_refused() {
+    async fn in_epmc_with_no_retrievable_pdf_is_refused() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/europepmc/webservices/rest/search"))
@@ -435,6 +496,50 @@ mod tests {
         assert!(
             msg.contains("isOpenAccess = N") && msg.contains("inEPMC = Y"),
             "the refusal must say WHY, naming both flags; got: {msg}"
+        );
+        assert!(
+            msg.contains("no retrievable PDF"),
+            "the refusal must be about retrievability, not subset membership \
+             — the two are distinguishable and #503 was the case where they \
+             differ; got: {msg}"
+        );
+    }
+
+    /// #503. `isOpenAccess = N` is a statement about the bulk OA subset,
+    /// and the record still carries a Free PDF at an already-allowlisted
+    /// host. Refusing here discarded a copy doiget could retrieve, one
+    /// line before `open_access_pdf_url` — which already accepted `F` —
+    /// would have found it.
+    #[tokio::test]
+    async fn closed_subset_record_with_a_free_pdf_is_accepted() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/europepmc/webservices/rest/search"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(SAMPLE_CLOSED_SUBSET_WITH_FREE_PDF),
+            )
+            .mount(&server)
+            .await;
+
+        let (_td, ctx) = build_test_context(&server.address().to_string());
+        let src = EuropePmcSource::with_base(Url::parse(&server.uri()).expect("base"));
+        let ref_ = Ref::Doi(Doi::parse("10.1098/rspa.2014.0585").expect("doi"));
+
+        let got = src
+            .fetch(&ref_, &profile(true), &ctx)
+            .await
+            .expect("a Free PDF entry is retrievable even outside the OA subset");
+        assert!(got.pdf_bytes.is_none(), "metadata-only contract");
+        let rec = got.metadata_json.expect("record");
+        assert_eq!(
+            open_access_pdf_url(&rec),
+            Some("https://europepmc.org/articles/PMC4277194?pdf=render"),
+            "the URL the oa-publisher leg will fetch must survive to the caller"
+        );
+        assert!(
+            !is_open_access(&rec),
+            "the subset flag is reported, not corrected — a caller that \
+             cares can still read it"
         );
     }
 

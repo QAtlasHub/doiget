@@ -4210,6 +4210,19 @@ mod attempt_denial_tests {
 
 /// Whether a `SourceSchema` hint describes an access refusal rather than a
 /// malformed response.
+///
+/// The coupling is prose: a source says why it refused in free text and
+/// this reads the text back. That is fragile, and #503 is the proof — it
+/// reworded Europe PMC's refusal from "not open access" to "advertises no
+/// retrievable PDF" and the row silently reclassified from
+/// `NotOpenAccess` to `Failed`, which reads to an operator as "the source
+/// broke" rather than "the source has it and cannot give it to us".
+///
+/// It is caught rather than prevented: `an_access_refusal_is_recorded_
+/// distinctly_from_a_miss` drives the real chain, so any source whose
+/// wording drifts out of this predicate fails there. A typed refusal on
+/// `FetchError` would prevent it instead, at the cost of widening the
+/// closed error set in `docs/ERRORS.md` §3.
 #[cfg(any(
     feature = "metadata",
     feature = "tdm-elsevier",
@@ -4218,7 +4231,13 @@ mod attempt_denial_tests {
     feature = "tdm-ieee"
 ))]
 fn is_access_refusal(hint: &str) -> bool {
-    hint.contains("not open access") || hint.contains("openAccess")
+    hint.contains("not open access")
+        || hint.contains("openAccess")
+        // #503: Europe PMC refuses on "nothing retrievable is
+        // advertised", which is a strictly narrower claim than "outside
+        // the OA subset" and is still an access refusal, not a schema
+        // failure.
+        || hint.contains("no retrievable PDF")
 }
 
 /// Run the optional resolution chain and record one [`SourceAttempt`] per
@@ -4924,6 +4943,11 @@ mod chain_tests {
     /// An access refusal is not a miss. OpenAIRE / Europe PMC / HAL all
     /// report "found it, cannot give it to you" — that must not be recorded
     /// as `NoRecord`, or the operator concludes the paper does not exist.
+    ///
+    /// This record carries no `fullTextUrlList` at all, so after #503 it is
+    /// refused for the narrower reason and must still classify as
+    /// `NotOpenAccess` — see `is_access_refusal`, whose coupling to the
+    /// wording this test is the only thing guarding.
     #[tokio::test]
     #[serial_test::serial]
     async fn an_access_refusal_is_recorded_distinctly_from_a_miss() {
@@ -4954,6 +4978,53 @@ mod chain_tests {
             o.render().contains("not open access"),
             "the reason must survive into the message; got {}",
             o.render()
+        );
+    }
+
+    /// #503, at the level that matters: a Europe PMC record OUTSIDE the
+    /// bulk OA subset that still advertises a Free PDF must resolve, and
+    /// the URL must reach `optional_source_oa_url` — which is what
+    /// `try_optional_source_oa_fallback` hands to the `oa-publisher` leg.
+    ///
+    /// The source-level test proves the gate; this proves the copy is not
+    /// dropped somewhere between the gate and the fetch. Every bug in the
+    /// #442 family was a correct component that nothing reached.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_closed_subset_record_with_a_free_pdf_resolves_and_carries_its_url() {
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"resultList":{"result":[{"doi":"10.1098/rspa.2014.0585",
+                   "isOpenAccess":"N","inEPMC":"Y","fullTextUrlList":{"fullTextUrl":[
+                   {"availability":"Free","availabilityCode":"F","documentStyle":"pdf",
+                    "site":"Europe_PMC",
+                    "url":"https://europepmc.org/articles/PMC4277194?pdf=render"}]}}]}}"#,
+            ))
+            .mount(&server)
+            .await;
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+        let ref_ = Ref::Doi(Doi::parse("10.1098/rspa.2014.0585").expect("doi"));
+        let mut fields = CrossrefFields::default();
+        let mut attempts = Vec::new();
+        let mut on = all_off();
+        on.metadata.europe_pmc = true;
+
+        let resolved =
+            resolve_optional_chain(&ref_, &on, &ctx, false, &mut fields, &mut attempts).await;
+
+        let (source, record) = resolved.expect("a Free PDF entry must resolve, not refuse");
+        assert_eq!(source, "europe-pmc");
+        let row = outcome(&attempts, "europe-pmc");
+        assert!(
+            matches!(row, AttemptOutcome::Resolved),
+            "the row must read as resolved, not as an access refusal; got {row:?}"
+        );
+        assert_eq!(
+            optional_source_oa_url("europe-pmc", &record),
+            Some("https://europepmc.org/articles/PMC4277194?pdf=render"),
+            "the URL the oa-publisher leg fetches must survive the chain"
         );
     }
 
