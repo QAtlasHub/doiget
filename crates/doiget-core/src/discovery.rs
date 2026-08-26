@@ -61,7 +61,7 @@ use crate::source::{FetchContext, FetchError};
 /// Shares the `"openalex"` key with `crate::sources::openalex` so that
 /// `crate::http::discovery_allowlist` (always compiled) and
 /// `tier_2_allowlist` (always compiled, but only *called* by the CLI
-/// under `#[cfg(feature = "citation")]`) register the same
+/// under `#[cfg(feature = "metadata")]` — #516) register the same
 /// `api.openalex.org` host under one key (an idempotent overwrite — see
 /// ADR-0031 D2).
 const SOURCE_KEY: &str = "openalex";

@@ -46,7 +46,7 @@ use anyhow::{anyhow, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 
 use super::output::print_err;
-#[cfg(feature = "citation")]
+#[cfg(feature = "metadata")]
 use doiget_core::http::tier_2_allowlist;
 use doiget_core::http::{
     discovery_allowlist, fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist,
@@ -258,13 +258,18 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
         // `"ar5iv"` source key unconditionally so `paper_text::paper_text`
         // can reach ar5iv in `oa-only` builds.
         allowlists.extend(fulltext_allowlist());
-        // Slice 16: when the `citation` feature is compiled in, the
-        // graph subcommand walks OpenAlex Work IDs via
-        // `ctx.http.fetch_bytes("openalex", ...)`. The Tier 2
-        // allowlist registers the `api.openalex.org` host under
-        // that source key. CapabilityProfile.metadata.openalex is
-        // the runtime gate; the allowlist is the transport gate.
-        #[cfg(feature = "citation")]
+        // The Tier-2 transport gate. The sources it serves — OpenAlex,
+        // Semantic Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE and
+        // Europe PMC — are compiled under `metadata`, and
+        // `resolve_optional_chain` is `#[cfg(feature = "metadata")]`,
+        // so this extend MUST be gated on `metadata` too. It was gated
+        // on `citation` for six releases: in a `--features metadata`
+        // build (which CI's clippy matrix builds explicitly) the chain
+        // ran, `can_serve` passed, and the request died at
+        // `UnknownSource` because no allowlist entry existed for the
+        // key (#516). CapabilityProfile.metadata.* is the runtime gate;
+        // this is the transport gate, and the two must agree.
+        #[cfg(feature = "metadata")]
         allowlists.extend(tier_2_allowlist());
         // #454: the Tier-3 transport gate. #444 made the orchestrator
         // reach these sources; without this line the fetch it then issues
@@ -1383,6 +1388,62 @@ mod tests {
         }
     }
 
+    /// #516: the Tier-2 half of the same guard, and the reason it is
+    /// needed is that the Tier-3 lesson was not applied one tier up.
+    ///
+    /// `every_tier_2_source_has_a_transport_allowlist_entry` (in
+    /// `http.rs`) asserts that `tier_2_allowlist()` *contains* every
+    /// source key. That stayed true while the extend into the production
+    /// client was gated on `citation` rather than `metadata`, so in a
+    /// `--features metadata` build — which CI's clippy matrix builds
+    /// explicitly — `resolve_optional_chain` ran, `can_serve` passed,
+    /// and the request died at `UnknownSource`.
+    ///
+    /// This asserts the object the fetch goes through, and it enumerates
+    /// from `tier_2_allowlist()` rather than a literal so a new source
+    /// cannot be added to the list and missed here.
+    #[test]
+    #[serial]
+    #[cfg(feature = "metadata")]
+    fn the_production_client_registers_every_tier_2_source_key() {
+        // Every base override must be clear or `build_http_client` takes
+        // the test-mode branch, which registers whatever it is given and
+        // would prove nothing.
+        let _g: Vec<EnvGuard> = [
+            "DOIGET_ARXIV_BASE",
+            "DOIGET_CROSSREF_BASE",
+            "DOIGET_UNPAYWALL_BASE",
+            "DOIGET_OA_PUBLISHER_BASE",
+            "DOIGET_OPENALEX_BASE",
+            "DOIGET_AR5IV_BASE",
+        ]
+        .iter()
+        .map(|k| {
+            let g = EnvGuard::save(k);
+            std::env::remove_var(k);
+            g
+        })
+        .collect();
+
+        let client = build_http_client(None).expect("production client builds");
+
+        // Fully qualified on purpose: the `use` at the top of this file is
+        // itself `#[cfg(feature = "metadata")]`, so importing it here would
+        // turn a regression into a compile error in this file rather than the
+        // assertion failure that names the actual defect.
+        let keys: Vec<String> = doiget_core::http::tier_2_allowlist()
+            .iter()
+            .map(|a| a.source.clone())
+            .collect();
+        assert!(!keys.is_empty(), "the guard must have checked something");
+        for key in keys {
+            assert!(
+                client.source_allowlist(&key).is_some(),
+                "the production client has no allowlist for `{key}`; \n                 `resolve_optional_chain` reaches this source in a \n                 `metadata` build and the fetch would die at \n                 UnknownSource (#516)"
+            );
+        }
+    }
+
     #[test]
     fn new_session_id_is_26_chars() {
         // ULID textual form is fixed-width 26 chars (Crockford base32).
@@ -1582,9 +1643,10 @@ host = "*.uj.edu.pl"
     /// ADR-0031 D2: discovery search (`doiget search`) ships in the default
     /// `oa-only` binary, so `api.openalex.org` MUST be on the production
     /// allowlist under the `"openalex"` source key WITHOUT `--features
-    /// citation`. The Tier-2 `tier_2_allowlist()` extend is
-    /// `#[cfg(feature = "citation")]`; this test proves
-    /// `discovery_allowlist()` covers that gap in the shipped build.
+    /// metadata`. The Tier-2 `tier_2_allowlist()` extend is
+    /// `#[cfg(feature = "metadata")]` (#516 moved it off `citation`);
+    /// this test proves `discovery_allowlist()` covers that gap in the
+    /// shipped `oa-only` build, where neither feature is compiled.
     #[test]
     #[serial]
     fn build_http_client_registers_openalex_for_discovery() {
