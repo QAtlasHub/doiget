@@ -275,13 +275,15 @@ pub fn tier_2_allowlist() -> Vec<SourceAllowlist> {
 /// Tier-1 `discovery::paper_search` (`GET /works?search=`) can reach the
 /// endpoint in the **default `oa-only` binary** — unlike
 /// [`tier_2_allowlist`], which the CLI only wires in under
-/// `#[cfg(feature = "citation")]`.
+/// `#[cfg(feature = "metadata")]` (#516; it was `citation` until then,
+/// which left every other Tier-2 source `UnknownSource` in a
+/// `metadata`-only build).
 ///
 /// Discovery search is classified as Tier 1 OA metadata (read-only, never
 /// paywalled, never a PDF — same risk class as Crossref/Unpaywall), so its
 /// transport allowlist must exist regardless of the `metadata`/`citation`
 /// features (ADR-0031 D1/D2). The CLI's `build_http_client` extends the
-/// production allowlist with this **unconditionally**; in `citation`
+/// production allowlist with this **unconditionally**; in `metadata`
 /// builds [`tier_2_allowlist`] re-registers the identical
 /// `"openalex" → api.openalex.org` entry, which is a harmless idempotent
 /// `HashMap` overwrite in [`HttpClient::new`].
