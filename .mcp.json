@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "doiget": {
+      "command": "doiget",
+      "args": [
+        "serve"
+      ]
+    }
+  }
+}

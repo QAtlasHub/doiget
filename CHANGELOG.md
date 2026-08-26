@@ -12,16 +12,6 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Added
 
-- **[config]** `~/.config/doiget/credentials.toml` is **read**. `docs/CONFIG.md` §6
-  had specified it in full — schema, precedence, a `0600` warning "at startup" — and
-  nothing opened it, so a user who followed a NORMATIVE document wrote their Elsevier
-  key into a file doiget ignored and then reported the source unavailable for want of
-  a key. `[tdm.<publisher>] api_key` now sits one rung below
-  `DOIGET_KEY_<PUBLISHER>`, and the permission warning exists. **The agreement did
-  not move**: `DOIGET_AGREE_TDM_<PUBLISHER>=1` stays environment-only, so it remains
-  an act taken in the session that runs the fetch rather than a boolean written once
-  into a file — an `agreed` key there is parsed only so doiget can warn that it
-  grants nothing (#509, ADR-0050).
 ### Changed
 
 - **[cli]** **Breaking for scripts.** An unparsable ref now exits **2** (misuse) on
@@ -43,6 +33,12 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   `link[]` entry is programme-scoped and none is general-purpose, so there is nothing
   legitimate to follow. The supported route for a closed work is a TDM credential
   (#517, ADR-0052).
+
+- **[docs]** `README.md` no longer points readers at closed issue #247 for the
+  install channels it promised. Four of its five did not exist when it was closed
+  as completed; the README now carries a status table naming what ships, what does
+  not (Homebrew, `.deb`, Docker) and what is unverified (the Nix flake's outputs),
+  with the remainder tracked in the open #501 (#501).
 ### Fixed
 
 - **[metadata]** `MetadataOnlyOutcome.oa_url` handed callers **Similarity Check and

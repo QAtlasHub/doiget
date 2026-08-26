@@ -681,4 +681,86 @@ jobs:
         run: |
           set -euo pipefail
           MCPB="doiget-${TAG#v}.mcpb"
-          gh release upload "$TAG"             "$MCPB"             "$MCPB.sha256"             "$MCPB.cosign.bundle"             --clobber
+          gh release upload "$TAG" "$MCPB" "$MCPB.sha256" "$MCPB.cosign.bundle" --clobber
+
+  npm-publish:
+    name: publish to npm (Trusted Publishing)
+    runs-on: ubuntu-latest
+    needs: [github-release, sign]
+    # Runs for betas too — they publish under the `beta` dist-tag, never
+    # `latest`. ADR-0033's cadence means most tags are betas, so gating this
+    # on stable would leave the npm channel months behind the binaries.
+    #
+    # `continue-on-error` matches `mcp-registry` / `desktop-extension`: a
+    # publish failure must not fail a release whose crates and binaries are
+    # already out. Read the log, do not assume it succeeded (#472).
+    continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write   # npm Trusted Publishing (no long-lived NPM_TOKEN)
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+      - name: Upgrade npm for Trusted Publishing
+        shell: bash
+        # node/npm are preinstalled on the GitHub-hosted runner, so no
+        # `setup-node` action is pinned here — same reasoning as the
+        # `desktop-extension` job. Trusted Publishing needs a recent npm;
+        # `npm@latest` is the documented instruction.
+        run: |
+          set -euo pipefail
+          npm install -g npm@latest
+          npm --version
+      - name: Download the signed release binaries
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dl
+          gh release download "$TAG" -D dl \
+            -p 'doiget-linux-x86_64' \
+            -p 'doiget-macos-aarch64' \
+            -p 'doiget-macos-x86_64' \
+            -p 'doiget-windows-x86_64.exe' \
+            -p 'doiget-*.sha256'
+      - name: Verify every checksum before it goes into a package
+        shell: bash
+        # The whole argument for optionalDependencies over a postinstall
+        # download is that the bytes are inside the registry, covered by npm
+        # integrity. That is only worth anything if what goes in is what the
+        # release signed.
+        run: |
+          set -euo pipefail
+          cd dl
+          for f in *.sha256; do
+            read -r want _rest < "$f"
+            got="$(openssl dgst -sha256 -r "${f%.sha256}" | cut -d' ' -f1)"
+            if [ "$want" != "$got" ]; then
+              echo "::error::checksum mismatch for ${f%.sha256}: release says $want, got $got"
+              exit 1
+            fi
+            echo "ok ${f%.sha256}"
+          done
+      - name: Stage the packages
+        shell: bash
+        run: bash scripts/stage-npm.sh "${TAG#v}" dl npm-stage
+      - name: Publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A pre-release version must not move `latest`.
+          case "$TAG" in
+            *-*) DIST_TAG=beta ;;
+            *)   DIST_TAG=latest ;;
+          esac
+          echo "publishing ${TAG#v} under dist-tag $DIST_TAG"
+          # Platform packages first: the wrapper pins them by exact version
+          # in optionalDependencies, so publishing it first would leave a
+          # window in which `npm i doiget` resolves nothing to run.
+          for p in npm-stage/doiget-*; do
+            npm publish "$p" --provenance --access public --tag "$DIST_TAG"
+          done
+          npm publish npm-stage/doiget --provenance --access public --tag "$DIST_TAG"
