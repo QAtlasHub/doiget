@@ -12,6 +12,12 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Added
 
+- **[source]** The #445 content-leg fall-through asks OpenAlex too. OpenAlex reports
+  every location it knows of, where Unpaywall reports one — so for a hybrid-OA article
+  whose publisher leg is refused, it is the source likeliest to name the institutional
+  repository copy that actually satisfies the fetch. `OpenalexSource` was compiled in and
+  reachable from `doiget graph`, but absent from the optional chain, so the accessor was
+  not "the only missing piece": the wiring was missing too (#461).
 - **[legal]** `docs/LEGAL.md` §2a states the **access ceiling** — what doiget may
   attempt for a given ref, and what bounds it. §1 and §2 said only what doiget does
   *not* do, so the positive limit existed as a shared belief: *"never go beyond what
