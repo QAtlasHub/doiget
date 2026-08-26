@@ -17,22 +17,77 @@ weight = 200
 
 | Source | Tier | Phase | Auth | ToS link | doiget feature |
 |---|---|---|---|---|---|
-| Crossref | 1 (OA) | 1 | none | <https://www.crossref.org/services/metadata-retrieval/rest-api/> | always-on |
+| Crossref | 1 (OA) | 1 | none | <https://www.crossref.org/documentation/retrieve-metadata/rest-api/> | always-on |
 | Unpaywall | 1 (OA) | 1 | email (polite pool) | <https://unpaywall.org/products/api> | always-on |
 | arXiv | 1 (OA) | 1 | none | <https://info.arxiv.org/help/api/index.html> | always-on |
 | ar5iv (full text) | 1 (OA) | 4 (PR4) | none | <https://ar5iv.labs.arxiv.org/> | always-on |
-| OpenAlex | 2 (metadata) | 4 | none | <https://docs.openalex.org/how-to-use-the-api/api-overview> | `--features metadata` + `DOIGET_ENABLE_OPENALEX` |
+| OpenAlex | 2 (metadata) | 4 | none | <https://help.openalex.org/how-to/> | `--features metadata` + `DOIGET_ENABLE_OPENALEX` |
 | Semantic Scholar | 2 (metadata) | 4 | API key (optional) | <https://www.semanticscholar.org/product/api> | `--features metadata` + `DOIGET_ENABLE_S2` |
-| DOAJ | 2 (metadata) | 4 | none | <https://www.doaj.org/api> | `--features metadata` + `DOIGET_ENABLE_DOAJ` |
+| DOAJ | 2 (metadata) | 4 | none | <https://doaj.org/terms/> | `--features metadata` + `DOIGET_ENABLE_DOAJ` |
 | DataCite | 2 (resolution) | 4 | none | <https://datacite.org/terms-and-conditions/> | `--features metadata` + `DOIGET_ENABLE_DATACITE` |
 | HAL | 2 (metadata) | 4 | none | <https://api.archives-ouvertes.fr/docs> | `--features metadata` + `DOIGET_ENABLE_HAL` |
 | OpenAIRE | 2 (metadata) | 4 | none | <https://graph.openaire.eu/docs/> | `--features metadata` + `DOIGET_ENABLE_OPENAIRE` |
-| CORE | 2 (metadata) | 4 | optional free key (`DOIGET_CORE_API_KEY`) | <https://core.ac.uk/terms> | `--features metadata` + `DOIGET_ENABLE_CORE` |
+| CORE | 2 (metadata) | 4 | free key (`DOIGET_CORE_API_KEY`); unregistered use is token-tiered, see §6.1 | <https://core.ac.uk/terms> | `--features metadata` + `DOIGET_ENABLE_CORE` |
 | Europe PMC | 2 (metadata) | 4 | none | <https://europepmc.org/About> | `--features metadata` + `DOIGET_ENABLE_EUROPE_PMC` |
-| Springer Nature OA | 3 (institutional) | 5a | API key | <https://dev.springernature.com/> | `--features tdm-springer` + key + agree |
-| APS Harvest TDM | 3 (institutional) | 5b | API key | <https://harvest.aps.org/> | `--features tdm-aps` + key + agree |
-| Elsevier ScienceDirect TDM | 3 (institutional) | 5c | API key | <https://www.elsevier.com/legal/tdmrep> | `--features tdm-elsevier` + key + agree |
+| Springer Nature OA | 3 (institutional) | 5a | API key | <https://dev.springernature.com/terms-conditions/> | `--features tdm-springer` + key + agree |
+| APS Harvest TDM (**serves PDFs**) | 3 (institutional) | 5b | API key | <https://harvest.aps.org/> | `--features tdm-aps` + key + agree |
+| Elsevier ScienceDirect TDM | 3 (institutional) | 5c | API key | <https://www.elsevier.com/about/policies-and-standards/text-and-data-mining> | `--features tdm-elsevier` + key + agree |
 | IEEE Xplore TDM (**unverified**) | 3 (institutional) | 5d | API key | <https://developer.ieee.org/> | `--features tdm-ieee` + key + agree |
+
+When the content leg is blocked, the enabled optional sources are asked whether anyone
+else holds a copy, and the URL they report is tried (#445). Four can name one:
+
+| source | field | notes |
+|---|---|---|
+| CORE | `downloadUrl` | |
+| HAL | `fileMain_s` | gated on `openAccess_bool` |
+| Europe PMC | `fullTextUrlList` | `documentStyle: pdf` and `availabilityCode` of `F` or `OA` |
+| OpenAlex | `locations[]` | the first entry with `is_oa` and a `pdf_url` (#461) |
+
+OpenAlex is the one that reports **every** location it knows of rather than a single best
+one, which is what makes it the likeliest to name an institutional-repository copy of a
+hybrid-OA article whose publisher refused. That host will not be on any curated list —
+`[network] trust_academic_repos` (ADR-0028) is the existing answer, and the denial help
+names it when it applies.
+
+The ceiling on all of this — what doiget may attempt for a given ref, and what bounds
+it — is [`LEGAL.md`](LEGAL.md) §2a. A change that lets doiget try a location it could
+not try before amends that section in the same PR (#497, ADR-0048).
+
+### 1.1 When Tier 3 is consulted (ADR-0044)
+
+Tier-3 sources are asked two different questions at two different points, and the
+distinction is what #458 was about:
+
+| point | question | trigger |
+|---|---|---|
+| metadata stage | "who can tell me about this DOI?" | Crossref found nothing |
+| **content stage** | "who will give me the bytes?" | the OA content leg was **blocked** |
+
+The second is the one a TDM agreement is obtained for. Until ADR-0044 it did not
+exist, so for a publisher-registered DOI — which Crossref resolves readily — an
+enabled TDM source was never consulted at all and enabling it changed nothing
+observable.
+
+**`tdm-aps` returns PDF bytes** at the content stage; APS documents single-request
+retrieval with `Accept: application/pdf`. The stored file reports
+`license = "unknown"`: it came from the publisher under your agreement, not from the
+OA location whose licence Unpaywall reported, and doiget does not guess licences.
+
+`tdm-elsevier`, `tdm-springer` and `tdm-ieee` remain metadata-only — but for three
+different reasons. This paragraph named them in one sentence with only Elsevier's
+reason attached, so the weaker cases inherited the stronger one's justification
+(#496):
+
+| source | why it is metadata-only |
+|---|---|
+| `tdm-elsevier` | **The vendor's policy.** Retrieval of non-open-access article PDFs through the ScienceDirect APIs is not permitted; a non-OA article yields a first-page preview rather than the article. Full-text **XML** is what an entitlement grants, which is the ADR-0032 `paper_text` route rather than the content leg. |
+| `tdm-springer` | **doiget's choice.** Springer publishes a Full Text (TDM) API and an Open Access API alongside the Meta API, so full text is contractually available. Staying metadata-only is a conservative decision here, not a restriction. |
+| `tdm-ieee` | **The contract is not public.** Shipped against an inferred one (ADR-0042), so the narrower surface is the honest one until it can be checked. |
+
+Disclosure is bounded exactly as before: a source is only ever told about DOIs its
+own publisher registered (ADR-0041). What rises with ADR-0044 is how often it is
+asked, not what it is told.
 
 ## 2. User responsibility
 
@@ -45,7 +100,14 @@ hold any credential for any user. Before enabling a source, ensure that you:
 - Are operating from a network and device authorized to use those rights.
 
 doiget enforces a hard rate cap of **5 fetches per second** per process to make polite
-behavior the default ([`LEGAL.md`](LEGAL.md) §6 safeguard 8).
+behavior the default ([`LEGAL.md`](LEGAL.md) §6a safeguard 5), tightened per source
+where a vendor publishes something stricter (§6.1 below, ADR-0045).
+
+This cited "§6 safeguard 8" until #496. Safeguard 8 is marketing-language
+self-policing, and it lives in §6b — *policy commitments*, the ones a contributor
+could violate without CI catching it. The rate cap is §6a.5, an *enforced control*.
+The citation sent a reader looking for the enforcement basis to the section that has
+none.
 
 ## 3. Default release binaries
 
@@ -97,8 +159,14 @@ There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).
 
 ### arXiv
 
-- Public, no-auth API, but the API has a 3-second-per-request rate guideline. doiget's
-  global 5/sec cap respects this.
+- Public, no-auth API. Its [Terms of Use](https://info.arxiv.org/help/api/tou.html)
+  cap requests at **one every three seconds, over a single connection**, collectively
+  across every machine under the caller's control.
+- doiget applies that per-source, via `SOURCE_RATE_OVERRIDES` (ADR-0045). One arXiv
+  *attempt* issues two *requests* — the Atom feed, then the PDF — and both are paced,
+  because the guideline counts requests.
+- This page previously claimed the global 5/sec cap "respects this". It did not: the
+  effective rate was 15x the guideline and the concurrency 5x (#493).
 - doiget uses arXiv for: arXiv id → PDF + metadata. The parsed metadata
   also carries the **published DOI** and **journal reference** when the
   submitter supplied them (`<arxiv:doi>` / `<arxiv:journal_ref>`) — the
@@ -249,5 +317,32 @@ doiget's defaults are designed to be on the polite side of every source we know 
 - `User-Agent: doiget/<version> (+https://github.com/QAtlasHub/doiget)`.
 - Honors `Retry-After` headers (treats 429 as `RATE_LIMITED` with the indicated wait).
 
-If a source publishes a stricter rate guideline, doiget will adopt the stricter value at
-the per-source level rather than relax the global cap.
+If a source publishes a stricter rate guideline, doiget adopts the stricter value at
+the per-source level rather than relaxing the global cap. This is now mechanical rather
+than a promise: `RateLimits::backoff_ms_for` and `max_concurrent_for` take the stricter
+of the global setting and the source's entry in `SOURCE_RATE_OVERRIDES`, so an entry can
+only ever tighten (ADR-0045).
+
+### 6.1 What each vendor publishes, and what doiget does about it
+
+Recorded so the paragraph above is auditable rather than aspirational (#496). A row
+with no `SOURCE_RATE_OVERRIDES` entry runs on the global cap, and the "doiget" column
+says so rather than leaving it to be inferred.
+
+| source | vendor's published limit | doiget | source of the figure |
+|---|---|---|---|
+| arXiv | 1 request / 3 s, single connection | **enforced per-source** (`SOURCE_RATE_OVERRIDES`) | <https://info.arxiv.org/help/api/tou.html> |
+| CORE | token-cost model: 100 tokens/day and 10/min unregistered, 1 000/day and 25/min registered; a complex query costs 3–5 tokens | global cap; the key is what raises the tier | <https://api.core.ac.uk/docs/v3> |
+| OpenAlex | daily and per-second limits, plus a polite pool keyed on `mailto` | global cap; doiget sends `mailto` when a contact email is set | <https://help.openalex.org/how-to/> |
+| Springer | a rate-limits page, tiered Basic / Premium | global cap | <https://dev.springernature.com/docs/rate-limit-details/rate-limits/> — **figures not recorded**, see below |
+| APS | none found | global cap | <https://harvest.aps.org/docs/harvest-api> |
+| Unpaywall, Crossref, DataCite, DOAJ, HAL, OpenAIRE, Europe PMC, Semantic Scholar, IEEE | none found, or not yet checked | global cap | — |
+
+The Springer figures are **absent rather than guessed**: that page renders its body
+through JavaScript and the audit could not extract the numbers. A plausible-looking
+number here would be worse than the gap, because the point of the table is that it can
+be checked against the vendor. Someone should open it in a browser and fill the cell in.
+
+CORE's row is why the §1 matrix no longer calls its key "optional". Requests do resolve
+without one, at roughly a hundred simple queries a day — so a run that worked yesterday
+can stop working today, and "optional" gives the reader nothing to diagnose that with.

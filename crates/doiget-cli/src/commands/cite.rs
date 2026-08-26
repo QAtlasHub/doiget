@@ -59,7 +59,7 @@ use super::resolve_store_root;
 /// `--quiet` does NOT suppress it. A total miss (no live resolve and no
 /// store entry) returns an error so the CLI exits non-zero.
 pub async fn run(input: String, offline: bool, _mode: super::output::OutputMode) -> Result<()> {
-    let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
+    let ref_ = super::parse_ref_or_exit(&input)?;
 
     // `--offline`: render straight from the store, no network at all.
     if offline {

@@ -64,6 +64,32 @@ pub struct EntryInfo {
     pub year: Option<i32>,
     /// `fetched_at` from the `[doiget]` table, if any.
     pub fetched_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// `size_bytes` from the `[doiget]` table: the size of the stored PDF,
+    /// `0` for a metadata-only entry, `None` when the entry has no
+    /// `[doiget]` table at all.
+    ///
+    /// #481: without it the inventory commands could not tell a fetched
+    /// paper from a metadata-only stub. Every other surface could -- the
+    /// fetch itself failed loudly, the TOML omits `pdf_path`, the
+    /// provenance log carries an `err` row, `doiget info` shows
+    /// `size_bytes = 0` -- and the one command that answers "what do I
+    /// have?" without knowing the ref in advance was the one that dropped
+    /// it. Fifty refs with ten blocked listed as fifty identical rows.
+    pub size_bytes: Option<u64>,
+}
+
+impl EntryInfo {
+    /// Whether a PDF was actually stored for this entry.
+    ///
+    /// `false` for a metadata-only entry (`size_bytes == 0`) and for one
+    /// with no `[doiget]` table. Deliberately not "is this entry useful" --
+    /// a metadata-only entry is a legitimate result, it is just a different
+    /// one, and #118 is the standing rule that the two must not be
+    /// presented alike.
+    #[must_use]
+    pub fn has_pdf(&self) -> bool {
+        self.size_bytes.is_some_and(|n| n > 0)
+    }
 }
 
 /// Errors emitted by [`Store`] implementations.

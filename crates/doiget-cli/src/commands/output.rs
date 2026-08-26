@@ -162,9 +162,23 @@ pub struct ResolvedOutput {
 ///   particular is almost always piped (`doiget text arxiv:… > paper.txt`),
 ///   so the implicit-Quiet fallback would otherwise blank the output.
 ///
-/// `audit-log` is omitted on purpose: it is *informational* in Human
-/// mode and *artifact* in Json mode; the command checks the resolved
-/// mode rather than its name, so this classifier doesn't apply.
+/// Two commands are omitted on purpose, because a name-level predicate
+/// cannot express them and pretending otherwise would be worse than the
+/// omission:
+///
+/// - `audit-log` is *informational* in Human mode and *artifact* in Json
+///   mode; the command checks the resolved mode rather than its name.
+/// - `config` is artifact-class in `path` and `show` (their stdout is the
+///   requested value) and status-class in `init`; `doctor` writes to
+///   stderr and is unaffected either way. It takes `quiet_was_explicit`
+///   and decides per action (#476).
+///
+/// This is the third time the list has been found incomplete (#219/#220,
+/// #301, #476), and the reason is visible above: it is a hand-maintained
+/// enumeration of a property no type carries. Deriving it from the command
+/// definition would end the pattern. Until then, a new subcommand that
+/// writes a *value* to stdout has to be added here or handled per action,
+/// or it is silent to every non-interactive caller.
 pub fn is_artifact_command(name: &str) -> bool {
     matches!(
         name,

@@ -597,6 +597,18 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
                 label, outcome.size_bytes, arxiv_id, outcome.path
             ));
         }
+        // #458: the publisher served its own copy under the user's TDM
+        // agreement. Named explicitly rather than left to the `_` arm
+        // below, which would have printed the same line as a plain OA
+        // fetch -- the user needs to know the open route failed and which
+        // agreement was drawn on, because that is the one with terms
+        // attached.
+        PdfLegStatus::TdmFetched { source, .. } => {
+            print_success(format_args!(
+                "fetched {} ({} bytes) via {} under your TDM agreement (no open copy available) -> {}",
+                label, outcome.size_bytes, source, outcome.path
+            ));
+        }
         // Issue #145: `Blocked` is NO LONGER a success outcome. It is
         // intercepted in `fetch_one` BEFORE `emit_success_line` is
         // called and rendered via `render_blocked_error` with a
@@ -713,10 +725,7 @@ pub async fn run_with_options(
     let ref_ = match Ref::parse(&input) {
         Ok(r) => r,
         Err(e) => {
-            print_err(format_args!(
-                "error[{}]: invalid ref: {e}",
-                ErrorCode::InvalidRef.as_wire()
-            ));
+            super::render_ref_parse_error(&e);
             return Err(anyhow::Error::new(CliExit(cli_exit_code(
                 ErrorCode::InvalidRef,
             ))));
@@ -814,7 +823,9 @@ fn emit_link_result(ref_: &Ref, outcome: &FetchPaperOutcome, dir: &Utf8Path) {
     };
     if !matches!(
         outcome.pdf_leg,
-        PdfLegStatus::Fetched | PdfLegStatus::PreprintFallback { .. }
+        PdfLegStatus::Fetched
+            | PdfLegStatus::PreprintFallback { .. }
+            | PdfLegStatus::TdmFetched { .. }
     ) {
         print_success(format_args!(
             "note: --link skipped for {label} (no PDF — metadata-only fetch)"
@@ -1086,14 +1097,50 @@ fn denial_note_lines(dc: &DenialContext, config_path: Option<&camino::Utf8Path>)
     out.push(format!(
         "  = help: that host is not on the allowlist yet; widen it in {where_}"
     ));
-    out.push(
-        "          [network] trust_academic_repos = true   # 15 curated academic suffixes"
-            .to_string(),
-    );
-    out.push(
-        "          [network] trust_oa_registries  = true   # DOAJ, SciELO, Zenodo, OSF, HAL"
-            .to_string(),
-    );
+    // #478: name the ONE flag that covers this host, not both.
+    //
+    // `trust_flag_for_host` already computes it, and
+    // `remediation::for_denial` calls it -- so MCP and `batch --json`
+    // consumers were getting the precise answer while the human was shown
+    // two flags with nothing to choose between them, and following the
+    // wrong one cost a round. The human has less context than the agent,
+    // not more.
+    //
+    // `None` means neither flag covers the host (a genuine publisher). The
+    // machine path offers no flag there; so does this one now, rather than
+    // suggesting two settings that cannot possibly help.
+    //
+    // Three cases, and "we did not compute it" is not the same answer as
+    // "we computed it and neither applies":
+    match dc.attempted.as_deref() {
+        // Known host, one flag covers it. Name that one.
+        Some(h) => match doiget_core::remediation::trust_flag_for_host(h) {
+            Some((flag, pattern, note)) => out.push(format!(
+                "          [network] {flag} = true   # covers {pattern} ({note})"
+            )),
+            // Known host, neither flag covers it -- a genuine publisher.
+            // The machine path offers no flag here (there is a test for
+            // it: `a_publisher_host_offers_no_trust_flag`), so neither
+            // does this one. Suggesting two settings that cannot help is
+            // worse than saying so.
+            None => out.push(
+                "          # neither trust_academic_repos nor trust_oa_registries covers this host"
+                    .to_string(),
+            ),
+        },
+        // No host to test. Both flags stay listed, because the reason for
+        // narrowing is absent rather than resolved.
+        None => {
+            out.push(
+                "          [network] trust_academic_repos = true   # 15 curated academic suffixes"
+                    .to_string(),
+            );
+            out.push(
+                "          [network] trust_oa_registries  = true   # DOAJ, SciELO, Zenodo, OSF, HAL"
+                    .to_string(),
+            );
+        }
+    }
     if dc.attempted.is_some() {
         for (pattern, why) in doiget_core::remediation::widening_suggestions(attempted) {
             out.push(format!(
@@ -1796,6 +1843,72 @@ host = "*.uj.edu.pl"
         );
     }
 
+    /// #478. Only ONE of the two flags covers any given host, and
+    /// `remediation::trust_flag_for_host` already computes which -- so the
+    /// MCP and `batch --json` consumers got the precise answer while the
+    /// human was shown both with nothing to choose between them.
+    #[test]
+    fn the_help_names_only_the_trust_flag_that_covers_the_host() {
+        let mut dc = denial(DenialReason::RedirectNotInAllowlist);
+        dc.attempted = Some("strathprints.strath.ac.uk".to_string());
+        let joined = denial_note_lines(&dc, None).join(
+            "
+",
+        );
+
+        assert!(
+            joined.contains("trust_academic_repos = true"),
+            "an *.ac.uk host is covered by the academic list; got:
+{joined}"
+        );
+        assert!(
+            !joined.contains("trust_oa_registries"),
+            "trust_oa_registries does nothing for this host and must not be offered; got:
+{joined}"
+        );
+        assert!(
+            joined.contains("*.ac.uk"),
+            "naming the pattern is what makes the suggestion checkable; got:
+{joined}"
+        );
+    }
+
+    /// And when neither covers it -- a genuine publisher host -- the human
+    /// is told so rather than handed two settings that cannot help. The
+    /// machine path already behaved this way
+    /// (`a_publisher_host_offers_no_trust_flag` in `doiget-core`).
+    #[test]
+    fn a_publisher_host_is_offered_no_trust_flag_in_the_human_help() {
+        let mut dc = denial(DenialReason::RedirectNotInAllowlist);
+        dc.attempted = Some("link.springer.com".to_string());
+        let joined = denial_note_lines(&dc, None).join(
+            "
+",
+        );
+
+        assert!(
+            !joined.contains("trust_academic_repos = true"),
+            "neither flag covers a publisher host; got:
+{joined}"
+        );
+        assert!(
+            !joined.contains("trust_oa_registries = true"),
+            "neither flag covers a publisher host; got:
+{joined}"
+        );
+        assert!(
+            joined.contains("neither trust_academic_repos nor trust_oa_registries"),
+            "saying so is the point -- silence would read as an omission; got:
+{joined}"
+        );
+        // The per-host escape hatch is still the real answer here.
+        assert!(
+            joined.contains("additional_hosts]] host = \"link.springer.com\""),
+            "got:
+{joined}"
+        );
+    }
+
     /// The help block is specific to the allowlist. Other denial classes
     /// (an insecure scheme, a blocklisted host) are NOT fixed by widening
     /// the allowlist, so pointing at `trust_academic_repos` there would be
@@ -2045,7 +2158,7 @@ host = "*.uj.edu.pl"
             SourceAttempt::new(
                 "hal",
                 AttemptOutcome::Disabled {
-                    env: "DOIGET_ENABLE_HAL",
+                    env: &["DOIGET_ENABLE_HAL"],
                 },
             ),
         ];
@@ -2073,13 +2186,13 @@ host = "*.uj.edu.pl"
             SourceAttempt::new(
                 "core",
                 AttemptOutcome::Disabled {
-                    env: "DOIGET_ENABLE_CORE",
+                    env: &["DOIGET_ENABLE_CORE"],
                 },
             ),
             SourceAttempt::new(
                 "hal",
                 AttemptOutcome::Disabled {
-                    env: "DOIGET_ENABLE_HAL",
+                    env: &["DOIGET_ENABLE_HAL"],
                 },
             ),
         ];

@@ -329,6 +329,47 @@ pub trait Source: Send + Sync {
         profile: &CapabilityProfile,
         ctx: &FetchContext,
     ) -> Result<FetchResult, FetchError>;
+
+    /// Fetch the publisher's own copy of the document itself, when this
+    /// source holds one.
+    ///
+    /// Distinct from [`Self::fetch`], which resolves a *record*. A Tier-3
+    /// TDM source is consulted for two different reasons at two different
+    /// points in the fetch, and conflating them is what #458 was:
+    ///
+    /// - [`fetch`](Self::fetch) answers "who can tell me about this DOI?"
+    ///   and runs when Crossref could not;
+    /// - `fetch_content` answers "who will give me the bytes?" and runs
+    ///   when the content leg was blocked — which is usually *after*
+    ///   Crossref answered perfectly well.
+    ///
+    /// The default is `Ok(None)`: "this source is metadata-only". Stating
+    /// it is the point. Before #458 the same fact was expressed by every
+    /// Tier-3 impl setting `FetchResult.pdf_bytes` to `None` and saying so
+    /// in a doc-comment, which the orchestrator could neither read nor act
+    /// on — so it could not tell a source that had nothing to offer from
+    /// one it had simply never asked.
+    ///
+    /// Implementations that override it MUST use a PDF-validating fetch
+    /// ([`HttpClient::fetch_pdf`] or
+    /// [`HttpClient::fetch_pdf_with_headers`]). A publisher error page or
+    /// a WAF holding response is a 200 with a body, and storing one under
+    /// `<safekey>.pdf` would be worse than returning nothing.
+    ///
+    /// # Errors
+    ///
+    /// Any [`FetchError`]. `Ok(None)` means "not me"; `Err` means "me, and
+    /// it went wrong". The orchestrator keeps the original content-leg
+    /// block either way, but records the two as different attempt
+    /// outcomes.
+    async fn fetch_content(
+        &self,
+        _ref_: &Ref,
+        _profile: &CapabilityProfile,
+        _ctx: &FetchContext,
+    ) -> Result<Option<Bytes>, FetchError> {
+        Ok(None)
+    }
 }
 
 // ---------------------------------------------------------------------------

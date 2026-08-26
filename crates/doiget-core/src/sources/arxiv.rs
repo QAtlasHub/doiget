@@ -1,8 +1,15 @@
 //! arXiv source — arXiv id → PDF + Atom-feed metadata.
 //!
-//! Spec: `docs/SOURCES.md` §4 arXiv. No auth; the API has a 3-second-per-request
-//! rate guideline that doiget's 5/sec global + 200ms per-source backoff
-//! comfortably respects (no extra source-specific tuning needed).
+//! Spec: `docs/SOURCES.md` §4 arXiv. No auth. The API's Terms of Use cap
+//! requests at **one every three seconds, single connection** — stricter
+//! than the global 5/sec + 200 ms backoff, which this comment previously
+//! claimed "comfortably respects" it. It did not: that was 15x the rate and
+//! 5x the concurrency (#493, ADR-0045).
+//!
+//! The limit now comes from [`crate::SOURCE_RATE_OVERRIDES`], and because
+//! it caps REQUESTS rather than attempts, the PDF leg below calls
+//! [`crate::rate_limiter::RateLimiter::pace`] — one attempt issues two
+//! requests, and only the first was paced by the permit.
 //!
 //! # Fetch flow (full)
 //!
@@ -277,6 +284,14 @@ impl Source for ArxivSource {
         };
 
         // ----- PDF leg -------------------------------------------------
+        //
+        // #493: arXiv's terms cap REQUESTS, not attempts, and this is the
+        // second request of this attempt -- the Atom leg above was the
+        // first. The `acquire` permit paced that one; without this the two
+        // went out back to back, so even a perfectly serialised caller
+        // broke the published interval.
+        ctx.rate_limiter.pace(self.name()).await;
+
         let url = self.pdf_url(id)?;
 
         // `fetch_pdf` enforces the magic-byte check (`%PDF-`) per
