@@ -913,6 +913,30 @@ impl FetchPaperOutcome {
             attempts: Vec::new(),
         }
     }
+
+    /// [`Self::for_test_synthetic`] carrying a resolution trace.
+    ///
+    /// #471: the plain constructor hard-codes `attempts: Vec::new()`, so a
+    /// test driving `classify_joined` with a `Blocked` outcome could not
+    /// observe a trace even if it looked -- and none did. Reverting the one
+    /// line that threads `outcome.attempts` into `build_jsonl_failure` left
+    /// the whole suite green, silently dropping the trace from `--json`,
+    /// which is the regression #459 exists to prevent.
+    ///
+    /// `#[doc(hidden)]` for the same reason as its sibling: not a stable
+    /// public API.
+    #[doc(hidden)]
+    pub fn for_test_synthetic_with_attempts(
+        safekey: impl Into<String>,
+        source: impl Into<String>,
+        pdf_leg: PdfLegStatus,
+        attempts: Vec<SourceAttempt>,
+    ) -> Self {
+        Self {
+            attempts,
+            ..Self::for_test_synthetic(safekey, source, pdf_leg)
+        }
+    }
 }
 
 /// Resolve a [`Ref`] to a PDF (or metadata-only fallback) and write it

@@ -22,6 +22,17 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[test]** The three diagnostic wiring points would have survived being
+  disconnected. `batch --json`'s one line threading a real outcome's trace into the
+  record, and the MCP envelope's `attempts` and `remediation` insertions, each had
+  every nearby assertion calling the leaf helper directly with hand-built arguments —
+  so reverting any of them left the whole suite green while the trace or the
+  remediation vanished from the wire, which is the regression #459 exists to prevent.
+  `FetchPaperOutcome::for_test_synthetic_with_attempts` makes the first testable at
+  all: the plain constructor hard-codes `attempts: Vec::new()`, so the one test that
+  did drive `classify_joined` could not have observed a trace even if it had looked
+  (#471, #459).
+
 - **[legal]** `docs/LEGAL.md` §2 declares the default binary's whole network surface.
   It said "Crossref, Unpaywall, arXiv"; a default `oa-only` build also registers
   `oa_publisher_allowlist` (~20 publisher/repository patterns), `api.openalex.org`
