@@ -87,11 +87,36 @@ Given a ref, doiget attempts retrieval from exactly two kinds of location:
 **(a) A location an enabled source reported.** The URL appears verbatim in a response
 doiget received from a source that both the build and the runtime capability profile
 have enabled. In practice: Unpaywall's `best_oa_location` / `oa_locations` (Tier 1),
-and — only when the content leg was already blocked — CORE's `downloadUrl`, HAL's
+and - only when the content leg was already blocked - CORE's `downloadUrl`, HAL's
 `fileMain_s` (gated on `openAccess_bool`), or Europe PMC's `fullTextUrlList`, each
 behind its own `DOIGET_ENABLE_*` flag.
 *Enforced by:* `orchestrator::optional_source_oa_url`, which dispatches to one
 per-source extractor and returns `None` for any other source name.
+
+**(a-i) Crossref `link[]` is NOT one of them, and this was measured.** #517 asked
+whether the fetch path should carry the publisher link Crossref reports, so that a
+user on a subscribing network reaches the publisher instead of exiting 0 in silence.
+It should not, and the reason is what Crossref actually returns.
+
+Every `link[]` entry carries `intended-application`. `unspecified` would be a general
+full-text link; `text-mining`, `similarity-checking` and `syndication` scope the URL to
+a specific licensed programme. Measured 2026-08-26 across **six live DOIs** (SIAM,
+IEEE, AMS, ACM, Springer Nature, the Royal Society) and the **eight captured
+responses** in `tests/fixtures/real_world/` - 12 entries in total - **not one carried
+`unspecified`.** Every one was `text-mining` or `similarity-checking`.
+
+So Crossref `link[]` is a programme-scoped channel, not a general full-text one.
+Following it would mean using Similarity Check and TDM links without holding those
+licences - and doiget already has the licensed route: its Tier-3 TDM sources, with the
+user's own credential and a recorded per-publisher agreement (§6a.2). The ceiling is
+unchanged (ADR-0052).
+
+*Enforced by:* `orchestrator::extract_crossref_publisher_url`, which accepts only
+`unspecified` and refuses an unlabelled entry as well - an unlabelled link is a guess,
+and the line this section draws is documented-by-the-vendor versus guessed-by-us
+(ADR-0048 D2). Before #517 that function returned the first entry with no filtering,
+so `MetadataOnlyOutcome.oa_url` could hand a caller a Similarity Check URL under the
+name `oa_url`.
 
 **(b) An endpoint built from a vendor's own documented URL scheme, for the identifier
 the user supplied.** arXiv's `/pdf/<id>.pdf` and `/api/query?id_list=<id>`; ar5iv's

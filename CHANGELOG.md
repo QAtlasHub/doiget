@@ -10,6 +10,31 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Fixed
+
+- **[metadata]** `MetadataOnlyOutcome.oa_url` handed callers **Similarity Check and
+  TDM URLs under the name `oa_url`** — to the MCP surface and to anyone reading
+  `metadata_only` output, whose own doc comment invites acting on the field "for
+  separate action". The extractor returned the first `message.link[]` entry with no
+  filtering, and Crossref's `intended-application` distinguishes a general-purpose link
+  from ones a publisher scoped to Similarity Check, syndication or its TDM programme.
+  Only `unspecified` is accepted now; an unlabelled entry is refused too, because
+  ADR-0048 D2 draws the line at documented-by-the-vendor versus guessed-by-us. Seven
+  real-world fixtures asserted the old value, which is the strongest evidence it was
+  behaviour rather than an accident (#517, ADR-0052).
+
+### Changed
+
+- **[docs]** `CONFIG.md` §6.1 named two things standing between an entitled network and
+  a paywalled paper — the allowlist, and the publisher bot wall — and **neither was
+  reached**. A third sits in front of both: for a closed work no candidate URL is ever
+  formed, so the leg ends before any host is chosen and the run exits 0 with `no OA PDF
+  available`. The section now leads with that, and says why it is not a bug awaiting a
+  fix: measured across six live DOIs and eight captured responses, **every** Crossref
+  `link[]` entry is programme-scoped and none is general-purpose, so there is nothing
+  legitimate to follow. The supported route for a closed work is a TDM credential
+  (#517, ADR-0052).
+
 ## [0.8.10] - 2026-08-26
 
 ### Added
