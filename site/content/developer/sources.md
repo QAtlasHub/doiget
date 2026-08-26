@@ -34,6 +34,22 @@ weight = 200
 | Elsevier ScienceDirect TDM | 3 (institutional) | 5c | API key | <https://www.elsevier.com/about/policies-and-standards/text-and-data-mining> | `--features tdm-elsevier` + key + agree |
 | IEEE Xplore TDM (**unverified**) | 3 (institutional) | 5d | API key | <https://developer.ieee.org/> | `--features tdm-ieee` + key + agree |
 
+When the content leg is blocked, the enabled optional sources are asked whether anyone
+else holds a copy, and the URL they report is tried (#445). Four can name one:
+
+| source | field | notes |
+|---|---|---|
+| CORE | `downloadUrl` | |
+| HAL | `fileMain_s` | gated on `openAccess_bool` |
+| Europe PMC | `fullTextUrlList` | `documentStyle: pdf` and `availabilityCode` of `F` or `OA` |
+| OpenAlex | `locations[]` | the first entry with `is_oa` and a `pdf_url` (#461) |
+
+OpenAlex is the one that reports **every** location it knows of rather than a single best
+one, which is what makes it the likeliest to name an institutional-repository copy of a
+hybrid-OA article whose publisher refused. That host will not be on any curated list —
+`[network] trust_academic_repos` (ADR-0028) is the existing answer, and the denial help
+names it when it applies.
+
 The ceiling on all of this — what doiget may attempt for a given ref, and what bounds
 it — is [`LEGAL.md`](LEGAL.md) §2a. A change that lets doiget try a location it could
 not try before amends that section in the same PR (#497, ADR-0048).
