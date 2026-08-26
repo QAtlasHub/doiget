@@ -33,7 +33,7 @@ const OPENALEX_DEFAULT_BASE: &str = "https://api.openalex.org";
 /// [`ErrorCode`] as a process exit code via [`CliExit`] (e.g. a DOI with no
 /// OpenAlex work → `NOT_FOUND`).
 pub async fn run(ref_: String, mode: OutputMode, quiet_was_explicit: bool) -> Result<()> {
-    let parsed = Ref::parse(&ref_).with_context(|| format!("invalid ref {ref_:?}"))?;
+    let parsed = super::parse_ref_or_exit(&ref_)?;
     let doi = match parsed {
         Ref::Doi(d) => d,
         Ref::Arxiv(_) => {

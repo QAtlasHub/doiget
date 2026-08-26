@@ -295,6 +295,13 @@ enum Command {
         /// Number of entries to show.
         #[arg(default_value_t = 10)]
         limit: usize,
+        /// Show only entries with no stored PDF -- the metadata-only ones.
+        ///
+        /// Answers "which of my batch need retrying?" without reading a
+        /// fifty-row table by eye. The `pdf` column carries the same
+        /// information for every row (#481).
+        #[arg(long)]
+        missing_pdf: bool,
     },
     /// Search for papers. Default: external discovery over OpenAlex
     /// (`/works?search=`, ADR-0031) — turn a topic into ranked candidate
@@ -782,8 +789,8 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Info { ref_ }) => {
             doiget_cli::commands::info::run(ref_, mode, out.quiet_was_explicit)
         }
-        Some(Command::ListRecent { limit }) => {
-            doiget_cli::commands::list_recent::run(limit, mode, out.quiet_was_explicit)
+        Some(Command::ListRecent { limit, missing_pdf }) => {
+            doiget_cli::commands::list_recent::run(limit, missing_pdf, mode, out.quiet_was_explicit)
         }
         Some(Command::Search {
             query,

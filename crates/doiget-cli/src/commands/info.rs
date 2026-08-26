@@ -1,6 +1,7 @@
 //! `doiget info <ref>` subcommand — read-only metadata inspection.
 //!
-//! Reads the metadata TOML for a given [`Ref`] from the [`FsStore`] and
+//! Reads the metadata TOML for a given [`Ref`](doiget_core::Ref) from the
+//! [`FsStore`] and
 //! prints it on stdout. Network access is never required.
 //!
 //! Per [`docs/PUBLIC_API.md`](../../../../docs/PUBLIC_API.md) §2 the read goes
@@ -12,14 +13,14 @@ use std::io::Write;
 use anyhow::{bail, Context, Result};
 
 use doiget_core::store::{FsStore, Store};
-use doiget_core::Ref;
 
 use super::resolve_store_root;
 
 /// Run the `info` subcommand against the configured store.
 ///
 /// `input` is the user-supplied ref string (e.g. `"10.1234/example"`,
-/// `"arxiv:2401.12345"`, or any of the schemes accepted by [`Ref::parse`]).
+/// `"arxiv:2401.12345"`, or any of the schemes accepted by
+/// [`Ref::parse`](doiget_core::Ref::parse)).
 ///
 /// On success, the entry's [`Metadata`](doiget_core::store::Metadata) is
 /// written to stdout as TOML. On a missing entry, the function returns an
@@ -34,7 +35,7 @@ pub fn run(input: String, mode: super::output::OutputMode, quiet_was_explicit: b
     // caller needs. `Json` serialises `Metadata` directly (it carries
     // `Serialize`); the wire form is the field-name JSON of the on-disk
     // TOML (#204).
-    let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
+    let ref_ = super::parse_ref_or_exit(&input)?;
     let safekey = ref_.safekey();
 
     let store_root = resolve_store_root()?;

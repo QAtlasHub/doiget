@@ -1,4 +1,4 @@
-# 0045 - Contributions carry a relicensable grant, recorded as a commit sign-off
+# 0051 - Contributions carry a relicensable grant, recorded as a commit sign-off
 
 - **Date:** 2026-08-25
 - **Status:** Accepted
@@ -104,5 +104,5 @@ pre-existing non-maintainer commits are bot-authored dependency bumps.
   adoption for revenue that has no customer yet. This ADR keeps the door open without
   walking through it.
 
-If this decision is ever revisited, write a new ADR with `Supersedes: 0045`, and update
+If this decision is ever revisited, write a new ADR with `Supersedes: 0051`, and update
 this file's `Status:` per `CONTRIBUTING.md`.

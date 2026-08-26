@@ -10,7 +10,110 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.10] - 2026-08-26
+
+### Added
+
+- **[source]** The #445 content-leg fall-through asks OpenAlex too. OpenAlex reports
+  every location it knows of, where Unpaywall reports one — so for a hybrid-OA article
+  whose publisher leg is refused, it is the source likeliest to name the institutional
+  repository copy that actually satisfies the fetch. `OpenalexSource` was compiled in and
+  reachable from `doiget graph`, but absent from the optional chain, so the accessor was
+  not "the only missing piece": the wiring was missing too (#461).
+- **[legal]** `docs/LEGAL.md` §2a states the **access ceiling** — what doiget may
+  attempt for a given ref, and what bounds it. §1 and §2 said only what doiget does
+  *not* do, so the positive limit existed as a shared belief: *"never go beyond what
+  Unpaywall reports"*. That belief is false. The ceiling rose twice, deliberately and
+  with ADRs — ADR-0044's Tier-3 content leg and #445's optional-source fall-through —
+  and neither could be reviewed against a limit that was never written down. Every
+  clause names the code that enforces it (#497, ADR-0048).
+
 ### Fixed
+
+- **[test]** The three diagnostic wiring points would have survived being
+  disconnected. `batch --json`'s one line threading a real outcome's trace into the
+  record, and the MCP envelope's `attempts` and `remediation` insertions, each had
+  every nearby assertion calling the leaf helper directly with hand-built arguments —
+  so reverting any of them left the whole suite green while the trace or the
+  remediation vanished from the wire, which is the regression #459 exists to prevent.
+  `FetchPaperOutcome::for_test_synthetic_with_attempts` makes the first testable at
+  all: the plain constructor hard-codes `attempts: Vec::new()`, so the one test that
+  did drive `classify_joined` could not have observed a trace even if it had looked
+  (#471, #459).
+
+- **[legal]** `docs/LEGAL.md` §2 declares the default binary's whole network surface.
+  It said "Crossref, Unpaywall, arXiv"; a default `oa-only` build also registers
+  `oa_publisher_allowlist` (~20 publisher/repository patterns), `api.openalex.org`
+  (discovery, ADR-0031, always-on) and `ar5iv.labs.arxiv.org` (ADR-0032, always-on).
+  **OpenAlex was absent entirely** — a third-party service contacted by the shipped
+  binary with no opt-in — and the one document written for publisher legal teams was
+  the one that did not say so (#494, ADR-0047).
+- **[legal]** `docs/LEGAL.md` lists all four TDM features. `tdm-ieee` landed with
+  ADR-0042 and was missing from §2 and §6a.3; `SOURCES.md` had it (#494).
+- **[legal]** §6a.1 no longer claims credentials are read from
+  `~/.config/doiget/credentials.toml`. They are not — the resolver reads
+  `std::env::var` and nothing else, and no code path opens that file. `CONFIG.md` §6
+  specifies it in full regardless, which is #509 (#494, ADR-0047).
+- **[legal]** §6a.1's "*Enforced by: CI grep for embedded key patterns*" is removed.
+  **No such check exists.** §6a is defined as controls a machine enforces, as opposed
+  to §6b policy commitments, so an enforcement clause naming nothing was in the wrong
+  section — the same defect as the §6 safeguard-8 citation in #496 (#494, ADR-0047).
+
+- **[docs]** Five of the sixteen ToS links in `docs/SOURCES.md` §1 no longer led to
+  terms — two 404s, one redirect to a docs-domain root, one to a Swagger schema, one
+  to a portal root. The Elsevier entry was wrong before it died: `legal/tdmrep` is the
+  W3C TDM **Reservation** Protocol, by which a rightsholder signals an opt-out *from*
+  mining, not Elsevier's API terms. All sixteen now resolve, measured (#495, ADR-0046).
+- **[docs]** `docs/SOURCES.md` no longer implies Springer restricts full text. Springer
+  publishes a Full Text (TDM) API and an Open Access API; staying metadata-only there
+  is doiget's conservative choice. The old sentence named Elsevier, Springer and IEEE
+  together with only Elsevier's reason attached, so the weaker cases inherited the
+  stronger one's justification (#496).
+- **[docs]** CORE's key is no longer called "optional". Unregistered use is a
+  token-cost tier — roughly a hundred simple queries a day — so a run can stop working
+  and "optional" gave the reader nothing to diagnose that with (#496).
+- **[docs]** The rate cap cites `LEGAL.md` §6a safeguard 5, the enforced control,
+  instead of §6b safeguard 8, which is marketing-language self-policing. The old
+  citation sent a reader looking for the enforcement basis to the section that has
+  none (#496).
+
+- **[tdm-aps]** The source requests the URL APS documents. It built
+  `/v2/article/<percent-encoded DOI>`; APS Harvest serves
+  `/v2/journals/articles/<raw DOI>`, so a reached source would have 404'd. Both wiremock
+  stubs asserted the path the implementation produced, so they could never have caught
+  it — they are now pinned to a constant transcribed from the vendor's own curl example
+  (#484).
+- **[legal]** arXiv is fetched at the rate its Terms of Use publish — one request
+  every three seconds over a single connection — instead of 15x that rate and 5x
+  the concurrency. `RateLimits` had no per-source dimension at all, and three
+  places in the tree, including `docs/SOURCES.md`, asserted the global 5/sec cap
+  "comfortably respects" the guideline. §6 of the same document promised doiget
+  would adopt a stricter vendor value per source; the promise was real and the
+  mechanism did not exist (#493, ADR-0045).
+
+- **[cli]** Every ref-taking command emits the `docs/ERRORS.md` §3 contract
+  line — `error[INVALID_REF]: invalid ref: …` — for an unparsable input.
+  #119 gave `fetch` the contract and nothing generalised it, so `info`,
+  `link`, `cite`, `text`, `tag`, `bib`, `csl` and `source` each printed a raw
+  `anyhow` dump: a bare `Error:` plus a `Caused by:` chain leaking internal
+  error types that are in no contract, on a surface whose callers are told
+  they can key off `error[CODE]:`. One renderer now, and a table-driven e2e
+  that fails by naming the command that regressed (#477).
+- **[cli]** `verify` renders a missing input file as `error: failed to read
+  reference file …` with exit 2 rather than an `anyhow` dump. It takes a path,
+  not a ref, and the closed `ErrorCode` set describes fetch outcomes — so it
+  gets the misuse form the CLI already uses elsewhere (#477).
+- **[core]** An input with neither a scheme nor a `10.` prefix reports
+  `RefParseError::UnrecognisedShape` — "neither a DOI … nor an arXiv id" —
+  instead of the arXiv parser's verdict. `Ref::parse` falls through to arXiv,
+  so someone who mistyped a DOI was told about arXiv id shapes (#477).
+
+- **[cli]** `list-recent` and `search --local` show whether a PDF was actually
+  stored. A metadata-only entry — what a blocked content leg leaves behind —
+  rendered identically to a fetched paper, and the inventory command is the only
+  one that answers "what do I have?" without being told the ref in advance. Batch
+  fifty refs with ten blocked, come back later, and the natural conclusion is
+  fifty papers (#481, #118).
 
 - **[cli]** `config path` and `config show` print when stdout is not a terminal.
   They were absent from the ADR-0017 artifact classification, so an implicit
@@ -62,10 +165,52 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   neither Dependabot nor github-actions is a legal person who could certify a
   license grant. Deliberately not a required status check: it blocks in its own job,
   so a missing sign-off is visible before a human merges without disturbing the
-  auto-merge chain (ADR-0045 D4).
+  auto-merge chain (ADR-0051 D4).
 
 ### Changed
 
+- **[deps]** `rmcp` 2.2 → **3.1.4**, a semver-major of the MCP SDK. One breaking change
+  reaches this repo: `InitializeResult::server_info` is now `Option<Implementation>`.
+  `schemars` stays at 1.2.1, so every tool's generated input schema is byte-identical,
+  and `ProtocolVersion::V_2024_11_05` is pinned explicitly, so the advertised protocol
+  version does not move with the SDK. ADR-0001's stdio-only invariant holds — no `axum`,
+  `oauth2`, `jsonwebtoken` or streamable-http crate enters the tree (#452).
+- **[deps]** `serial_test` 3.5 → **4.0.1** (its MSRV rises to 1.93.1, which does not reach
+  the MSRV jobs — they build without `--all-targets`, so dev-dependencies are never
+  compiled at 1.86), plus `async-trait`, `clap`, `thiserror`, `uuid`, and the CI action
+  bumps (#450, #451, #453).
+- **[test]** `tools_list_carries_the_safety_annotations`. The 22 safety annotations
+  shipped in 0.8.6 are consumed entirely by the rmcp macro and read back by nothing, so a
+  macro or model change in a major could have dropped every one of them with the build
+  green and every other test passing (#452, #406).
+- **[docs]** `docs/SOURCES.md` §6.1 records what each vendor publishes as a rate limit
+  and what doiget does about it. §6 promised doiget adopts a stricter vendor guideline
+  per source while recording no vendor's limit anywhere, so the promise could not be
+  checked against anything. Springer's figures are left **blank and labelled** rather
+  than guessed — their page renders through JavaScript and the audit could not read
+  them, and a plausible wrong number destroys the table's only value (#496, ADR-0046).
+- **[ci]** `tos-links.yml` requests every §1 link monthly and opens an issue on any
+  non-200. Schedule-only by design: a publisher reorganising their site overnight must
+  not turn an unrelated PR red. It fails loudly if it extracts zero URLs, because a
+  table reformat that emptied the list would otherwise look exactly like a clean sweep
+  (#495, ADR-0046).
+- **[core]** `SOURCE_RATE_OVERRIDES` plus `RateLimits::backoff_ms_for` /
+  `max_concurrent_for`. Library constants keyed by source name — never
+  caller-supplied, since `docs/LEGAL.md` §6a safeguard 5 makes `RateLimits`
+  unsynthesizable on purpose. An entry can only ever TIGHTEN: the accessors take
+  the stricter of the global value and the entry, and a test pins the table so an
+  entry that would be silently ignored fails the build (#493, ADR-0045).
+- **[core]** `RateLimiter::pace` for additional requests inside one attempt.
+  arXiv's terms cap requests and one arXiv attempt issues two — the Atom feed,
+  then the PDF — so the second was previously unpaced (#493).
+- **[cli]** `list-recent --missing-pdf` lists only the metadata-only entries —
+  "which of my batch need retrying?" without reading a fifty-row table by eye
+  (#481).
+- **[core]** `EntryInfo` gains `size_bytes: Option<u64>` and `has_pdf()`. The
+  `list-recent --mode json` envelope carries both: `0` and `null` both mean "no
+  PDF" while meaning different things about the entry, and a consumer should not
+  have to know that. The `pdf` column is APPENDED to the human table, not
+  inserted — column order is stable for `cut(1)` by contract (#481).
 - **[docs]** `batch --json` record order is stated in `docs/ERRORS.md` §3.2a and
   in `batch --help`: records are emitted as refs complete, not in input order, and
   `ref` is the key. Nothing said so, and zipping stdout against the input file
@@ -93,19 +238,29 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   one unreachable contributor pins it forever. doiget is at the single moment when
   reopening that door costs nothing: `git shortlog -sne --all` lists exactly one
   human. Assent is a commit sign-off, and the change is not retroactive — everything
-  merged before it stays MIT-only (ADR-0045).
+  merged before it stays MIT-only (ADR-0051).
 
 ### Retracted
 
-- **[docs]** The 0.8.9 entry claimed the Tier-3 chain runs even when Crossref answers. It
-  does not. `resolve_tdm_chain` still short-circuits every entry to `NotNeeded` the moment
-  `crossref_answered` is true, so a configured TDM key still yields byte-identical output
-  for the DOIs the chain exists to serve, and #458 is open. The bullet is struck from
+- **[docs]** The 0.8.9 entry claimed the Tier-3 chain runs even when Crossref answers.
+  **In 0.8.9 it did not.** `resolve_tdm_chain` short-circuited every entry to `NotNeeded`
+  the moment `crossref_answered` was true, so a configured TDM key yielded byte-identical
+  output for exactly the DOIs the chain exists to serve. The bullet is struck from
   `## [0.8.9]` below and the GitHub Release body carries a correction; the `v0.8.9` tag
-  annotation is immutable and still states it. The notes were assembled by grepping
-  `main..next` for `Closes` and `Refs` and reading both as "fixed" — PR #466 wrote
-  `Refs #458` about an adjacent `cfg`-gate fix, deliberately and correctly. The two
-  keywords are not interchangeable when assembling release notes (#472).
+  annotation is immutable and still states it.
+
+  **#458 is fixed in this release** — see the Tier-3 content-leg entry above (ADR-0044).
+  The retraction stands anyway, because it is about what 0.8.9 *shipped*: a reader on
+  0.8.9 was told a feature worked when it did not, and a later fix does not unsay that.
+
+  Cause: the notes were assembled by grepping `main..next` for `Closes` and `Refs` and
+  reading both as "fixed". PR #466 wrote `Refs #458` about an adjacent `cfg`-gate fix,
+  deliberately and correctly. The two keywords are not interchangeable when assembling
+  release notes (#472).
+
+  This entry itself said "#458 is open" in the present tense until the 0.8.10 promotion
+  review caught it contradicting the Fixed section three screens above. A retraction that
+  goes stale is still a false statement.
 
 ## [0.8.9] - 2026-08-25
 
@@ -2797,4 +2952,4 @@ harden the wire contracts the previous commits introduced:
   `doiget-mcp/tests/initialize_handshake.rs` (renamed test),
   ERRORS.md §1 + §2 (new variant + semantics row).
 
-[Unreleased]: https://github.com/sotashimozono/doiget/compare/main...HEAD
+[Unreleased]: https://github.com/QAtlasHub/doiget/compare/main...HEAD

@@ -61,7 +61,11 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0042 | `tdm-ieee` ships against an inferred contract, marked unverified | Accepted (0.8.9) | `feat/430-tdm-ieee` | #430 |
 | 0043 | The machine-readable surfaces carry the trace and the remediation | Accepted (0.8.9) | `feat/459-machine-readable-diagnostics` | #459 |
 | 0044 | Tier-3 TDM sources are consulted on a blocked content leg, not on a Crossref miss | Accepted | `feat/458-tdm-content-leg` | #458 |
-| 0045 | Contributions carry a relicensable grant, recorded as a commit sign-off | Accepted | `chore/cla-relicensing-grant` | - |
+| 0045 | Per-source rate limits, taken as the stricter of the vendor's terms and the global cap | Accepted | `fix/493-per-source-rate-limits` | #493 |
+| 0046 | In SOURCES.md, a claim about a vendor is normative; the URL where the vendor says it is a pointer | Accepted | `docs/495-496-sources-accuracy` | #495, #496 |
+| 0047 | LEGAL.md's claims are read off the code, and an "enforced control" must name enforcement that exists | Accepted | `docs/494-legal-network-surface` | #494 |
+| 0048 | The access ceiling is written down, and widening it amends the written form | Accepted | `docs/497-access-invariant` | #497 |
+| 0051 | Contributions carry a relicensable grant, recorded as a commit sign-off | Accepted | `chore/cla-relicensing-grant` | - |
 
 ## Conventions
 

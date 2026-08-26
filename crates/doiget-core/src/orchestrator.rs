@@ -913,6 +913,30 @@ impl FetchPaperOutcome {
             attempts: Vec::new(),
         }
     }
+
+    /// [`Self::for_test_synthetic`] carrying a resolution trace.
+    ///
+    /// #471: the plain constructor hard-codes `attempts: Vec::new()`, so a
+    /// test driving `classify_joined` with a `Blocked` outcome could not
+    /// observe a trace even if it looked -- and none did. Reverting the one
+    /// line that threads `outcome.attempts` into `build_jsonl_failure` left
+    /// the whole suite green, silently dropping the trace from `--json`,
+    /// which is the regression #459 exists to prevent.
+    ///
+    /// `#[doc(hidden)]` for the same reason as its sibling: not a stable
+    /// public API.
+    #[doc(hidden)]
+    pub fn for_test_synthetic_with_attempts(
+        safekey: impl Into<String>,
+        source: impl Into<String>,
+        pdf_leg: PdfLegStatus,
+        attempts: Vec<SourceAttempt>,
+    ) -> Self {
+        Self {
+            attempts,
+            ..Self::for_test_synthetic(safekey, source, pdf_leg)
+        }
+    }
 }
 
 /// Resolve a [`Ref`] to a PDF (or metadata-only fallback) and write it
@@ -1572,6 +1596,10 @@ async fn fetch_paper_doi(
 #[cfg(feature = "metadata")]
 fn optional_source_oa_url<'a>(source: &str, meta: &'a Value) -> Option<&'a str> {
     match source {
+        // #461: OpenAlex reports every location it knows of, not just a
+        // best one, so it is the source most likely to name a repository
+        // copy for a hybrid-OA article whose publisher refused.
+        "openalex" => crate::sources::openalex::open_access_pdf_url(meta),
         "core" => crate::sources::core_oa::open_access_pdf_url(meta),
         "hal" => crate::sources::hal::open_access_pdf_url(meta),
         "europe-pmc" => crate::sources::europepmc::open_access_pdf_url(meta),
@@ -4242,6 +4270,16 @@ async fn resolve_optional_chain(
         crate::sources::core_oa::CoreSource::new,
         crate::sources::core_oa::CoreSource::with_base,
     );
+    // #461: `OpenalexSource` was compiled in and reachable from `doiget
+    // graph`, but absent from THIS chain -- so the #445 content-leg
+    // fall-through could never ask the one source that reports more than one
+    // location per work. The issue said the accessor was "the only missing
+    // piece"; the wiring was missing too.
+    let openalex_contact = contact_email_from_env();
+    let openalex = match optional_base("DOIGET_OPENALEX_BASE") {
+        Some(base) => crate::sources::openalex::OpenalexSource::with_base(base, openalex_contact),
+        None => crate::sources::openalex::OpenalexSource::new(openalex_contact),
+    };
 
     // The name is carried explicitly rather than read from `src.name()`:
     // that borrows the source, while a `SourceAttempt` holds a `'static`
@@ -4261,6 +4299,7 @@ async fn resolve_optional_chain(
         ("openaire", &["DOIGET_ENABLE_OPENAIRE"], &openaire),
         ("hal", &["DOIGET_ENABLE_HAL"], &hal),
         ("core", &["DOIGET_ENABLE_CORE"], &core),
+        ("openalex", &["DOIGET_ENABLE_OPENALEX"], &openalex),
     ];
 
     let mut resolved: Option<(&'static str, Value)> = None;
@@ -4549,6 +4588,7 @@ mod chain_tests {
                 "DOIGET_OPENAIRE_BASE",
                 "DOIGET_HAL_BASE",
                 "DOIGET_CORE_BASE",
+                "DOIGET_OPENALEX_BASE",
             ];
             Self(
                 VARS.iter()
@@ -4581,6 +4621,12 @@ mod chain_tests {
             ("openaire", host),
             ("hal", host),
             ("core", host),
+            // #461. Production registers this unconditionally via
+            // `discovery_allowlist` (ADR-0031, and there is a test in
+            // `commands/fetch.rs` guarding exactly that), so omitting it
+            // here would fail the source at `UnknownSource` for a reason
+            // production does not have.
+            ("openalex", host),
         ]));
         let session_id = "01J0000000000000000000TEST".to_string();
         let log = Arc::new(
@@ -4620,6 +4666,7 @@ mod chain_tests {
         p.metadata.openaire = true;
         p.metadata.core = true;
         p.metadata.europe_pmc = true;
+        p.metadata.openalex = true;
         p
     }
 
@@ -4629,6 +4676,83 @@ mod chain_tests {
             .find(|a| a.source == name)
             .unwrap_or_else(|| panic!("no attempt recorded for {name}; got {attempts:?}"))
             .outcome
+    }
+
+    /// Every source in the optional chain that can name an OA document URL
+    /// has an `optional_source_oa_url` arm, and each arm reads the field its
+    /// vendor actually uses.
+    ///
+    /// #461 caught this the hard way: adding `"openalex"` to the chain and
+    /// then DELETING its dispatch arm broke nothing -- no test, no clippy
+    /// warning. The chain entry and the arm are two halves of one wiring and
+    /// only the first half was pinned. Same shape as #471.
+    ///
+    /// Table-driven, so a new source is added here or is not covered, and a
+    /// failure names which one.
+    #[test]
+    fn every_oa_url_bearing_source_has_a_dispatch_arm() {
+        // Each case carries the field its vendor actually uses.
+        // Deliberately different per source: a shared shape would let one
+        // arm accidentally serve another and still look green.
+        let cases: &[(&str, serde_json::Value, &str)] = &[
+            (
+                "core",
+                serde_json::json!({ "downloadUrl": "https://core.example/1.pdf" }),
+                "https://core.example/1.pdf",
+            ),
+            (
+                "hal",
+                serde_json::json!({
+                    "openAccess_bool": true,
+                    "fileMain_s": "https://hal.example/2.pdf"
+                }),
+                "https://hal.example/2.pdf",
+            ),
+            (
+                "europe-pmc",
+                serde_json::json!({
+                    "fullTextUrlList": {
+                        "fullTextUrl": [{
+                            "documentStyle": "pdf",
+                            "availabilityCode": "OA",
+                            "url": "https://epmc.example/3.pdf"
+                        }]
+                    }
+                }),
+                "https://epmc.example/3.pdf",
+            ),
+            (
+                "openalex",
+                serde_json::json!({
+                    "locations": [
+                        { "is_oa": true, "pdf_url": "https://repo.example.ac.uk/4.pdf" }
+                    ]
+                }),
+                "https://repo.example.ac.uk/4.pdf",
+            ),
+        ];
+
+        let mut broken: Vec<String> = Vec::new();
+        for (source, meta, expected) in cases {
+            let got = optional_source_oa_url(source, meta);
+            if got != Some(*expected) {
+                broken.push(format!("{source}: expected {expected:?}, got {got:?}"));
+            }
+        }
+        assert!(
+            broken.is_empty(),
+            "these sources are in the optional chain but their document URL never reaches the \
+             content leg -- a missing or wrong `optional_source_oa_url` arm:\n  {}",
+            broken.join("\n  ")
+        );
+
+        // A source with no arm returns None rather than something else's
+        // URL, which is what keeps the dispatch honest as it grows.
+        assert_eq!(
+            optional_source_oa_url("datacite", &serde_json::json!({ "downloadUrl": "x" })),
+            None,
+            "datacite reports no document URL; it must not fall through to another arm"
+        );
     }
 
     /// THE regression for the bug this whole change exists to fix.
@@ -4660,7 +4784,14 @@ mod chain_tests {
         let names: Vec<&str> = attempts.iter().map(|a| a.source).collect();
         assert_eq!(
             names,
-            vec!["datacite", "europe-pmc", "openaire", "hal", "core"],
+            vec![
+                "datacite",
+                "europe-pmc",
+                "openaire",
+                "hal",
+                "core",
+                "openalex"
+            ],
             "the trace must list every source, in chain order"
         );
         for a in &attempts {
@@ -4673,7 +4804,7 @@ mod chain_tests {
         }
         assert_eq!(
             server.received_requests().await.expect("recorded").len(),
-            5,
+            6,
             "each enabled source must issue exactly one request"
         );
     }

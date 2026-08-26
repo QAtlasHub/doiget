@@ -251,7 +251,7 @@ The grant below is broader than "MIT in, MIT out". It exists so the project can 
 its outbound license later — a copyleft core with separately licensed connectors, say —
 without having to find and re-ask every past contributor. The alternatives that were
 considered and rejected are recorded in
-[ADR-0045](docs/DECISIONS/0045-contributor-license-agreement.md).
+[ADR-0051](docs/DECISIONS/0051-contributor-license-agreement.md).
 
 ### 1. Copyright grant
 

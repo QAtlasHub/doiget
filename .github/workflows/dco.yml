@@ -1,6 +1,6 @@
 name: dco
 
-# ADR-0045 D4 — the Contributor License Agreement in CONTRIBUTING.md is agreed to
+# ADR-0051 D4 — the Contributor License Agreement in CONTRIBUTING.md is agreed to
 # by a `Signed-off-by` trailer on each commit, and this job is what makes that
 # record real rather than aspirational.
 #
@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   dco:
-    name: dco (ADR-0045 — is every commit signed off?)
+    name: dco (ADR-0051 — is every commit signed off?)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

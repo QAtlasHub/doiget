@@ -972,6 +972,71 @@ mod tests {
         );
     }
 
+    /// #471. The ONE line that threads a real outcome's trace into the
+    /// `--json` record had no test behind it: every assertion about
+    /// `attempts` called `build_jsonl_failure` directly with hand-built
+    /// arguments, and the only test that went through `classify_joined`
+    /// built its outcome with `for_test_synthetic`, which hard-codes
+    /// `attempts: Vec::new()` -- so it could not have observed a trace even
+    /// if it had looked.
+    ///
+    /// Reverting `batch.rs`'s `&outcome.attempts` to `&[]` left the whole
+    /// suite green while silently dropping the trace from `--json`, which is
+    /// the regression #459 exists to prevent.
+    #[test]
+    fn classify_joined_threads_the_real_outcomes_trace_into_the_json_record() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        use doiget_core::ErrorCode as Ec;
+
+        let blocked = PdfLegStatus::Blocked {
+            code: Ec::NetworkError,
+            message: "publisher refused".to_string(),
+            denial: None,
+            suggested_arxiv_id: None,
+        };
+        // A trace with something in it, and something a `&[]` cannot fake.
+        let attempts = vec![
+            SourceAttempt::new("crossref", AttemptOutcome::Resolved),
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_HAL"],
+                },
+            ),
+        ];
+
+        let outcome = classify_joined(
+            Ok(TaskOutcome {
+                input: "10.1234/foo".to_string(),
+                result: Ok(FetchPaperOutcome::for_test_synthetic_with_attempts(
+                    "doi__10_1234_foo",
+                    "oa-publisher",
+                    blocked,
+                    attempts,
+                )),
+            }),
+            true,
+        );
+
+        let rec = outcome
+            .json_record
+            .unwrap_or_else(|| panic!("json mode must produce a record"));
+
+        let rows = rec["error"]["attempts"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the trace must reach the wire; record: {rec}"));
+        assert_eq!(rows.len(), 2, "record: {rec}");
+        assert_eq!(rows[0]["source"], serde_json::json!("crossref"));
+        assert_eq!(rows[1]["source"], serde_json::json!("hal"));
+        // #470's structured form travels with it -- which is what proves this
+        // is the real outcome's trace rather than a placeholder.
+        assert_eq!(
+            rows[1]["required_env"],
+            serde_json::json!(["DOIGET_ENABLE_HAL"]),
+            "record: {rec}"
+        );
+    }
+
     #[test]
     fn classify_joined_blocked_pdf_emits_failure_with_denial_context() {
         // #210: a `PdfLegStatus::Blocked` outcome is reported as a
