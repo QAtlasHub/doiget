@@ -10,6 +10,8 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.10] - 2026-08-26
+
 ### Added
 
 - **[source]** The #445 content-leg fall-through asks OpenAlex too. OpenAlex reports
@@ -2934,4 +2936,4 @@ harden the wire contracts the previous commits introduced:
   `doiget-mcp/tests/initialize_handshake.rs` (renamed test),
   ERRORS.md §1 + §2 (new variant + semantics row).
 
-[Unreleased]: https://github.com/sotashimozono/doiget/compare/main...HEAD
+[Unreleased]: https://github.com/QAtlasHub/doiget/compare/main...HEAD
