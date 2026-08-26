@@ -1049,6 +1049,13 @@ pub(crate) fn cli_exit_code(code: ErrorCode) -> i32 {
         // A name filter that matched several entities is user-fixable by
         // narrowing the query → `docs/ERRORS.md` §4 exit 2 ("misuse").
         ErrorCode::Ambiguous => 2,
+        // An unparsable ref is a bad argument, and §4's exit 1 is "at
+        // least one fetch failed" — which does not describe a run where
+        // nothing was fetched. `graph` had followed the table with a
+        // hard-coded 2 while `fetch` and the eight #477 commands fell to
+        // the `_ => 1` arm below, so the same input produced different
+        // exit codes from the same binary (#492, ADR-0049).
+        ErrorCode::InvalidRef => 2,
         _ => 1,
     }
 }
@@ -1661,6 +1668,16 @@ host = "*.uj.edu.pl"
         // ADR-0031 D5: a name-filter ambiguity is user-fixable → exit 2,
         // distinct from the generic exit 1.
         assert_eq!(cli_exit_code(ErrorCode::Ambiguous), 2);
+    }
+
+    #[test]
+    fn invalid_ref_maps_to_exit_code_2() {
+        // ADR-0049: an unparsable ref is misuse. `docs/ERRORS.md` §4
+        // reserves 1 for "at least one fetch was attempted and failed",
+        // and nothing is fetched here. `Ambiguous` — a value that fails
+        // to select one entity — was already 2; `InvalidRef` is a value
+        // that fails to parse, and sat at the catch-all 1 next to it.
+        assert_eq!(cli_exit_code(ErrorCode::InvalidRef), 2);
     }
 
     /// Minimal `DenialContext` carrying only `reason`; every other field

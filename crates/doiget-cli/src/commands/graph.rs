@@ -59,12 +59,15 @@ pub async fn run(
         Ok(r) => r,
         Err(e) => {
             // Bad ref string is user misuse -> `docs/ERRORS.md` §4 exit 2
-            // (issue #149). NOTE: `fetch` exits 1 for the same input; §4
-            // says misuse is 2, so they disagree and this is the one
-            // following the table. Not reconciled in #477 -- see
-            // `commands::render_ref_parse_error`.
+            // (issue #149). Routed through `cli_exit_code` since #492:
+            // this used to hard-code the 2 while `fetch` fell to the
+            // generic 1, so the same input got two answers out of one
+            // binary and the comment here asserted a consistency that
+            // did not hold.
             super::render_ref_parse_error(&e);
-            return Err(anyhow::Error::new(CliExit(2)));
+            return Err(anyhow::Error::new(CliExit(
+                crate::commands::fetch::cli_exit_code(doiget_core::ErrorCode::InvalidRef),
+            )));
         }
     };
     let doi = match &ref_ {
