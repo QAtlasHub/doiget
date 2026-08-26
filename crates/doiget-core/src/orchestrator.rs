@@ -554,12 +554,29 @@ fn extract_metadata_authors(meta: &Value) -> Vec<String> {
 // helpers so a single test fixture can drive both crates.
 // ---------------------------------------------------------------------------
 
-/// `DOIGET_CONTACT_EMAIL`, defaulting to the same `doiget@localhost`
-/// the CLI uses (`crates/doiget-cli/src/commands/fetch.rs::OrchestratorConfig`).
+/// Last rung of the contact ladder — the same `doiget@localhost` the CLI
+/// uses (`crates/doiget-cli/src/commands/fetch.rs::OrchestratorConfig`).
 const FALLBACK_CONTACT_EMAIL: &str = "doiget@localhost";
 
-fn contact_email_from_env() -> String {
-    std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| FALLBACK_CONTACT_EMAIL.to_string())
+/// Read an env var, treating blank as unset.
+fn env_nonempty(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|s| !s.trim().is_empty())
+}
+
+/// Polite-pool contact address: `DOIGET_CONTACT_EMAIL`, then
+/// `[network] contact_email` in `config.toml`, then `doiget@localhost`
+/// (#504).
+///
+/// Same rung order ADR-0036 / #441 gave `store_root`, per field. The file
+/// is opened only when the env rung is empty, and the result is
+/// deliberately **not** cached: a long-lived `doiget serve`, `config
+/// doctor` and the tests must all see an edit to the file or the
+/// environment, and one small read is free next to the network legs it
+/// precedes.
+fn resolve_contact_email() -> String {
+    env_nonempty("DOIGET_CONTACT_EMAIL")
+        .or_else(|| crate::user_extension::load_or_default().contact_email)
+        .unwrap_or_else(|| FALLBACK_CONTACT_EMAIL.to_string())
 }
 
 fn arxiv_source_from_env() -> ArxivSource {
@@ -613,7 +630,7 @@ async fn metadata_only_doi(
     profile: &CapabilityProfile,
     ctx: &FetchContext,
 ) -> Result<MetadataOnlyOutcome, FetchError> {
-    let contact = contact_email_from_env();
+    let contact = resolve_contact_email();
     let crossref = crossref_source_from_env(&contact);
     match crossref.fetch(ref_, profile, ctx).await {
         Ok(res) => {
@@ -1149,8 +1166,8 @@ async fn fetch_paper_doi(
     store_root: &Utf8Path,
     safekey: &Safekey,
 ) -> Result<FetchPaperOutcome, FetchError> {
-    let contact = contact_email_from_env();
-    let unpaywall_contact = unpaywall_email_from_env(&contact);
+    let contact = resolve_contact_email();
+    let unpaywall_contact = resolve_unpaywall_email(&contact);
     let crossref = crossref_source_from_env(&contact);
     // Issue #120: Crossref is NON-fatal. A transient Crossref failure
     // must not abort the whole DOI fetch when Unpaywall alone can
@@ -2523,8 +2540,25 @@ fn strip_arxiv_version(id: &str) -> &str {
     id
 }
 
-fn unpaywall_email_from_env(fallback_contact: &str) -> String {
-    std::env::var("DOIGET_UNPAYWALL_EMAIL").unwrap_or_else(|_| fallback_contact.to_string())
+/// Unpaywall contact: `DOIGET_UNPAYWALL_EMAIL`, then
+/// `[network] unpaywall_email`, then whatever the caller resolved as the
+/// general contact address (#504).
+///
+/// The more specific field wins at each rung, which is how
+/// `DOIGET_UNPAYWALL_EMAIL` already beat `DOIGET_CONTACT_EMAIL`.
+///
+/// `[network] unpaywall_email` was written by `config init`, called
+/// STRONGLY RECOMMENDED by the template's own prose, and read by nothing
+/// for four releases. The cost is not politeness. The template says so
+/// itself: the automatic arXiv-preprint fallback fires on what Unpaywall
+/// reports, so a throttled answer from the non-polite pool quietly costs
+/// that fallback — and the run still exits 0 with `metadata-only: no OA
+/// PDF available`. A degraded search and a true negative were the same
+/// observable.
+fn resolve_unpaywall_email(fallback_contact: &str) -> String {
+    env_nonempty("DOIGET_UNPAYWALL_EMAIL")
+        .or_else(|| crate::user_extension::load_or_default().unpaywall_email)
+        .unwrap_or_else(|| fallback_contact.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -2633,6 +2667,128 @@ pub fn batch_fetch_plans(
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    // ── #504: the contact ladder, at the end that actually fetches ──────
+
+    /// RAII env guard for the ladder tests.
+    struct LadderEnv {
+        vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl LadderEnv {
+        /// Clear both address vars and point every config-dir rung at `dir`.
+        fn scoped(dir: &str) -> Self {
+            let mut vars = Vec::new();
+            for v in ["DOIGET_CONTACT_EMAIL", "DOIGET_UNPAYWALL_EMAIL"] {
+                vars.push((v, std::env::var_os(v)));
+                std::env::remove_var(v);
+            }
+            for v in ["XDG_CONFIG_HOME", "APPDATA", "HOME", "USERPROFILE"] {
+                vars.push((v, std::env::var_os(v)));
+                std::env::set_var(v, dir);
+            }
+            Self { vars }
+        }
+
+        fn set(&mut self, var: &'static str, value: &str) {
+            self.vars.push((var, std::env::var_os(var)));
+            std::env::set_var(var, value);
+        }
+    }
+
+    impl Drop for LadderEnv {
+        fn drop(&mut self) {
+            for (var, prior) in self.vars.iter().rev() {
+                match prior {
+                    Some(v) => std::env::set_var(var, v),
+                    None => std::env::remove_var(var),
+                }
+            }
+        }
+    }
+
+    /// Write a `config.toml` under `dir` and return `dir`.
+    fn write_config(td: &tempfile::TempDir, body: &str) -> String {
+        let dir = camino::Utf8PathBuf::from_path_buf(td.path().to_path_buf())
+            .expect("temp path is UTF-8");
+        std::fs::create_dir_all(dir.join("doiget").as_std_path()).expect("mkdir");
+        std::fs::write(dir.join("doiget").join("config.toml").as_std_path(), body)
+            .expect("write config.toml");
+        dir.to_string()
+    }
+
+    /// #504. The fetch path read the environment and nothing else, so
+    /// `[network] unpaywall_email` — written by `config init`, called
+    /// STRONGLY RECOMMENDED in the template's own prose — did nothing, and
+    /// every request from a machine configured that way went out as
+    /// `doiget@localhost`.
+    ///
+    /// This is the end that matters: `ResolvedConfig` agreeing is what
+    /// `doctor` reports, but this is what the network sees.
+    #[test]
+    #[serial_test::serial]
+    fn resolve_contact_email_reads_the_config_file_rung() {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = write_config(
+            &td,
+            "[network]\ncontact_email = \"file@institution.edu\"\nunpaywall_email = \"up@institution.edu\"\n",
+        );
+        let _env = LadderEnv::scoped(&dir);
+
+        let contact = resolve_contact_email();
+        assert_eq!(contact, "file@institution.edu");
+        assert_eq!(resolve_unpaywall_email(&contact), "up@institution.edu");
+    }
+
+    /// The env rung stays on top, per field, and `unpaywall_email` still
+    /// falls back to the resolved contact when only that one is absent.
+    #[test]
+    #[serial_test::serial]
+    fn the_env_rung_outranks_the_file_and_unpaywall_falls_back_to_contact() {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = write_config(&td, "[network]\ncontact_email = \"file@institution.edu\"\n");
+        let mut env = LadderEnv::scoped(&dir);
+        env.set("DOIGET_CONTACT_EMAIL", "env@institution.edu");
+
+        let contact = resolve_contact_email();
+        assert_eq!(contact, "env@institution.edu");
+        assert_eq!(
+            resolve_unpaywall_email(&contact),
+            "env@institution.edu",
+            "no unpaywall rung is set, so it must inherit the resolved contact"
+        );
+    }
+
+    /// No file and no env is still the documented fallback — the ladder
+    /// must not have turned a missing config into an error or a blank
+    /// address.
+    #[test]
+    #[serial_test::serial]
+    fn an_absent_config_still_yields_the_documented_fallback() {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8PathBuf::from_path_buf(td.path().to_path_buf())
+            .expect("temp path is UTF-8")
+            .to_string();
+        let _env = LadderEnv::scoped(&dir);
+
+        let contact = resolve_contact_email();
+        assert_eq!(contact, FALLBACK_CONTACT_EMAIL);
+        assert_eq!(resolve_unpaywall_email(&contact), FALLBACK_CONTACT_EMAIL);
+    }
+
+    /// A blank value is not an address. Both rungs treat it as unset —
+    /// an empty `mailto:` reads to the upstream as no contact at all,
+    /// which is the state the field exists to avoid.
+    #[test]
+    #[serial_test::serial]
+    fn a_blank_value_on_either_rung_is_treated_as_unset() {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = write_config(&td, "[network]\ncontact_email = \"   \"\n");
+        let mut env = LadderEnv::scoped(&dir);
+        env.set("DOIGET_CONTACT_EMAIL", "");
+
+        assert_eq!(resolve_contact_email(), FALLBACK_CONTACT_EMAIL);
+    }
 
     /// A Crossref `message` envelope (the shape `metadata_only_doi` stores
     /// in `MetadataOnlyOutcome.metadata`: `CrossrefSource` returns
@@ -4210,6 +4366,19 @@ mod attempt_denial_tests {
 
 /// Whether a `SourceSchema` hint describes an access refusal rather than a
 /// malformed response.
+///
+/// The coupling is prose: a source says why it refused in free text and
+/// this reads the text back. That is fragile, and #503 is the proof — it
+/// reworded Europe PMC's refusal from "not open access" to "advertises no
+/// retrievable PDF" and the row silently reclassified from
+/// `NotOpenAccess` to `Failed`, which reads to an operator as "the source
+/// broke" rather than "the source has it and cannot give it to us".
+///
+/// It is caught rather than prevented: `an_access_refusal_is_recorded_
+/// distinctly_from_a_miss` drives the real chain, so any source whose
+/// wording drifts out of this predicate fails there. A typed refusal on
+/// `FetchError` would prevent it instead, at the cost of widening the
+/// closed error set in `docs/ERRORS.md` §3.
 #[cfg(any(
     feature = "metadata",
     feature = "tdm-elsevier",
@@ -4218,7 +4387,13 @@ mod attempt_denial_tests {
     feature = "tdm-ieee"
 ))]
 fn is_access_refusal(hint: &str) -> bool {
-    hint.contains("not open access") || hint.contains("openAccess")
+    hint.contains("not open access")
+        || hint.contains("openAccess")
+        // #503: Europe PMC refuses on "nothing retrievable is
+        // advertised", which is a strictly narrower claim than "outside
+        // the OA subset" and is still an access refusal, not a schema
+        // failure.
+        || hint.contains("no retrievable PDF")
 }
 
 /// Run the optional resolution chain and record one [`SourceAttempt`] per
@@ -4275,7 +4450,7 @@ async fn resolve_optional_chain(
     // fall-through could never ask the one source that reports more than one
     // location per work. The issue said the accessor was "the only missing
     // piece"; the wiring was missing too.
-    let openalex_contact = contact_email_from_env();
+    let openalex_contact = resolve_contact_email();
     let openalex = match optional_base("DOIGET_OPENALEX_BASE") {
         Some(base) => crate::sources::openalex::OpenalexSource::with_base(base, openalex_contact),
         None => crate::sources::openalex::OpenalexSource::new(openalex_contact),
@@ -4924,6 +5099,11 @@ mod chain_tests {
     /// An access refusal is not a miss. OpenAIRE / Europe PMC / HAL all
     /// report "found it, cannot give it to you" — that must not be recorded
     /// as `NoRecord`, or the operator concludes the paper does not exist.
+    ///
+    /// This record carries no `fullTextUrlList` at all, so after #503 it is
+    /// refused for the narrower reason and must still classify as
+    /// `NotOpenAccess` — see `is_access_refusal`, whose coupling to the
+    /// wording this test is the only thing guarding.
     #[tokio::test]
     #[serial_test::serial]
     async fn an_access_refusal_is_recorded_distinctly_from_a_miss() {
@@ -4954,6 +5134,53 @@ mod chain_tests {
             o.render().contains("not open access"),
             "the reason must survive into the message; got {}",
             o.render()
+        );
+    }
+
+    /// #503, at the level that matters: a Europe PMC record OUTSIDE the
+    /// bulk OA subset that still advertises a Free PDF must resolve, and
+    /// the URL must reach `optional_source_oa_url` — which is what
+    /// `try_optional_source_oa_fallback` hands to the `oa-publisher` leg.
+    ///
+    /// The source-level test proves the gate; this proves the copy is not
+    /// dropped somewhere between the gate and the fetch. Every bug in the
+    /// #442 family was a correct component that nothing reached.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_closed_subset_record_with_a_free_pdf_resolves_and_carries_its_url() {
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"resultList":{"result":[{"doi":"10.1098/rspa.2014.0585",
+                   "isOpenAccess":"N","inEPMC":"Y","fullTextUrlList":{"fullTextUrl":[
+                   {"availability":"Free","availabilityCode":"F","documentStyle":"pdf",
+                    "site":"Europe_PMC",
+                    "url":"https://europepmc.org/articles/PMC4277194?pdf=render"}]}}]}}"#,
+            ))
+            .mount(&server)
+            .await;
+        let (_td, ctx) = ctx_for(&server.address().to_string());
+        let ref_ = Ref::Doi(Doi::parse("10.1098/rspa.2014.0585").expect("doi"));
+        let mut fields = CrossrefFields::default();
+        let mut attempts = Vec::new();
+        let mut on = all_off();
+        on.metadata.europe_pmc = true;
+
+        let resolved =
+            resolve_optional_chain(&ref_, &on, &ctx, false, &mut fields, &mut attempts).await;
+
+        let (source, record) = resolved.expect("a Free PDF entry must resolve, not refuse");
+        assert_eq!(source, "europe-pmc");
+        let row = outcome(&attempts, "europe-pmc");
+        assert!(
+            matches!(row, AttemptOutcome::Resolved),
+            "the row must read as resolved, not as an access refusal; got {row:?}"
+        );
+        assert_eq!(
+            optional_source_oa_url("europe-pmc", &record),
+            Some("https://europepmc.org/articles/PMC4277194?pdf=render"),
+            "the URL the oa-publisher leg fetches must survive the chain"
         );
     }
 

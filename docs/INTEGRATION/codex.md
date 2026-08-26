@@ -1,39 +1,33 @@
 # OpenAI Codex CLI integration
 
-> **Status: PLACEHOLDER (Phase 3).** This file is a landing stub. Concrete
-> configuration lands when `doiget serve` is real. See
-> [`README.md`](./README.md) for the planned-files table and rationale.
+> **Status: UNTESTED against Codex CLI as of 2026-08-26.** `doiget serve` is a
+> plain stdio MCP server, and the snippet below is the standard stdio shape,
+> but this specific host has not been exercised. Report success or failure on
+> [#512](https://github.com/QAtlasHub/doiget/issues/512).
 
-[OpenAI Codex CLI](https://github.com/openai/codex) is OpenAI's terminal-native
-coding agent and supports MCP servers. Once `doiget serve` ships in Phase 3,
-this guide will document how to register `doiget` as an MCP server in Codex
-CLI so that the tools enumerated in [`../MCP_TOOLS.md`](../MCP_TOOLS.md) are
-callable from Codex sessions.
-
-## Configuration (Phase 3)
-
-The example below is intentionally empty. Do not copy speculative TOML from
-elsewhere — wait for the verified Phase 3 snippet.
+[Codex CLI](https://github.com/openai/codex) reads `~/.codex/config.toml`.
+MCP servers go under `[mcp_servers.<name>]`:
 
 ```toml
-<!-- TODO Phase 3: paste verified Codex CLI MCP server entry here. -->
+[mcp_servers.doiget]
+command = "doiget"
+args = ["serve"]
+
+[mcp_servers.doiget.env]
+DOIGET_STORE_ROOT = "/home/you/papers"
+DOIGET_CONTACT_EMAIL = "you@institution.edu"
 ```
 
-```toml
-<!-- TODO Phase 3: env-var block (see ../CONFIG.md for precedence). -->
-```
+Use an absolute `command` path if `doiget` is not on `PATH`.
 
-## What to read in the meantime
+## Environment
 
-- **Tool surface:** [`../MCP_TOOLS.md`](../MCP_TOOLS.md) — the exact tools
-  Phase 3 exposes, including JSON-Schema for inputs and outputs.
-- **Configuration:** [`../CONFIG.md`](../CONFIG.md) — env-var precedence and
-  the `~/.config/doiget/` layout that any host wiring must respect.
-- **Architecture:** [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §4-6 — transport
-  and capability-gate context for MCP integration.
+Identical to every other host — see [`claude-code.md`](./claude-code.md)
+§Environment, [`../CONFIG.md`](../CONFIG.md) and
+[`../CAPABILITY.md`](../CAPABILITY.md).
 
-## Contributing
+## Checking it worked
 
-If you have a working Codex CLI integration ahead of Phase 3, open a GitHub
-Discussion with the JSON-RPC trace and host-side config rather than a PR — see
-[`README.md`](./README.md) §Contributing a snippet.
+Ask for `doiget_health`, then `doiget_capability_profile`.
+
+Tool surface: [`../MCP_TOOLS.md`](../MCP_TOOLS.md).
