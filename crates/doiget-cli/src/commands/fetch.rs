@@ -138,24 +138,21 @@ fn home_dir_utf8() -> Result<Utf8PathBuf> {
     Err(anyhow!("neither HOME nor USERPROFILE is set"))
 }
 
-/// Best-effort config-dir resolution. Honors `XDG_CONFIG_HOME` first
-/// (POSIX), then `APPDATA` (Windows), then falls back to `$HOME/.config`.
+/// Config-dir resolution, delegated to `doiget_core::user_extension`.
 ///
-/// Crate-visible so sibling modules (`commands::capabilities`,
-/// `commands::config`) can resolve the same `<config_dir>/doiget/`
-/// path the production HTTP-client builder reads from. Keep the
-/// signature stable: any divergence between this and the MCP-side
-/// copy (`crates/doiget-mcp/src/lib.rs::config_dir_utf8`) would
-/// silently desync the user-extension allowlist surfaces.
+/// This used to be one of three copies. The previous comment here asked
+/// the reader to "keep the signature stable" because divergence from the
+/// MCP-side copy "would silently desync the user-extension allowlist
+/// surfaces" — and they had already diverged, this one accepting
+/// `XDG_CONFIG_HOME=""` and resolving a *relative* config path under the
+/// cwd where the MCP copy treated blank as unset. The shared resolver
+/// keeps blank-is-unset, so a blank variable no longer silently selects a
+/// different file.
+///
+/// Kept as a crate-visible wrapper so the ~20 call sites in
+/// `commands::capabilities` / `commands::config` are unchanged.
 pub(crate) fn config_dir_utf8() -> Result<Utf8PathBuf> {
-    if let Some(s) = read_env_utf8("XDG_CONFIG_HOME")? {
-        return Ok(Utf8PathBuf::from(s));
-    }
-    if let Some(s) = read_env_utf8("APPDATA")? {
-        return Ok(Utf8PathBuf::from(s));
-    }
-    let home = home_dir_utf8()?;
-    Ok(home.join(".config"))
+    Ok(doiget_core::user_extension::config_dir()?)
 }
 
 /// Best-effort resolver-cache root (`docs/CACHE.md`). Honors
@@ -377,10 +374,11 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
 
 /// Resolved configuration derived from the environment.
 ///
-/// Slice 2: `contact_email` / `unpaywall_email` are now read by the
-/// `doiget-core::orchestrator::fetch_paper` orchestrator directly from
-/// the env (`contact_email_from_env` / `unpaywall_email_from_env` in
-/// that module), so the CLI no longer threads them through. The fields
+/// Slice 2: `contact_email` / `unpaywall_email` are read by the
+/// `doiget-core::orchestrator::fetch_paper` orchestrator itself
+/// (`resolve_contact_email` / `resolve_unpaywall_email` in that module —
+/// env var, then `[network]` in `config.toml`, then the default since
+/// #504), so the CLI no longer threads them through. The fields
 /// stay here so a future slice that adds CLI-flag overrides has a
 /// natural attachment point — the `#[allow(dead_code)]` is the minimal
 /// intervention until that slice lands.
