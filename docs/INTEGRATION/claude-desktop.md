@@ -1,39 +1,75 @@
 # Claude Desktop integration
 
-> **Status: PLACEHOLDER (Phase 3).** This file is a landing stub. Concrete
-> configuration lands when `doiget serve` is real. See
-> [`README.md`](./README.md) for the planned-files table and rationale.
+> **Status: VERIFIED for the `.mcpb` route** (shipping since 0.8.4; attached to
+> every GitHub Release). The manual JSON route below is the same stdio
+> invocation and is included for people who would rather not install an
+> extension. Last checked 2026-08-26.
 
-[Claude Desktop](https://claude.ai/download) is Anthropic's desktop client and
-hosts MCP servers over stdio. Once `doiget serve` ships in Phase 3, this guide
-will document how to register `doiget` as a tool provider in Claude Desktop's
-MCP configuration so that `resolve_doi`, `fetch_metadata`, and the rest of the
-tool surface in [`../MCP_TOOLS.md`](../MCP_TOOLS.md) are callable from a chat.
+[Claude Desktop](https://claude.ai/download) hosts MCP servers over stdio.
 
-## Configuration (Phase 3)
+## Recommended: install the `.mcpb` extension
 
-The example below is intentionally empty. Do not copy speculative JSON from
-elsewhere — wait for the verified Phase 3 snippet.
+Each [GitHub Release](https://github.com/QAtlasHub/doiget/releases) attaches
+`doiget-<version>.mcpb`. Download it and open it — Claude Desktop installs it
+as an extension. The bundle carries the binaries for macOS, Windows and Linux
+and picks the right one, so there is no PATH to configure.
+
+It asks for one setting, **Paper store location**, which becomes
+`DOIGET_STORE_ROOT`. Point it at a real directory you own; the default is
+`~/Documents/doiget-papers`.
+
+Requires Claude Desktop **0.10.0 or newer**
+(`mcpb/manifest.json` → `compatibility.claude_desktop`).
+
+## Manual: `claude_desktop_config.json`
+
+Settings → Developer → Edit Config. The file lives at:
+
+| OS | Path |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
 
 ```json
-<!-- TODO Phase 3: paste verified Claude Desktop MCP server entry here. -->
+{
+  "mcpServers": {
+    "doiget": {
+      "command": "/usr/local/bin/doiget",
+      "args": ["serve"],
+      "env": {
+        "DOIGET_STORE_ROOT": "/Users/you/papers",
+        "DOIGET_CONTACT_EMAIL": "you@institution.edu"
+      }
+    }
+  }
+}
 ```
 
-```toml
-<!-- TODO Phase 3: env-var block (see ../CONFIG.md for precedence). -->
-```
+Use an **absolute** `command` path. A desktop app does not inherit the `PATH`
+your shell has, so a bare `doiget` frequently fails to launch with no visible
+error.
 
-## What to read in the meantime
+Restart Claude Desktop after editing.
 
-- **Tool surface:** [`../MCP_TOOLS.md`](../MCP_TOOLS.md) — the exact tools
-  Phase 3 exposes, including JSON-Schema for inputs and outputs.
-- **Configuration:** [`../CONFIG.md`](../CONFIG.md) — env-var precedence and
-  the `~/.config/doiget/` layout that any host wiring must respect.
-- **Architecture:** [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §4-6 — transport
-  and capability-gate context for MCP integration.
+## Environment
 
-## Contributing
+`DOIGET_STORE_ROOT` matters more here than anywhere else: the working
+directory of a GUI-launched process is not a directory you chose, so the
+`./papers` default (ADR-0036) lands somewhere arbitrary. That was #369.
 
-If you have a working Claude Desktop integration ahead of Phase 3, open a
-GitHub Discussion with the JSON-RPC trace and host-side config rather than a
-PR — see [`README.md`](./README.md) §Contributing a snippet.
+The remaining variables are the same as for Claude Code — see
+[`claude-code.md`](./claude-code.md) §Environment,
+[`../CONFIG.md`](../CONFIG.md) and [`../CAPABILITY.md`](../CAPABILITY.md).
+
+## Checking it worked
+
+Ask for `doiget_health`. It reports the version, store writability and the
+resolved store path.
+
+## Verifying the download
+
+Every release asset except the `.mcpb` currently ships `.sha256` and
+`.cosign.bundle` sidecars; [#483](https://github.com/QAtlasHub/doiget/issues/483)
+adds them for the `.mcpb` too. Until it lands, verify the raw binary if you
+need a signature check, and install that manually per above.

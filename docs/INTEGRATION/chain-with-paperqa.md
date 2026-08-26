@@ -1,43 +1,55 @@
 # Chaining with paper-qa
 
-> **Status: PLACEHOLDER (Phase 3).** This file is a landing stub. Concrete
-> configuration lands when `doiget serve` is real. See
-> [`README.md`](./README.md) for the planned-files table and rationale.
-> Note: per the planned-files table this composition guide is scoped to
-> **Phase 3+** — `doiget serve` ships first, then a verified chain recipe.
+> **Status: UNTESTED as a chain.** Both halves are real — doiget writes PDFs to
+> a directory, paper-qa reads a directory of PDFs — but nobody has run the
+> composition end to end and reported back. Treat the shape below as the
+> intended design, not a verified recipe. Last checked 2026-08-26.
 
-[paper-qa](https://github.com/Future-House/paper-qa) is a retrieval-augmented
-question-answering system over scientific papers. The chain pattern this
-guide will document keeps `doiget`'s role narrow — DOI resolution, metadata,
-and content fetch via the tools in [`../MCP_TOOLS.md`](../MCP_TOOLS.md) — and
-hands the resulting documents to paper-qa for embedding, retrieval, and
-answer synthesis. Composition keeps each tool single-purpose and avoids
-duplicating retrieval logic inside `doiget`.
+[paper-qa](https://github.com/Future-House/paper-qa) does retrieval-augmented
+question answering over scientific papers. It handles embedding, retrieval and
+answer synthesis; doiget handles getting the papers, legally and with a
+provenance trail. Neither needs to know about the other, because the interface
+is a directory.
 
-## Configuration (Phase 3)
+## The shape
 
-The example below is intentionally empty. The chain shape depends on the
-final Phase 3 tool surface and on paper-qa's MCP/CLI ingestion entry point.
+```sh
+export DOIGET_STORE_ROOT="$HOME/papers"
+export DOIGET_CONTACT_EMAIL="you@institution.edu"
 
-```toml
-<!-- TODO Phase 3: paste verified doiget + paper-qa chain config here. -->
+# 1. Resolve and fetch a bibliography's references (OA only).
+doiget batch refs.bib
+
+# 2. Point paper-qa at the store.
+pqa -i "$HOME/papers" ask "what do these papers say about X?"
 ```
 
-```toml
-<!-- TODO Phase 3: env-var block (see ../CONFIG.md for precedence). -->
-```
+`doiget batch` reports per-reference outcomes; the ones it could not fetch are
+named rather than dropped, so the corpus paper-qa sees is one you can account
+for.
 
-## What to read in the meantime
+## Why compose rather than integrate
 
-- **Tool surface:** [`../MCP_TOOLS.md`](../MCP_TOOLS.md) — the exact tools
-  Phase 3 exposes, including JSON-Schema for inputs and outputs.
-- **Configuration:** [`../CONFIG.md`](../CONFIG.md) — env-var precedence and
-  the `~/.config/doiget/` layout that any host wiring must respect.
-- **Architecture:** [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §4-6 — transport
-  and capability-gate context for MCP integration.
+doiget's job stops at "the bytes are on disk, and here is where they came
+from". Embedding and retrieval are a different problem with different
+dependencies, and duplicating either inside doiget would widen its network
+surface and its supply chain for no gain — see [`../SCOPE.md`](../SCOPE.md).
+
+The same argument means doiget will not ship a paper-qa plugin. The directory
+is the integration.
+
+## What doiget gives you that a scraper does not
+
+- **Provenance.** Every fetch is a hash-chained row in the append-only log
+  ([`../PROVENANCE_LOG.md`](../PROVENANCE_LOG.md)), so the corpus behind an
+  answer is auditable.
+- **Licence, per entry.** The sidecar records it, which matters as soon as an
+  answer is quoted.
+- **A refusal you can read.** A blocked paper produces a named reason and a
+  remediation, not a silent gap in the corpus.
 
 ## Contributing
 
-If you have a working `doiget` + paper-qa chain ahead of Phase 3, open a
-GitHub Discussion with the orchestration script and any host-specific quirks
-rather than a PR — see [`README.md`](./README.md) §Contributing a snippet.
+If you run this, the useful thing to report is the orchestration script and
+any paper-qa-side quirks — open a
+[GitHub Discussion](https://github.com/QAtlasHub/doiget/discussions).

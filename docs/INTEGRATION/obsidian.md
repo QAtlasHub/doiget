@@ -1,42 +1,42 @@
-# Obsidian backend export
+# Obsidian
 
-> **Status: PLACEHOLDER (Phase 3).** This file is a landing stub. Concrete
-> configuration lands when `doiget serve` is real. See
-> [`README.md`](./README.md) for the planned-files table and rationale.
-> Note: per the planned-files table, an Obsidian backend export is scoped to
-> **Phase 7 (optional)** — this stub exists so future contributors have an
-> obvious landing place rather than a 404.
+> **Status: NOT IMPLEMENTED, and this page says what does work instead.**
+> There is no Obsidian backend export and none is in progress. The
+> "Phase 7 (optional)" marker in the planned-files table is the only
+> commitment, and it is not a schedule. Last checked 2026-08-26.
 
-[Obsidian](https://obsidian.md/) is a markdown-based knowledge base. The
-Phase 7 Obsidian backend export will, when shipped, let `doiget` write
-metadata and citation records into an Obsidian vault as plain Markdown notes
-with frontmatter, so that the same data exposed by the MCP tools in
-[`../MCP_TOOLS.md`](../MCP_TOOLS.md) can be browsed inside Obsidian.
+Obsidian does not host MCP servers, so there is nothing to register. What
+exists today is that doiget's store is **plain files**, so a vault can sit on
+top of it with no integration at all.
 
-## Configuration (Phase 3)
+## What doiget writes
 
-The example below is intentionally empty. The Obsidian backend export is a
-Phase 7 deliverable; even the Phase 3 wiring is not yet implemented.
+One TOML sidecar and one PDF per entry, under `DOIGET_STORE_ROOT`. The layout
+and the field contract are in [`../STORE.md`](../STORE.md).
 
-```toml
-<!-- TODO Phase 3: paste verified Obsidian export config block here. -->
+Point the store at a folder inside your vault:
+
+```sh
+export DOIGET_STORE_ROOT="$HOME/Vault/papers"
+doiget fetch 10.1103/PhysRevLett.130.200601
 ```
 
-```toml
-<!-- TODO Phase 3: env-var block (see ../CONFIG.md for precedence). -->
-```
+The PDFs are then openable from Obsidian, and the sidecars are readable text.
+They are **TOML, not Markdown with YAML frontmatter**, so Obsidian will not
+index them as notes and Dataview will not see them.
 
-## What to read in the meantime
+## What is missing, precisely
 
-- **Tool surface:** [`../MCP_TOOLS.md`](../MCP_TOOLS.md) — the exact tools
-  Phase 3 exposes, including JSON-Schema for inputs and outputs.
-- **Configuration:** [`../CONFIG.md`](../CONFIG.md) — env-var precedence and
-  the `~/.config/doiget/` layout that any host wiring must respect.
-- **Architecture:** [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §4-6 — transport
-  and capability-gate context for MCP integration.
+A Markdown-with-frontmatter projection of the sidecar. That is the whole of
+the "Obsidian backend export" idea, and it is not implemented — not the wiring,
+not the frontmatter schema, not a `doiget` subcommand.
+
+`doiget csl <ref>` and `doiget bib <ref>` emit CSL-JSON and BibTeX from the
+same records, which is enough to script a projection yourself.
 
 ## Contributing
 
-If you have a working Obsidian export workflow ahead of Phase 7, open a
-GitHub Discussion describing the vault layout and frontmatter shape rather
-than a PR — see [`README.md`](./README.md) §Contributing a snippet.
+If you build one, open a
+[GitHub Discussion](https://github.com/QAtlasHub/doiget/discussions) with the
+vault layout and the frontmatter shape before a PR — the schema is the part
+worth agreeing on first.
