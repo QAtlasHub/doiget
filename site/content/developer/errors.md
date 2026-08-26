@@ -63,7 +63,7 @@ Wire form (JSON / MCP): `"INVALID_REF"`, `"NO_OA_AVAILABLE"`, etc.
 |---|---|
 | Agent (MCP) | Structured, never throws. On failure: `{ ok: false, error: { code, message, denial_context? } }`. `remediation` and `attempts` are **not** carried here — they belong to the `{ ok: true, … }` envelope, as `pdf.remediation` (present when the PDF leg was blocked) and top-level `attempts`. A blocked PDF leg is an `ok: true` result with a failed leg, not an `ok: false` call. |
 | Researcher (CLI human) | `cargo`-style stderr: `error[E0007]: rate limited from unpaywall: retry after 1s`. Exit code 1. |
-| CI / Batch (CLI `--json`) | JSON Lines record per ref with `{"ok":false, "error":{"code":"...","message":"...","denial_context":{...}?,"remediation":[...]?,"attempts":[...]?}}`. Exit code = number of failures (capped at 255). |
+| CI / Batch (CLI `--json`) | JSON Lines record per ref with `{"ok":false, "error":{"code":"...","message":"...","denial_context":{...}?,"remediation":[...]?,"attempts":[...]?}}`. Exit code = number of failures (capped at 255). **Records are emitted in completion order, not input order** — see below. |
 | Library (Rust) | `Err(FetchError)` (typed via `thiserror`). |
 
 ### 3.1 Structured `denial_context` (NORMATIVE; ADR-0023)
@@ -132,23 +132,66 @@ Emitted only for reasons with a configuration channel — `redirect_not_in_allow
 `remediation`, because offering a host to trust would send the caller after a fix that
 cannot work.
 
+### 3.2a `batch --json` record order (NORMATIVE)
+
+Records are written as each ref **completes**. `batch` runs up to
+`RateLimits::HARD_CODED.max_concurrent_fetches()` fetches at once and emits each
+record when its task finishes, so stdout is in completion order and reordering is
+the normal case rather than a rare one: a parse error returns instantly, a 1 MB PDF
+does not.
+
+**Key on the `ref` field.** Zipping stdout against the input file positionally is the
+obvious thing to write, it works on a small or uniform batch, and the first time a
+fetch is slow it attaches a result to the wrong DOI with no error anywhere (#479).
+
+Input order would cost buffering the whole run before emitting anything, which
+would end streaming for large batches. The order is not going to change; consumers
+that need input order must sort by `ref` themselves.
+
 ### 3.3 Structured `attempts` (NORMATIVE; ADR-0043)
 
 The resolution trace introduced in #413/#438, previously CLI text only.
 
 ```jsonc
 "attempts": [
-  { "source": "hal",  "outcome": "not_consulted_disabled", "detail": "DOIGET_ENABLE_HAL", "consulted": false },
-  { "source": "core", "outcome": "consulted_no_record",                                   "consulted": true  }
+  { "source": "hal", "outcome": "not_consulted_disabled",
+    "detail": "DOIGET_ENABLE_HAL", "required_env": ["DOIGET_ENABLE_HAL"], "consulted": false },
+  { "source": "tdm-aps", "outcome": "not_consulted_disabled",
+    "detail": "DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS",
+    "required_env": ["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"], "consulted": false },
+  { "source": "core", "outcome": "consulted_denied",
+    "detail": "consulted: refused (RedirectNotInAllowlist, cdn.example.org)",
+    "denial_context": { "reason": "redirect_not_in_allowlist", "attempted": "cdn.example.org",
+                        "expected": ["core.ac.uk"], "hop_index": 1 },
+    "remediation": [ /* … */ ], "consulted": true }
 ]
 ```
 
 `outcome` is a **closed** enum:
 `not_consulted_disabled`, `not_consulted_not_applicable`,
 `not_consulted_wrong_publisher`, `not_consulted_not_needed`, `consulted_no_record`,
-`consulted_not_open_access`, `consulted_failed`, `consulted_resolved`.
+`consulted_not_open_access`, `consulted_denied`, `consulted_failed`,
+`consulted_resolved`.
 
 `detail` is present only for the variants carrying one, and is opaque text.
+
+**`required_env`** (#470) accompanies `not_consulted_disabled`: the variables to set,
+as a list. `detail` carries the same set joined with `" + "` and is retained for
+compatibility — do not parse it. Tier-3 sources need two variables and Tier-2 one,
+which is why the joined form was a separator a consumer had to split on.
+
+**`denial_context`** and **`remediation`** (#470) accompany `consulted_denied`, and
+carry the same ADR-0023 structure the blocked PDF leg already carried. Before this,
+a redirect denial, an oversized body or a not-a-PDF on a *metadata-chain* source —
+the richest and most actionable failures — flattened into `consulted_failed` with an
+opaque string, on a surface documented as machine-readable. `remediation` is omitted
+when the denial reason has no configuration channel (`InsecureScheme` has none:
+the fix for an `http://` redirect is not to trust the host).
+
+`consulted_denied` is a *refusal by a policy control*, distinct from
+`consulted_failed` (transport, auth, schema). `CapabilityNotGranted` is **not** a
+`consulted_denied`: it is produced before any request goes out, so reporting it as
+consulted would misstate reach.
 `consulted` is redundant with `outcome` and present anyway: it is the single question
 every consumer has — *did anyone else look?* — and requiring them to memorise which of
 eight tokens implies it invites the confusion the trace exists to end.

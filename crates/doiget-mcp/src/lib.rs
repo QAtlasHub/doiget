@@ -3242,6 +3242,18 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
     match leg {
         PdfLegStatus::Fetched => json!({ "status": "fetched" }),
         PdfLegStatus::NoOaUrl => json!({ "status": "no_oa_url" }),
+        // #458. Explicit, because the `_` arm at the bottom renders
+        // `{"status": "unknown"}` -- an agent would be told nothing about
+        // a PDF that exists, came from the publisher rather than an open
+        // host, and carries the terms of a TDM agreement.
+        PdfLegStatus::TdmFetched {
+            source,
+            original_block,
+        } => json!({
+            "status": "tdm_fetched",
+            "source": source,
+            "original_block": original_block,
+        }),
         PdfLegStatus::Blocked {
             code,
             message,
@@ -3953,8 +3965,8 @@ fn resolve_log_path() -> anyhow::Result<Utf8PathBuf> {
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerInfo {
         // Both `ServerInfo` and `Implementation` are `#[non_exhaustive]`
-        // in rmcp 1.6, so we go through the public builders rather than
-        // struct-literal construction.
+        // (since rmcp 1.6, still so in 3.x), so we go through the public
+        // builders rather than struct-literal construction.
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_server_info(Implementation::new("doiget", VERSION))
@@ -4570,6 +4582,72 @@ mod tests {
     /// #459: the trace, and the distinction it exists to make. Absent
     /// rather than `[]` when unavailable — #413 was filed because those
     /// two were the same observable.
+    /// #471. `fetch_paper_success_envelope` is the only caller that inserts
+    /// `"attempts"`, and `pdf_leg_json` the only one that inserts
+    /// `"remediation"` -- and neither was called from any test. Every test
+    /// naming those fields called the leaf helpers directly with
+    /// hand-constructed values, so disconnecting either wiring point left
+    /// the suite green while the trace and the remediation vanished from the
+    /// envelope an agent reads.
+    ///
+    /// This drives the ENVELOPE BUILDER, so both insertions are exercised at
+    /// the point where a real outcome meets the wire.
+    #[test]
+    fn the_success_envelope_carries_the_trace_and_the_remediation() {
+        use doiget_core::orchestrator::{AttemptOutcome, FetchPaperOutcome, SourceAttempt};
+        use doiget_core::{DenialContext, DenialReason, ErrorCode};
+
+        let blocked = PdfLegStatus::Blocked {
+            code: ErrorCode::NetworkError,
+            message: "redirect target not in allowlist".to_string(),
+            denial: Some(DenialContext {
+                reason: DenialReason::RedirectNotInAllowlist,
+                source: Some("oa-publisher".to_string()),
+                attempted: Some("cdn.example.org".to_string()),
+                expected: Some(vec!["good.example.org".to_string()]),
+                hop_index: Some(1),
+                cap: None,
+                actual: None,
+            }),
+            suggested_arxiv_id: None,
+        };
+        let outcome = FetchPaperOutcome::for_test_synthetic_with_attempts(
+            "doi__10_1234_foo",
+            "oa-publisher",
+            blocked,
+            vec![
+                SourceAttempt::new("crossref", AttemptOutcome::Resolved),
+                SourceAttempt::new(
+                    "hal",
+                    AttemptOutcome::Disabled {
+                        env: &["DOIGET_ENABLE_HAL"],
+                    },
+                ),
+            ],
+        );
+
+        let env = fetch_paper_success_envelope(&outcome, "doi:10.1234/foo");
+
+        // The trace reached the envelope.
+        let rows = env["attempts"]
+            .as_array()
+            .unwrap_or_else(|| panic!("attempts must be on the envelope; got {env}"));
+        assert_eq!(rows.len(), 2, "{env}");
+        assert_eq!(rows[0]["source"], json!("crossref"));
+        assert_eq!(
+            rows[1]["required_env"],
+            json!(["DOIGET_ENABLE_HAL"]),
+            "the #470 structured form travels with it; got {env}"
+        );
+
+        // And so did the remediation, through `pdf_leg_json`.
+        let rem = env["pdf"]["remediation"]
+            .as_array()
+            .unwrap_or_else(|| panic!("a redirect denial has a config channel; got {env}"));
+        assert!(!rem.is_empty(), "{env}");
+        assert_eq!(env["pdf"]["status"], json!("blocked"), "{env}");
+    }
+
     #[test]
     fn attempts_json_distinguishes_no_trace_from_an_empty_one() {
         use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
@@ -4583,7 +4661,7 @@ mod tests {
             SourceAttempt::new(
                 "hal",
                 AttemptOutcome::Disabled {
-                    env: "DOIGET_ENABLE_HAL",
+                    env: &["DOIGET_ENABLE_HAL"],
                 },
             ),
             SourceAttempt::new("core", AttemptOutcome::NoRecord),

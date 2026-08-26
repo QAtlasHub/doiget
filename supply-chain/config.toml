@@ -71,7 +71,7 @@ version = "0.4.42"
 criteria = "safe-to-deploy"
 
 [[exemptions.async-trait]]
-version = "0.1.91"
+version = "0.1.92"
 criteria = "safe-to-deploy"
 
 [[exemptions.aws-lc-rs]]
@@ -119,11 +119,11 @@ version = "0.4.45"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap]]
-version = "4.6.5"
+version = "4.6.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_builder]]
-version = "4.6.5"
+version = "4.6.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_derive]]
@@ -175,15 +175,15 @@ version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.darling]]
-version = "0.23.0"
+version = "0.24.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.darling_core]]
-version = "0.23.0"
+version = "0.24.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.darling_macro]]
-version = "0.23.0"
+version = "0.24.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.deadpool]]
@@ -567,7 +567,7 @@ version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmcp]]
-version = "2.2.0"
+version = "3.1.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmcp-macros]]
@@ -575,7 +575,7 @@ version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmcp-macros]]
-version = "2.2.0"
+version = "3.1.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.roman-numerals-rs]]
@@ -675,11 +675,11 @@ version = "1.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.serial_test]]
-version = "3.5.0"
+version = "4.0.1"
 criteria = "safe-to-run"
 
 [[exemptions.serial_test_derive]]
-version = "3.5.0"
+version = "4.0.1"
 criteria = "safe-to-run"
 
 [[exemptions.sha2]]
@@ -743,11 +743,11 @@ version = "3.27.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.thiserror]]
-version = "2.0.19"
+version = "2.0.20"
 criteria = "safe-to-deploy"
 
 [[exemptions.thiserror-impl]]
-version = "2.0.19"
+version = "2.0.20"
 criteria = "safe-to-deploy"
 
 [[exemptions.tinystr]]
@@ -875,7 +875,7 @@ version = "2.5.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.uuid]]
-version = "1.24.0"
+version = "1.25.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.walkdir]]

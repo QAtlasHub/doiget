@@ -15,7 +15,7 @@ exclude = [
 ]
 
 [workspace.package]
-version       = "0.8.9"
+version       = "0.8.10"
 edition       = "2021"
 rust-version  = "1.86"
 license       = "MIT"
@@ -41,9 +41,9 @@ features-doc-link = "docs/SOURCES.md"
 
 [workspace.dependencies]
 # Core
-doiget-core = { path = "crates/doiget-core", version = "0.8.9" }
-doiget-cli  = { path = "crates/doiget-cli", version = "0.8.9" }
-doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.9" }
+doiget-core = { path = "crates/doiget-core", version = "0.8.10" }
+doiget-cli  = { path = "crates/doiget-cli", version = "0.8.10" }
+doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.10" }
 
 # Async runtime — features are deliberately limited (avoid `full`).
 tokio = { version = "1", default-features = false, features = [
@@ -180,7 +180,7 @@ proptest    = "1"
 # DOIGET_STORE_ROOT, etc.) within a single test binary. Lifted to
 # workspace deps in #228 review pass A6 so the three member crates
 # (core / cli / mcp) cannot drift on the major version.
-serial_test = "3"
+serial_test = "4"
 
 # Phase 4 (citation graph)
 petgraph = "0.6"
@@ -201,7 +201,7 @@ petgraph = "0.6"
 # `deny.toml` bans `axum` / `hyper::Server` / `openssl` / `native-tls`.
 # A `cargo tree -p doiget-mcp` after the edit must NOT show any of those
 # crates; `cargo deny check` enforces this in CI.
-rmcp = { version = "2.2", default-features = false, features = [
+rmcp = { version = "3.1", default-features = false, features = [
     "server", "macros", "transport-io", "schemars",
 ] }
 

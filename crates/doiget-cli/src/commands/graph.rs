@@ -58,12 +58,12 @@ pub async fn run(
     let ref_ = match Ref::parse(&input) {
         Ok(r) => r,
         Err(e) => {
-            // Bad ref string is user misuse → `docs/ERRORS.md` §4 exit 2
-            // (issue #149), consistent with `fetch`'s INVALID_REF path.
-            print_err(format_args!(
-                "error[{}]: invalid ref: {e}",
-                ErrorCode::InvalidRef.as_wire()
-            ));
+            // Bad ref string is user misuse -> `docs/ERRORS.md` §4 exit 2
+            // (issue #149). NOTE: `fetch` exits 1 for the same input; §4
+            // says misuse is 2, so they disagree and this is the one
+            // following the table. Not reconciled in #477 -- see
+            // `commands::render_ref_parse_error`.
+            super::render_ref_parse_error(&e);
             return Err(anyhow::Error::new(CliExit(2)));
         }
     };

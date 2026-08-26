@@ -165,9 +165,11 @@ fn run_local(
         write_json(&mut out, &local_envelope(query, &entries))?;
         return Ok(());
     }
-    writeln!(out, "safekey\tyear\ttitle\tfetched_at")
+    // Same column as `list-recent` (#481): `search --local` lists store
+    // entries too, so it had the same gap.
+    writeln!(out, "safekey\tyear\ttitle\tfetched_at\tpdf")
         .context("failed to write search header to stdout")?;
-    for e in entries {
+    for e in &entries {
         let year = dash_or(e.year);
         let fetched = e
             .fetched_at
@@ -175,11 +177,12 @@ fn run_local(
             .unwrap_or_else(|| "-".into());
         writeln!(
             out,
-            "{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}",
             e.safekey.as_str(),
             year,
             e.title,
-            fetched
+            fetched,
+            super::list_recent::pdf_cell(e)
         )
         .context("failed to write search row to stdout")?;
     }

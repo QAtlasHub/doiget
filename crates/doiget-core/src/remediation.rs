@@ -177,7 +177,10 @@ pub fn widening_suggestions(host: &str) -> Vec<(String, &'static str)> {
         return out;
     }
     let parent = parent_labels.join(".");
-    out.push((format!("*.{parent}"), "the whole publisher"));
+    // "the whole publisher" was wrong for the dominant case (#478): this
+    // fires most often for institutional repositories, and every host in
+    // the built-in `trust_academic_repos` list is a university.
+    out.push((format!("*.{parent}"), "the whole domain"));
     out.push((parent, "apex too (a wildcard does not match it)"));
     out
 }

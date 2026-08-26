@@ -41,12 +41,19 @@ pub struct RateLimiter {
     global_starts: Arc<Mutex<Vec<Instant>>>,
     // Earliest-allowed start time per source name.
     per_source_next: Arc<Mutex<HashMap<String, Instant>>>,
+    // #493: per-source concurrency, for sources whose terms cap it below
+    // the global semaphore. Created lazily so a source with no override
+    // costs nothing.
+    per_source_sem: Arc<Mutex<HashMap<String, Arc<Semaphore>>>>,
 }
 
 /// Held while a fetch is in flight; releases the concurrency slot on drop.
 #[derive(Debug)]
 pub struct Permit {
     _slot: OwnedSemaphorePermit,
+    // #493: held for the same lifetime as the global slot when the source
+    // has a stricter concurrency cap.
+    _source_slot: Option<OwnedSemaphorePermit>,
 }
 
 impl RateLimiter {
@@ -58,7 +65,45 @@ impl RateLimiter {
             sem: Arc::new(Semaphore::new(max)),
             global_starts: Arc::new(Mutex::new(Vec::new())),
             per_source_next: Arc::new(Mutex::new(HashMap::new())),
+            per_source_sem: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Wait out the per-source interval for one ADDITIONAL request inside a
+    /// fetch that already holds a [`Permit`].
+    ///
+    /// #493. arXiv's terms cap *requests*, and one arXiv attempt issues two
+    /// of them -- the Atom feed, then the PDF -- under a single `acquire`.
+    /// The second was previously unpaced, so even a perfectly serialised
+    /// caller sent two requests back to back.
+    ///
+    /// Does not touch the concurrency slots: the caller already holds them,
+    /// and taking them again would deadlock at `max_concurrent_for == 1`,
+    /// which is exactly the arXiv case.
+    pub async fn pace(&self, source: &str) {
+        // The global cap admits this request too. Review of #493 caught the
+        // first draft pushing a start into `global_starts` WITHOUT waiting
+        // on the window -- which inflates the window for every other source
+        // while never being bounded by it. It cannot bite at arXiv's 3 s
+        // interval, and "it cannot bite in practice" is the reasoning that
+        // produced #493 in the first place.
+        self.await_global_rate_window().await;
+
+        let backoff = Duration::from_millis(self.limits.backoff_ms_for(source));
+        let mut next_map = self.per_source_next.lock().await;
+        if let Some(&next) = next_map.get(source) {
+            if Instant::now() < next {
+                drop(next_map);
+                sleep_until(next).await;
+                next_map = self.per_source_next.lock().await;
+            }
+        }
+        let start = Instant::now();
+        next_map.insert(source.to_string(), start + backoff);
+        drop(next_map);
+
+        let mut starts = self.global_starts.lock().await;
+        starts.push(start);
     }
 
     /// Block until a slot is available, then return a [`Permit`].
@@ -85,33 +130,41 @@ impl RateLimiter {
             .await
             .expect("rate-limiter semaphore is never closed");
 
-        // Step 2: global rate cap. Loop until the rolling-second window has
-        // room, sleeping until the oldest entry ages out if it does not.
-        let max_per_sec = self.limits.max_fetches_per_second() as usize;
-        let one_sec = Duration::from_secs(1);
-        loop {
-            let mut starts = self.global_starts.lock().await;
-            let now = Instant::now();
-            // Prune entries older than 1 s. starts is FIFO so we can drop
-            // a contiguous prefix.
-            let cutoff = now.checked_sub(one_sec).unwrap_or(now);
-            let drop_count = starts.iter().take_while(|t| **t <= cutoff).count();
-            if drop_count > 0 {
-                starts.drain(..drop_count);
+        // Step 2: global rate cap.
+        self.await_global_rate_window().await;
+
+        // Step 2b: per-source concurrency (#493). After the global
+        // semaphore, so the global cap is still the ceiling, and before the
+        // interval wait, so a source capped at one connection serialises
+        // rather than piling up sleepers.
+        let source_slot = {
+            let cap = self.limits.max_concurrent_for(source) as usize;
+            if cap >= self.limits.max_concurrent_fetches() as usize {
+                None
+            } else {
+                let sem = {
+                    let mut map = self.per_source_sem.lock().await;
+                    Arc::clone(
+                        map.entry(source.to_string())
+                            .or_insert_with(|| Arc::new(Semaphore::new(cap))),
+                    )
+                };
+                #[allow(clippy::expect_used)]
+                Some(
+                    sem.acquire_owned()
+                        .await
+                        .expect("per-source semaphore is never closed"),
+                )
             }
-            if starts.len() < max_per_sec {
-                break;
-            }
-            // Window is full — wake at the moment the oldest entry ages out.
-            // starts.len() >= max_per_sec >= 1 here, so [0] is safe.
-            let wake = starts[0] + one_sec;
-            drop(starts);
-            sleep_until(wake).await;
-        }
+        };
 
         // Step 3: per-source backoff. Acquire `per_source_next` strictly
         // after dropping `global_starts` above (lock order documented).
-        let backoff = Duration::from_millis(self.limits.per_source_backoff_ms());
+        //
+        // #493: `backoff_ms_for`, not `per_source_backoff_ms` -- the
+        // vendor's published guideline when it is stricter than the global
+        // 200 ms floor.
+        let backoff = Duration::from_millis(self.limits.backoff_ms_for(source));
         let mut next_map = self.per_source_next.lock().await;
         let now = Instant::now();
         if let Some(&next) = next_map.get(source) {
@@ -134,7 +187,39 @@ impl RateLimiter {
         starts.push(start);
         drop(starts);
 
-        Permit { _slot: slot }
+        Permit {
+            _slot: slot,
+            _source_slot: source_slot,
+        }
+    }
+
+    /// Block until the global rolling-second window has room.
+    ///
+    /// Loops because another task may take the slot between the wake and
+    /// the re-check. Holds only `global_starts`, and never across a sleep,
+    /// so it composes with the documented lock order.
+    async fn await_global_rate_window(&self) {
+        let max_per_sec = self.limits.max_fetches_per_second() as usize;
+        let one_sec = Duration::from_secs(1);
+        loop {
+            let mut starts = self.global_starts.lock().await;
+            let now = Instant::now();
+            // Prune entries older than 1 s. `starts` is FIFO, so this is a
+            // contiguous prefix.
+            let cutoff = now.checked_sub(one_sec).unwrap_or(now);
+            let drop_count = starts.iter().take_while(|t| **t <= cutoff).count();
+            if drop_count > 0 {
+                starts.drain(..drop_count);
+            }
+            if starts.len() < max_per_sec {
+                return;
+            }
+            // Window is full -- wake when the oldest entry ages out.
+            // `starts.len() >= max_per_sec >= 1` here, so `[0]` is safe.
+            let wake = starts[0] + one_sec;
+            drop(starts);
+            sleep_until(wake).await;
+        }
     }
 
     /// Tell the limiter to delay further starts to `source` by at least
@@ -307,5 +392,113 @@ mod tests {
             elapsed_x,
             delay
         );
+    }
+
+    // ---- #493: a vendor guideline stricter than the global cap ---------
+
+    /// arXiv publishes one request every three seconds. The global cap is
+    /// 5/s, so before #493 two consecutive arXiv requests were 200 ms
+    /// apart -- 15x the permitted rate -- while three places in the tree
+    /// asserted the global cap "comfortably respects" the guideline.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn arxiv_requests_are_three_seconds_apart() {
+        let rl = RateLimiter::new(RateLimits::HARD_CODED);
+        let t0 = Instant::now();
+        drop(rl.acquire("arxiv").await);
+        drop(rl.acquire("arxiv").await);
+        let elapsed = Instant::now() - t0;
+        assert!(
+            elapsed >= Duration::from_millis(3_000),
+            "arXiv requests must be >= 3 s apart; got {elapsed:?}"
+        );
+    }
+
+    /// The table only ever tightens. A source with no entry keeps the
+    /// global 200 ms floor, so the fix cannot have slowed everything else
+    /// down by accident.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn a_source_without_an_override_keeps_the_global_backoff() {
+        let rl = RateLimiter::new(RateLimits::HARD_CODED);
+        let t0 = Instant::now();
+        drop(rl.acquire("crossref").await);
+        drop(rl.acquire("crossref").await);
+        let elapsed = Instant::now() - t0;
+        assert!(
+            elapsed >= Duration::from_millis(200),
+            "the global floor still applies; got {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(3_000),
+            "crossref has no override and must not inherit arXiv's; got {elapsed:?}"
+        );
+    }
+
+    /// The second request of ONE arXiv attempt is paced too. arXiv caps
+    /// requests, not attempts, and an attempt issues two -- the Atom feed
+    /// and the PDF -- under a single permit (#493).
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn pace_spaces_a_second_request_inside_one_attempt() {
+        let rl = RateLimiter::new(RateLimits::HARD_CODED);
+        let permit = rl.acquire("arxiv").await;
+        let t0 = Instant::now();
+        // Deliberately while the permit is still held: `pace` must not
+        // touch the concurrency slots, or arXiv's cap of one connection
+        // would deadlock against itself.
+        rl.pace("arxiv").await;
+        let elapsed = Instant::now() - t0;
+        drop(permit);
+        assert!(
+            elapsed >= Duration::from_millis(3_000),
+            "the second leg must wait out the interval; got {elapsed:?}"
+        );
+    }
+
+    /// `pace` is admitted by the global window, not merely recorded in it.
+    ///
+    /// Found by reading the diff, not by a failing test -- the first draft
+    /// pushed a start into `global_starts` without ever waiting on the
+    /// window, so an extra request inflated the cap for every other source
+    /// while being bounded by none of it. Unreachable at arXiv's 3 s
+    /// interval, which is precisely the argument that let #493 ship.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn pace_is_admitted_by_the_global_window_too() {
+        let rl = RateLimiter::new(RateLimits::HARD_CODED);
+        // Fill the rolling second to the global maximum, on distinct
+        // sources so no per-source interval is in play.
+        for s in ["a", "b", "c", "d", "e"] {
+            drop(rl.acquire(s).await);
+        }
+        let t0 = Instant::now();
+        rl.pace("f").await;
+        let elapsed = Instant::now() - t0;
+        assert!(
+            elapsed >= Duration::from_millis(900),
+            "pace must wait for the global window exactly as acquire does; got {elapsed:?}"
+        );
+    }
+
+    /// The table is a ceiling-tightener, not a general knob: an entry that
+    /// tried to be *looser* than the global settings must not take effect.
+    #[test]
+    fn an_override_can_only_tighten() {
+        let l = RateLimits::HARD_CODED;
+        assert_eq!(l.backoff_ms_for("arxiv"), 3_000);
+        assert_eq!(l.backoff_ms_for("crossref"), l.per_source_backoff_ms());
+        assert_eq!(l.max_concurrent_for("arxiv"), 1);
+        assert_eq!(l.max_concurrent_for("crossref"), l.max_concurrent_fetches());
+        // Every entry is at least as strict as the global cap on both axes.
+        // `backoff_ms_for` / `max_concurrent_for` enforce it at call time;
+        // this pins the TABLE, so a future entry cannot be added in the
+        // belief that it relaxes something and then silently do nothing.
+        for (name, r) in crate::SOURCE_RATE_OVERRIDES {
+            assert!(
+                r.min_interval_ms >= l.per_source_backoff_ms(),
+                "{name}: an override looser than the global floor is silently ignored"
+            );
+            assert!(
+                r.max_concurrent <= l.max_concurrent_fetches(),
+                "{name}: an override cannot raise the global concurrency cap"
+            );
+        }
     }
 }

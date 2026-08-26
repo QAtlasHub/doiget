@@ -19,7 +19,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 use doiget_core::refs::{self, Format};
 use doiget_core::store::{render, FsStore, Metadata, Store};
-use doiget_core::{Ref, Safekey};
+use doiget_core::Safekey;
 
 use super::fetch::CliExit;
 use super::output::print_err;
@@ -64,7 +64,7 @@ pub fn run(
         Some(r) => r,
         None => bail!("specify a ref, `--all`, or `--from-file <FILE>`"),
     };
-    let ref_ = Ref::parse(&input).with_context(|| format!("invalid ref: {input}"))?;
+    let ref_ = super::parse_ref_or_exit(&input)?;
     let safekey = ref_.safekey();
     match store.read(&safekey)? {
         Some(m) => write_all(&render::to_bibtex(safekey.as_str(), &m)),

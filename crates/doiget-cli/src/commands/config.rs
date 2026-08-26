@@ -142,12 +142,26 @@ pub async fn run(
     mode: super::output::OutputMode,
     network: bool,
     force: bool,
+    quiet_was_explicit: bool,
 ) -> Result<()> {
-    // `mode` honors ADR-0017: `Quiet` suppresses the TOML dump (`show`)
-    // and the path println! (`path`); `doctor` is unaffected because its
-    // per-check output is on stderr and only the failure/success exit
-    // code is the user-visible signal (#203). Json body for `show` is
-    // tracked in #204.
+    // `mode` honors ADR-0017, per ACTION rather than per command -- like
+    // `audit-log`, `config` is not uniformly one class:
+    //
+    //   * `path` / `show` are ARTIFACT. Their stdout IS the thing the
+    //     caller asked for, so only an EXPLICIT Quiet silences them. The
+    //     implicit non-TTY Quiet must not, which is #476: `doiget config
+    //     path` from a pipe printed zero bytes and exited 0, so the
+    //     documented way to find your config file (`docs/CONFIG.md` SS4,
+    //     SS12) answered a script, a CI step or an agent with silence AND
+    //     success. Third time the ADR-0017 classification was found
+    //     incomplete, after #219/#220 and #301.
+    //   * `init` is a STATUS report about a write that happened. Quiet of
+    //     either kind silences it; the exit code carries the outcome.
+    //   * `doctor` is unaffected either way -- its per-check output is on
+    //     stderr and the exit code is the signal (#203).
+    //
+    // Json body for `show` is tracked in #204.
+    let artifact_quiet = mode == super::output::OutputMode::Quiet && quiet_was_explicit;
     let cfg = ResolvedConfig::from_env()?;
     if network && action != "doctor" {
         eprintln_err("error: --network applies to `config doctor` only");
@@ -158,8 +172,14 @@ pub async fn run(
         return Err(anyhow::Error::new(CliExit(2)));
     }
     match action.as_str() {
+        "show" if artifact_quiet => {}
         "show" => match mode {
-            super::output::OutputMode::Quiet => {}
+            super::output::OutputMode::Quiet => {
+                // Implicit (non-TTY) Quiet: `show` is artifact-class, so
+                // render rather than suppress (#476).
+                let s = toml::to_string_pretty(&cfg)?;
+                print!("{s}");
+            }
             super::output::OutputMode::Json => {
                 // #204: `ResolvedConfig` is `Serialize` (already used for
                 // the TOML branch).
@@ -173,8 +193,12 @@ pub async fn run(
             }
         },
         "init" => init_config(&cfg, force, mode)?,
+        "path" if artifact_quiet => {}
         "path" => match mode {
-            super::output::OutputMode::Quiet => {}
+            super::output::OutputMode::Quiet => {
+                // Implicit (non-TTY) Quiet: naming the file IS the job.
+                println!("{}", cfg.config_path);
+            }
             super::output::OutputMode::Json => {
                 // Minimal JSON object so callers can parse the path
                 // uniformly; no trailing-newline ambiguity vs the raw
@@ -1003,6 +1027,7 @@ mod tests {
             crate::commands::output::OutputMode::Human,
             false,
             false,
+            false,
         )
         .await
         .expect_err("doctor should fail when DOIGET_CONTACT_EMAIL is unset");
@@ -1025,6 +1050,7 @@ mod tests {
         run(
             "doctor".into(),
             crate::commands::output::OutputMode::Human,
+            false,
             false,
             false,
         )
@@ -1080,6 +1106,7 @@ mod tests {
             crate::commands::output::OutputMode::Human,
             false,
             false,
+            false,
         )
         .await
         .expect_err("doctor should fail when user-extension config is malformed");
@@ -1119,6 +1146,7 @@ mod tests {
         let err = run(
             "bogus".into(),
             crate::commands::output::OutputMode::Human,
+            false,
             false,
             false,
         )

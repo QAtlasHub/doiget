@@ -214,6 +214,47 @@ impl Source for OpenalexSource {
 /// hints. Avoids dumping a multi-KB payload into a single log line
 /// when the response is malformed; 200 chars is enough to identify the
 /// shape (HTML 404 page vs. JSON error envelope vs. truncated work).
+/// Extract an open-access PDF URL from an OpenAlex Work record.
+///
+/// #461. OpenAlex carries a `locations[]` array -- every place it knows the
+/// work exists -- where Unpaywall's `best_oa_location` is one. For a
+/// hybrid-OA article whose publisher leg is refused, the copy that satisfies
+/// the fetch is often an institutional repository sitting in that array and
+/// in no curated list.
+///
+/// Returns the first entry with `is_oa == true` and a non-empty `pdf_url`.
+/// `landing_page_url` is deliberately NOT used: it is a page about the paper,
+/// not the paper, and `try_fetch_oa_pdf` would reject the HTML as `NotAPdf`
+/// after having made the request.
+///
+/// Like the CORE / HAL / Europe PMC accessors, this only SURFACES a
+/// candidate. The fetch is still performed by the `oa-publisher` leg, under
+/// that leg's allowlist and its ADR-0023 denial context -- so a repository
+/// host the user has not trusted is refused exactly as it is today, and the
+/// access ceiling in `LEGAL.md` §2a is unchanged: this is still case (a), a
+/// location an enabled source reported.
+///
+/// Known cost: `locations[0]` is usually the same location Unpaywall already
+/// offered and the chain already failed on, so the first candidate is often a
+/// retry of a request that was just refused. The three existing accessors
+/// share the property. Fixing it means telling the accessor which URL already
+/// failed, which none of them can see.
+#[must_use]
+pub fn open_access_pdf_url(record: &serde_json::Value) -> Option<&str> {
+    record
+        .get("locations")
+        .and_then(serde_json::Value::as_array)?
+        .iter()
+        .find_map(|loc| {
+            if loc.get("is_oa").and_then(serde_json::Value::as_bool) != Some(true) {
+                return None;
+            }
+            loc.get("pdf_url")
+                .and_then(serde_json::Value::as_str)
+                .filter(|u| !u.is_empty())
+        })
+}
+
 fn truncate_for_hint(body: &[u8]) -> String {
     const MAX: usize = 200;
     let s = String::from_utf8_lossy(body);
@@ -392,5 +433,65 @@ mod tests {
             .await
             .expect_err("missing `id` must surface as SourceSchema");
         assert!(matches!(err, FetchError::SourceSchema { .. }));
+    }
+
+    // ---- #461: locations[] as a candidate source of OA copies ----------
+
+    /// The point of the accessor: OpenAlex reports EVERY location, so the
+    /// repository copy that satisfies a refused hybrid-OA article is in the
+    /// array even when it is not the primary one.
+    #[test]
+    fn open_access_pdf_url_finds_a_repository_copy_past_the_primary() {
+        let work = serde_json::json!({
+            "locations": [
+                // The publisher's own landing page: not OA, and no pdf_url.
+                // This is the one that just refused us.
+                { "is_oa": false, "landing_page_url": "https://ieeexplore.example/doc/1" },
+                // An institutional repository, which is the interesting case.
+                { "is_oa": true, "pdf_url": "https://repo.example.ac.uk/1/paper.pdf" }
+            ]
+        });
+        assert_eq!(
+            open_access_pdf_url(&work),
+            Some("https://repo.example.ac.uk/1/paper.pdf")
+        );
+    }
+
+    /// A location that is open but records only a landing page is skipped.
+    /// Returning it would spend a request to be told the HTML is `NotAPdf`.
+    #[test]
+    fn open_access_pdf_url_skips_a_landing_page_only_location() {
+        let work = serde_json::json!({
+            "locations": [
+                { "is_oa": true, "landing_page_url": "https://repo.example.ac.uk/1" },
+                { "is_oa": true, "pdf_url": "https://other.example.ac.uk/2/paper.pdf" }
+            ]
+        });
+        assert_eq!(
+            open_access_pdf_url(&work),
+            Some("https://other.example.ac.uk/2/paper.pdf")
+        );
+    }
+
+    /// `is_oa: false` is not a candidate even with a `pdf_url`. Offering it
+    /// would send doiget at a copy the index itself says is not open.
+    #[test]
+    fn open_access_pdf_url_ignores_a_non_oa_location() {
+        let work = serde_json::json!({
+            "locations": [
+                { "is_oa": false, "pdf_url": "https://paywall.example/1.pdf" }
+            ]
+        });
+        assert_eq!(open_access_pdf_url(&work), None);
+    }
+
+    /// An empty string is not a URL. Absent `locations` is not an error.
+    #[test]
+    fn open_access_pdf_url_rejects_empty_and_absent() {
+        let empty = serde_json::json!({
+            "locations": [{ "is_oa": true, "pdf_url": "" }]
+        });
+        assert_eq!(open_access_pdf_url(&empty), None);
+        assert_eq!(open_access_pdf_url(&serde_json::json!({})), None);
     }
 }

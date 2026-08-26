@@ -14,7 +14,6 @@ use std::io::Write;
 use anyhow::{bail, Context, Result};
 
 use doiget_core::store::{FsStore, Store};
-use doiget_core::Ref;
 
 use super::output::OutputMode;
 use super::resolve_store_root;
@@ -37,7 +36,7 @@ pub fn run(
     mode: OutputMode,
     quiet_was_explicit: bool,
 ) -> Result<()> {
-    let ref_ = Ref::parse(&ref_str).with_context(|| format!("invalid ref: {ref_str}"))?;
+    let ref_ = super::parse_ref_or_exit(&ref_str)?;
     let safekey = ref_.safekey();
 
     let store_root = resolve_store_root()?;
@@ -136,7 +135,7 @@ pub fn run_annotate(ref_str: String, text: Option<String>, clear: bool) -> Resul
         bail!("provide annotation <text> or --clear");
     }
 
-    let ref_ = Ref::parse(&ref_str).with_context(|| format!("invalid ref: {ref_str}"))?;
+    let ref_ = super::parse_ref_or_exit(&ref_str)?;
     let safekey = ref_.safekey();
 
     let store_root = resolve_store_root()?;

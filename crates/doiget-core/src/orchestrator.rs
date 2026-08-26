@@ -25,6 +25,7 @@ use crate::sources::arxiv::ArxivSource;
 use crate::sources::crossref::CrossrefSource;
 use crate::sources::unpaywall::UnpaywallSource;
 use crate::store::{DoigetExtension, Metadata, Store};
+use crate::DenialContext;
 use crate::{ArxivId, CapabilityProfile, Doi, Ref, Safekey, MAX_BATCH_REFS, SCHEMA_VERSION};
 
 /// Outcome of a successful [`metadata_only`] call.
@@ -770,6 +771,23 @@ pub enum PdfLegStatus {
         /// and audit trail context).
         original_block: String,
     },
+    /// The OA chain was blocked and a Tier-3 TDM source served the
+    /// publisher's own copy under the user's TDM agreement (#458).
+    ///
+    /// Distinct from [`Self::Fetched`] on purpose. The bytes did not come
+    /// from an OA host, they are not necessarily openly licensed, and the
+    /// user obtained them under an agreement they signed — provenance
+    /// that says `oa-publisher` here would be wrong in all three
+    /// respects.
+    TdmFetched {
+        /// The Tier-3 source that served it (`"tdm-aps"`, ...). Matches
+        /// [`crate::source::Source::name`].
+        source: String,
+        /// The OA-chain error that triggered the fallback, kept for the
+        /// audit trail — the user still needs to know the open route
+        /// failed even though the fetch succeeded.
+        original_block: String,
+    },
 }
 
 /// What `fetch_paper` wrote to disk and how.
@@ -893,6 +911,30 @@ impl FetchPaperOutcome {
             authors: Vec::new(),
             year: None,
             attempts: Vec::new(),
+        }
+    }
+
+    /// [`Self::for_test_synthetic`] carrying a resolution trace.
+    ///
+    /// #471: the plain constructor hard-codes `attempts: Vec::new()`, so a
+    /// test driving `classify_joined` with a `Blocked` outcome could not
+    /// observe a trace even if it looked -- and none did. Reverting the one
+    /// line that threads `outcome.attempts` into `build_jsonl_failure` left
+    /// the whole suite green, silently dropping the trace from `--json`,
+    /// which is the regression #459 exists to prevent.
+    ///
+    /// `#[doc(hidden)]` for the same reason as its sibling: not a stable
+    /// public API.
+    #[doc(hidden)]
+    pub fn for_test_synthetic_with_attempts(
+        safekey: impl Into<String>,
+        source: impl Into<String>,
+        pdf_leg: PdfLegStatus,
+        attempts: Vec<SourceAttempt>,
+    ) -> Self {
+        Self {
+            attempts,
+            ..Self::for_test_synthetic(safekey, source, pdf_leg)
         }
     }
 }
@@ -1373,8 +1415,46 @@ async fn fetch_paper_doi(
         optional_resolved.as_ref().map(|(n, m)| (*n, m)),
     )
     .await;
+
+    // #458: and if even that found nothing, ask the publisher itself.
+    //
+    // This is the second Tier-3 consultation point, and the one that
+    // matters. `resolve_tdm_chain` above runs when *Crossref* missed,
+    // which is a question about metadata. The gap a TDM agreement is
+    // obtained to close is about bytes, and it opens here -- after
+    // Crossref answered perfectly well and the content leg still failed.
+    #[cfg(any(
+        feature = "tdm-elsevier",
+        feature = "tdm-aps",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    ))]
+    let (pdf_leg, pdf_bytes) =
+        try_tdm_content_fallback(doi, pdf_leg, pdf_bytes, profile, ctx, &mut attempts).await;
+
     if let Some(fl) = fallback_license {
         license = fl;
+    }
+
+    // #458: the licence tracks the artifact that actually landed, not the
+    // work. That is already how the arXiv fallback behaves -- it overwrites
+    // `license` with the preprint's, because a CC-BY record about the
+    // published version says nothing about the file on disk.
+    //
+    // A TDM copy came from the publisher under an agreement the user
+    // signed, by a route the OA licence does not describe; carrying
+    // Unpaywall's `cc-by` forward would put an open-licence claim on it.
+    // doiget does not guess licences (`docs/SOURCES.md` -- Tier-2 sources
+    // report `unknown` rather than infer), and the APS record's licence
+    // field describes the article, not this retrieval. So: `unknown`.
+    #[cfg(any(
+        feature = "tdm-elsevier",
+        feature = "tdm-aps",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    ))]
+    if matches!(pdf_leg, PdfLegStatus::TdmFetched { .. }) {
+        license = "unknown".to_string();
     }
 
     // Issue #120: Crossref is non-fatal, but if it failed AND the OA
@@ -1407,14 +1487,17 @@ async fn fetch_paper_doi(
         }
     }
 
-    let is_preprint_fallback = matches!(pdf_leg, PdfLegStatus::PreprintFallback { .. });
     let (final_source_label, size_bytes, pdf_path_relative, pdf_staged) = match &pdf_bytes {
         Some(bytes) => {
             let staged = stage_pdf_to_tempfile(bytes)?;
-            let label = if is_preprint_fallback {
-                "arxiv".to_string()
-            } else {
-                "oa-publisher".to_string()
+            // Derived from the leg rather than from a boolean: #458 added a
+            // third way to end up holding bytes, and a two-valued flag
+            // would have quietly labelled the publisher's TDM copy
+            // `oa-publisher`.
+            let label = match &pdf_leg {
+                PdfLegStatus::PreprintFallback { .. } => "arxiv".to_string(),
+                PdfLegStatus::TdmFetched { source, .. } => source.clone(),
+                _ => "oa-publisher".to_string(),
             };
             (
                 label,
@@ -1513,6 +1596,10 @@ async fn fetch_paper_doi(
 #[cfg(feature = "metadata")]
 fn optional_source_oa_url<'a>(source: &str, meta: &'a Value) -> Option<&'a str> {
     match source {
+        // #461: OpenAlex reports every location it knows of, not just a
+        // best one, so it is the source most likely to name a repository
+        // copy for a hybrid-OA article whose publisher refused.
+        "openalex" => crate::sources::openalex::open_access_pdf_url(meta),
         "core" => crate::sources::core_oa::open_access_pdf_url(meta),
         "hal" => crate::sources::hal::open_access_pdf_url(meta),
         "europe-pmc" => crate::sources::europepmc::open_access_pdf_url(meta),
@@ -1631,6 +1718,193 @@ async fn try_optional_source_oa_fallback(
             (pdf_leg, pdf_bytes)
         }
     }
+}
+
+/// #458: the publisher's own copy, once the open routes are exhausted.
+///
+/// Triggered by a blocked *content* leg -- the trigger #445 already built
+/// for the optional OA chain, and the one Tier 3 always needed.
+/// `resolve_tdm_chain` fires on a Crossref miss instead, so for the DOIs
+/// these sources exist to serve -- ones Crossref resolves readily -- it
+/// recorded `NotNeeded` for every entry and no request ever went out.
+///
+/// Additive, like its two siblings: on any failure the ORIGINAL block is
+/// kept. The publisher's refusal on the open route is what the user has to
+/// act on; burying it under a second failure from the TDM endpoint would
+/// answer a question they did not ask.
+///
+/// Disclosure stays bounded exactly as ADR-0041 bounds it -- a source is
+/// only ever told about DOIs its own publisher registered. What rises is
+/// the frequency of consultation, not its scope.
+#[cfg(any(
+    feature = "tdm-elsevier",
+    feature = "tdm-aps",
+    feature = "tdm-springer",
+    feature = "tdm-ieee"
+))]
+#[allow(clippy::vec_init_then_push)]
+async fn try_tdm_content_fallback(
+    doi: &Doi,
+    pdf_leg: PdfLegStatus,
+    pdf_bytes: Option<Vec<u8>>,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    attempts: &mut Vec<SourceAttempt>,
+) -> (PdfLegStatus, Option<Vec<u8>>) {
+    struct ContentEntry<'a> {
+        name: &'static str,
+        /// What the user must set, rendered verbatim into the trace.
+        enable_hint: &'static [&'static str],
+        /// DOI prefixes this publisher registered (ADR-0041).
+        prefixes: &'static [&'static str],
+        /// Human name, for the wrong-publisher message.
+        publisher: &'static str,
+        src: &'a dyn crate::source::Source,
+    }
+
+    if pdf_bytes.is_some() {
+        return (pdf_leg, pdf_bytes);
+    }
+    let PdfLegStatus::Blocked {
+        message: ref blocked_message,
+        ..
+    } = pdf_leg
+    else {
+        return (pdf_leg, pdf_bytes);
+    };
+    let original_block = blocked_message.clone();
+
+    let ref_ = Ref::Doi(doi.clone());
+
+    #[cfg(feature = "tdm-aps")]
+    let aps = optional_base("DOIGET_APS_BASE").map_or_else(
+        crate::sources::tdm_aps::TdmApsSource::new,
+        crate::sources::tdm_aps::TdmApsSource::with_base,
+    );
+    #[cfg(feature = "tdm-elsevier")]
+    let elsevier = optional_base("DOIGET_ELSEVIER_BASE").map_or_else(
+        crate::sources::tdm_elsevier::TdmElsevierSource::new,
+        crate::sources::tdm_elsevier::TdmElsevierSource::with_base,
+    );
+    #[cfg(feature = "tdm-springer")]
+    let springer = optional_base("DOIGET_SPRINGER_BASE").map_or_else(
+        crate::sources::tdm_springer::TdmSpringerSource::new,
+        crate::sources::tdm_springer::TdmSpringerSource::with_base,
+    );
+    #[cfg(feature = "tdm-ieee")]
+    let ieee = optional_base("DOIGET_IEEE_BASE").map_or_else(
+        crate::sources::tdm_ieee::TdmIeeeSource::new,
+        crate::sources::tdm_ieee::TdmIeeeSource::with_base,
+    );
+
+    // Not a `vec![]` literal: each entry is `#[cfg]`-gated on its own
+    // publisher feature, and attribute-per-element inside a vec literal is
+    // not expressible. Same shape as `resolve_tdm_chain`; the
+    // `vec_init_then_push` allow is on the fn because the lint's span runs
+    // from the `let` across every push, so a statement-level attribute does
+    // not cover it.
+    #[allow(unused_mut)]
+    let mut chain: Vec<ContentEntry<'_>> = Vec::new();
+    #[cfg(feature = "tdm-aps")]
+    chain.push(ContentEntry {
+        name: "tdm-aps",
+        enable_hint: &["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"],
+        prefixes: crate::sources::tdm_aps::PUBLISHER_PREFIXES,
+        publisher: "American Physical Society (APS)",
+        src: &aps,
+    });
+    #[cfg(feature = "tdm-elsevier")]
+    chain.push(ContentEntry {
+        name: "tdm-elsevier",
+        enable_hint: &["DOIGET_KEY_ELSEVIER", "DOIGET_AGREE_TDM_ELSEVIER"],
+        prefixes: crate::sources::tdm_elsevier::PUBLISHER_PREFIXES,
+        publisher: "Elsevier BV",
+        src: &elsevier,
+    });
+    #[cfg(feature = "tdm-springer")]
+    chain.push(ContentEntry {
+        name: "tdm-springer",
+        enable_hint: &["DOIGET_KEY_SPRINGER", "DOIGET_AGREE_TDM_SPRINGER"],
+        prefixes: crate::sources::tdm_springer::PUBLISHER_PREFIXES,
+        publisher: "Springer Nature",
+        src: &springer,
+    });
+    #[cfg(feature = "tdm-ieee")]
+    chain.push(ContentEntry {
+        name: "tdm-ieee",
+        enable_hint: &["DOIGET_KEY_IEEE", "DOIGET_AGREE_TDM_IEEE"],
+        prefixes: crate::sources::tdm_ieee::PUBLISHER_PREFIXES,
+        publisher: "IEEE",
+        src: &ieee,
+    });
+
+    // Replace the metadata-stage row rather than appending a second one.
+    // That row says `NotNeeded`, which was true of the metadata question
+    // and is now false of the one being asked.
+    fn record(attempts: &mut Vec<SourceAttempt>, name: &'static str, outcome: AttemptOutcome) {
+        attempts.retain(|a| a.source != name);
+        attempts.push(SourceAttempt::new(name, outcome));
+    }
+
+    for e in chain {
+        debug_assert_eq!(e.name, e.src.name(), "chain name must match Source::name");
+
+        // Prefix BEFORE credentials, per ADR-0041: a DOI this publisher
+        // never registered is not a configuration problem, and reporting
+        // it as one would send the user after an API key that would not
+        // have helped.
+        if !e.prefixes.contains(&doi.prefix()) {
+            record(
+                attempts,
+                e.name,
+                AttemptOutcome::WrongPublisher {
+                    detail: format!("DOI prefix {} is not {}", doi.prefix(), e.publisher),
+                },
+            );
+            continue;
+        }
+        if !e.src.can_serve(profile, &ref_) {
+            record(
+                attempts,
+                e.name,
+                AttemptOutcome::Disabled { env: e.enable_hint },
+            );
+            continue;
+        }
+
+        match e.src.fetch_content(&ref_, profile, ctx).await {
+            // A metadata-only source. It has nothing to say about the
+            // content question, so its metadata-stage row is left alone
+            // rather than overwritten with a verdict it never gave.
+            Ok(None) => {}
+            Ok(Some(bytes)) => {
+                tracing::info!(
+                    source = e.name,
+                    doi = %doi.as_str(),
+                    size = bytes.len(),
+                    "OA routes exhausted; the publisher served its own copy under the user's TDM agreement (#458)"
+                );
+                record(attempts, e.name, AttemptOutcome::Resolved);
+                return (
+                    PdfLegStatus::TdmFetched {
+                        source: e.name.to_string(),
+                        original_block,
+                    },
+                    Some(bytes.to_vec()),
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    source = e.name,
+                    error = %err,
+                    "TDM content leg failed; keeping the original block"
+                );
+                record(attempts, e.name, classify_attempt(&err));
+            }
+        }
+    }
+
+    (pdf_leg, pdf_bytes)
 }
 
 /// Auto preprint fallback (issue #325). Called after the DOI OA PDF chain
@@ -3454,8 +3728,15 @@ pub enum AttemptOutcome {
     /// Runtime flag unset — **not consulted**. Carries the env var so the
     /// message can name the exact thing the user has to change.
     Disabled {
-        /// e.g. `"DOIGET_ENABLE_HAL"`.
-        env: &'static str,
+        /// Every variable that has to be set, e.g.
+        /// `["DOIGET_ENABLE_HAL"]` or
+        /// `["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"]`.
+        ///
+        /// A list rather than a string because Tier 3 needs two, and
+        /// joining them into `"A + B"` put a separator on the #459 wire
+        /// that a consumer would have had to split on — which is the
+        /// thing the `detail()` / `wire()` split exists to avoid (#470).
+        env: &'static [&'static str],
     },
     /// This source cannot serve this kind of ref at all (e.g. an arXiv id
     /// handed to a DOI-only resolver). Not a misconfiguration.
@@ -3482,6 +3763,20 @@ pub enum AttemptOutcome {
         /// Source-specific detail, e.g. the access-rights code observed.
         detail: String,
     },
+    /// **Consulted**, and refused by a policy control with a structured
+    /// reason: a redirect off the allowlist, an insecure redirect, an
+    /// oversized body, a not-a-PDF (ADR-0023).
+    ///
+    /// Distinct from [`Self::Failed`] because the [`DenialContext`] is what
+    /// [`crate::remediation::for_denial`] consumes. `PdfLegStatus::Blocked`
+    /// kept it end to end and the MCP layer turned it into a remediation;
+    /// per-source rows flattened the same information to prose, so the
+    /// richest and most actionable case degraded to text on a wire that
+    /// #459 advertises as machine-readable (#470).
+    Denied {
+        /// The structured denial, verbatim.
+        denial: DenialContext,
+    },
     /// **Consulted.** The request itself failed (transport, auth, schema).
     Failed {
         /// Rendered error.
@@ -3502,7 +3797,11 @@ impl AttemptOutcome {
     pub fn was_consulted(&self) -> bool {
         matches!(
             self,
-            Self::NoRecord | Self::NotOpenAccess { .. } | Self::Failed { .. } | Self::Resolved
+            Self::NoRecord
+                | Self::NotOpenAccess { .. }
+                | Self::Denied { .. }
+                | Self::Failed { .. }
+                | Self::Resolved
         )
     }
 
@@ -3525,6 +3824,7 @@ impl AttemptOutcome {
             Self::NotNeeded => "not_consulted_not_needed",
             Self::NoRecord => "consulted_no_record",
             Self::NotOpenAccess { .. } => "consulted_not_open_access",
+            Self::Denied { .. } => "consulted_denied",
             Self::Failed { .. } => "consulted_failed",
             Self::Resolved => "consulted_resolved",
         }
@@ -3538,10 +3838,34 @@ impl AttemptOutcome {
     #[must_use]
     pub fn detail(&self) -> Option<&str> {
         match self {
-            Self::Disabled { env } => Some(env),
+            // `Disabled` and `Denied` carry structure, not a string.
+            // See `required_env` and `denial`; `attempts_to_value` renders
+            // both, and still emits a joined `detail` for each so the #459
+            // wire stays backwards compatible.
+            Self::Disabled { .. } | Self::Denied { .. } => None,
             Self::WrongPublisher { detail }
             | Self::NotOpenAccess { detail }
             | Self::Failed { detail } => Some(detail),
+            _ => None,
+        }
+    }
+
+    /// The variables a `Disabled` row needs set, in the order the user
+    /// should set them. `None` for every other outcome.
+    #[must_use]
+    pub fn required_env(&self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::Disabled { env } => Some(env),
+            _ => None,
+        }
+    }
+
+    /// The structured denial behind a `Denied` row, which is what
+    /// [`crate::remediation::for_denial`] takes. `None` otherwise.
+    #[must_use]
+    pub fn denial(&self) -> Option<&DenialContext> {
+        match self {
+            Self::Denied { denial } => Some(denial),
             _ => None,
         }
     }
@@ -3551,7 +3875,9 @@ impl AttemptOutcome {
     #[must_use]
     pub fn render(&self) -> String {
         match self {
-            Self::Disabled { env } => format!("not consulted (set {env} to enable)"),
+            Self::Disabled { env } => {
+                format!("not consulted (set {} to enable)", env.join(" + "))
+            }
             Self::NotApplicable => "not consulted (cannot serve this ref kind)".to_string(),
             Self::WrongPublisher { detail } => format!("not consulted ({detail})"),
             Self::NotNeeded => "not consulted (an earlier source answered)".to_string(),
@@ -3559,6 +3885,13 @@ impl AttemptOutcome {
             Self::NotOpenAccess { detail } => {
                 format!("consulted: found, not open access ({detail})")
             }
+            // `{:?}` on the reason: `render` is explicitly prose (`wire`
+            // is the stable token), and the attempted host is the part a
+            // human acts on.
+            Self::Denied { denial } => match &denial.attempted {
+                Some(a) => format!("consulted: refused ({:?}, {a})", denial.reason),
+                None => format!("consulted: refused ({:?})", denial.reason),
+            },
             Self::Failed { detail } => format!("consulted: failed ({detail})"),
             Self::Resolved => "consulted: resolved".to_string(),
         }
@@ -3606,6 +3939,21 @@ pub fn attempts_to_value(attempts: &[SourceAttempt]) -> serde_json::Value {
                 o.insert("outcome".into(), serde_json::json!(a.outcome.wire()));
                 if let Some(d) = a.outcome.detail() {
                     o.insert("detail".into(), serde_json::json!(d));
+                }
+                if let Some(env) = a.outcome.required_env() {
+                    // `detail` stays a joined string so a #459-era consumer
+                    // reads the same field it always did; `required_env` is
+                    // the form that does not need splitting.
+                    o.insert("detail".into(), serde_json::json!(env.join(" + ")));
+                    o.insert("required_env".into(), serde_json::json!(env));
+                }
+                if let Some(dc) = a.outcome.denial() {
+                    o.insert("detail".into(), serde_json::json!(a.outcome.render()));
+                    o.insert("denial_context".into(), serde_json::json!(dc));
+                    let rem = crate::remediation::for_denial(dc);
+                    if !rem.is_empty() {
+                        o.insert("remediation".into(), serde_json::json!(rem));
+                    }
                 }
                 o.insert(
                     "consulted".into(),
@@ -3663,9 +4011,200 @@ fn classify_attempt(e: &FetchError) -> AttemptOutcome {
                 detail: hint.clone(),
             }
         }
-        other => AttemptOutcome::Failed {
-            detail: other.to_string(),
+        // A policy refusal before the untyped fallback (#470). The
+        // conversion already exists and yields exactly the reason /
+        // attempted / expected / hop_index that `remediation::for_denial`
+        // consumes; `classify_attempt` used to walk straight past it and
+        // stringify.
+        //
+        // `CapabilityNotGranted` is deliberately excluded. It is produced
+        // by a source's defensive gate BEFORE any request goes out, and
+        // `Denied` reports `was_consulted() == true` — which is the exact
+        // predicate the #442 reachability tests assert on. Routing it here
+        // would make a source that was never contacted claim it was. The
+        // orchestrator already reports that state as `Disabled`, which
+        // also names the variables to set.
+        other => match Option::<DenialContext>::from(other) {
+            Some(denial) if denial.reason != crate::DenialReason::CapabilityNotGranted => {
+                AttemptOutcome::Denied { denial }
+            }
+            _ => AttemptOutcome::Failed {
+                detail: other.to_string(),
+            },
         },
+    }
+}
+
+// Gated exactly as `classify_attempt` is, not more narrowly. Gating these
+// on `metadata` alone left the new code compiled but untested under the
+// coverage job's feature set (`tdm-*` without `metadata`) -- a smaller copy
+// of the same "is this actually exercised?" question #442/#458 are about,
+// and the reason `codecov/patch` failed on this PR.
+#[cfg(all(
+    test,
+    any(
+        feature = "metadata",
+        feature = "tdm-elsevier",
+        feature = "tdm-aps",
+        feature = "tdm-springer",
+        feature = "tdm-ieee"
+    )
+))]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod attempt_denial_tests {
+    use super::*;
+
+    use crate::http::HttpError;
+    use crate::DenialReason;
+
+    fn redirect_denial() -> FetchError {
+        FetchError::Http(HttpError::RedirectDenied {
+            source_key: "hal".to_string(),
+            host: "cdn.example.org".to_string(),
+            expected_hosts: vec!["hal.science".to_string()],
+        })
+    }
+
+    /// #470. A redirect denial on a metadata-chain source used to flatten
+    /// to `Failed { detail: "..." }` -- an untyped string on a wire #459
+    /// advertises as machine-readable, for the one case that is richest and
+    /// most actionable.
+    #[test]
+    fn a_policy_refusal_keeps_its_denial_context() {
+        let outcome = classify_attempt(&redirect_denial());
+        let denial = outcome
+            .denial()
+            .expect("a redirect denial must survive classification");
+        assert_eq!(denial.reason, DenialReason::RedirectNotInAllowlist);
+        assert_eq!(denial.attempted.as_deref(), Some("cdn.example.org"));
+        assert_eq!(outcome.wire(), "consulted_denied");
+        assert!(
+            outcome.was_consulted(),
+            "a refusal means a request went out"
+        );
+    }
+
+    /// The point of keeping it: `remediation::for_denial` becomes reachable
+    /// from a per-source row, so the row can tell the user what to change.
+    /// `PdfLegStatus::Blocked` could already do this; the rows could not.
+    #[test]
+    fn a_denied_row_carries_a_remediation_on_the_wire() {
+        let attempts = vec![SourceAttempt::new(
+            "hal",
+            classify_attempt(&redirect_denial()),
+        )];
+        let v = attempts_to_value(&attempts);
+        let row = &v[0];
+
+        assert_eq!(row["outcome"], serde_json::json!("consulted_denied"));
+        assert_eq!(
+            row["denial_context"]["reason"],
+            serde_json::json!("redirect_not_in_allowlist"),
+            "row: {row}"
+        );
+        let rem = row["remediation"]
+            .as_array()
+            .unwrap_or_else(|| panic!("a redirect denial has a config channel; row: {row}"));
+        assert!(!rem.is_empty());
+        assert!(
+            row["detail"].is_string(),
+            "`detail` must stay populated for a #459-era consumer; row: {row}"
+        );
+    }
+
+    /// `CapabilityNotGranted` is produced BEFORE any request goes out, so
+    /// routing it to `Denied` would make a source that was never contacted
+    /// report `was_consulted() == true` -- the predicate the #442
+    /// reachability tests rest on.
+    #[test]
+    fn an_ungranted_capability_is_not_reported_as_consulted_and_denied() {
+        let outcome = classify_attempt(&FetchError::NotEligible {
+            source_key: "tdm-aps".into(),
+        });
+        assert!(
+            outcome.denial().is_none(),
+            "got {outcome:?}: this never reached the network"
+        );
+        assert_eq!(outcome.wire(), "consulted_failed");
+    }
+
+    /// The accessors are a narrowing, so the negative case matters as much
+    /// as the positive one: a caller that treated `denial()` as
+    /// "is this a failure" would mishandle every `Failed` row.
+    #[test]
+    fn the_accessors_narrow_rather_than_generalise() {
+        let failed = AttemptOutcome::Failed {
+            detail: "connection reset".to_string(),
+        };
+        assert!(failed.denial().is_none());
+        assert!(failed.required_env().is_none());
+        assert!(failed.detail().is_some());
+
+        let disabled = AttemptOutcome::Disabled {
+            env: &["DOIGET_ENABLE_HAL"],
+        };
+        assert!(disabled.denial().is_none());
+        assert!(
+            disabled.detail().is_none(),
+            "`Disabled` carries structure; the joined string is built at the wire"
+        );
+        assert!(!disabled.was_consulted());
+        assert_eq!(
+            disabled.render(),
+            "not consulted (set DOIGET_ENABLE_HAL to enable)"
+        );
+    }
+
+    /// `attempted` is optional on a `DenialContext`, and the size cap has
+    /// no host to name. The prose has to hold either way.
+    #[test]
+    fn a_denial_without_an_attempted_host_still_renders() {
+        let outcome = AttemptOutcome::Denied {
+            denial: DenialContext {
+                reason: DenialReason::SizeCapExceeded,
+                source: Some("core".to_string()),
+                attempted: None,
+                expected: None,
+                hop_index: None,
+                cap: None,
+                actual: None,
+            },
+        };
+        assert_eq!(outcome.render(), "consulted: refused (SizeCapExceeded)");
+
+        // No config channel for a size cap, so no remediation key -- as
+        // opposed to an empty array, which would read as "we looked and
+        // there is nothing you can do" without saying so.
+        let v = attempts_to_value(&[SourceAttempt::new("core", outcome)]);
+        assert!(v[0].get("remediation").is_none(), "row: {}", v[0]);
+        assert!(v[0].get("denial_context").is_some(), "row: {}", v[0]);
+    }
+
+    /// #470's second half. Tier 3 needs two variables, and joining them
+    /// into `"A + B"` meant a consumer had to split on the separator --
+    /// exactly what the `detail()` / `wire()` split exists to avoid.
+    #[test]
+    fn a_disabled_row_lists_its_variables_instead_of_joining_them() {
+        let attempts = vec![SourceAttempt::new(
+            "tdm-aps",
+            AttemptOutcome::Disabled {
+                env: &["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"],
+            },
+        )];
+        let v = attempts_to_value(&attempts);
+        let row = &v[0];
+
+        assert_eq!(
+            row["required_env"],
+            serde_json::json!(["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"]),
+            "row: {row}"
+        );
+        // Unchanged for anyone already reading it.
+        assert_eq!(
+            row["detail"],
+            serde_json::json!("DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS"),
+            "row: {row}"
+        );
     }
 }
 
@@ -3731,17 +4270,36 @@ async fn resolve_optional_chain(
         crate::sources::core_oa::CoreSource::new,
         crate::sources::core_oa::CoreSource::with_base,
     );
+    // #461: `OpenalexSource` was compiled in and reachable from `doiget
+    // graph`, but absent from THIS chain -- so the #445 content-leg
+    // fall-through could never ask the one source that reports more than one
+    // location per work. The issue said the accessor was "the only missing
+    // piece"; the wiring was missing too.
+    let openalex_contact = contact_email_from_env();
+    let openalex = match optional_base("DOIGET_OPENALEX_BASE") {
+        Some(base) => crate::sources::openalex::OpenalexSource::with_base(base, openalex_contact),
+        None => crate::sources::openalex::OpenalexSource::new(openalex_contact),
+    };
 
     // The name is carried explicitly rather than read from `src.name()`:
     // that borrows the source, while a `SourceAttempt` holds a `'static`
     // key so the trace can outlive the chain. A test asserts the two agree,
     // so this cannot drift into a lie.
-    let chain: Vec<(&'static str, &'static str, &dyn crate::source::Source)> = vec![
-        ("datacite", "DOIGET_ENABLE_DATACITE", &datacite),
-        ("europe-pmc", "DOIGET_ENABLE_EUROPE_PMC", &epmc),
-        ("openaire", "DOIGET_ENABLE_OPENAIRE", &openaire),
-        ("hal", "DOIGET_ENABLE_HAL", &hal),
-        ("core", "DOIGET_ENABLE_CORE", &core),
+    // `&'static [&'static str]` rather than a single var: `AttemptOutcome::
+    // Disabled` now carries the whole list, because Tier 3 needs two and a
+    // joined string put a separator on the #459 wire (#470). Tier 2 needs
+    // one, which is a one-element list.
+    let chain: Vec<(
+        &'static str,
+        &'static [&'static str],
+        &dyn crate::source::Source,
+    )> = vec![
+        ("datacite", &["DOIGET_ENABLE_DATACITE"], &datacite),
+        ("europe-pmc", &["DOIGET_ENABLE_EUROPE_PMC"], &epmc),
+        ("openaire", &["DOIGET_ENABLE_OPENAIRE"], &openaire),
+        ("hal", &["DOIGET_ENABLE_HAL"], &hal),
+        ("core", &["DOIGET_ENABLE_CORE"], &core),
+        ("openalex", &["DOIGET_ENABLE_OPENALEX"], &openalex),
     ];
 
     let mut resolved: Option<(&'static str, Value)> = None;
@@ -3830,7 +4388,7 @@ async fn resolve_tdm_chain(
     struct Entry<'a> {
         name: &'static str,
         /// What the user must set, rendered verbatim into the trace.
-        enable_hint: &'static str,
+        enable_hint: &'static [&'static str],
         /// DOI prefixes this publisher registered.
         prefixes: &'static [&'static str],
         /// Human name, for the wrong-publisher message.
@@ -3870,7 +4428,7 @@ async fn resolve_tdm_chain(
     #[cfg(feature = "tdm-aps")]
     chain.push(Entry {
         name: "tdm-aps",
-        enable_hint: "DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS",
+        enable_hint: &["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"],
         prefixes: crate::sources::tdm_aps::PUBLISHER_PREFIXES,
         publisher: "American Physical Society (APS)",
         src: &aps,
@@ -3878,7 +4436,7 @@ async fn resolve_tdm_chain(
     #[cfg(feature = "tdm-elsevier")]
     chain.push(Entry {
         name: "tdm-elsevier",
-        enable_hint: "DOIGET_KEY_ELSEVIER + DOIGET_AGREE_TDM_ELSEVIER",
+        enable_hint: &["DOIGET_KEY_ELSEVIER", "DOIGET_AGREE_TDM_ELSEVIER"],
         prefixes: crate::sources::tdm_elsevier::PUBLISHER_PREFIXES,
         publisher: "Elsevier BV",
         src: &elsevier,
@@ -3886,7 +4444,7 @@ async fn resolve_tdm_chain(
     #[cfg(feature = "tdm-springer")]
     chain.push(Entry {
         name: "tdm-springer",
-        enable_hint: "DOIGET_KEY_SPRINGER + DOIGET_AGREE_TDM_SPRINGER",
+        enable_hint: &["DOIGET_KEY_SPRINGER", "DOIGET_AGREE_TDM_SPRINGER"],
         prefixes: crate::sources::tdm_springer::PUBLISHER_PREFIXES,
         publisher: "Springer Nature",
         src: &springer,
@@ -3894,7 +4452,7 @@ async fn resolve_tdm_chain(
     #[cfg(feature = "tdm-ieee")]
     chain.push(Entry {
         name: "tdm-ieee",
-        enable_hint: "DOIGET_KEY_IEEE + DOIGET_AGREE_TDM_IEEE",
+        enable_hint: &["DOIGET_KEY_IEEE", "DOIGET_AGREE_TDM_IEEE"],
         prefixes: crate::sources::tdm_ieee::PUBLISHER_PREFIXES,
         publisher: "IEEE",
         src: &ieee,
@@ -4030,6 +4588,7 @@ mod chain_tests {
                 "DOIGET_OPENAIRE_BASE",
                 "DOIGET_HAL_BASE",
                 "DOIGET_CORE_BASE",
+                "DOIGET_OPENALEX_BASE",
             ];
             Self(
                 VARS.iter()
@@ -4062,6 +4621,12 @@ mod chain_tests {
             ("openaire", host),
             ("hal", host),
             ("core", host),
+            // #461. Production registers this unconditionally via
+            // `discovery_allowlist` (ADR-0031, and there is a test in
+            // `commands/fetch.rs` guarding exactly that), so omitting it
+            // here would fail the source at `UnknownSource` for a reason
+            // production does not have.
+            ("openalex", host),
         ]));
         let session_id = "01J0000000000000000000TEST".to_string();
         let log = Arc::new(
@@ -4101,6 +4666,7 @@ mod chain_tests {
         p.metadata.openaire = true;
         p.metadata.core = true;
         p.metadata.europe_pmc = true;
+        p.metadata.openalex = true;
         p
     }
 
@@ -4110,6 +4676,83 @@ mod chain_tests {
             .find(|a| a.source == name)
             .unwrap_or_else(|| panic!("no attempt recorded for {name}; got {attempts:?}"))
             .outcome
+    }
+
+    /// Every source in the optional chain that can name an OA document URL
+    /// has an `optional_source_oa_url` arm, and each arm reads the field its
+    /// vendor actually uses.
+    ///
+    /// #461 caught this the hard way: adding `"openalex"` to the chain and
+    /// then DELETING its dispatch arm broke nothing -- no test, no clippy
+    /// warning. The chain entry and the arm are two halves of one wiring and
+    /// only the first half was pinned. Same shape as #471.
+    ///
+    /// Table-driven, so a new source is added here or is not covered, and a
+    /// failure names which one.
+    #[test]
+    fn every_oa_url_bearing_source_has_a_dispatch_arm() {
+        // Each case carries the field its vendor actually uses.
+        // Deliberately different per source: a shared shape would let one
+        // arm accidentally serve another and still look green.
+        let cases: &[(&str, serde_json::Value, &str)] = &[
+            (
+                "core",
+                serde_json::json!({ "downloadUrl": "https://core.example/1.pdf" }),
+                "https://core.example/1.pdf",
+            ),
+            (
+                "hal",
+                serde_json::json!({
+                    "openAccess_bool": true,
+                    "fileMain_s": "https://hal.example/2.pdf"
+                }),
+                "https://hal.example/2.pdf",
+            ),
+            (
+                "europe-pmc",
+                serde_json::json!({
+                    "fullTextUrlList": {
+                        "fullTextUrl": [{
+                            "documentStyle": "pdf",
+                            "availabilityCode": "OA",
+                            "url": "https://epmc.example/3.pdf"
+                        }]
+                    }
+                }),
+                "https://epmc.example/3.pdf",
+            ),
+            (
+                "openalex",
+                serde_json::json!({
+                    "locations": [
+                        { "is_oa": true, "pdf_url": "https://repo.example.ac.uk/4.pdf" }
+                    ]
+                }),
+                "https://repo.example.ac.uk/4.pdf",
+            ),
+        ];
+
+        let mut broken: Vec<String> = Vec::new();
+        for (source, meta, expected) in cases {
+            let got = optional_source_oa_url(source, meta);
+            if got != Some(*expected) {
+                broken.push(format!("{source}: expected {expected:?}, got {got:?}"));
+            }
+        }
+        assert!(
+            broken.is_empty(),
+            "these sources are in the optional chain but their document URL never reaches the \
+             content leg -- a missing or wrong `optional_source_oa_url` arm:\n  {}",
+            broken.join("\n  ")
+        );
+
+        // A source with no arm returns None rather than something else's
+        // URL, which is what keeps the dispatch honest as it grows.
+        assert_eq!(
+            optional_source_oa_url("datacite", &serde_json::json!({ "downloadUrl": "x" })),
+            None,
+            "datacite reports no document URL; it must not fall through to another arm"
+        );
     }
 
     /// THE regression for the bug this whole change exists to fix.
@@ -4141,7 +4784,14 @@ mod chain_tests {
         let names: Vec<&str> = attempts.iter().map(|a| a.source).collect();
         assert_eq!(
             names,
-            vec!["datacite", "europe-pmc", "openaire", "hal", "core"],
+            vec![
+                "datacite",
+                "europe-pmc",
+                "openaire",
+                "hal",
+                "core",
+                "openalex"
+            ],
             "the trace must list every source, in chain order"
         );
         for a in &attempts {
@@ -4154,7 +4804,7 @@ mod chain_tests {
         }
         assert_eq!(
             server.received_requests().await.expect("recorded").len(),
-            5,
+            6,
             "each enabled source must issue exactly one request"
         );
     }
@@ -4189,7 +4839,7 @@ mod chain_tests {
         assert_eq!(
             outcome(&attempts, "hal"),
             &AttemptOutcome::Disabled {
-                env: "DOIGET_ENABLE_HAL"
+                env: &["DOIGET_ENABLE_HAL"]
             },
             "a disabled source must name the variable that enables it"
         );
@@ -4469,7 +5119,7 @@ mod tdm_chain_tests {
 
     use camino::Utf8PathBuf;
     use tempfile::TempDir;
-    use wiremock::matchers::method;
+    use wiremock::matchers::{header, method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::http::HttpClient;
@@ -4706,7 +5356,7 @@ mod tdm_chain_tests {
         assert_eq!(
             o,
             &AttemptOutcome::Disabled {
-                env: "DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS"
+                env: &["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"]
             },
             "a closed Tier-3 gate must name the key AND the agreement"
         );
@@ -4786,9 +5436,14 @@ mod tdm_chain_tests {
             .iter()
             .map(|r| r.url.path().to_string())
             .collect();
+        // The prefix APS publishes, not the one this repo happens to
+        // build. #484 shipped `/v2/article/` past every test in the tree
+        // precisely because each of them was written from the
+        // implementation's output.
+        const APS_DOCUMENTED_PREFIX: &str = "/v2/journals/articles/";
         assert!(
-            paths.iter().any(|p| p.contains("/v2/article/")),
-            "fetch_paper never reached tdm-aps; paths were {paths:?}"
+            paths.iter().any(|p| p.contains(APS_DOCUMENTED_PREFIX)),
+            "fetch_paper never reached tdm-aps at its documented endpoint; paths were {paths:?}"
         );
 
         // Evidence 2: and the trace says so, in terms an operator can act
@@ -4801,6 +5456,315 @@ mod tdm_chain_tests {
             "the trace must record tdm-aps as consulted; got:
 {hint}"
         );
+    }
+    // -----------------------------------------------------------------
+    // #458 — the CONTENT leg. Everything above this line drives the
+    // metadata stage (Crossref missed); these drive the state #458 was
+    // actually reported in: Crossref answered fine, and the PDF is what
+    // could not be had.
+    // -----------------------------------------------------------------
+
+    /// The mock has to serve Crossref, Unpaywall, the OA host AND the TDM
+    /// endpoint, so every one of those source keys needs an allowlist
+    /// entry. `ctx_for` above registers only the `tdm-*` keys, which is
+    /// why its tests can only ever 404 their way to the chain.
+    fn ctx_for_content(host: &str) -> (TempDir, FetchContext) {
+        let td = TempDir::new().expect("tempdir");
+        let dir = Utf8PathBuf::try_from(td.path().to_path_buf()).expect("utf-8");
+        let http = Arc::new(HttpClient::new_for_tests_allow_http_multi(&[
+            ("crossref", host),
+            ("unpaywall", host),
+            ("oa-publisher", host),
+            ("tdm-aps", host),
+            ("tdm-elsevier", host),
+            ("tdm-springer", host),
+            ("tdm-ieee", host),
+        ]));
+        let session_id = "01J0000000000000000000CNT".to_string();
+        let log = Arc::new(
+            ProvenanceLog::open(dir.join("t.jsonl"), session_id.clone()).expect("log opens"),
+        );
+        (
+            td,
+            FetchContext {
+                http,
+                rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+                log,
+                session_id,
+                cache_root: None,
+            },
+        )
+    }
+
+    /// Minimal Crossref envelope. Its job here is simply to SUCCEED, which
+    /// is what makes `resolve_tdm_chain` record `NotNeeded` for every
+    /// Tier-3 entry — the short circuit #458 is about.
+    fn crossref_body() -> serde_json::Value {
+        serde_json::json!({
+            "status": "ok",
+            "message": {
+                "title": ["A paper APS published"],
+                "author": [{ "family": "Doe", "given": "Jane" }],
+                "issued": { "date-parts": [[2026, 1, 1]] },
+                "container-title": ["Physical Review X"],
+                "type": "journal-article"
+            }
+        })
+    }
+
+    /// Unpaywall reports an OA copy that will turn out to be unreachable.
+    /// `license` is deliberately `cc-by`: if the TDM copy inherited it,
+    /// the store would carry an open-licence claim about a file obtained
+    /// under a signed agreement.
+    fn unpaywall_body(oa_url: &str) -> serde_json::Value {
+        serde_json::json!({
+            "doi": "10.1103/PhysRevX.10.011001",
+            "is_oa": true,
+            "title": "A paper APS published",
+            "best_oa_location": {
+                "url": oa_url,
+                "url_for_pdf": oa_url,
+                "license": "cc-by"
+            }
+        })
+    }
+
+    const PDF_BYTES: &[u8] = b"%PDF-1.7\nthe publisher's own copy\n%%EOF\n";
+
+    /// Mount Crossref (answers), Unpaywall (points at a dead OA URL), the
+    /// dead OA URL itself, and whatever APS should reply with.
+    ///
+    /// Registration order matters: wiremock takes the first mock that
+    /// matches, so the Unpaywall catch-all goes last.
+    async fn mount_oa_blocked(server: &MockServer, aps: ResponseTemplate) {
+        let oa_url = format!("{}/oa/file.pdf", server.uri());
+        Mock::given(method("GET"))
+            .and(path_regex("^/works/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(crossref_body()))
+            .mount(server)
+            .await;
+        // The PDF representation of the APS article endpoint. Matched on
+        // `Accept` so it cannot be confused with the metadata-stage call
+        // to the same path — if the two were conflated this test would
+        // pass without the content leg existing at all.
+        Mock::given(method("GET"))
+            .and(path_regex("^/v2/journals/articles/"))
+            .and(header("accept", "application/pdf"))
+            .respond_with(aps)
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/oa/file.pdf"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(unpaywall_body(&oa_url)))
+            .mount(server)
+            .await;
+    }
+
+    fn aps_pdf_requests(reqs: &[wiremock::Request]) -> usize {
+        reqs.iter()
+            .filter(|r| {
+                r.url.path().starts_with("/v2/journals/articles/")
+                    && r.headers
+                        .get("accept")
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|v| v.contains("application/pdf"))
+            })
+            .count()
+    }
+
+    /// THE regression for #458.
+    ///
+    /// Crossref answers, so the metadata-stage chain records `NotNeeded`
+    /// for every Tier-3 source exactly as it always did. The OA copy is
+    /// refused. Before this change that was the end of it — byte-identical
+    /// output with the TDM gates open and closed, which is the report.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn tdm_content_leg_serves_the_pdf_when_the_oa_route_is_blocked() {
+        let server = MockServer::start().await;
+        mount_oa_blocked(
+            &server,
+            ResponseTemplate::new(200).set_body_bytes(PDF_BYTES),
+        )
+        .await;
+
+        let _bases = BaseGuard::to(&server.uri());
+        let _oa = OaBaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for_content(&server.address().to_string());
+
+        let store_td = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::try_from(store_td.path().to_path_buf()).expect("utf-8");
+        let store = crate::store::FsStore::new(root.clone()).expect("store");
+
+        let ref_ = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("doi"));
+        let outcome = fetch_paper(&ref_, &all_gates_open(), &ctx, &store, &root)
+            .await
+            .expect("the TDM content leg should have supplied the PDF");
+
+        // Evidence 1: a PDF request actually went out to APS. Asserted on
+        // the mock's record rather than on the return value, because
+        // "reached" is the whole question (#442).
+        let reqs = server.received_requests().await.expect("recorded");
+        assert_eq!(
+            aps_pdf_requests(&reqs),
+            1,
+            "expected exactly one Accept: application/pdf request to the APS article endpoint; \
+             paths were {:?}",
+            reqs.iter().map(|r| r.url.path()).collect::<Vec<_>>()
+        );
+
+        // Evidence 2: the leg says where the bytes came from.
+        match &outcome.pdf_leg {
+            PdfLegStatus::TdmFetched {
+                source,
+                original_block,
+            } => {
+                assert_eq!(source, "tdm-aps");
+                assert!(
+                    !original_block.is_empty(),
+                    "the OA refusal must be carried forward, not discarded"
+                );
+            }
+            other => panic!("expected TdmFetched, got {other:?}"),
+        }
+
+        // Evidence 3: provenance names the publisher, not `oa-publisher`.
+        assert_eq!(outcome.source, "tdm-aps");
+        assert_eq!(outcome.size_bytes, PDF_BYTES.len() as u64);
+
+        // Evidence 4: and it does not claim the file is CC-BY. Unpaywall
+        // said `cc-by` about the OA location we never got; this file came
+        // from the publisher under an agreement, by a route that licence
+        // does not describe.
+        assert_eq!(
+            outcome.license, "unknown",
+            "a TDM-retrieved copy must not inherit the OA location's licence"
+        );
+    }
+
+    /// Prefix scoping still holds on the new path (ADR-0041). An Elsevier
+    /// DOI must not cause a request to APS — the disclosure argument for
+    /// the whole feature depends on it, and the new consultation point
+    /// fires far more often than the old one.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn tdm_content_leg_is_not_consulted_for_another_publishers_doi() {
+        let server = MockServer::start().await;
+        mount_oa_blocked(
+            &server,
+            ResponseTemplate::new(200).set_body_bytes(PDF_BYTES),
+        )
+        .await;
+
+        let _bases = BaseGuard::to(&server.uri());
+        let _oa = OaBaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for_content(&server.address().to_string());
+
+        let store_td = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::try_from(store_td.path().to_path_buf()).expect("utf-8");
+        let store = crate::store::FsStore::new(root.clone()).expect("store");
+
+        // An Elsevier prefix, with the APS gate wide open.
+        let ref_ = Ref::Doi(Doi::parse("10.1016/j.physrep.2020.01.001").expect("doi"));
+        let _ = fetch_paper(&ref_, &all_gates_open(), &ctx, &store, &root).await;
+
+        let reqs = server.received_requests().await.expect("recorded");
+        assert_eq!(
+            aps_pdf_requests(&reqs),
+            0,
+            "an Elsevier DOI reached the APS content endpoint; paths were {:?}",
+            reqs.iter().map(|r| r.url.path()).collect::<Vec<_>>()
+        );
+    }
+
+    /// The zero-request test above proves nothing reached APS. It cannot
+    /// prove WHICH gate stopped it: `Source::can_serve` checks the prefix
+    /// too, so deleting the orchestrator check leaves that test green.
+    ///
+    /// What only the orchestrator produces is the DISTINCTION. ADR-0041
+    /// checks the prefix before credentials precisely so a foreign DOI
+    /// reads as `WrongPublisher` rather than `Disabled` -- otherwise the
+    /// trace tells the user to go and find an API key that would not have
+    /// helped, which is the failure #438 added the trace to prevent.
+    ///
+    /// Mirrors `a_foreign_doi_is_wrong_publisher_not_disabled`, which
+    /// makes the same assertion about the metadata chain.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn content_leg_reports_a_foreign_doi_as_wrong_publisher_not_disabled() {
+        let server = MockServer::start().await;
+        let _bases = BaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for_content(&server.address().to_string());
+
+        let doi = Doi::parse("10.1016/j.physrep.2020.01.001").expect("doi");
+        let blocked = PdfLegStatus::Blocked {
+            code: crate::ErrorCode::NetworkError,
+            message: "the open route refused us".to_string(),
+            denial: None,
+            suggested_arxiv_id: None,
+        };
+        let mut attempts: Vec<SourceAttempt> = Vec::new();
+
+        let (leg, bytes) =
+            try_tdm_content_fallback(&doi, blocked, None, &all_gates_open(), &ctx, &mut attempts)
+                .await;
+
+        assert!(bytes.is_none(), "no publisher owns this DOI here");
+        assert!(matches!(leg, PdfLegStatus::Blocked { .. }));
+        assert!(
+            matches!(outcome(&attempts, "tdm-aps"), AttemptOutcome::WrongPublisher { .. }),
+            "an Elsevier DOI must read as WrongPublisher for tdm-aps, not Disabled; got {attempts:?}"
+        );
+    }
+
+    /// A 200 that is not a PDF must not become `<safekey>.pdf`, and must
+    /// not displace the OA refusal the user has to act on.
+    ///
+    /// This is the case `fetch_bytes_with_headers` would have gotten
+    /// wrong: publisher error pages and WAF holding responses are 200s
+    /// with a body.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn tdm_content_leg_rejects_a_non_pdf_body_and_keeps_the_original_block() {
+        let server = MockServer::start().await;
+        mount_oa_blocked(
+            &server,
+            ResponseTemplate::new(200).set_body_string("<html>Access denied</html>"),
+        )
+        .await;
+
+        let _bases = BaseGuard::to(&server.uri());
+        let _oa = OaBaseGuard::to(&server.uri());
+        let (_td, ctx) = ctx_for_content(&server.address().to_string());
+
+        let store_td = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::try_from(store_td.path().to_path_buf()).expect("utf-8");
+        let store = crate::store::FsStore::new(root.clone()).expect("store");
+
+        let ref_ = Ref::Doi(Doi::parse("10.1103/PhysRevX.10.011001").expect("doi"));
+        let outcome = fetch_paper(&ref_, &all_gates_open(), &ctx, &store, &root)
+            .await
+            .expect("a metadata-only outcome is still an outcome");
+
+        // The request went out...
+        let reqs = server.received_requests().await.expect("recorded");
+        assert_eq!(aps_pdf_requests(&reqs), 1);
+
+        // ...and the HTML did not become a PDF.
+        match &outcome.pdf_leg {
+            PdfLegStatus::Blocked { message, .. } => {
+                assert!(
+                    !message.is_empty(),
+                    "the ORIGINAL OA refusal must survive, not the TDM failure"
+                );
+            }
+            other => panic!("expected the original Blocked leg to survive, got {other:?}"),
+        }
+        assert_eq!(outcome.size_bytes, 0, "nothing should have been stored");
     }
 }
 
