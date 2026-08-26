@@ -13,8 +13,15 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
+/// #119 gave `fetch` the `error[CODE]:` line and asserted exit **1**,
+/// which is what `cli_exit_code`'s catch-all produced rather than a
+/// decision anyone made. `docs/ERRORS.md` §4 reserves 1 for "at least one
+/// fetch failed", and an unparsable ref fetches nothing.
+///
+/// #492 / ADR-0049 moved it to 2 for every ref-taking command at once.
+/// The name is part of the assertion, so it moved too.
 #[test]
-fn fetch_invalid_ref_emits_cargo_style_error_and_exit_1() {
+fn fetch_invalid_ref_emits_cargo_style_error_and_exit_2() {
     let td = TempDir::new().expect("tempdir");
     Command::cargo_bin("doiget")
         .expect("doiget binary built")
@@ -24,7 +31,7 @@ fn fetch_invalid_ref_emits_cargo_style_error_and_exit_1() {
         .env("DOIGET_LOG_PATH", "")
         .args(["fetch", "not a doi"])
         .assert()
-        .code(1)
+        .code(2)
         .stderr(predicate::str::contains("error[INVALID_REF]: invalid ref"))
         // stdout MUST stay clean (ADR-0001 stdio rule).
         .stdout(predicate::str::is_empty());
@@ -95,6 +102,59 @@ fn every_ref_taking_command_emits_the_error_code_contract() {
         broken.is_empty(),
         "these commands do not honour the error[CODE] contract for an invalid ref:\n  {}",
         broken.join("\n  ")
+    );
+}
+
+/// #492: the exit code is half the contract, and it was the half that
+/// disagreed with itself.
+///
+/// `fetch` exited 1, `graph` exited 2, and `docs/ERRORS.md` §4 says 2 —
+/// so one binary answered the same input two ways, and the comment at
+/// each site asserted consistency with the other. A message contract that
+/// every command honours and an exit code that half of them get wrong is
+/// worse than neither, because a script keys off the exit code.
+///
+/// Same table as the message test above, deliberately: a new ref-taking
+/// subcommand is covered by both or by neither.
+#[test]
+fn every_ref_taking_command_exits_2_for_an_invalid_ref() {
+    let mut commands: Vec<Vec<&str>> = vec![
+        vec!["fetch"],
+        vec!["info"],
+        vec!["link"],
+        vec!["cite"],
+        vec!["text"],
+        vec!["bib"],
+        vec!["csl"],
+        vec!["source", "--out", "."],
+        vec!["tag"],
+    ];
+    if cfg!(feature = "citation") {
+        commands.push(vec!["graph"]);
+    }
+
+    let td = TempDir::new().expect("tempdir");
+    let root = td.path().to_str().expect("utf-8");
+
+    let mut wrong: Vec<String> = Vec::new();
+    for argv in &commands {
+        let mut cmd = Command::cargo_bin("doiget").expect("doiget binary built");
+        cmd.env("DOIGET_STORE_ROOT", root)
+            .env("DOIGET_LOG_PATH", "")
+            .env("DOIGET_CONTACT_EMAIL", "test@example.com")
+            .args(argv)
+            .arg("not a doi");
+        let out = cmd.output().expect("run doiget");
+        if out.status.code() != Some(2) {
+            wrong.push(format!("{}: exit {:?}", argv.join(" "), out.status.code()));
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "docs/ERRORS.md §4: an unparsable ref is misuse (exit 2), not a failed fetch \
+         (exit 1). These disagree:\n  {}",
+        wrong.join("\n  ")
     );
 }
 

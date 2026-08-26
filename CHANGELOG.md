@@ -22,6 +22,17 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   an act taken in the session that runs the fetch rather than a boolean written once
   into a file — an `agreed` key there is parsed only so doiget can warn that it
   grants nothing (#509, ADR-0050).
+### Changed
+
+- **[cli]** **Breaking for scripts.** An unparsable ref now exits **2** (misuse) on
+  every ref-taking command, not 1. `docs/ERRORS.md` §4 already reserved 1 for "at
+  least one fetch was attempted and failed", and an unparsable ref fetches nothing —
+  but `cli_exit_code` had no `INVALID_REF` arm, so `fetch` and the eight commands
+  #477 converted fell through to the catch-all 1 while `graph` hard-coded the 2 the
+  table prescribes. One binary, two answers for the same input, and a comment at
+  each site asserting agreement with the other. A caller that branched on `$? == 1`
+  to mean "invalid ref" was already wrong: 1 was also every network failure and
+  every other code under the catch-all (#492, ADR-0049).
 
 ## [0.8.10] - 2026-08-26
 
