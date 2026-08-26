@@ -10,6 +10,19 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Added
+
+- **[config]** `~/.config/doiget/credentials.toml` is **read**. `docs/CONFIG.md` §6
+  had specified it in full — schema, precedence, a `0600` warning "at startup" — and
+  nothing opened it, so a user who followed a NORMATIVE document wrote their Elsevier
+  key into a file doiget ignored and then reported the source unavailable for want of
+  a key. `[tdm.<publisher>] api_key` now sits one rung below
+  `DOIGET_KEY_<PUBLISHER>`, and the permission warning exists. **The agreement did
+  not move**: `DOIGET_AGREE_TDM_<PUBLISHER>=1` stays environment-only, so it remains
+  an act taken in the session that runs the fetch rather than a boolean written once
+  into a file — an `agreed` key there is parsed only so doiget can warn that it
+  grants nothing (#509, ADR-0050).
+
 ## [0.8.10] - 2026-08-26
 
 ### Added

@@ -127,9 +127,13 @@ impl CapabilityProfile {
     }
 }
 
-fn read_tdm_grant(agree_var: &str, key_var: &str) -> Result<Option<TdmGrant>, CapabilityError> {
+// `file_key` is `[tdm.<publisher>] api_key` from credentials.toml, one rung
+// BELOW the env var (#509, ADR-0050). The agreement has no file rung.
+fn read_tdm_grant(agree_var: &str, key_var: &str, file_key: Option<&str>)
+    -> Result<Option<TdmGrant>, CapabilityError>
+{
     let agreed = matches!(env::var(agree_var).as_deref(), Ok("1"));
-    let key    = env::var(key_var).ok();
+    let key    = env::var(key_var).ok().or_else(|| file_key.map(str::to_string));
     match (agreed, key) {
         (true, Some(k)) => Ok(Some(TdmGrant {
             // `secrecy` 0.10: `SecretString::from(String)` replaces the
@@ -152,6 +156,15 @@ fn read_tdm_grant(agree_var: &str, key_var: &str) -> Result<Option<TdmGrant>, Ca
 ```
 
 ### Three resolution rules
+
+The **key** may come from `DOIGET_KEY_<PUBLISHER>` or from
+`[tdm.<publisher>] api_key` in `credentials.toml`, env first
+([`CONFIG.md`](CONFIG.md) §6). The **agreement** has no file rung: it is
+`DOIGET_AGREE_TDM_<PUBLISHER>=1` in the environment or it does not exist, so
+that it is an act taken in the session that runs the fetch rather than a
+boolean written once and forgotten ([`LEGAL.md`](LEGAL.md) §6a.2, ADR-0050).
+The three rules below are unchanged by that — a key from the file still needs
+the agreement, so rule 3 now also fires for a file-supplied key.
 
 1. **`agree=1` + key present** → `Some(TdmGrant)`. The source is enabled this session.
 2. **`agree=1` but key missing** → `Err(AgreedButNoKey)`. Startup fails; user has agreed

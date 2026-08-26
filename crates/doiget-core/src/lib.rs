@@ -16,6 +16,7 @@ use sha2::Digest;
 
 // --- Modules ---
 pub mod canonical;
+pub mod credentials;
 pub mod discovery;
 pub mod dry_run;
 pub mod http;
@@ -1369,29 +1370,40 @@ impl CapabilityProfile {
         };
 
         // -- Tier 3 TDM grants ----------------------------------------------
+        // #509: the key may also come from `credentials.toml`, which
+        // `docs/CONFIG.md` §6 has specified in full since 0.7 and which
+        // nothing read. Loaded once — one file, one reader, so `config
+        // doctor` and a fetch can never describe different files (#441's
+        // lesson). The **agreement** stays environment-only; see the
+        // `credentials` module docs and `docs/LEGAL.md` §6a.2.
+        let creds = crate::credentials::load_or_default();
         let tdm_elsevier = resolve_tdm_grant(
             "DOIGET_AGREE_TDM_ELSEVIER",
             "DOIGET_KEY_ELSEVIER",
             "tdm-elsevier",
             cfg!(feature = "tdm-elsevier"),
+            creds.api_key("elsevier"),
         )?;
         let tdm_aps = resolve_tdm_grant(
             "DOIGET_AGREE_TDM_APS",
             "DOIGET_KEY_APS",
             "tdm-aps",
             cfg!(feature = "tdm-aps"),
+            creds.api_key("aps"),
         )?;
         let tdm_springer = resolve_tdm_grant(
             "DOIGET_AGREE_TDM_SPRINGER",
             "DOIGET_KEY_SPRINGER",
             "tdm-springer",
             cfg!(feature = "tdm-springer"),
+            creds.api_key("springer"),
         )?;
         let tdm_ieee = resolve_tdm_grant(
             "DOIGET_AGREE_TDM_IEEE",
             "DOIGET_KEY_IEEE",
             "tdm-ieee",
             cfg!(feature = "tdm-ieee"),
+            creds.api_key("ieee"),
         )?;
 
         Ok(Self {
@@ -1430,24 +1442,32 @@ fn resolve_metadata_flag(env_var: &str, feature: &str, feature_enabled: bool) ->
     }
 }
 
-/// Resolve a Tier 3 TDM grant from the `agree`/`key` env-var pair and the
-/// per-publisher Cargo feature.
+/// Resolve a Tier 3 TDM grant from the agreement env var, the key (env var
+/// or `credentials.toml`), and the per-publisher Cargo feature.
 ///
 /// Implements the rules in `docs/CAPABILITY.md` §2:
 ///
 /// - both unset → `Ok(None)`.
-/// - `agree == "1"` and `key` set → `Ok(Some(TdmGrant { .. }))` (when the
+/// - `agree == "1"` and a key → `Ok(Some(TdmGrant { .. }))` (when the
 ///   feature is enabled), or warn-and-`Ok(None)` (when the feature is not
 ///   compiled in).
-/// - `agree == "1"` and `key` unset →
-///   [`CapabilityError::AgreedButNoKey`].
-/// - `key` set and `agree` unset OR `agree` set to anything other than `"1"`
-///   → [`CapabilityError::KeyButNotAgreed`].
+/// - `agree == "1"` and no key → [`CapabilityError::AgreedButNoKey`].
+/// - a key, and `agree` unset OR set to anything other than `"1"` →
+///   [`CapabilityError::KeyButNotAgreed`].
+///
+/// `file_key` is `[tdm.<publisher>] api_key` from `credentials.toml`, one
+/// rung **below** `DOIGET_KEY_<PUBLISHER>` (#509). The two rules above are
+/// unchanged by its existence: a key from the file still needs the
+/// agreement, and the agreement still comes only from the environment, so
+/// `KeyButNotAgreed` now also fires for a file-supplied key with no
+/// `DOIGET_AGREE_TDM_<PUBLISHER>=1`. That is the point — `docs/LEGAL.md`
+/// §6a.2 is an enforced control, and a convenience must not dilute it.
 fn resolve_tdm_grant(
     agree_var: &str,
     key_var: &str,
     feature: &str,
     feature_enabled: bool,
+    file_key: Option<&str>,
 ) -> Result<Option<TdmGrant>, CapabilityError> {
     // `agree` is "agreed" iff the value is exactly the literal "1"; any other
     // value (including "true", "yes", empty) is treated as not-agreed per
@@ -1460,7 +1480,14 @@ fn resolve_tdm_grant(
     // An empty value is treated as "not set" — an empty API key cannot
     // authenticate, and silently constructing a grant around it would
     // mask the misconfiguration the AgreedButNoKey rule exists to surface.
-    let key_value = std::env::var(key_var).ok().filter(|v| !v.is_empty());
+    //
+    // Env above file (#509), matching `docs/CONFIG.md` §1 and the
+    // `store_root` / `contact_email` rungs. `credentials.toml` has already
+    // applied the same blank-is-unset rule.
+    let key_value = std::env::var(key_var)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| file_key.map(str::to_string));
 
     match (agreed, agree_present, key_value) {
         (true, _, Some(key)) => {
@@ -1629,9 +1656,25 @@ mod tests {
         }
     }
 
+    /// Point every config-dir rung at `dir`, so `credentials.toml` and
+    /// `config.toml` resolve there. Returns guards restoring prior values.
+    fn scoped_config_home(dir: &str) -> Vec<EnvGuard> {
+        ["XDG_CONFIG_HOME", "APPDATA", "HOME", "USERPROFILE"]
+            .iter()
+            .map(|v| EnvGuard::set(v, dir))
+            .collect()
+    }
+
     /// Convenience: unset every Tier 2 / Tier 3 env var the resolution
     /// algorithm reads, returning a vector of guards that restore them on
     /// drop. Callers can then `EnvGuard::set` individual vars on top.
+    ///
+    /// The caller MUST also scope the config directory — see
+    /// [`isolated_capability_env`]. Since #509 the TDM key has a
+    /// `credentials.toml` rung, so a test that only clears the environment
+    /// reads the developer's real credentials file: green in CI and red on
+    /// the one machine that has TDM configured, which is the least useful
+    /// place for a test to fail.
     fn unset_all_capability_env_vars() -> Vec<EnvGuard> {
         [
             "DOIGET_ENABLE_OPENALEX",
@@ -1643,10 +1686,138 @@ mod tests {
             "DOIGET_KEY_APS",
             "DOIGET_AGREE_TDM_SPRINGER",
             "DOIGET_KEY_SPRINGER",
+            "DOIGET_AGREE_TDM_IEEE",
+            "DOIGET_KEY_IEEE",
         ]
         .iter()
         .map(|v| EnvGuard::unset(v))
         .collect()
+    }
+
+    /// Clean environment AND an empty config directory, so
+    /// `CapabilityProfile::from_env` sees neither an env var nor a
+    /// credentials file. Hold the returned tuple for the test's lifetime.
+    fn isolated_capability_env() -> (tempfile::TempDir, Vec<EnvGuard>, Vec<EnvGuard>) {
+        isolated_env_with(None)
+    }
+
+    /// As [`isolated_capability_env`], optionally writing `credentials.toml`.
+    fn isolated_env_with(
+        credentials: Option<&str>,
+    ) -> (tempfile::TempDir, Vec<EnvGuard>, Vec<EnvGuard>) {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8PathBuf::from_path_buf(td.path().to_path_buf())
+            .expect("temp path is UTF-8");
+        if let Some(body) = credentials {
+            std::fs::create_dir_all(dir.join("doiget").as_std_path()).expect("mkdir");
+            std::fs::write(
+                dir.join("doiget").join("credentials.toml").as_std_path(),
+                body,
+            )
+            .expect("write credentials.toml");
+        }
+        let env = unset_all_capability_env_vars();
+        let home = scoped_config_home(dir.as_str());
+        (td, env, home)
+    }
+
+    /// #509: `credentials.toml` supplies the KEY, and the agreement still
+    /// comes only from the environment.
+    ///
+    /// Asserts the production path (`CapabilityProfile::from_env`), not the
+    /// parser — the parser was never the missing part. #442, #454 and #458
+    /// were each a correct component nothing reached, and a file reader
+    /// with no caller would be that defect again.
+    ///
+    /// Holds in the shipped `oa-only` build: `KeyButNotAgreed` fires before
+    /// any feature gate, so this proves the file is read without needing a
+    /// `tdm-*` feature compiled.
+    #[test]
+    #[serial_test::serial]
+    fn a_key_from_credentials_toml_is_read_and_still_needs_the_agreement() {
+        let (_td, _env, _home) = isolated_env_with(Some(
+            "[tdm.elsevier]
+api_key = \"file-key\"
+",
+        ));
+
+        match CapabilityProfile::from_env() {
+            Err(CapabilityError::KeyButNotAgreed { agree_var }) => {
+                assert_eq!(agree_var, "DOIGET_AGREE_TDM_ELSEVIER");
+            }
+            other => panic!(
+                "a key in credentials.toml must be READ, so the missing agreement is reported. Before #509 this was Ok(no grant) because the file was never opened. Got {other:?}"
+            ),
+        }
+    }
+
+    /// The half that must NOT work: `agreed = true` in the file is not an
+    /// agreement (`docs/LEGAL.md` §6a.2). Key from the file, no
+    /// `DOIGET_AGREE_TDM_ELSEVIER` — still `KeyButNotAgreed`.
+    #[test]
+    #[serial_test::serial]
+    fn agreed_in_credentials_toml_does_not_grant_anything() {
+        let (_td, _env, _home) = isolated_env_with(Some(
+            "[tdm.elsevier]
+api_key = \"file-key\"
+agreed = true
+",
+        ));
+
+        match CapabilityProfile::from_env() {
+            Err(CapabilityError::KeyButNotAgreed { agree_var }) => {
+                assert_eq!(agree_var, "DOIGET_AGREE_TDM_ELSEVIER");
+            }
+            other => panic!(
+                "`agreed` in the file must not substitute for the environment agreement; got {other:?}"
+            ),
+        }
+    }
+
+    /// Env above file, per `docs/CONFIG.md` §1: the agreement plus either
+    /// key resolves, and a blank env key falls through to the file rather
+    /// than counting as a key (the blank-is-unset rule every rung uses).
+    #[test]
+    #[serial_test::serial]
+    fn the_env_key_outranks_the_file_and_a_blank_one_falls_through() {
+        let _g = unset_all_capability_env_vars();
+
+        let granted = resolve_tdm_grant(
+            "DOIGET_AGREE_TDM_ELSEVIER",
+            "DOIGET_KEY_ELSEVIER",
+            "tdm-elsevier",
+            false,
+            Some("file-key"),
+        );
+        match granted {
+            Err(CapabilityError::KeyButNotAgreed { .. }) => {}
+            other => panic!("a file key with no agreement is KeyButNotAgreed; got {other:?}"),
+        }
+
+        let _key = EnvGuard::set("DOIGET_KEY_ELSEVIER", "   ");
+        match resolve_tdm_grant(
+            "DOIGET_AGREE_TDM_ELSEVIER",
+            "DOIGET_KEY_ELSEVIER",
+            "tdm-elsevier",
+            false,
+            Some("file-key"),
+        ) {
+            Err(CapabilityError::KeyButNotAgreed { .. }) => {}
+            other => panic!("a blank env key must fall through to the file; got {other:?}"),
+        }
+
+        let _agree = EnvGuard::set("DOIGET_AGREE_TDM_ELSEVIER", "1");
+        assert!(
+            resolve_tdm_grant(
+                "DOIGET_AGREE_TDM_ELSEVIER",
+                "DOIGET_KEY_ELSEVIER",
+                "tdm-elsevier",
+                false,
+                Some("file-key"),
+            )
+            .is_ok(),
+            "agreement + a file key is a valid configuration"
+        );
     }
 
     #[test]
@@ -1655,7 +1826,7 @@ mod tests {
         // Rule: with every relevant env var unset, the resolved profile has
         // all TDM grants `None` and all metadata flags `false`. Hard-coded
         // rate limits still apply. (Replaces the old Phase 0 stub test.)
-        let _g = unset_all_capability_env_vars();
+        let (_td, _g, _home) = isolated_capability_env();
 
         let p = CapabilityProfile::from_env().expect("clean env never errors");
         assert!(p.tdm_elsevier.is_none());
@@ -1672,7 +1843,7 @@ mod tests {
     fn from_env_no_tdm_returns_tier_1_profile() {
         // Rule (CAPABILITY.md §2): with every TDM env var unset, all
         // `tdm_*` fields are `None` and no error is produced.
-        let _g = unset_all_capability_env_vars();
+        let (_td, _g, _home) = isolated_capability_env();
 
         let p = CapabilityProfile::from_env().expect("no TDM env -> Ok");
         assert!(p.tdm_elsevier.is_none());
@@ -1684,7 +1855,7 @@ mod tests {
     #[serial_test::serial]
     fn from_env_agreed_but_no_key_errs() {
         // Rule (CAPABILITY.md §2): agree=1 + key unset -> AgreedButNoKey.
-        let _g = unset_all_capability_env_vars();
+        let (_td, _g, _home) = isolated_capability_env();
         let _agree = EnvGuard::set("DOIGET_AGREE_TDM_ELSEVIER", "1");
 
         let result = CapabilityProfile::from_env();
@@ -1705,7 +1876,7 @@ mod tests {
         // DOIGET_KEY_ELSEVIER="" the misconfiguration must surface as
         // AgreedButNoKey, not silently build a grant around an empty
         // secret that could never authenticate.
-        let _g = unset_all_capability_env_vars();
+        let (_td, _g, _home) = isolated_capability_env();
         let _agree = EnvGuard::set("DOIGET_AGREE_TDM_ELSEVIER", "1");
         let _key = EnvGuard::set("DOIGET_KEY_ELSEVIER", "");
 
@@ -1727,7 +1898,7 @@ mod tests {
         // It must resolve to Ok(None) (no grant, no error) — an empty
         // string must NOT trip the KeyButNotAgreed leaked-credential
         // rule, since there is no credential.
-        let _g = unset_all_capability_env_vars();
+        let (_td, _g, _home) = isolated_capability_env();
         let _key = EnvGuard::set("DOIGET_KEY_ELSEVIER", "");
 
         let p = CapabilityProfile::from_env()
@@ -1745,7 +1916,7 @@ mod tests {
     fn from_env_key_but_not_agreed_errs() {
         // Rule (CAPABILITY.md §2): key set + agree unset -> KeyButNotAgreed.
         // A leaked DOIGET_KEY_ELSEVIER must not silently enable a source.
-        let _g = unset_all_capability_env_vars();
+        let (_td, _g, _home) = isolated_capability_env();
         let _key = EnvGuard::set("DOIGET_KEY_ELSEVIER", "sk-test");
 
         let result = CapabilityProfile::from_env();
@@ -1763,7 +1934,7 @@ mod tests {
         // Rule (CAPABILITY.md §2): the agree var must be exactly "1". Any
         // other value (here: "true") is treated as not-agreed; combined
         // with a key set, that triggers KeyButNotAgreed.
-        let _g = unset_all_capability_env_vars();
+        let (_td, _g, _home) = isolated_capability_env();
         let _agree = EnvGuard::set("DOIGET_AGREE_TDM_ELSEVIER", "true");
         let _key = EnvGuard::set("DOIGET_KEY_ELSEVIER", "sk-test");
 
