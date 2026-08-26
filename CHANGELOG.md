@@ -75,6 +75,12 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   citation sent a reader looking for the enforcement basis to the section that has
   none (#496).
 
+- **[tdm-aps]** The source requests the URL APS documents. It built
+  `/v2/article/<percent-encoded DOI>`; APS Harvest serves
+  `/v2/journals/articles/<raw DOI>`, so a reached source would have 404'd. Both wiremock
+  stubs asserted the path the implementation produced, so they could never have caught
+  it — they are now pinned to a constant transcribed from the vendor's own curl example
+  (#484).
 - **[legal]** arXiv is fetched at the rate its Terms of Use publish — one request
   every three seconds over a single connection — instead of 15x that rate and 5x
   the concurrency. `RateLimits` had no per-source dimension at all, and three
@@ -155,6 +161,20 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[deps]** `rmcp` 2.2 → **3.1.4**, a semver-major of the MCP SDK. One breaking change
+  reaches this repo: `InitializeResult::server_info` is now `Option<Implementation>`.
+  `schemars` stays at 1.2.1, so every tool's generated input schema is byte-identical,
+  and `ProtocolVersion::V_2024_11_05` is pinned explicitly, so the advertised protocol
+  version does not move with the SDK. ADR-0001's stdio-only invariant holds — no `axum`,
+  `oauth2`, `jsonwebtoken` or streamable-http crate enters the tree (#452).
+- **[deps]** `serial_test` 3.5 → **4.0.1** (its MSRV rises to 1.93.1, which does not reach
+  the MSRV jobs — they build without `--all-targets`, so dev-dependencies are never
+  compiled at 1.86), plus `async-trait`, `clap`, `thiserror`, `uuid`, and the CI action
+  bumps (#450, #451, #453).
+- **[test]** `tools_list_carries_the_safety_annotations`. The 22 safety annotations
+  shipped in 0.8.6 are consumed entirely by the rmcp macro and read back by nothing, so a
+  macro or model change in a major could have dropped every one of them with the build
+  green and every other test passing (#452, #406).
 - **[docs]** `docs/SOURCES.md` §6.1 records what each vendor publishes as a rate limit
   and what doiget does about it. §6 promised doiget adopts a stricter vendor guideline
   per source while recording no vendor's limit anywhere, so the promise could not be
@@ -204,15 +224,25 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Retracted
 
-- **[docs]** The 0.8.9 entry claimed the Tier-3 chain runs even when Crossref answers. It
-  does not. `resolve_tdm_chain` still short-circuits every entry to `NotNeeded` the moment
-  `crossref_answered` is true, so a configured TDM key still yields byte-identical output
-  for the DOIs the chain exists to serve, and #458 is open. The bullet is struck from
+- **[docs]** The 0.8.9 entry claimed the Tier-3 chain runs even when Crossref answers.
+  **In 0.8.9 it did not.** `resolve_tdm_chain` short-circuited every entry to `NotNeeded`
+  the moment `crossref_answered` was true, so a configured TDM key yielded byte-identical
+  output for exactly the DOIs the chain exists to serve. The bullet is struck from
   `## [0.8.9]` below and the GitHub Release body carries a correction; the `v0.8.9` tag
-  annotation is immutable and still states it. The notes were assembled by grepping
-  `main..next` for `Closes` and `Refs` and reading both as "fixed" — PR #466 wrote
-  `Refs #458` about an adjacent `cfg`-gate fix, deliberately and correctly. The two
-  keywords are not interchangeable when assembling release notes (#472).
+  annotation is immutable and still states it.
+
+  **#458 is fixed in this release** — see the Tier-3 content-leg entry above (ADR-0044).
+  The retraction stands anyway, because it is about what 0.8.9 *shipped*: a reader on
+  0.8.9 was told a feature worked when it did not, and a later fix does not unsay that.
+
+  Cause: the notes were assembled by grepping `main..next` for `Closes` and `Refs` and
+  reading both as "fixed". PR #466 wrote `Refs #458` about an adjacent `cfg`-gate fix,
+  deliberately and correctly. The two keywords are not interchangeable when assembling
+  release notes (#472).
+
+  This entry itself said "#458 is open" in the present tense until the 0.8.10 promotion
+  review caught it contradicting the Fixed section three screens above. A retraction that
+  goes stale is still a false statement.
 
 ## [0.8.9] - 2026-08-25
 
