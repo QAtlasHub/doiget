@@ -305,22 +305,53 @@ warning exist as of 0.8.11.
 ## 6.1 Institutional networks: what works and what does not
 
 Being on a subscribing university network does **not** make paywalled content
-fetchable. Two independent things sit in the way, and only one of them is doiget's:
+fetchable. Three things sit in the way, in this order — and until 0.8.11 this section
+listed only the last two, which meant it sent readers after fixes that could not help.
+
+0. **Nothing is attempted at all**, and this comes first. The fetch path carries only
+   OA locations an enabled source reported. For a closed work there are none, so the
+   leg ends before any host is chosen: not refused, **never attempted**. The run exits
+   **0** with `metadata-only: no OA PDF available`, which reads as "this paper has no
+   OA copy".
+
+   Both blockers below sit behind this one and are never reached, so widening the
+   allowlist or obtaining TDM credentials does not change the outcome for a closed
+   DOI. Until 0.8.11 this section listed only (1) and (2), and therefore sent readers
+   after two fixes that could not help.
+
+   **This is not a bug awaiting a fix.** #517 asked whether Crossref's publisher link
+   could fill the gap. Measured across six live DOIs and eight captured responses,
+   every `link[]` entry Crossref returns is scoped to Similarity Check, syndication or
+   a TDM programme, and none is general-purpose - so following one would mean using a
+   licensed route without the licence. See [`LEGAL.md`](LEGAL.md) §2a(a-i) and
+   ADR-0052. **The supported route for a closed work is a TDM credential (§6)**, which
+   is the licensed version of exactly that.
 
 1. **The allowlist.** IEEE, ACM, SIAM and AMS are not on the default `oa-publisher`
-   allowlist, so doiget will not attempt the publisher leg for them at all. IEEE now
-   has a TDM route instead (`[tdm.ieee]` above, `--features tdm-ieee`) — that is a
-   different host (`ieeexploreapi.ieee.org`, the API) under a different source key,
-   not a widening of `oa-publisher`.
+   allowlist, so the attempt is refused at the redirect policy with
+   `error[CAPABILITY_DENIED] ... redirect_not_in_allowlist` naming the host. IEEE has
+   a TDM route instead (`[tdm.ieee]` above, `--features tdm-ieee`) — a different host
+   (`ieeexploreapi.ieee.org`, the API) under a different source key, not a widening of
+   `oa-publisher` (ADR-0039).
 2. **The publisher's bot wall.** Even from a subscribing address, a scripted client
    commonly gets `202 Accepted` with an **empty body** — a challenge holding response,
    not a paywall and not a 403. The subscription is not the binding constraint; being a
    program is.
 
 So widening the allowlist alone would not fix such a fetch; it would move the failure
-one step later. `HTTPS_PROXY` is honoured (§4), but a proxy fixes *addressing*, never
-the bot wall — and if you are already on the subscribing network, tunnelling elsewhere
-routes you away from your entitlement.
+one step later. That is now demonstrable rather than asserted: the request is formed
+and refused by name, so you can see which of (1) and (2) you are hitting.
+`HTTPS_PROXY` is honoured (§4), but a proxy fixes *addressing*, never the bot wall —
+and if you are already on the subscribing network, tunnelling elsewhere routes you
+away from your entitlement.
+
+**Where this does work.** For a closed work whose publisher **is** on the
+`oa-publisher` allowlist — the physics societies and diamond-OA hosts of ADR-0027, or
+a host you added yourself via `[[network.additional_hosts]]` / `trust_academic_repos`
+/ `trust_oa_registries` — the attempt now goes out, and on an entitled network it can
+succeed. That is not circumvention: the URL is the one Crossref reports, the request
+carries no credential doiget invented, and any access control on the far side applies
+unchanged.
 
 The two routes that do work:
 

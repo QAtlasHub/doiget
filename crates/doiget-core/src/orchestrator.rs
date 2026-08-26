@@ -635,7 +635,7 @@ async fn metadata_only_doi(
     match crossref.fetch(ref_, profile, ctx).await {
         Ok(res) => {
             let metadata = res.metadata_json.unwrap_or(Value::Null);
-            let oa_url = extract_crossref_oa_url(&metadata);
+            let oa_url = extract_crossref_publisher_url(&metadata);
             // Pure resolver — no store write here (see `metadata_only`
             // doc); persistence is `metadata_only_to_store`'s job.
             Ok(MetadataOnlyOutcome {
@@ -688,20 +688,72 @@ async fn metadata_only_doi(
     }
 }
 
-/// Defensively pull a Crossref OA URL out of a `message.link[]` entry.
+/// The publisher full-text URL Crossref reports for a work — **only** if
+/// the entry is a general-purpose one, which in practice it never is.
 ///
-/// The Crossref `Link` model documents `link[].URL` as the OA URL string
-/// when the work has one (see
-/// `<https://api.crossref.org/swagger-ui/index.html>`). Multiple entries
-/// may be present; we return the first non-empty `URL` field
-/// encountered. Returns `None` if the array is missing, empty, or
-/// contains no usable URL string.
-fn extract_crossref_oa_url(msg: &Value) -> Option<String> {
+/// Crossref's `Link` model carries `intended-application` on every entry,
+/// and the values are not interchangeable:
+///
+/// | value | what it is |
+/// |---|---|
+/// | `unspecified` | the general full-text link the publisher advertises |
+/// | `text-mining` | scoped to the publisher's TDM programme |
+/// | `similarity-checking` | scoped to Similarity Check / iThenticate |
+/// | `syndication` | scoped to syndication partners |
+///
+/// **Only `unspecified` is returned.** The other three are links a
+/// publisher scoped to a specific licensed programme; doiget participates
+/// in such programmes through its Tier-3 TDM sources, with a credential
+/// and a recorded per-publisher agreement, and following one of those URLs
+/// outside that path would be taking a licensed route without the licence.
+/// An entry with the field **absent** is also refused rather than assumed
+/// general: ADR-0048 D2's line is documented-by-the-vendor versus
+/// guessed-by-us, and an unlabelled link is a guess.
+///
+/// Among the eligible entries a `content-type` of `application/pdf` is
+/// preferred, since the leg that consumes this wants bytes, not a landing
+/// page.
+///
+/// This used to return the **first** `link[].URL` with no filtering at all,
+/// which meant `MetadataOnlyOutcome.oa_url` — surfaced to callers "for
+/// separate action" — could hand out a Similarity Check URL (#517).
+///
+/// # What this returns in practice: nothing
+///
+/// Measured 2026-08-26 against live Crossref for six DOIs across SIAM,
+/// IEEE, AMS, ACM, Springer Nature and the Royal Society (12 `link[]`
+/// entries), and against the eight captured responses in
+/// `tests/fixtures/real_world/`: **not one entry carried `unspecified`.**
+/// Every one was `text-mining` or `similarity-checking`.
+///
+/// So Crossref `link[]` is a programme-scoped channel, not a general
+/// full-text channel, and this function is a gate rather than a feature.
+/// That measurement is what settled #517 — see ADR-0052. It is kept, and
+/// kept correct, because the alternative is what it replaced: handing a
+/// caller a Similarity Check URL under the name `oa_url`.
+fn extract_crossref_publisher_url(msg: &Value) -> Option<String> {
     let arr = msg.get("link")?.as_array()?;
-    arr.iter()
-        .filter_map(|entry| entry.get("URL").and_then(Value::as_str))
-        .find(|s| !s.is_empty())
-        .map(|s| s.to_string())
+    let eligible = || {
+        arr.iter().filter(|e| {
+            e.get("intended-application")
+                .and_then(Value::as_str)
+                .is_some_and(|a| a.eq_ignore_ascii_case("unspecified"))
+        })
+    };
+    let url_of = |e: &Value| {
+        e.get("URL")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    eligible()
+        .find(|e| {
+            e.get("content-type")
+                .and_then(Value::as_str)
+                .is_some_and(|c| c.eq_ignore_ascii_case("application/pdf"))
+        })
+        .and_then(url_of)
+        .or_else(|| eligible().find_map(url_of))
 }
 
 /// Defensively pull Unpaywall's preferred OA URL
@@ -2947,35 +2999,91 @@ mod tests {
     }
 
     #[test]
-    fn extract_crossref_oa_url_finds_first_url() {
+    fn extract_crossref_publisher_url_takes_a_general_entry() {
         let msg = serde_json::json!({
             "link": [
-                {"URL": "https://example.org/free.pdf"},
-                {"URL": "https://example.org/alt.pdf"}
+                {"URL": "https://example.org/free.pdf",
+                 "intended-application": "unspecified"},
+                {"URL": "https://example.org/alt.pdf",
+                 "intended-application": "unspecified"}
             ]
         });
         assert_eq!(
-            extract_crossref_oa_url(&msg),
+            extract_crossref_publisher_url(&msg),
             Some("https://example.org/free.pdf".to_string())
         );
     }
 
     #[test]
-    fn extract_crossref_oa_url_returns_none_when_absent() {
-        let msg = serde_json::json!({});
-        assert!(extract_crossref_oa_url(&msg).is_none());
+    fn extract_crossref_publisher_url_returns_none_when_absent() {
+        assert!(extract_crossref_publisher_url(&serde_json::json!({})).is_none());
     }
 
     #[test]
-    fn extract_crossref_oa_url_skips_empty_url_strings() {
+    fn extract_crossref_publisher_url_skips_empty_url_strings() {
         let msg = serde_json::json!({
             "link": [
-                {"URL": ""},
-                {"URL": "https://example.org/real.pdf"}
+                {"URL": "", "intended-application": "unspecified"},
+                {"URL": "https://example.org/real.pdf",
+                 "intended-application": "unspecified"}
             ]
         });
         assert_eq!(
-            extract_crossref_oa_url(&msg),
+            extract_crossref_publisher_url(&msg),
+            Some("https://example.org/real.pdf".to_string())
+        );
+    }
+
+    /// #517: the three scoped `intended-application` values are links a
+    /// publisher pointed at a specific licensed programme. doiget joins
+    /// such programmes through its Tier-3 TDM sources, with a credential
+    /// and a recorded agreement; following one of these URLs outside that
+    /// path takes a licensed route without the licence.
+    ///
+    /// This is not hypothetical for the metadata-only path either: before
+    /// #517 the extractor returned the FIRST entry unfiltered, so
+    /// `MetadataOnlyOutcome.oa_url` — surfaced to callers "for separate
+    /// action" — could hand out a Similarity Check URL.
+    #[test]
+    fn extract_crossref_publisher_url_refuses_programme_scoped_links() {
+        for scoped in ["text-mining", "similarity-checking", "syndication"] {
+            let msg = serde_json::json!({
+                "link": [{"URL": "https://example.org/scoped.pdf",
+                          "intended-application": scoped}]
+            });
+            assert_eq!(
+                extract_crossref_publisher_url(&msg),
+                None,
+                "{scoped} is scoped to a programme doiget is not in on this path"
+            );
+        }
+    }
+
+    /// ADR-0048 D2: the line is documented-by-the-vendor versus
+    /// guessed-by-us. An entry with no `intended-application` is
+    /// unlabelled, and treating it as general-purpose would be the guess.
+    #[test]
+    fn extract_crossref_publisher_url_refuses_an_unlabelled_entry() {
+        let msg = serde_json::json!({"link": [{"URL": "https://example.org/x.pdf"}]});
+        assert_eq!(extract_crossref_publisher_url(&msg), None);
+    }
+
+    /// The leg that consumes this wants bytes, so a PDF entry wins over an
+    /// equally eligible landing page.
+    #[test]
+    fn extract_crossref_publisher_url_prefers_a_pdf_content_type() {
+        let msg = serde_json::json!({
+            "link": [
+                {"URL": "https://example.org/landing",
+                 "content-type": "text/html",
+                 "intended-application": "unspecified"},
+                {"URL": "https://example.org/real.pdf",
+                 "content-type": "application/pdf",
+                 "intended-application": "unspecified"}
+            ]
+        });
+        assert_eq!(
+            extract_crossref_publisher_url(&msg),
             Some("https://example.org/real.pdf".to_string())
         );
     }
