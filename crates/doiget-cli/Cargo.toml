@@ -23,7 +23,11 @@ workspace = true
 default  = ["oa-only"]
 oa-only  = ["doiget-core/oa-only"]
 metadata = ["doiget-core/metadata"]
-citation = ["doiget-core/citation"]
+# Mirrors `doiget-core`'s own `citation = ["metadata"]`. Without the
+# CLI-level implication `cfg(feature = "metadata")` is FALSE in a
+# `--features citation` build, so anything gated on `metadata` here
+# silently drops out of the richer build (#516).
+citation = ["metadata", "doiget-core/citation"]
 # The `doiget-mcp/*` half matters: `doiget serve` builds its client
 # through the MCP twin of `build_http_client`, so a CLI-only feature
 # would leave the MCP surface without the Tier-3 transport gate (#454).

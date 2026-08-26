@@ -16,6 +16,18 @@ name: backmerge
 # trigger the required CI checks (GitHub recursion guard), so they could
 # never be merged into the protected `next`. (Same constraint the release-plz
 # era already hit; the secret is reused.)
+#
+# The QAtlasHub org refuses fine-grained PATs with a lifetime over 366 days
+# (#426). A PAT minted under the personal account before the migration is
+# rejected with a raw GraphQL error, and every such token expires eventually,
+# so this failure recurs by construction. `gh pr create` is therefore trapped
+# below and the reason is classified into an actionable `::error::` — the
+# 0.8.7 promotion failed here and read as a bare `backmerge / failure` in the
+# Actions list, with the notices above it never reaching the log.
+#
+# A GitHub App installation token (`actions/create-github-app-token`) removes
+# the expiry treadmill and is org-policy clean; it needs an App created and
+# installed, which is a maintainer action, so it is not done here.
 
 on:
   push:
@@ -67,7 +79,42 @@ jobs:
             echo "**Expected merge-time conflict (every back-merge):** \`[workspace.package].version\` and \`Cargo.lock\` conflict — \`next\` carries \`X.Y.Z-beta.N\`, \`main\` carries the clean stable \`X.Y.Z\`. **Keep \`next\`'s \`-beta.N\` version**; take \`main\`'s other changes. Resolve any non-version conflict on its merits."
           } > "$body_file"
 
-          gh pr create --repo "$GITHUB_REPOSITORY" --base next --head main \
-            --title "chore: back-merge main → next (ADR-0025 §D6)" \
-            --body-file "$body_file"
-          echo "::notice::opened main → next back-merge PR."
+          # Trap rather than let `set -e` kill the step on a raw GraphQL
+          # dump. What a reader needs from the Actions list is which of the
+          # three recurring causes it was and what to do, not a log dive.
+          err_file="$(mktemp)"
+          if gh pr create --repo "$GITHUB_REPOSITORY" --base next --head main \
+               --title "chore: back-merge main → next (ADR-0025 §D6)" \
+               --body-file "$body_file" 2>"$err_file"; then
+            echo "::notice::opened main → next back-merge PR."
+            exit 0
+          fi
+
+          err="$(cat "$err_file")"
+          echo "$err" >&2
+
+          cause="gh pr create failed"
+          fix="Open it by hand: gh pr create --base next --head main"
+          case "$err" in
+            *"forbids access via a fine-grained personal access token"*|*"token's lifetime"*)
+              cause="RELEASE_PLZ_TOKEN refused by the QAtlasHub PAT-lifetime policy (max 366 days)"
+              fix="Re-mint the fine-grained PAT with lifetime <= 366 days (contents + pull-requests: write) and update the RELEASE_PLZ_TOKEN repo secret. To stop this recurring on every expiry, move to a GitHub App installation token (actions/create-github-app-token). See #426."
+              ;;
+            *"Bad credentials"*|*"401"*)
+              cause="RELEASE_PLZ_TOKEN is invalid or expired"
+              fix="Re-mint the PAT and update the RELEASE_PLZ_TOKEN repo secret. See #426."
+              ;;
+            *"Resource not accessible"*|*"403"*)
+              cause="RELEASE_PLZ_TOKEN is missing a permission"
+              fix="It needs contents: write and pull-requests: write on this repository. See #426."
+              ;;
+            *"No commits between"*)
+              cause="GitHub reports no diff between main and next"
+              fix="Nothing to do; the branches agree despite the rev-list count above."
+              ;;
+          esac
+
+          echo "::error::back-merge PR could not be opened: $cause"
+          echo "::error::$fix"
+          echo "::error::next is $behind commit(s) behind main and stays there until a PR is opened."
+          exit 1

@@ -10,6 +10,52 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Added
+
+- **[config]** `~/.config/doiget/credentials.toml` is **read**. `docs/CONFIG.md` §6
+  had specified it in full — schema, precedence, a `0600` warning "at startup" — and
+  nothing opened it, so a user who followed a NORMATIVE document wrote their Elsevier
+  key into a file doiget ignored and then reported the source unavailable for want of
+  a key. `[tdm.<publisher>] api_key` now sits one rung below
+  `DOIGET_KEY_<PUBLISHER>`, and the permission warning exists. **The agreement did
+  not move**: `DOIGET_AGREE_TDM_<PUBLISHER>=1` stays environment-only, so it remains
+  an act taken in the session that runs the fetch rather than a boolean written once
+  into a file — an `agreed` key there is parsed only so doiget can warn that it
+  grants nothing (#509, ADR-0050).
+### Changed
+
+- **[cli]** **Breaking for scripts.** An unparsable ref now exits **2** (misuse) on
+  every ref-taking command, not 1. `docs/ERRORS.md` §4 already reserved 1 for "at
+  least one fetch was attempted and failed", and an unparsable ref fetches nothing —
+  but `cli_exit_code` had no `INVALID_REF` arm, so `fetch` and the eight commands
+  #477 converted fell through to the catch-all 1 while `graph` hard-coded the 2 the
+  table prescribes. One binary, two answers for the same input, and a comment at
+  each site asserting agreement with the other. A caller that branched on `$? == 1`
+  to mean "invalid ref" was already wrong: 1 was also every network failure and
+  every other code under the catch-all (#492, ADR-0049).
+
+- **[docs]** `CONFIG.md` §6.1 named two things standing between an entitled network and
+  a paywalled paper — the allowlist, and the publisher bot wall — and **neither was
+  reached**. A third sits in front of both: for a closed work no candidate URL is ever
+  formed, so the leg ends before any host is chosen and the run exits 0 with `no OA PDF
+  available`. The section now leads with that, and says why it is not a bug awaiting a
+  fix: measured across six live DOIs and eight captured responses, **every** Crossref
+  `link[]` entry is programme-scoped and none is general-purpose, so there is nothing
+  legitimate to follow. The supported route for a closed work is a TDM credential
+  (#517, ADR-0052).
+### Fixed
+
+- **[metadata]** `MetadataOnlyOutcome.oa_url` handed callers **Similarity Check and
+  TDM URLs under the name `oa_url`** — to the MCP surface and to anyone reading
+  `metadata_only` output, whose own doc comment invites acting on the field "for
+  separate action". The extractor returned the first `message.link[]` entry with no
+  filtering, and Crossref's `intended-application` distinguishes a general-purpose link
+  from ones a publisher scoped to Similarity Check, syndication or its TDM programme.
+  Only `unspecified` is accepted now; an unlabelled entry is refused too, because
+  ADR-0048 D2 draws the line at documented-by-the-vendor versus guessed-by-us. Seven
+  real-world fixtures asserted the old value, which is the strongest evidence it was
+  behaviour rather than an accident (#517, ADR-0052).
+
 ## [0.8.10] - 2026-08-26
 
 ### Added

@@ -54,9 +54,64 @@ pub struct ResolvedConfig {
     /// Contact email for the polite User-Agent header (and Unpaywall fallback).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contact_email: Option<String>,
+    /// Which rung produced `contact_email` (#504) — same reason
+    /// `store_root_source` exists (#441): a setting that did nothing must
+    /// not look like a setting that worked.
+    pub contact_email_source: String,
     /// Unpaywall-specific contact email; falls back to `contact_email` when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unpaywall_email: Option<String>,
+    /// Which rung produced `unpaywall_email` (#504).
+    pub unpaywall_email_source: String,
+}
+
+/// Which rung of the #504 ladder produced an address.
+///
+/// Reported for the reason [`super::StoreRootSource`] is: `config init`
+/// wrote `[network] unpaywall_email`, the template called it STRONGLY
+/// RECOMMENDED, `doctor` never mentioned it, and nothing read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EmailSource {
+    /// The env var for this field.
+    Env(&'static str),
+    /// `[network] <field>` in the user's `config.toml`.
+    ConfigFile(&'static str),
+    /// Nothing set it.
+    Unset,
+}
+
+impl EmailSource {
+    /// Short label for `config show` / `doctor`.
+    fn label(self) -> String {
+        match self {
+            Self::Env(v) => v.to_string(),
+            Self::ConfigFile(k) => format!("[network] {k} in config.toml"),
+            Self::Unset => "unset".to_string(),
+        }
+    }
+}
+
+/// Resolve one address across env → `config.toml` → nothing.
+///
+/// Mirrors `doiget_core::orchestrator::resolve_contact_email`. Two
+/// separate readers is the hazard #441 named, so the shared half — which
+/// file, and how it parses — lives in `doiget_core::user_extension`, and
+/// only the rung order is restated here. Both ends are pinned:
+/// `contact_email_comes_from_config_toml_when_the_env_is_unset` below,
+/// and `resolve_contact_email_reads_the_config_file_rung` in
+/// `doiget-core`.
+fn resolve_email(
+    env_var: &'static str,
+    key: &'static str,
+    from_file: Option<String>,
+) -> (Option<String>, EmailSource) {
+    if let Some(v) = std::env::var(env_var).ok().filter(|s| !s.trim().is_empty()) {
+        return (Some(v), EmailSource::Env(env_var));
+    }
+    match from_file {
+        Some(v) => (Some(v), EmailSource::ConfigFile(key)),
+        None => (None, EmailSource::Unset),
+    }
 }
 
 impl ResolvedConfig {
@@ -113,6 +168,19 @@ impl ResolvedConfig {
         let config_dir = cfg.join("doiget");
         let config_path = config_dir.join("config.toml");
 
+        // #504: the two addresses have a `config.toml` rung, like
+        // `store_root` since #441. Read once — a parse failure loses every
+        // file rung at once, and `doctor`'s user-extension check reports it
+        // separately, so this stays quiet and reports `unset`.
+        let file = doiget_core::user_extension::load(&config_path).unwrap_or_default();
+        let (contact_email, contact_email_source) =
+            resolve_email("DOIGET_CONTACT_EMAIL", "contact_email", file.contact_email);
+        let (unpaywall_email, unpaywall_email_source) = resolve_email(
+            "DOIGET_UNPAYWALL_EMAIL",
+            "unpaywall_email",
+            file.unpaywall_email,
+        );
+
         Ok(Self {
             store_root,
             store_root_source: store_root_source.label().to_string(),
@@ -120,8 +188,10 @@ impl ResolvedConfig {
             log_path,
             config_dir,
             config_path,
-            contact_email: std::env::var("DOIGET_CONTACT_EMAIL").ok(),
-            unpaywall_email: std::env::var("DOIGET_UNPAYWALL_EMAIL").ok(),
+            contact_email,
+            contact_email_source: contact_email_source.label(),
+            unpaywall_email,
+            unpaywall_email_source: unpaywall_email_source.label(),
         })
     }
 }
@@ -261,12 +331,14 @@ pub async fn run(
                 &mut all_ok,
             );
             check(
-                "contact_email set",
+                &format!("contact_email set (from: {})", cfg.contact_email_source),
                 cfg.contact_email.is_some(),
                 Some(
-                    "set DOIGET_CONTACT_EMAIL to your email address\n               \
+                    "set DOIGET_CONTACT_EMAIL, or [network] contact_email in config.toml\n               \
                      e.g. export DOIGET_CONTACT_EMAIL=you@institution.edu\n               \
-                     (required for the polite User-Agent header and Unpaywall API)",
+                     (polite User-Agent header + Unpaywall API; without it requests go\n               \
+                     out as doiget@localhost from the non-polite pool, where a throttled\n               \
+                     answer is indistinguishable from `no OA copy` — #504)",
                 ),
                 &mut all_ok,
             );
@@ -417,10 +489,19 @@ pub(crate) fn config_template() -> &'static str {
 [network]
 # Contact address for the polite pool. STRONGLY RECOMMENDED.
 #
-# Without it doiget still queries Unpaywall, but as `doiget@localhost`, from
-# the non-polite pool — where you may be throttled or refused. Since the
-# automatic arXiv-preprint fallback fires on what Unpaywall reports, a
-# throttled response quietly costs you that fallback too.
+# Without it doiget still queries Unpaywall and Crossref, but as
+# `doiget@localhost`, from the non-polite pool — where you may be throttled
+# or refused. Since the automatic arXiv-preprint fallback fires on what
+# Unpaywall reports, a throttled response quietly costs you that fallback
+# too, and the run still exits 0 saying `no OA PDF available`.
+#
+# This is also what `doiget config doctor` checks. Overridden by
+# DOIGET_CONTACT_EMAIL, one rung above.
+# contact_email = "you@institution.edu"
+
+# Only if Unpaywall should see a DIFFERENT address from contact_email above
+# — most people should leave this alone. Overridden by
+# DOIGET_UNPAYWALL_EMAIL.
 # unpaywall_email = "you@institution.edu"
 
 # Allow the curated academic-repository suffixes, i.e. where institutions
@@ -605,7 +686,9 @@ fn contact_report_lines(contact_email: Option<&str>) -> Vec<String> {
             "  contact         polite User-Agent as {e} (all outbound requests)"
         )],
         None => vec![
-            "  contact         no DOIGET_CONTACT_EMAIL — every outbound request, metadata"
+            "  contact         unset — set DOIGET_CONTACT_EMAIL or [network] contact_email"
+                .to_string(),
+            "                  in config.toml. Until then every outbound request, metadata"
                 .to_string(),
             "                  AND publisher content, goes out on the non-polite pool and"
                 .to_string(),
@@ -777,6 +860,15 @@ mod tests {
         .collect()
     }
 
+    /// Point every config-dir rung at `dir`, so `config_dir_utf8()`
+    /// resolves there on any host. Returns guards that restore prior values.
+    fn scoped_config_home(dir: &str) -> Vec<EnvGuard> {
+        ["XDG_CONFIG_HOME", "APPDATA", "HOME", "USERPROFILE"]
+            .iter()
+            .map(|v| EnvGuard::set(v, dir))
+            .collect()
+    }
+
     #[test]
     #[serial_test::serial]
     fn from_env_uses_cwd_default_when_unset() {
@@ -796,6 +888,64 @@ mod tests {
         );
         assert_eq!(cfg.contact_email, None);
         assert_eq!(cfg.unpaywall_email, None);
+        assert_eq!(cfg.contact_email_source, "unset");
+        assert_eq!(cfg.unpaywall_email_source, "unset");
+    }
+
+    /// #504, and the exact shape #441 needed: a `config.toml` carrying only
+    /// `[network] contact_email` must produce a non-default contact.
+    ///
+    /// The old tests asserted the env-derived values and the template's key
+    /// list, and **both passed with the rung missing** — so on a machine
+    /// configured from the template every fetch went out as
+    /// `doiget@localhost` while `doctor` reported the store root correctly
+    /// from the very same file.
+    #[test]
+    #[serial_test::serial]
+    fn contact_email_comes_from_config_toml_when_the_env_is_unset() {
+        let _g = unset_all_doiget_config_env();
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8PathBuf::from_path_buf(td.path().to_path_buf())
+            .expect("temp path is UTF-8");
+        std::fs::create_dir_all(dir.join("doiget").as_std_path()).expect("mkdir");
+        std::fs::write(
+            dir.join("doiget").join("config.toml").as_std_path(),
+            "[network]\ncontact_email = \"file@institution.edu\"\nunpaywall_email = \"up@institution.edu\"\n",
+        )
+        .expect("write config");
+        let _scoped = scoped_config_home(dir.as_str());
+
+        let cfg = ResolvedConfig::from_env().expect("config resolves");
+        assert_eq!(cfg.contact_email.as_deref(), Some("file@institution.edu"));
+        assert_eq!(cfg.unpaywall_email.as_deref(), Some("up@institution.edu"));
+        assert_eq!(
+            cfg.contact_email_source, "[network] contact_email in config.toml",
+            "doctor must name the rung that answered, or an inert setting looks like a live one"
+        );
+    }
+
+    /// The env rung stays above the file rung, per field.
+    #[test]
+    #[serial_test::serial]
+    fn the_env_var_outranks_the_config_file_for_each_address() {
+        let _g = unset_all_doiget_config_env();
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8PathBuf::from_path_buf(td.path().to_path_buf())
+            .expect("temp path is UTF-8");
+        std::fs::create_dir_all(dir.join("doiget").as_std_path()).expect("mkdir");
+        std::fs::write(
+            dir.join("doiget").join("config.toml").as_std_path(),
+            "[network]\ncontact_email = \"file@institution.edu\"\n",
+        )
+        .expect("write config");
+        let _scoped = scoped_config_home(dir.as_str());
+        std::env::set_var("DOIGET_CONTACT_EMAIL", "env@institution.edu");
+
+        let cfg = ResolvedConfig::from_env().expect("config resolves");
+        std::env::remove_var("DOIGET_CONTACT_EMAIL");
+
+        assert_eq!(cfg.contact_email.as_deref(), Some("env@institution.edu"));
+        assert_eq!(cfg.contact_email_source, "DOIGET_CONTACT_EMAIL");
     }
 
     /// Issue #405: `config show` / `config path` / `doctor` MUST name the
@@ -889,6 +1039,7 @@ mod tests {
         for key in [
             "[store]",
             "root =",
+            "contact_email",
             "unpaywall_email",
             "trust_academic_repos",
             "trust_oa_registries",
@@ -1250,9 +1401,17 @@ mod tests {
     /// #443: the wording must not pin the cost of an unset contact address
     /// on the metadata leg — the 429 that prompted this came from the
     /// publisher, on the content leg.
+    ///
+    /// #504 adds the second half: the advisory must name **both** rungs, or
+    /// it sends a user who configured from `config init` to the one place
+    /// they were not looking.
     #[test]
     fn the_contact_advisory_names_every_outbound_request_not_just_unpaywall() {
         let joined = contact_report_lines(None).join("\n");
+        assert!(
+            joined.contains("DOIGET_CONTACT_EMAIL") && joined.contains("[network] contact_email"),
+            "both rungs must be named, not only the env var:\n{joined}"
+        );
         assert!(
             joined.contains("every outbound request") && joined.contains("publisher content"),
             "the advisory must cover the content leg too:\n{joined}"
