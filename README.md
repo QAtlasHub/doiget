@@ -111,9 +111,48 @@ linker is mandatory — `cargo install` cannot link a binary without one):
 If you don't have (or don't want) a build toolchain, use one of the prebuilt
 installers above — they need no compiler.
 
-Further prebuilt-binary channels (Homebrew tap, `cargo binstall`, npm/npx, Nix flake,
-`.deb`) are tracked in [#247](https://github.com/QAtlasHub/doiget/issues/247). Every
-release asset is cosign-keyless signed (`<asset>.cosign.bundle`) for optional verification.
+### npm / npx — one line in an agent config
+
+```sh
+npx -y doiget serve          # MCP server, no install step
+npm install -g doiget        # or put `doiget` on PATH
+```
+
+The npm packages carry the same signed release binaries as `optionalDependencies`
+— npm resolves the one matching your platform, and there is **no postinstall
+download**, so this works under `--ignore-scripts` and through a corporate
+registry mirror. `npm view doiget version` tells you what is published; the
+packages ship from tagged releases, so a very new commit may be ahead of them.
+
+### Claude Code plugin
+
+```
+/plugin marketplace add QAtlasHub/doiget
+/plugin install doiget@doiget
+```
+
+Reads `.claude-plugin/` from this repository's default branch. The plugin's
+`.mcp.json` runs `doiget serve`, so install the binary by one of the routes
+above first.
+
+### Channel status
+
+| Channel | Status |
+|---|---|
+| Shell / PowerShell installer | shipping |
+| GitHub Release binaries (signed, SBOM) | shipping |
+| `cargo install doiget-cli` | shipping (needs a C linker) |
+| `.mcpb` Claude Desktop extension | shipping since 0.8.4 |
+| MCP Registry | listed |
+| npm / npx | publishes from the next tagged release |
+| Claude Code plugin | self-hosted marketplace, as above |
+| Homebrew tap, `.deb`, Docker | **not built** |
+| Nix | `flake.nix` exists; whether it exposes an installable package rather than a dev shell is unverified |
+
+[#247](https://github.com/QAtlasHub/doiget/issues/247) was closed as completed
+while four of its five channels did not exist; the remaining ones are tracked in
+[#501](https://github.com/QAtlasHub/doiget/issues/501). Every release asset is
+cosign-keyless signed (`<asset>.cosign.bundle`) for optional verification.
 
 ## Quick start
 

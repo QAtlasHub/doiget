@@ -1,0 +1,13 @@
+{
+  "name": "doiget-darwin-x64",
+  "version": "0.0.0",
+  "description": "Prebuilt doiget binary for darwin x64. Installed automatically as an optionalDependency of `doiget`; not useful on its own.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QAtlasHub/doiget.git"
+  },
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "files": ["bin/"]
+}

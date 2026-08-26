@@ -1,0 +1,20 @@
+{
+  "name": "doiget",
+  "metadata": {
+    "description": "The doiget marketplace — one plugin: an OA-first paper fetcher for DOIs and arXiv IDs.",
+    "version": "0.8.11"
+  },
+  "owner": {
+    "name": "QAtlasHub",
+    "email": "souta.shimozono@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "doiget",
+      "source": "./",
+      "description": "Turn DOIs and arXiv IDs into local PDFs and structured metadata via official Open-Access APIs. Never bypasses paywalls.",
+      "category": "research",
+      "homepage": "https://github.com/QAtlasHub/doiget"
+    }
+  ]
+}

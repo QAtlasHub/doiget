@@ -10,6 +10,33 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Added
+
+- **[dist]** **npm packages.** `npx -y doiget serve` is now the one-line MCP entry,
+  and `npm i -g doiget` puts the CLI on PATH with no Rust toolchain and no C linker.
+  The four platform binaries ship as `optionalDependencies` carrying the same signed
+  release artifacts, with **no postinstall download** — so it installs under
+  `--ignore-scripts`, through a corporate registry mirror, and inside npm's integrity
+  hashes. A postinstall fetch would have been the shorter route and is the exact
+  supply-chain shape a reviewer is trained to reject. Published by the release
+  workflow over npm Trusted Publishing (OIDC, no long-lived token), after verifying
+  each binary against the release's own `.sha256` (#511).
+- **[dist]** **Claude Code plugin.** `/plugin marketplace add QAtlasHub/doiget` then
+  `/plugin install doiget@doiget`. Self-hosted, so it needs approval from nobody;
+  both manifests pass `claude plugin validate` (#513).
+- **[ci]** `posture-lint` fails when the npm platform mapping drifts. The npm and
+  release vocabularies (`darwin`/`x64` vs `macos`/`x86_64`) are written in three
+  places — the release matrix, `scripts/stage-npm.sh` and the bin shim — and three
+  hand-maintained copies of one table is the #454 / #504 shape (#511).
+
+### Changed
+
+- **[docs]** `README.md` no longer points readers at closed issue #247 for the
+  install channels it promised. Four of its five did not exist when it was closed
+  as completed; the README now carries a status table naming what ships, what does
+  not (Homebrew, `.deb`, Docker) and what is unverified (the Nix flake's outputs),
+  with the remainder tracked in the open #501 (#501).
+
 ## [0.8.10] - 2026-08-26
 
 ### Added
