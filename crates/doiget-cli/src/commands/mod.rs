@@ -19,7 +19,9 @@
 //! - [`list_recent`] — prints up to N most-recently-fetched entries.
 //! - [`search`] — case-insensitive substring search over stored metadata.
 //!
-//! Other subcommands (`serve`) land in separate PRs.
+//! `serve` has no module here: it delegates straight to `doiget-mcp`. It
+//! is wired in `main.rs` and is what every `docs/INTEGRATION/` guide tells
+//! users to run.
 
 /// Parse a ref, or render the failure in the `docs/ERRORS.md` §3
 /// "Researcher (CLI human)" form and return the CLI exit error.
@@ -54,17 +56,18 @@ pub fn parse_ref_or_exit(input: &str) -> anyhow::Result<doiget_core::Ref> {
     }
 }
 
-/// The renderer on its own, for the two call sites that already choose
-/// their own exit code.
+/// The renderer on its own, for call sites holding a
+/// [`doiget_core::RefParseError`] that did not come from
+/// [`parse_ref_or_exit`].
 ///
-/// `fetch` exits 1 (`cli_exit_code(InvalidRef)`) and `graph` exits 2,
-/// citing `docs/ERRORS.md` §4 "misuse" -- and §4 does say an unparsable
-/// argument is misuse, so they disagree and `graph` is the one following
-/// the table. Filed separately rather than changed here: #477 is about the
-/// message, `fetch`'s exit 1 is pinned by a named test, and quietly moving
-/// an exit code is how a script breaks without anyone noticing.
+/// Both now take the exit code from `fetch::cli_exit_code(InvalidRef)`,
+/// which is **2** since #492 / ADR-0049. Before that `fetch` fell to the
+/// generic `_ => 1` arm while `graph` hard-coded the 2 that
+/// `docs/ERRORS.md` §4 prescribes, so one binary gave two answers for the
+/// same input and each site's comment claimed agreement with the other.
 ///
-/// One renderer either way, which is the part that was missing.
+/// One renderer and one exit code. `every_ref_taking_command_exits_2_for_
+/// an_invalid_ref` is what keeps it that way.
 pub fn render_ref_parse_error(e: &doiget_core::RefParseError) {
     output::print_err(format_args!(
         "error[{}]: invalid ref: {e}",

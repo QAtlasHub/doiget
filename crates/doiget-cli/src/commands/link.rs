@@ -46,8 +46,9 @@ pub async fn run(ref_: String, mode: OutputMode, quiet_was_explicit: bool) -> Re
 
     let base = resolve_openalex_base()?;
     // Omit `mailto` when no contact email is configured (never a
-    // placeholder); the empty string is skipped downstream.
-    let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
+    // placeholder); the empty string is skipped downstream. Resolved
+    // through the core ladder so config.toml's rung counts (#504).
+    let contact_email = doiget_core::orchestrator::configured_contact_email().unwrap_or_default();
     let ctx = build_resolve_context().context("building fetch context")?;
 
     let links = match resolve_links_for_doi(&base, &contact_email, doi.as_str(), &ctx).await {

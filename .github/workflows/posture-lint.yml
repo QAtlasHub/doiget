@@ -119,6 +119,97 @@ jobs:
           fi
           echo "LICENSE OK: verbatim SPDX MIT, no trailing prose, ends at SOFTWARE., LF."
 
+      - name: npm platform packages cover every release binary (#511)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The npm `os`/`cpu` names (darwin/win32, x64/arm64) and the release
+          # asset names (macos/windows, x86_64/aarch64) are different
+          # vocabularies for the same four targets, so the mapping is written
+          # twice: `scripts/stage-npm.sh` (MAP) and `npm/doiget/bin/platform.js`
+          # (PACKAGES). Two hand-maintained copies of one table is the #454 /
+          # #504 shape, so it is checked rather than trusted.
+          #
+          # Third copy, and the one that moves: the `sign` matrix in
+          # release-plz.yml. A new target added there with no npm package
+          # would publish a wrapper that cannot run on it.
+          #
+          # `capture` exists because each of these greps is itself a silent
+          # failure waiting to happen: under `set -euo pipefail` a grep that
+          # matches nothing exits 1 and kills the step with NO output at all.
+          # Not hypothetical — the PACKAGES table moved from `doiget.js` to
+          # `platform.js` and this step went red with an empty log, which
+          # reads as infrastructure flake rather than as the drift it was
+          # actually detecting.
+          capture() {
+            local out
+            out="$(grep -oE "$1" "$2" || true)"
+            if [ -z "$out" ]; then
+              echo "::error::posture-lint npm: /$1/ matched nothing in $2 — the table it reads has moved or been renamed (#511)"
+              exit 1
+            fi
+            printf '%s\n' "$out"
+          }
+          assets="$(capture 'artifact: doiget-[a-z0-9_.-]+' .github/workflows/release-plz.yml \
+                    | sed 's/artifact: //' | sort -u)"
+          staged="$(capture '^doiget-[a-z0-9-]+:doiget-[a-z0-9_.-]+:' scripts/stage-npm.sh \
+                    | cut -d: -f2 | sort -u)"
+          shimmed="$(capture '"doiget-(darwin|linux|win32)-[a-z0-9]+"' npm/doiget/bin/platform.js \
+                     | tr -d '"' | sort -u)"
+          pkgs="$(capture '^doiget-[a-z0-9-]+:' scripts/stage-npm.sh | tr -d ':' | sort -u)"
+
+          fail=0
+          # `.exe` is appended by the matrix `ext:` field, so compare stems.
+          if [ "$(echo "$assets" | sed 's/\.exe$//' | sort -u)" \
+               != "$(echo "$staged" | sed 's/\.exe$//' | sort -u)" ]; then
+            echo "::error::posture-lint npm: release-plz.yml assets and scripts/stage-npm.sh disagree (#511)"
+            printf 'release-plz.yml:\n%s\nstage-npm.sh:\n%s\n' "$assets" "$staged"
+            fail=1
+          fi
+          if [ "$pkgs" != "$shimmed" ]; then
+            echo "::error::posture-lint npm: scripts/stage-npm.sh and npm/doiget/bin/platform.js name different packages (#511)"
+            printf 'stage-npm.sh:\n%s\nshim:\n%s\n' "$pkgs" "$shimmed"
+            fail=1
+          fi
+          # Every package the wrapper declares must exist as a directory, and
+          # vice versa — an optionalDependency that resolves to nothing fails
+          # SILENTLY at install time, which is the whole failure mode.
+          declared="$(capture '"doiget-(darwin|linux|win32)-[a-z0-9]+"' npm/doiget/package.json \
+                      | tr -d '"' | sort -u)"
+          onDisk="$(find npm -maxdepth 1 -mindepth 1 -type d -name 'doiget-*' -printf '%f\n' | sort -u)"
+          if [ "$declared" != "$onDisk" ]; then
+            echo "::error::posture-lint npm: optionalDependencies and npm/ directories disagree (#511)"
+            printf 'package.json:\n%s\nnpm/:\n%s\n' "$declared" "$onDisk"
+            fail=1
+          fi
+          # Without this edge the checks form TWO disjoint clusters —
+          # {assets,staged} and {pkgs,shimmed} versus {declared,onDisk} — so
+          # renaming both halves consistently but differently from each other
+          # passed every check while the wrapper depended on a package the
+          # staging script never produces.
+          if [ "$pkgs" != "$declared" ]; then
+            echo "::error::posture-lint npm: scripts/stage-npm.sh and npm/doiget/package.json name different packages (#511)"
+            printf 'stage-npm.sh:\n%s\npackage.json:\n%s\n' "$pkgs" "$declared"
+            fail=1
+          fi
+          [ "$fail" -eq 0 ]
+          echo "npm mapping OK: $(echo "$pkgs" | tr '\n' ' ')"
+
+      - name: release checksum verification test (#511)
+        shell: bash
+        run: bash npm/doiget/test/release-checksums.test.sh
+
+      - name: npm packaging tests (#511)
+        shell: bash
+        # The name-list greps above cannot catch a wrong binary name, a
+        # mis-forwarded exit code, or a staging script that produces the
+        # wrong layout. These actually run. node is preinstalled on the
+        # runner, so no action is pinned for it.
+        run: |
+          set -euo pipefail
+          node npm/doiget/test/platform.test.js
+          bash npm/doiget/test/stage-npm.test.sh
+
   network-purity:
     # Phase 0 must make zero outbound network calls from the unit / integration
     # test suite. See `docs/PHASES.md` §3 working principle ("No external

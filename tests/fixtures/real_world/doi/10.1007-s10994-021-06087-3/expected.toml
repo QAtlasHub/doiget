@@ -1,4 +1,24 @@
 safekey = "doi_10.1007_s10994-021-06087-3"
 source  = "crossref"
 title   = "A representative-shape illustration of a Springer ML-journal article"
-oa_url  = "https://link.springer.com/content/pdf/10.1007/s10994-021-06087-3.pdf"
+
+# `oa_url` is deliberately ABSENT, and this entry is why the field's old
+# value was worth measuring (#517).
+#
+# The captured Crossref response carries exactly one `link[]` entry:
+#
+#   { "URL": "https://link.springer.com/content/pdf/10.1007/s10994-021-06087-3.pdf",
+#     "content-type": "application/pdf",
+#     "intended-application": "text-mining" }
+#
+# `text-mining` scopes that URL to Springer's TDM programme. doiget joins
+# such programmes through its Tier-3 sources, with the user's own key and a
+# recorded per-publisher agreement — so surfacing this URL as `oa_url`
+# labelled a programme-scoped link as an Open Access one, to a caller the
+# field's own docs invite to act on it.
+#
+# This fixture asserted that behaviour, which is the strongest evidence
+# that it was behaviour rather than an accident. `oa_url` is now `None`
+# here, and stays `None` for every real Crossref response measured:
+# 12 `link[]` entries across six live DOIs and eight captured fixtures,
+# none of them `unspecified`. See ADR-0052.

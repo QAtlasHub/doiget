@@ -10,6 +10,261 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-08-27
+
+### Added
+
+- **[ci]** `dco.yml` fails a PR whose commits lack a well-formed `Signed-off-by`
+  trailer. Merge commits and bot authors are exempt — GitHub writes the former, and
+  neither Dependabot nor github-actions is a legal person who could certify a
+  license grant. Deliberately not a required status check: it blocks in its own job,
+  so a missing sign-off is visible before a human merges without disturbing the
+  auto-merge chain (ADR-0051 D4).
+- **[config]** `~/.config/doiget/credentials.toml` is **read**. `docs/CONFIG.md` §6
+  had specified it in full — schema, precedence, a `0600` warning "at startup" — and
+  nothing opened it, so a user who followed a NORMATIVE document wrote their Elsevier
+  key into a file doiget ignored and then reported the source unavailable for want of
+  a key. `[tdm.<publisher>] api_key` now sits one rung below
+  `DOIGET_KEY_<PUBLISHER>`, and the permission warning exists. **The agreement did
+  not move**: `DOIGET_AGREE_TDM_<PUBLISHER>=1` stays environment-only, so it remains
+  an act taken in the session that runs the fetch rather than a boolean written once
+  into a file — an `agreed` key there is parsed only so doiget can warn that it
+  grants nothing (#509, ADR-0050).
+- **[dist]** **npm packages.** `npx -y doiget serve` is now the one-line MCP entry,
+  and `npm i -g doiget` puts the CLI on PATH with no Rust toolchain and no C linker.
+  The four platform binaries ship as `optionalDependencies` carrying the same signed
+  release artifacts, with **no postinstall download** — so it installs under
+  `--ignore-scripts`, through a corporate registry mirror, and inside npm's integrity
+  hashes. A postinstall fetch would have been the shorter route and is the exact
+  supply-chain shape a reviewer is trained to reject. Published by the release
+  workflow over npm Trusted Publishing (OIDC, no long-lived token), after verifying
+  each binary against the release's own `.sha256` (#511).
+- **[dist]** **Claude Code plugin.** `/plugin marketplace add QAtlasHub/doiget` then
+  `/plugin install doiget@doiget`. Self-hosted, so it needs approval from nobody;
+  both manifests pass `claude plugin validate` (#513).
+- **[ci]** `posture-lint` fails when the npm platform mapping drifts. The npm and
+  release vocabularies (`darwin`/`x64` vs `macos`/`x86_64`) are written in three
+  places — the release matrix, `scripts/stage-npm.sh` and the bin shim — and three
+  hand-maintained copies of one table is the #454 / #504 shape (#511).
+- **[dist]** **MCP Registry entry carries packages.** `server.json` was source-only, so
+  `io.github.QAtlasHub/doiget` was discoverable in the registry but not installable
+  from it. It now emits both a `cargo` and an `mcpb` package, and the release signs
+  the `.mcpb` and publishes its `.sha256` alongside — previously the one artifact a
+  user is most likely to double-click was the only one they could not verify
+  (#483).
+
+### Changed
+
+- **[docs]** `CONTRIBUTING.md`'s one-line "your contribution is MIT" clause becomes a
+  Contributor License Agreement: a sublicensable copyright grant permitting
+  distribution under any license terms, an Apache-ICLA-shaped patent grant with
+  defensive termination, and a written promise that public releases stay under an
+  OSI-approved open source license. Inbound = outbound made the outbound license a
+  one-way door — changing it later needs permission from every past contributor, and
+  one unreachable contributor pins it forever. doiget is at the single moment when
+  reopening that door costs nothing: `git shortlog -sne --all` lists exactly one
+  human. Assent is a commit sign-off, and the change is not retroactive — everything
+  merged before it stays MIT-only (ADR-0051).
+- **[cli]** **Breaking for scripts.** An unparsable ref now exits **2** (misuse) on
+  every ref-taking command, not 1. `docs/ERRORS.md` §4 already reserved 1 for "at
+  least one fetch was attempted and failed", and an unparsable ref fetches nothing —
+  but `cli_exit_code` had no `INVALID_REF` arm, so `fetch` and the eight commands
+  #477 converted fell through to the catch-all 1 while `graph` hard-coded the 2 the
+  table prescribes. One binary, two answers for the same input, and a comment at
+  each site asserting agreement with the other. A caller that branched on `$? == 1`
+  to mean "invalid ref" was already wrong: 1 was also every network failure and
+  every other code under the catch-all (#492, ADR-0049).
+
+  Pre-release review found the claim was not yet true: `tex-source` and
+  `frontier` never routed through the shared parser, so both still exited 1 and
+  `tex-source` leaked the `Caused by:` chain #477's contract replaced. Both are
+  fixed, `annotate`'s missing-argument path moves from 1 to 2 with them, and the
+  test's command table is now **read back from clap's `--help`** instead of
+  hand-listed — a second hand-maintained copy of the subcommand set is what let
+  three commands go uncovered in the first place.
+
+- **[docs]** `CONFIG.md` §6.1 named two things standing between an entitled network and
+  a paywalled paper — the allowlist, and the publisher bot wall — and **neither was
+  reached**. A third sits in front of both: for a closed work no candidate URL is ever
+  formed, so the leg ends before any host is chosen and the run exits 0 with `no OA PDF
+  available`. The section now leads with that, and says why it is not a bug awaiting a
+  fix: measured across six live DOIs and eight captured responses, **every** Crossref
+  `link[]` entry is programme-scoped and none is general-purpose, so there is nothing
+  legitimate to follow. The supported route for a closed work is a TDM credential
+  (#517, ADR-0052).
+
+- **[docs]** `README.md` no longer points readers at closed issue #247 for the
+  install channels it promised. Four of its five did not exist when it was closed
+  as completed; the README now carries a status table naming what ships, what does
+  not (Homebrew, `.deb`, Docker) and what is unverified (the Nix flake's outputs),
+  with the remainder tracked in the open #501 (#501).
+- **[docs]** All six `docs/INTEGRATION/` host guides were `PLACEHOLDER (Phase 3)` and
+  told the reader to stop and wait — for a phase that shipped long ago. `claude-code.md`
+  said "Do not copy speculative JSON from elsewhere — wait for the verified Phase 3
+  snippet", which made it worse than a missing page: a missing page invites a guess and
+  this one forbade one. Each guide now carries a working configuration and an explicit
+  **exercised / not exercised** line with a date, rather than a blanket disclaimer
+  (#512).
+- **[docs]** `.cargo/config.toml` advertised `.cargo/config.local.toml` as the
+  per-developer override channel and `.gitignore` reserved the name. Cargo never reads
+  it, and the `include` that would make it real is a hard error before any cargo command
+  when the file is absent — which it is in every fresh clone. Both the promise and the
+  reserved filename are gone; `CONTRIBUTING.md` documents the two mechanisms that work
+  (`$CARGO_HOME/config.toml`, `CARGO_TARGET_DIR`), with the 195 GB this cost on one
+  machine as the reason to bound a shared target directory (#521).
+- **[ci]** The `main → next` back-merge died on a raw GraphQL dump and read as a bare
+  `backmerge / failure` in the Actions list. `gh pr create` is now trapped and its
+  stderr classified — org PAT-lifetime policy, expired token, missing scope, no diff —
+  each emitting an actionable error, with a closing line saying how far behind `next`
+  now is (#426).
+
+### Fixed
+
+- **[metadata]** `MetadataOnlyOutcome.oa_url` handed callers **Similarity Check and
+  TDM URLs under the name `oa_url`** — to the MCP surface and to anyone reading
+  `metadata_only` output, whose own doc comment invites acting on the field "for
+  separate action". The extractor returned the first `message.link[]` entry with no
+  filtering, and Crossref's `intended-application` distinguishes a general-purpose link
+  from ones a publisher scoped to Similarity Check, syndication or its TDM programme.
+  Only `unspecified` is accepted now; an unlabelled entry is refused too, because
+  ADR-0048 D2 draws the line at documented-by-the-vendor versus guessed-by-us. Seven
+  real-world fixtures asserted the old value, which is the strongest evidence it was
+  behaviour rather than an accident (#517, ADR-0052).
+- **[transport]** In a `--features metadata` build **every Tier-2 optional source died
+  at `UnknownSource`**. `build_http_client` registered `tier_2_allowlist()` under
+  `#[cfg(feature = "citation")]` while the sources it serves — OpenAlex, Semantic
+  Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE, Europe PMC — are compiled under
+  `metadata`, so the chain ran, `can_serve` passed, and the request was rejected for
+  want of an allowlist entry. CI's clippy matrix builds that configuration explicitly.
+  Fixing it also required `doiget-cli`'s `citation` to imply its own `metadata`, which
+  it did not — so `doiget capabilities` had been under-reporting the compiled feature
+  set too. Guarded in both crates by a test that asserts the **client** a fetch goes
+  through, not the list (#516).
+- **[source]** Europe PMC refused any record with `isOpenAccess = N` before consulting
+  `fullTextUrlList`, discarding a **Free PDF at `europepmc.org`** — a host already on
+  the `oa-publisher` allowlist — one line before the code written to find it.
+  `isOpenAccess` describes membership of the bulk OA subset; single-article
+  retrievability is a strictly weaker property Europe PMC reports per entry, and it is
+  now the gate. Measured on 10.1098/rspa.2014.0585 (PMC4277194), whose Free entry
+  returns 670 kB of `application/pdf` (#503).
+- **[config]** `[network] unpaywall_email` was written by `config init`, called STRONGLY
+  RECOMMENDED by the template's own prose, and **read by nothing** — so on a machine
+  configured from the template every request went out as `doiget@localhost` from the
+  non-polite pool, while `config doctor` reported the store root correctly from the same
+  file. The cost is not politeness: the arXiv-preprint fallback fires on what Unpaywall
+  reports, so a throttled answer quietly costs that fallback and the run still exits 0
+  saying `no OA PDF available`. Both addresses now resolve env → `config.toml` →
+  default, `config doctor` names **which rung answered**, and `contact_email` — absent
+  from the generated template entirely — is in it (#504).
+
+  Pre-release review found the fix stopped at the CLI: `doiget_paper_search`,
+  `doiget_link`, `doiget_expand_citation_graph` and `doiget_resolve_citation`
+  each read `DOIGET_CONTACT_EMAIL` directly, so a user who configured the
+  address in `config.toml` got the polite pool from `doiget fetch` and the
+  non-polite pool from every MCP tool — the interface doiget leads with. All
+  four now go through the same ladder. `config show` also reported
+  `unpaywall_email: unset` in the commonest configuration of all (only
+  `DOIGET_CONTACT_EMAIL` set) while the fetch it describes was sending the
+  contact address; it now reports `inherited from contact_email`.
+
+  Round 2 found that fix had stopped at the MCP boundary: `graph`, `frontier`,
+  `link`, `search` and `resolve-citation` still read `DOIGET_CONTACT_EMAIL`
+  directly and so still ignored `config.toml`, with the fallback hand-copied five
+  times into two mutually inconsistent policies. All of them, and the dormant copy
+  in `OrchestratorConfig`, now go through the core resolver. `config doctor` also
+  gained the `unpaywall_email` line it never had — the round-1 note above credited
+  `doctor` for a change that landed in `show`, and `doctor` is the surface meant to
+  be worth trusting.
+- **[ci]** **The npm publish would have failed on every release, silently.** The
+  `npm-publish` job downloaded `doiget-*.sha256`, a glob that also matches the SBOM's
+  and the `.mcpb`'s checksums — whose binaries it never downloads — so the verify
+  step ran `openssl dgst` on a missing file and aborted under `set -euo pipefail`
+  before staging anything. The job is `continue-on-error`, so the release would have
+  reported green with npm unpublished, while the entry above says npm packages ship.
+  The four platform checksums are now named exactly, and the step asserts it verified
+  all four rather than reporting a clean run over fewer (#511).
+- **[ci]** `posture-lint`'s npm mapping check compared two disjoint clusters of names,
+  so renaming both halves consistently-but-differently passed while the wrapper
+  depended on a package the staging script never produces. The four names now form one
+  connected chain. The packaging also gained **executable** tests — the name-list greps
+  could not catch a wrong binary name or a staging bug, and the first run of the new
+  `stage-npm.sh` test immediately caught one: the script copied only `doiget.js`, so
+  the shim's `require("./platform.js")` would have thrown `MODULE_NOT_FOUND` on the
+  first `npx doiget` (#511).
+- **[config]** `credentials.toml`'s failure modes reached only `tracing::warn!`, which
+  the CLI's default `EnvFilter` suppresses — so a malformed or group-readable file
+  produced no warning, no `doctor` line, and only the downstream "source unavailable"
+  the feature exists to prevent. Everything a reader can learn about the file is now
+  data rather than a log record: file-level failures are a `CredentialsError`, and
+  per-entry problems — a world-readable mode, an `api_key` the user typed and left
+  blank, an `agreed` doiget does not read — are `Advisory` values `config doctor`
+  prints as failing lines (#509).
+
+  Round 1 of the pre-release review claimed both halves of this and delivered
+  neither in full. `config doctor` surfaced only whole-file parse and IO errors: a
+  `chmod 644` on a file holding publisher keys still reported `[ ok ]`, which made
+  "the `0600` check is a real control rather than a sentence" untrue in the module
+  whose own doc comment says it. And the blank-key warning did not fire for
+  `api_key = ""` — `Option::unwrap_or_default()` collapses `None` and `Some("")` to
+  one empty string, so the commonest form of the case was still the silent one. Its
+  test used that exact input and asserted only the key count, so it passed.
+- **[core]** `Credentials` no longer derives `Debug` over plain-`String` API keys; a
+  hand-written impl redacts them, applying one hop earlier the same protection
+  `secrecy::SecretString` gives the value once it reaches `TdmGrant`. The two raw
+  deserialisation structs, which hold the key untrimmed and unredacted one hop before
+  that, no longer derive `Debug` either. The TDM env-var pair also moved behind
+  `AgreeVar`/`KeyVar` newtypes: they were adjacent `&str` parameters, so transposing
+  them at a call site type-checked and would have made the KEY the agreement signal
+  for a control `docs/LEGAL.md` §6a.2 calls enforced (#509).
+
+  Round 1 of the review closed that hole and **opened a more direct one**: making
+  `parse` fallible put a `toml::de::Error` inside `CredentialsError::Parse`, and that
+  error's `Display` quotes the offending source line verbatim. The commonest way this
+  file is malformed is a pasted key with a stray quote in it — so the error most
+  likely to reach a terminal was the one whose quoted line *is* the key, and `config
+  doctor` printed it. Its `Debug` is worse: it carries the whole file. The variant now
+  carries the path, line, column and the parser's own message, and a test asserts a
+  planted key appears in neither `Display` nor `Debug`.
+- **[ci]** `posture-lint`'s npm mapping check went red **with an empty log**. Its
+  grep read the platform table out of `npm/doiget/bin/doiget.js` after that table had
+  moved to `platform.js`; under `set -euo pipefail` a grep matching nothing exits 1
+  and kills the step before it can print anything, so a check that had correctly
+  detected drift looked like infrastructure flake — and the packaging tests queued
+  behind it never ran at all. Every grep in the step now goes through a helper that
+  turns "matched nothing" into a named error (#511).
+- **[ci]** `dco` could never pass on a `next → main` promotion. A promotion's commit
+  range is the whole release, and for the release that introduces ADR-0051 that range
+  holds commits predating the CLA which can never acquire a trailer — `next` is
+  protected and its history cannot be rewritten. A job that is red whatever the author
+  does is not a gate. Promotions are now exempt on the same structural grounds as
+  merge commits and bots: they re-present commits this job already gated when they
+  landed on `next` (ADR-0051).
+- **[cli]** `fetch` and `graph` were the last two commands carrying
+  `parse_ref_or_exit`'s body hand-inlined rather than calling it, which is how they
+  came to disagree about the exit code in the first place (#492).
+- **[core]** The whole rule set for `resolve_tdm_grant` — `docs/CAPABILITY.md` §2's
+  behaviour, the `AgreedButNoKey` / `KeyButNotAgreed` cases, the `credentials.toml`
+  precedence note — was rendering as the documentation of a one-line newtype. The
+  round-1 commit put `AgreeVar`'s doc block directly after the function's with no
+  separator, and rustdoc attaches a `///` run to the next item only, so the function
+  it describes had none at all. `AgreeVar`/`KeyVar` are `pub(crate)` with private
+  fields now: their only consumer is a private `fn`, and the public tuple field left
+  `AgreeVar("DOIGET_KEY_ELSEVIER")` — the same transposition expressed as content
+  rather than position — compiling cleanly (#509).
+- **[ci]** The `npm-publish` checksum loop and `stage-npm.sh`'s missing-asset guard
+  both gained tests that fail when they are broken. The guard's existing test checked
+  only the exit code, which stays non-zero when the guard is deleted because the `cp`
+  behind it fails too — so deleting it outright still passed, while leaving a
+  half-staged package on disk. The checksum loop, the fix for the defect this cluster
+  started from, had no test at all: it is now extracted from the workflow and run
+  against synthetic release directories, including the orphaned-checksum case that
+  caused the original silent failure (#511).
+- **[cli/mcp]** The config-directory resolver existed as two hand-maintained copies whose
+  own comment warned that divergence "would silently desync the user-extension allowlist
+  surfaces". They had already diverged: the CLI accepted `XDG_CONFIG_HOME=""` and
+  resolved a **relative** `doiget/config.toml` under the cwd. Consolidated into
+  `doiget_core::user_extension::config_dir`, which keeps blank-is-unset (#504).
+
 ## [0.8.10] - 2026-08-26
 
 ### Added

@@ -54,9 +54,73 @@ pub struct ResolvedConfig {
     /// Contact email for the polite User-Agent header (and Unpaywall fallback).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contact_email: Option<String>,
-    /// Unpaywall-specific contact email; falls back to `contact_email` when unset.
+    /// Which rung produced `contact_email` (#504) — same reason
+    /// `store_root_source` exists (#441): a setting that did nothing must
+    /// not look like a setting that worked.
+    pub contact_email_source: String,
+    /// Unpaywall-specific contact email. Inherits `contact_email` when no
+    /// Unpaywall-specific rung is set, matching
+    /// `doiget_core::orchestrator::resolve_contact_emails` — the reporting
+    /// side used to omit that fallback and print `unset` for the commonest
+    /// configuration of all (only `DOIGET_CONTACT_EMAIL` set), while the
+    /// fetch it describes was sending the contact address.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unpaywall_email: Option<String>,
+    /// Which rung produced `unpaywall_email` (#504).
+    pub unpaywall_email_source: String,
+}
+
+/// Which rung of the #504 ladder produced an address.
+///
+/// Reported for the reason [`super::StoreRootSource`] is: `config init`
+/// wrote `[network] unpaywall_email`, the template called it STRONGLY
+/// RECOMMENDED, `doctor` never mentioned it, and nothing read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EmailSource {
+    /// The env var for this field.
+    Env(&'static str),
+    /// `[network] <field>` in the user's `config.toml`.
+    ConfigFile(&'static str),
+    /// No Unpaywall-specific rung is set, so it inherits `contact_email`.
+    /// Only ever produced for `unpaywall_email`.
+    InheritedFromContact,
+    /// Nothing set it.
+    Unset,
+}
+
+impl EmailSource {
+    /// Short label for `config show` / `doctor`.
+    fn label(self) -> String {
+        match self {
+            Self::Env(v) => v.to_string(),
+            Self::ConfigFile(k) => format!("[network] {k} in config.toml"),
+            Self::InheritedFromContact => "inherited from contact_email".to_string(),
+            Self::Unset => "unset".to_string(),
+        }
+    }
+}
+
+/// Resolve one address across env → `config.toml` → nothing.
+///
+/// Mirrors `doiget_core::orchestrator::configured_contact_email`. Two
+/// separate readers is the hazard #441 named, so the shared half — which
+/// file, and how it parses — lives in `doiget_core::user_extension`, and
+/// only the rung order is restated here. Both ends are pinned:
+/// `contact_email_comes_from_config_toml_when_the_env_is_unset` below,
+/// and `resolve_contact_email_reads_the_config_file_rung` in
+/// `doiget-core`.
+fn resolve_email(
+    env_var: &'static str,
+    key: &'static str,
+    from_file: Option<String>,
+) -> (Option<String>, EmailSource) {
+    if let Some(v) = std::env::var(env_var).ok().filter(|s| !s.trim().is_empty()) {
+        return (Some(v), EmailSource::Env(env_var));
+    }
+    match from_file {
+        Some(v) => (Some(v), EmailSource::ConfigFile(key)),
+        None => (None, EmailSource::Unset),
+    }
 }
 
 impl ResolvedConfig {
@@ -113,6 +177,32 @@ impl ResolvedConfig {
         let config_dir = cfg.join("doiget");
         let config_path = config_dir.join("config.toml");
 
+        // #504: the two addresses have a `config.toml` rung, like
+        // `store_root` since #441. Read once — a parse failure loses every
+        // file rung at once, and `doctor`'s user-extension check reports it
+        // separately, so this stays quiet and reports `unset`.
+        let file = doiget_core::user_extension::load(&config_path).unwrap_or_default();
+        let (contact_email, contact_email_source) =
+            resolve_email("DOIGET_CONTACT_EMAIL", "contact_email", file.contact_email);
+        let (unpaywall_email, unpaywall_email_source) = match resolve_email(
+            "DOIGET_UNPAYWALL_EMAIL",
+            "unpaywall_email",
+            file.unpaywall_email,
+        ) {
+            // No Unpaywall-specific rung: the fetch path falls back to the
+            // resolved contact address, so the report has to say so rather
+            // than `unset`.
+            (None, _) => (
+                contact_email.clone(),
+                if contact_email.is_some() {
+                    EmailSource::InheritedFromContact
+                } else {
+                    EmailSource::Unset
+                },
+            ),
+            found => found,
+        };
+
         Ok(Self {
             store_root,
             store_root_source: store_root_source.label().to_string(),
@@ -120,8 +210,10 @@ impl ResolvedConfig {
             log_path,
             config_dir,
             config_path,
-            contact_email: std::env::var("DOIGET_CONTACT_EMAIL").ok(),
-            unpaywall_email: std::env::var("DOIGET_UNPAYWALL_EMAIL").ok(),
+            contact_email,
+            contact_email_source: contact_email_source.label(),
+            unpaywall_email,
+            unpaywall_email_source: unpaywall_email_source.label(),
         })
     }
 }
@@ -261,13 +353,30 @@ pub async fn run(
                 &mut all_ok,
             );
             check(
-                "contact_email set",
+                &format!("contact_email set (from: {})", cfg.contact_email_source),
                 cfg.contact_email.is_some(),
                 Some(
-                    "set DOIGET_CONTACT_EMAIL to your email address\n               \
+                    "set DOIGET_CONTACT_EMAIL, or [network] contact_email in config.toml\n               \
                      e.g. export DOIGET_CONTACT_EMAIL=you@institution.edu\n               \
-                     (required for the polite User-Agent header and Unpaywall API)",
+                     (polite User-Agent header + Unpaywall API; without it requests go\n               \
+                     out as doiget@localhost from the non-polite pool, where a throttled\n               \
+                     answer is indistinguishable from `no OA copy` — #504)",
                 ),
+                &mut all_ok,
+            );
+            // `config show` reports which rung answered for Unpaywall;
+            // doctor did not mention the address at all, so the surface
+            // meant to be the trustworthy one was silent about a request
+            // doiget actually makes. Never a failure on its own — it
+            // inherits `contact_email`, whose line above carries the remedy.
+            check(
+                &format!(
+                    "unpaywall_email: {} (from: {})",
+                    cfg.unpaywall_email.as_deref().unwrap_or("unset"),
+                    cfg.unpaywall_email_source
+                ),
+                true,
+                None,
                 &mut all_ok,
             );
             // ADR-0028 D2: surface user-extension allowlist health. A
@@ -326,6 +435,64 @@ pub async fn run(
                         "fix {} — see docs/CONFIG.md §3 for the \
                          [[network.additional_hosts]] schema",
                         cfg.config_path
+                    )),
+                    &mut all_ok,
+                ),
+            }
+            // #509 gave `credentials.toml` a reader; this gives it the same
+            // doctor visibility its sibling above already had. Without it
+            // the file's failure modes reach only `tracing::warn!`, which
+            // `EnvFilter::from_default_env()` suppresses at the default
+            // level — so a malformed or world-readable credentials file
+            // produced no warning, no doctor line, and only the downstream
+            // "source unavailable" the whole feature exists to prevent.
+            //
+            // A missing file is normal and reports `[ ok ]` with a count of
+            // zero: TDM is opt-in, and most installs have no such file.
+            // Keys are counted, never printed.
+            let cred_path = cfg.config_dir.join("credentials.toml");
+            match doiget_core::credentials::load(&cred_path) {
+                Ok(creds) => {
+                    check(
+                        &format!(
+                            "credentials.toml keys loaded: {} ({})",
+                            creds.len(),
+                            if creds.is_empty() {
+                                "none — TDM sources need DOIGET_KEY_* or this file"
+                            } else {
+                                "publisher names only; keys are never printed"
+                            }
+                        ),
+                        true,
+                        None,
+                        &mut all_ok,
+                    );
+                    // A file that parses can still be wrong in ways that
+                    // cost the user a key: mode 0644 on a file holding
+                    // publisher credentials, an `api_key = ""` they believe
+                    // is set, an `agreed` this tool does not read. Each was
+                    // a `tracing::warn!` and nothing else, which the
+                    // default `EnvFilter` throws away — so the `0600` check
+                    // `docs/CONFIG.md` §6 promises reached nobody. Each is
+                    // a failing line here, because each is a thing the user
+                    // has to act on.
+                    for advisory in creds.advisories() {
+                        check(
+                            &format!("credentials.toml: {advisory}"),
+                            false,
+                            None,
+                            &mut all_ok,
+                        );
+                    }
+                }
+                Err(e) => check(
+                    &format!("credentials.toml invalid: {e}"),
+                    false,
+                    Some(&format!(
+                        "fix {cred_path} — see docs/CONFIG.md §6 for the \
+                         [tdm.<publisher>] schema. Only `api_key` is read; \
+                         the agreement is DOIGET_AGREE_TDM_<PUBLISHER>=1 in \
+                         the environment (ADR-0050)"
                     )),
                     &mut all_ok,
                 ),
@@ -417,10 +584,19 @@ pub(crate) fn config_template() -> &'static str {
 [network]
 # Contact address for the polite pool. STRONGLY RECOMMENDED.
 #
-# Without it doiget still queries Unpaywall, but as `doiget@localhost`, from
-# the non-polite pool — where you may be throttled or refused. Since the
-# automatic arXiv-preprint fallback fires on what Unpaywall reports, a
-# throttled response quietly costs you that fallback too.
+# Without it doiget still queries Unpaywall and Crossref, but as
+# `doiget@localhost`, from the non-polite pool — where you may be throttled
+# or refused. Since the automatic arXiv-preprint fallback fires on what
+# Unpaywall reports, a throttled response quietly costs you that fallback
+# too, and the run still exits 0 saying `no OA PDF available`.
+#
+# This is also what `doiget config doctor` checks. Overridden by
+# DOIGET_CONTACT_EMAIL, one rung above.
+# contact_email = "you@institution.edu"
+
+# Only if Unpaywall should see a DIFFERENT address from contact_email above
+# — most people should leave this alone. Overridden by
+# DOIGET_UNPAYWALL_EMAIL.
 # unpaywall_email = "you@institution.edu"
 
 # Allow the curated academic-repository suffixes, i.e. where institutions
@@ -605,7 +781,9 @@ fn contact_report_lines(contact_email: Option<&str>) -> Vec<String> {
             "  contact         polite User-Agent as {e} (all outbound requests)"
         )],
         None => vec![
-            "  contact         no DOIGET_CONTACT_EMAIL — every outbound request, metadata"
+            "  contact         unset — set DOIGET_CONTACT_EMAIL or [network] contact_email"
+                .to_string(),
+            "                  in config.toml. Until then every outbound request, metadata"
                 .to_string(),
             "                  AND publisher content, goes out on the non-polite pool and"
                 .to_string(),
@@ -777,6 +955,15 @@ mod tests {
         .collect()
     }
 
+    /// Point every config-dir rung at `dir`, so `config_dir_utf8()`
+    /// resolves there on any host. Returns guards that restore prior values.
+    fn scoped_config_home(dir: &str) -> Vec<EnvGuard> {
+        ["XDG_CONFIG_HOME", "APPDATA", "HOME", "USERPROFILE"]
+            .iter()
+            .map(|v| EnvGuard::set(v, dir))
+            .collect()
+    }
+
     #[test]
     #[serial_test::serial]
     fn from_env_uses_cwd_default_when_unset() {
@@ -796,6 +983,104 @@ mod tests {
         );
         assert_eq!(cfg.contact_email, None);
         assert_eq!(cfg.unpaywall_email, None);
+        assert_eq!(cfg.contact_email_source, "unset");
+        assert_eq!(cfg.unpaywall_email_source, "unset");
+    }
+
+    /// #504, and the exact shape #441 needed: a `config.toml` carrying only
+    /// `[network] contact_email` must produce a non-default contact.
+    ///
+    /// The old tests asserted the env-derived values and the template's key
+    /// list, and **both passed with the rung missing** — so on a machine
+    /// configured from the template every fetch went out as
+    /// `doiget@localhost` while `doctor` reported the store root correctly
+    /// from the very same file.
+    #[test]
+    #[serial_test::serial]
+    fn contact_email_comes_from_config_toml_when_the_env_is_unset() {
+        let _g = unset_all_doiget_config_env();
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8PathBuf::from_path_buf(td.path().to_path_buf())
+            .expect("temp path is UTF-8");
+        std::fs::create_dir_all(dir.join("doiget").as_std_path()).expect("mkdir");
+        std::fs::write(
+            dir.join("doiget").join("config.toml").as_std_path(),
+            "[network]\ncontact_email = \"file@institution.edu\"\nunpaywall_email = \"up@institution.edu\"\n",
+        )
+        .expect("write config");
+        let _scoped = scoped_config_home(dir.as_str());
+
+        let cfg = ResolvedConfig::from_env().expect("config resolves");
+        assert_eq!(cfg.contact_email.as_deref(), Some("file@institution.edu"));
+        assert_eq!(cfg.unpaywall_email.as_deref(), Some("up@institution.edu"));
+        assert_eq!(
+            cfg.contact_email_source, "[network] contact_email in config.toml",
+            "doctor must name the rung that answered, or an inert setting looks like a live one"
+        );
+    }
+
+    /// The commonest configuration of all: only `DOIGET_CONTACT_EMAIL` is
+    /// set. The fetch path sends that address to Unpaywall
+    /// (`resolve_contact_emails` falls back to the resolved contact), so
+    /// `doctor` and `show` must say so. They used to print `unset`, which
+    /// described a request doiget does not make.
+    #[test]
+    #[serial_test::serial]
+    fn an_unset_unpaywall_address_reports_the_contact_it_actually_inherits() {
+        let _g = unset_all_doiget_config_env();
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8PathBuf::from_path_buf(td.path().to_path_buf())
+            .expect("temp path is UTF-8");
+        let _scoped = scoped_config_home(dir.as_str());
+        let _c = EnvGuard::set("DOIGET_CONTACT_EMAIL", "only@institution.edu");
+
+        let cfg = ResolvedConfig::from_env().expect("config resolves");
+        assert_eq!(
+            cfg.unpaywall_email.as_deref(),
+            Some("only@institution.edu"),
+            "the report must match what the fetch path sends"
+        );
+        assert_eq!(cfg.unpaywall_email_source, "inherited from contact_email");
+    }
+
+    /// With nothing set at all there is nothing to inherit, so `unset` is
+    /// still the honest answer.
+    #[test]
+    #[serial_test::serial]
+    fn with_no_address_anywhere_unpaywall_still_reports_unset() {
+        let _g = unset_all_doiget_config_env();
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8PathBuf::from_path_buf(td.path().to_path_buf())
+            .expect("temp path is UTF-8");
+        let _scoped = scoped_config_home(dir.as_str());
+
+        let cfg = ResolvedConfig::from_env().expect("config resolves");
+        assert_eq!(cfg.unpaywall_email, None);
+        assert_eq!(cfg.unpaywall_email_source, "unset");
+    }
+
+    /// The env rung stays above the file rung, per field.
+    #[test]
+    #[serial_test::serial]
+    fn the_env_var_outranks_the_config_file_for_each_address() {
+        let _g = unset_all_doiget_config_env();
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8PathBuf::from_path_buf(td.path().to_path_buf())
+            .expect("temp path is UTF-8");
+        std::fs::create_dir_all(dir.join("doiget").as_std_path()).expect("mkdir");
+        std::fs::write(
+            dir.join("doiget").join("config.toml").as_std_path(),
+            "[network]\ncontact_email = \"file@institution.edu\"\n",
+        )
+        .expect("write config");
+        let _scoped = scoped_config_home(dir.as_str());
+        std::env::set_var("DOIGET_CONTACT_EMAIL", "env@institution.edu");
+
+        let cfg = ResolvedConfig::from_env().expect("config resolves");
+        std::env::remove_var("DOIGET_CONTACT_EMAIL");
+
+        assert_eq!(cfg.contact_email.as_deref(), Some("env@institution.edu"));
+        assert_eq!(cfg.contact_email_source, "DOIGET_CONTACT_EMAIL");
     }
 
     /// Issue #405: `config show` / `config path` / `doctor` MUST name the
@@ -889,6 +1174,7 @@ mod tests {
         for key in [
             "[store]",
             "root =",
+            "contact_email",
             "unpaywall_email",
             "trust_academic_repos",
             "trust_oa_registries",
@@ -1116,6 +1402,90 @@ mod tests {
         assert_eq!(cli_exit.0, 2);
     }
 
+    /// `credentials.toml`'s reader is unit-tested; its WIRING into doctor
+    /// was not. Nothing failed if `cred_path` were built from the wrong
+    /// directory, or if the `Err` arm stopped setting `all_ok = false` —
+    /// which is the whole reason the check was added.
+    ///
+    /// Linux only, for the same reason as
+    /// `doctor_fails_with_malformed_user_extension_config`: `XDG_CONFIG_HOME`
+    /// is the only hermetic way to redirect the config dir.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn doctor_fails_when_credentials_toml_is_malformed() {
+        let _g = unset_all_doiget_config_env();
+        let _email = EnvGuard::set("DOIGET_CONTACT_EMAIL", "alice@example.org");
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg_root = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+        let doiget_dir = cfg_root.join("doiget");
+        std::fs::create_dir_all(doiget_dir.as_std_path()).expect("mk dir");
+        // An unterminated string: the commonest way a pasted key breaks
+        // this file, and the case whose parser message must not be echoed.
+        std::fs::write(
+            doiget_dir.join("credentials.toml").as_std_path(),
+            "[tdm.elsevier]\napi_key = \"sk-unterminated\n",
+        )
+        .expect("write credentials.toml");
+        let _x = EnvGuard::set("XDG_CONFIG_HOME", cfg_root.as_str());
+
+        let err = run(
+            "doctor".into(),
+            crate::commands::output::OutputMode::Human,
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect_err("doctor must fail when credentials.toml is malformed");
+        assert_eq!(
+            err.downcast_ref::<CliExit>()
+                .expect("failing doctor must carry a CliExit")
+                .0,
+            2
+        );
+    }
+
+    /// A file that parses but carries an advisory must fail doctor too.
+    /// Otherwise `[ ok ] credentials.toml keys loaded: 0` is the entire
+    /// report for a user who typed a key and did not get one.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn doctor_fails_when_credentials_toml_carries_an_advisory() {
+        let _g = unset_all_doiget_config_env();
+        let _email = EnvGuard::set("DOIGET_CONTACT_EMAIL", "alice@example.org");
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg_root = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+        let doiget_dir = cfg_root.join("doiget");
+        std::fs::create_dir_all(doiget_dir.as_std_path()).expect("mk dir");
+        // Well-formed TOML; the key is present and blank.
+        std::fs::write(
+            doiget_dir.join("credentials.toml").as_std_path(),
+            "[tdm.aps]\napi_key = \"\"\n",
+        )
+        .expect("write credentials.toml");
+        let _x = EnvGuard::set("XDG_CONFIG_HOME", cfg_root.as_str());
+
+        let err = run(
+            "doctor".into(),
+            crate::commands::output::OutputMode::Human,
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect_err("a blank api_key must be reported, not passed over");
+        assert_eq!(
+            err.downcast_ref::<CliExit>()
+                .expect("failing doctor must carry a CliExit")
+                .0,
+            2
+        );
+    }
+
     /// Issue #322: `check` must emit a `tip:` line to stderr when the
     /// check fails and a tip is provided. Passing `ok=true` must NOT
     /// emit the tip line even when one is supplied.
@@ -1250,9 +1620,17 @@ mod tests {
     /// #443: the wording must not pin the cost of an unset contact address
     /// on the metadata leg — the 429 that prompted this came from the
     /// publisher, on the content leg.
+    ///
+    /// #504 adds the second half: the advisory must name **both** rungs, or
+    /// it sends a user who configured from `config init` to the one place
+    /// they were not looking.
     #[test]
     fn the_contact_advisory_names_every_outbound_request_not_just_unpaywall() {
         let joined = contact_report_lines(None).join("\n");
+        assert!(
+            joined.contains("DOIGET_CONTACT_EMAIL") && joined.contains("[network] contact_email"),
+            "both rungs must be named, not only the env var:\n{joined}"
+        );
         assert!(
             joined.contains("every outbound request") && joined.contains("publisher content"),
             "the advisory must cover the content leg too:\n{joined}"

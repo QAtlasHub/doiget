@@ -46,7 +46,7 @@ use anyhow::{anyhow, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 
 use super::output::print_err;
-#[cfg(feature = "citation")]
+#[cfg(feature = "metadata")]
 use doiget_core::http::tier_2_allowlist;
 use doiget_core::http::{
     discovery_allowlist, fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist,
@@ -138,24 +138,21 @@ fn home_dir_utf8() -> Result<Utf8PathBuf> {
     Err(anyhow!("neither HOME nor USERPROFILE is set"))
 }
 
-/// Best-effort config-dir resolution. Honors `XDG_CONFIG_HOME` first
-/// (POSIX), then `APPDATA` (Windows), then falls back to `$HOME/.config`.
+/// Config-dir resolution, delegated to `doiget_core::user_extension`.
 ///
-/// Crate-visible so sibling modules (`commands::capabilities`,
-/// `commands::config`) can resolve the same `<config_dir>/doiget/`
-/// path the production HTTP-client builder reads from. Keep the
-/// signature stable: any divergence between this and the MCP-side
-/// copy (`crates/doiget-mcp/src/lib.rs::config_dir_utf8`) would
-/// silently desync the user-extension allowlist surfaces.
+/// This used to be one of three copies. The previous comment here asked
+/// the reader to "keep the signature stable" because divergence from the
+/// MCP-side copy "would silently desync the user-extension allowlist
+/// surfaces" — and they had already diverged, this one accepting
+/// `XDG_CONFIG_HOME=""` and resolving a *relative* config path under the
+/// cwd where the MCP copy treated blank as unset. The shared resolver
+/// keeps blank-is-unset, so a blank variable no longer silently selects a
+/// different file.
+///
+/// Kept as a crate-visible wrapper so the ~20 call sites in
+/// `commands::capabilities` / `commands::config` are unchanged.
 pub(crate) fn config_dir_utf8() -> Result<Utf8PathBuf> {
-    if let Some(s) = read_env_utf8("XDG_CONFIG_HOME")? {
-        return Ok(Utf8PathBuf::from(s));
-    }
-    if let Some(s) = read_env_utf8("APPDATA")? {
-        return Ok(Utf8PathBuf::from(s));
-    }
-    let home = home_dir_utf8()?;
-    Ok(home.join(".config"))
+    Ok(doiget_core::user_extension::config_dir()?)
 }
 
 /// Best-effort resolver-cache root (`docs/CACHE.md`). Honors
@@ -258,13 +255,18 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
         // `"ar5iv"` source key unconditionally so `paper_text::paper_text`
         // can reach ar5iv in `oa-only` builds.
         allowlists.extend(fulltext_allowlist());
-        // Slice 16: when the `citation` feature is compiled in, the
-        // graph subcommand walks OpenAlex Work IDs via
-        // `ctx.http.fetch_bytes("openalex", ...)`. The Tier 2
-        // allowlist registers the `api.openalex.org` host under
-        // that source key. CapabilityProfile.metadata.openalex is
-        // the runtime gate; the allowlist is the transport gate.
-        #[cfg(feature = "citation")]
+        // The Tier-2 transport gate. The sources it serves — OpenAlex,
+        // Semantic Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE and
+        // Europe PMC — are compiled under `metadata`, and
+        // `resolve_optional_chain` is `#[cfg(feature = "metadata")]`,
+        // so this extend MUST be gated on `metadata` too. It was gated
+        // on `citation` for six releases: in a `--features metadata`
+        // build (which CI's clippy matrix builds explicitly) the chain
+        // ran, `can_serve` passed, and the request died at
+        // `UnknownSource` because no allowlist entry existed for the
+        // key (#516). CapabilityProfile.metadata.* is the runtime gate;
+        // this is the transport gate, and the two must agree.
+        #[cfg(feature = "metadata")]
         allowlists.extend(tier_2_allowlist());
         // #454: the Tier-3 transport gate. #444 made the orchestrator
         // reach these sources; without this line the fetch it then issues
@@ -377,10 +379,11 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
 
 /// Resolved configuration derived from the environment.
 ///
-/// Slice 2: `contact_email` / `unpaywall_email` are now read by the
-/// `doiget-core::orchestrator::fetch_paper` orchestrator directly from
-/// the env (`contact_email_from_env` / `unpaywall_email_from_env` in
-/// that module), so the CLI no longer threads them through. The fields
+/// Slice 2: `contact_email` / `unpaywall_email` are read by the
+/// `doiget-core::orchestrator::fetch_paper` orchestrator itself
+/// (`resolve_contact_email` / `resolve_unpaywall_email` in that module —
+/// env var, then `[network]` in `config.toml`, then the default since
+/// #504), so the CLI no longer threads them through. The fields
 /// stay here so a future slice that adds CLI-flag overrides has a
 /// natural attachment point — the `#[allow(dead_code)]` is the minimal
 /// intervention until that slice lands.
@@ -396,10 +399,14 @@ impl OrchestratorConfig {
     fn from_env() -> Result<Self> {
         let store_root = super::resolve_store_root()?;
         let log_path = resolve_log_path()?;
-        let contact_email =
-            std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".into());
-        let unpaywall_email =
-            std::env::var("DOIGET_UNPAYWALL_EMAIL").unwrap_or_else(|_| contact_email.clone());
+        // Through the core resolver even though this struct is not read
+        // yet: a dormant third copy of the ladder is still a copy, and it
+        // is the one nobody would think to update.
+        let contact_email = doiget_core::orchestrator::contact_email_or_placeholder();
+        let unpaywall_email = std::env::var("DOIGET_UNPAYWALL_EMAIL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| contact_email.clone());
         Ok(Self {
             store_root,
             log_path,
@@ -720,17 +727,11 @@ pub async fn run_with_options(
     // mode.
     // Step 1: parse + safekey. Issue #119: render the cargo-style
     // `error[INVALID_REF]:` line + carry the exit code, rather than
-    // letting the granular `RefParseError` fall out as an opaque
-    // anyhow `{:?}` dump.
-    let ref_ = match Ref::parse(&input) {
-        Ok(r) => r,
-        Err(e) => {
-            super::render_ref_parse_error(&e);
-            return Err(anyhow::Error::new(CliExit(cli_exit_code(
-                ErrorCode::InvalidRef,
-            ))));
-        }
-    };
+    // letting the granular `RefParseError` fall out as an opaque anyhow
+    // `{:?}` dump. Through the shared helper (#492) so a change to the
+    // wording or the code reaches every command at once — this and `graph`
+    // were the last two hand-inlined copies of its body.
+    let ref_ = super::parse_ref_or_exit(&input)?;
 
     // Dry-run branch: build the plan and emit it. NO harness, NO network,
     // NO store write, NO provenance row. Posture-lint ADR-0022 §5 will
@@ -1049,6 +1050,13 @@ pub(crate) fn cli_exit_code(code: ErrorCode) -> i32 {
         // A name filter that matched several entities is user-fixable by
         // narrowing the query → `docs/ERRORS.md` §4 exit 2 ("misuse").
         ErrorCode::Ambiguous => 2,
+        // An unparsable ref is a bad argument, and §4's exit 1 is "at
+        // least one fetch failed" — which does not describe a run where
+        // nothing was fetched. `graph` had followed the table with a
+        // hard-coded 2 while `fetch` and the eight #477 commands fell to
+        // the `_ => 1` arm below, so the same input produced different
+        // exit codes from the same binary (#492, ADR-0049).
+        ErrorCode::InvalidRef => 2,
         _ => 1,
     }
 }
@@ -1383,6 +1391,62 @@ mod tests {
         }
     }
 
+    /// #516: the Tier-2 half of the same guard, and the reason it is
+    /// needed is that the Tier-3 lesson was not applied one tier up.
+    ///
+    /// `every_tier_2_source_has_a_transport_allowlist_entry` (in
+    /// `http.rs`) asserts that `tier_2_allowlist()` *contains* every
+    /// source key. That stayed true while the extend into the production
+    /// client was gated on `citation` rather than `metadata`, so in a
+    /// `--features metadata` build — which CI's clippy matrix builds
+    /// explicitly — `resolve_optional_chain` ran, `can_serve` passed,
+    /// and the request died at `UnknownSource`.
+    ///
+    /// This asserts the object the fetch goes through, and it enumerates
+    /// from `tier_2_allowlist()` rather than a literal so a new source
+    /// cannot be added to the list and missed here.
+    #[test]
+    #[serial]
+    #[cfg(feature = "metadata")]
+    fn the_production_client_registers_every_tier_2_source_key() {
+        // Every base override must be clear or `build_http_client` takes
+        // the test-mode branch, which registers whatever it is given and
+        // would prove nothing.
+        let _g: Vec<EnvGuard> = [
+            "DOIGET_ARXIV_BASE",
+            "DOIGET_CROSSREF_BASE",
+            "DOIGET_UNPAYWALL_BASE",
+            "DOIGET_OA_PUBLISHER_BASE",
+            "DOIGET_OPENALEX_BASE",
+            "DOIGET_AR5IV_BASE",
+        ]
+        .iter()
+        .map(|k| {
+            let g = EnvGuard::save(k);
+            std::env::remove_var(k);
+            g
+        })
+        .collect();
+
+        let client = build_http_client(None).expect("production client builds");
+
+        // Fully qualified on purpose: the `use` at the top of this file is
+        // itself `#[cfg(feature = "metadata")]`, so importing it here would
+        // turn a regression into a compile error in this file rather than the
+        // assertion failure that names the actual defect.
+        let keys: Vec<String> = doiget_core::http::tier_2_allowlist()
+            .iter()
+            .map(|a| a.source.clone())
+            .collect();
+        assert!(!keys.is_empty(), "the guard must have checked something");
+        for key in keys {
+            assert!(
+                client.source_allowlist(&key).is_some(),
+                "the production client has no allowlist for `{key}`; \n                 `resolve_optional_chain` reaches this source in a \n                 `metadata` build and the fetch would die at \n                 UnknownSource (#516)"
+            );
+        }
+    }
+
     #[test]
     fn new_session_id_is_26_chars() {
         // ULID textual form is fixed-width 26 chars (Crockford base32).
@@ -1582,9 +1646,10 @@ host = "*.uj.edu.pl"
     /// ADR-0031 D2: discovery search (`doiget search`) ships in the default
     /// `oa-only` binary, so `api.openalex.org` MUST be on the production
     /// allowlist under the `"openalex"` source key WITHOUT `--features
-    /// citation`. The Tier-2 `tier_2_allowlist()` extend is
-    /// `#[cfg(feature = "citation")]`; this test proves
-    /// `discovery_allowlist()` covers that gap in the shipped build.
+    /// metadata`. The Tier-2 `tier_2_allowlist()` extend is
+    /// `#[cfg(feature = "metadata")]` (#516 moved it off `citation`);
+    /// this test proves `discovery_allowlist()` covers that gap in the
+    /// shipped `oa-only` build, where neither feature is compiled.
     #[test]
     #[serial]
     fn build_http_client_registers_openalex_for_discovery() {
@@ -1661,6 +1726,16 @@ host = "*.uj.edu.pl"
         // ADR-0031 D5: a name-filter ambiguity is user-fixable → exit 2,
         // distinct from the generic exit 1.
         assert_eq!(cli_exit_code(ErrorCode::Ambiguous), 2);
+    }
+
+    #[test]
+    fn invalid_ref_maps_to_exit_code_2() {
+        // ADR-0049: an unparsable ref is misuse. `docs/ERRORS.md` §4
+        // reserves 1 for "at least one fetch was attempted and failed",
+        // and nothing is fetched here. `Ambiguous` — a value that fails
+        // to select one entity — was already 2; `InvalidRef` is a value
+        // that fails to parse, and sat at the catch-all 1 next to it.
+        assert_eq!(cli_exit_code(ErrorCode::InvalidRef), 2);
     }
 
     /// Minimal `DenialContext` carrying only `reason`; every other field

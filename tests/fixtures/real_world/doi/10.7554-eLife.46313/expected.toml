@@ -1,4 +1,15 @@
 safekey = "doi_10.7554_eLife.46313"
 source  = "crossref"
 title   = "A representative-shape illustration of an eLife article"
-oa_url  = "https://elifesciences.org/articles/46313.pdf"
+
+# `oa_url` is deliberately ABSENT (#517).
+#
+# The captured Crossref response's `link[]` entries are
+# `intended-application: similarity-checking`, which scopes those URLs to a specific
+# licensed programme (Similarity Check, syndication, or the publisher's TDM
+# programme). Surfacing one as `oa_url` labelled a programme-scoped link as
+# an Open Access one, to a caller the field's own docs invite to act on it.
+#
+# Measured 2026-08-26: 12 `link[]` entries across six live DOIs and eight
+# captured fixtures, and NOT ONE carried `unspecified`. That is what
+# settled #517 — see ADR-0052.

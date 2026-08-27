@@ -38,8 +38,24 @@ pub async fn run(
     mode: OutputMode,
     quiet_was_explicit: bool,
 ) -> Result<()> {
-    let seed_doi = doiget_core::Doi::parse(&doi_str)
-        .map_err(|e| anyhow::anyhow!("invalid seed DOI {doi_str:?}: {e}"))?;
+    // #492 / ADR-0049: previously a bare `anyhow!`, which exited 1 with no
+    // `error[INVALID_REF]:` line. Routed through the shared parser so the
+    // message and the exit code match every other ref-taking command.
+    let seed_doi = match super::parse_ref_or_exit(&doi_str)? {
+        doiget_core::Ref::Doi(d) => d,
+        doiget_core::Ref::Arxiv(_) => {
+            // Same shape as `graph`: OpenAlex keys the citation graph by
+            // DOI, so an arXiv id is argument misuse rather than a parse
+            // failure — `docs/ERRORS.md` §4 exit 2.
+            super::output::print_err(format_args!(
+                "error: doiget frontier requires a DOI seed; arXiv ids are not in \
+                 OpenAlex's referenced_works keyspace"
+            ));
+            return Err(anyhow::Error::new(CliExit(cli_exit_code(
+                doiget_core::ErrorCode::InvalidRef,
+            ))));
+        }
+    };
 
     let base = {
         let raw = std::env::var("DOIGET_OPENALEX_BASE")
@@ -47,7 +63,10 @@ pub async fn run(
         url::Url::parse(&raw)
             .with_context(|| format!("DOIGET_OPENALEX_BASE is not a URL: {raw}"))?
     };
-    let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
+    // `unwrap_or_default`, not the placeholder: an unset address means
+    // `mailto` is omitted rather than sent as `doiget@localhost`. Routed
+    // through the core resolver so config.toml's rung counts (#504).
+    let contact_email = doiget_core::orchestrator::configured_contact_email().unwrap_or_default();
 
     let harness = FetchHarness::from_env().context("building fetch harness")?;
     harness

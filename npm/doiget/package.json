@@ -1,0 +1,27 @@
+{
+  "name": "doiget",
+  "version": "0.0.0",
+  "description": "Turn DOIs and arXiv IDs into local PDFs and metadata via official Open-Access APIs. CLI + stdio MCP server. Never bypasses paywalls.",
+  "keywords": ["doi", "arxiv", "open-access", "mcp", "modelcontextprotocol", "bibliography", "crossref", "unpaywall", "research"],
+  "homepage": "https://github.com/QAtlasHub/doiget#readme",
+  "bugs": "https://github.com/QAtlasHub/doiget/issues",
+  "license": "MIT",
+  "author": "Sota Shimozono",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QAtlasHub/doiget.git"
+  },
+  "bin": {
+    "doiget": "bin/doiget.js"
+  },
+  "files": ["bin/", "README.md"],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "doiget-darwin-arm64": "0.0.0",
+    "doiget-darwin-x64": "0.0.0",
+    "doiget-linux-x64": "0.0.0",
+    "doiget-win32-x64": "0.0.0"
+  }
+}

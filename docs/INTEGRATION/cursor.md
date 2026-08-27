@@ -1,39 +1,44 @@
 # Cursor integration
 
-> **Status: PLACEHOLDER (Phase 3).** This file is a landing stub. Concrete
-> configuration lands when `doiget serve` is real. See
-> [`README.md`](./README.md) for the planned-files table and rationale.
+> **Status: UNTESTED against Cursor as of 2026-08-26.** `doiget serve` is a
+> plain stdio MCP server with no host-specific behaviour, and the snippet
+> below is the standard stdio shape — but nobody has run it in Cursor and
+> reported back. If you do, please say so on
+> [#512](https://github.com/QAtlasHub/doiget/issues/512) and this banner
+> comes off.
 
-[Cursor](https://www.cursor.com/) is an AI-first code editor that supports MCP
-servers. Once `doiget serve` ships in Phase 3, this guide will show how to
-register `doiget` as an MCP server in Cursor so that DOI resolution, metadata
-fetch, and the other tools listed in [`../MCP_TOOLS.md`](../MCP_TOOLS.md) are
-callable from Cursor's agent.
-
-## Configuration (Phase 3)
-
-The example below is intentionally empty. Do not copy speculative JSON from
-elsewhere — wait for the verified Phase 3 snippet.
+[Cursor](https://www.cursor.com/) supports MCP servers. Configuration is a
+`mcp.json` file: `.cursor/mcp.json` inside a project, or `~/.cursor/mcp.json`
+for every project.
 
 ```json
-<!-- TODO Phase 3: paste verified Cursor MCP server entry here. -->
+{
+  "mcpServers": {
+    "doiget": {
+      "command": "doiget",
+      "args": ["serve"],
+      "env": {
+        "DOIGET_STORE_ROOT": "/Users/you/papers",
+        "DOIGET_CONTACT_EMAIL": "you@institution.edu"
+      }
+    }
+  }
+}
 ```
 
-```toml
-<!-- TODO Phase 3: env-var block (see ../CONFIG.md for precedence). -->
-```
+Use an absolute `command` path if `doiget` is not on the `PATH` the editor
+inherits.
 
-## What to read in the meantime
+## Environment
 
-- **Tool surface:** [`../MCP_TOOLS.md`](../MCP_TOOLS.md) — the exact tools
-  Phase 3 exposes, including JSON-Schema for inputs and outputs.
-- **Configuration:** [`../CONFIG.md`](../CONFIG.md) — env-var precedence and
-  the `~/.config/doiget/` layout that any host wiring must respect.
-- **Architecture:** [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §4-6 — transport
-  and capability-gate context for MCP integration.
+Identical to every other host — see [`claude-code.md`](./claude-code.md)
+§Environment. `DOIGET_STORE_ROOT` is the one that silently misbehaves if
+omitted (ADR-0036, #369).
 
-## Contributing
+## Checking it worked
 
-If you have a working Cursor integration ahead of Phase 3, open a GitHub
-Discussion with the JSON-RPC trace and host-side config rather than a PR — see
-[`README.md`](./README.md) §Contributing a snippet.
+Have the agent call `doiget_health`. If Cursor's own MCP panel reports the
+server as connected but no tool is callable, `doiget_capability_profile` will
+say what this build is allowed to do.
+
+Tool surface: [`../MCP_TOOLS.md`](../MCP_TOOLS.md).

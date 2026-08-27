@@ -132,7 +132,11 @@ pub fn run(
 /// stored entry. Exactly one of `text` (Some) or `clear = true` must be given.
 pub fn run_annotate(ref_str: String, text: Option<String>, clear: bool) -> Result<()> {
     if !clear && text.is_none() {
-        bail!("provide annotation <text> or --clear");
+        // `docs/ERRORS.md` §4: a missing required argument is misuse, which
+        // is exit 2. A bare `bail!` gave the generic 1 — the same gap #492
+        // closed for an unparsable ref, one argument over.
+        super::output::print_err(format_args!("error: provide annotation <text> or --clear"));
+        return Err(anyhow::Error::new(super::fetch::CliExit(2)));
     }
 
     let ref_ = super::parse_ref_or_exit(&ref_str)?;

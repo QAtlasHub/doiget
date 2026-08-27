@@ -127,9 +127,11 @@ const SAMPLE_ATOM_FEED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   </entry>
 </feed>"#;
 
-/// Synthetic Crossref `message` payload. Carries an OA URL in
-/// `message.link[]` so `extract_crossref_oa_url` returns `Some(...)`.
-const SAMPLE_CROSSREF_RESPONSE: &str = r#"{"status":"ok","message":{"title":["Example Paper"],"link":[{"URL":"https://example.org/oa.pdf"}]}}"#;
+/// Synthetic Crossref `message` payload. Carries a general-purpose
+/// (`intended-application: unspecified`) link in `message.link[]` so
+/// `extract_crossref_publisher_url` returns `Some(...)`. The field is
+/// load-bearing since #517 — an unlabelled entry is refused.
+const SAMPLE_CROSSREF_RESPONSE: &str = r#"{"status":"ok","message":{"title":["Example Paper"],"link":[{"URL":"https://example.org/oa.pdf","content-type":"application/pdf","intended-application":"unspecified"}]}}"#;
 
 // ---------------------------------------------------------------------------
 // 1. invalid ref -> INVALID_REF

@@ -55,18 +55,12 @@ pub async fn run(
     // `_mode` is threaded per ADR-0017 / #144. Graph's JSON output is
     // product output (the requested artifact), not informational; Quiet
     // does NOT suppress it.
-    let ref_ = match Ref::parse(&input) {
-        Ok(r) => r,
-        Err(e) => {
-            // Bad ref string is user misuse -> `docs/ERRORS.md` §4 exit 2
-            // (issue #149). NOTE: `fetch` exits 1 for the same input; §4
-            // says misuse is 2, so they disagree and this is the one
-            // following the table. Not reconciled in #477 -- see
-            // `commands::render_ref_parse_error`.
-            super::render_ref_parse_error(&e);
-            return Err(anyhow::Error::new(CliExit(2)));
-        }
-    };
+    // Bad ref string is user misuse -> `docs/ERRORS.md` §4 exit 2 (issue
+    // #149). Through the shared helper (#492): this used to hard-code the 2
+    // while `fetch` fell to the generic 1, so the same input got two
+    // answers out of one binary and the comment here asserted a consistency
+    // that did not hold. Sharing the helper is what makes it hold.
+    let ref_ = super::parse_ref_or_exit(&input)?;
     let doi = match &ref_ {
         Ref::Doi(d) => d.clone(),
         Ref::Arxiv(_) => {
@@ -98,8 +92,10 @@ pub async fn run(
         ))));
     }
 
-    let contact_email =
-        std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
+    // Through the core resolver, not `std::env::var`: `[network]
+    // contact_email` in config.toml is a documented rung (#504), and a
+    // command that reads only the environment silently ignores it.
+    let contact_email = doiget_core::orchestrator::contact_email_or_placeholder();
     let source = if let Ok(base) = std::env::var("DOIGET_OPENALEX_BASE") {
         if let Ok(url) = url::Url::parse(&base) {
             OpenalexSource::with_base(url, contact_email)

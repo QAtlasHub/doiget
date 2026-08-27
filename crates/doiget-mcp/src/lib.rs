@@ -1340,7 +1340,13 @@ impl Server {
         };
         // Omit `mailto` when no contact email is configured (never a
         // placeholder); the empty string is skipped downstream.
-        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
+        //
+        // Goes through the core ladder so `[network] contact_email` in
+        // `config.toml` counts here too — reading the env var directly meant
+        // #504's fix stopped at `doiget fetch` and never reached the MCP
+        // tools, which is the interface doiget leads with.
+        let contact_email =
+            doiget_core::orchestrator::configured_contact_email().unwrap_or_default();
 
         let ctx = match build_fetch_context() {
             Ok(c) => c,
@@ -1714,7 +1720,8 @@ impl Server {
                 )));
             }
         };
-        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
+        let contact_email =
+            doiget_core::orchestrator::configured_contact_email().unwrap_or_default();
 
         let ctx = match build_fetch_context() {
             Ok(c) => c,
@@ -2010,8 +2017,7 @@ impl Server {
                 }
             };
 
-            let contact_email = std::env::var("DOIGET_CONTACT_EMAIL")
-                .unwrap_or_else(|_| "doiget@localhost".to_string());
+            let contact_email = doiget_core::orchestrator::contact_email_or_placeholder();
             let source = if let Ok(base) = std::env::var("DOIGET_OPENALEX_BASE") {
                 if let Ok(url) = url::Url::parse(&base) {
                     doiget_core::sources::openalex::OpenalexSource::with_base(url, contact_email)
@@ -3746,8 +3752,7 @@ fn build_fetch_context() -> anyhow::Result<FetchContext> {
 ///
 /// Returns `Err(String)` — callers convert it into a structured tool error.
 fn crossref_source_from_env() -> Result<CrossrefSource, String> {
-    let contact_email =
-        std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
+    let contact_email = doiget_core::orchestrator::contact_email_or_placeholder();
     match std::env::var("DOIGET_CROSSREF_BASE").ok() {
         Some(base_str) => {
             let base = url::Url::parse(&base_str)
@@ -3906,20 +3911,10 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
 /// case the caller downgrades to "user extension disabled" rather
 /// than failing the whole request.
 fn config_dir_utf8() -> anyhow::Result<Utf8PathBuf> {
-    if let Ok(s) = std::env::var("XDG_CONFIG_HOME") {
-        if !s.is_empty() {
-            return Ok(Utf8PathBuf::from(s));
-        }
-    }
-    if let Ok(s) = std::env::var("APPDATA") {
-        if !s.is_empty() {
-            return Ok(Utf8PathBuf::from(s));
-        }
-    }
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| anyhow::anyhow!("neither HOME nor USERPROFILE is set"))?;
-    Ok(Utf8PathBuf::from(home).join(".config"))
+    // Delegated to `doiget_core::user_extension::config_dir` (#504): this
+    // was the second of three hand-maintained copies, and the CLI's
+    // already disagreed with it about a blank `XDG_CONFIG_HOME`.
+    Ok(doiget_core::user_extension::config_dir()?)
 }
 
 /// Resolve the provenance log path. Mirrors the CLI's precedence
@@ -4731,6 +4726,45 @@ mod tests {
                 client.source_allowlist(key).is_some(),
                 "the production MCP client has no allowlist for `{key}`; a TDM fetch \
                  would die at UnknownSource (#454)"
+            );
+        }
+    }
+
+    /// #516: the MCP half of the Tier-2 transport gate.
+    ///
+    /// The CLI builder had this extend behind `#[cfg(feature =
+    /// "citation")]` while the sources it serves are gated on
+    /// `metadata`, so a `metadata`-only build reached them and died at
+    /// `UnknownSource`. `build_http_client_for_fetch` registers
+    /// `tier_2_allowlist()` unconditionally and is therefore correct
+    /// today — this pins that, because "correct today in one of two
+    /// hand-maintained twins" is exactly the state #454 was filed from.
+    #[test]
+    #[serial_test::serial]
+    fn the_production_client_registers_every_tier_2_source_key() {
+        // Any base override takes the test-mode branch, which registers
+        // whatever it is handed and would prove nothing.
+        let _guards = [
+            EnvGuard::unset("DOIGET_ARXIV_BASE"),
+            EnvGuard::unset("DOIGET_ARXIV_SRC_BASE"),
+            EnvGuard::unset("DOIGET_CROSSREF_BASE"),
+            EnvGuard::unset("DOIGET_UNPAYWALL_BASE"),
+            EnvGuard::unset("DOIGET_OA_PUBLISHER_BASE"),
+            EnvGuard::unset("DOIGET_OPENALEX_BASE"),
+            EnvGuard::unset("DOIGET_AR5IV_BASE"),
+        ];
+
+        let client = build_http_client_for_fetch().expect("production client builds");
+
+        let keys: Vec<String> = tier_2_allowlist()
+            .iter()
+            .map(|a| a.source.clone())
+            .collect();
+        assert!(!keys.is_empty(), "the guard must have checked something");
+        for key in keys {
+            assert!(
+                client.source_allowlist(&key).is_some(),
+                "the production MCP client has no allowlist for `{key}`; the \n                 optional chain reaches this source and the fetch would \n                 die at UnknownSource (#516)"
             );
         }
     }
