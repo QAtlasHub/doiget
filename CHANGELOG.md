@@ -10,7 +10,31 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Changed
+
+- **[ci]** `version-check` was red on **every** PR to `next`, unconditionally.
+  ADR-0025 D2-G5 wants a non-empty `## [X.Y.Z]` section for exactly the tagged
+  version; D4 says that per-version section is generated and reviewed *at release
+  time*, so between releases the notes live under `## [Unreleased]` — which is
+  where every beta commit in this repository has kept them. The state Amendment 6
+  describes as the normal reading, "green on `next`", was unreachable. An
+  always-red check carries exactly as much information as an always-green one:
+  nobody reads it, and the day it goes red for a real reason nobody notices.
+  On the **beta** lane G5 now accepts a non-empty `## [Unreleased]`; an explicit
+  `## [X.Y.Z-beta.N]` still wins if one was written. On the **stable** lane it is
+  unchanged and strict — that is the lane #164 bit, and a test pins that the
+  relaxation does not leak into it. Emptiness is *not* relaxed, which gives the
+  check the signal it never had: a change landed on `next` and nobody wrote it
+  down (ADR-0025 Amendment 7).
+
 ### Added
+
+- **[ci]** `scripts/release-version-gate.test.sh` — G5's first test. It runs the
+  real gate over six crafted CHANGELOGs inside a throwaway `git worktree`, and it
+  copies the working-tree script in rather than trusting the worktree's `HEAD`
+  copy, because otherwise it would silently pass over an uncommitted change to
+  the very thing under test. Wired into `version-check.yml`, which already
+  installs the toolchain G2 needs.
 
 - **[dist]** `scripts/bootstrap-npm.sh`, and the runbook for it in
   `CONTRIBUTING.md`. The `publish to npm` job authenticates over OIDC and holds no
