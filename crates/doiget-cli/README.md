@@ -8,13 +8,31 @@ same library without coordination.
 
 ## Install
 
+This file is also the README of the **npm** package `doiget-cli`, so both routes
+are here. Either way the command you get is `doiget`.
+
+### npm — no toolchain, no compiler
+
+```sh
+npx -y doiget-cli serve      # stdio MCP server, nothing installed
+npm install -g doiget-cli    # puts `doiget` on PATH
+```
+
+The per-platform binaries ship as `optionalDependencies` carrying the same
+signed release artifacts, with **no postinstall download** — so this works under
+`--ignore-scripts` and through a registry mirror. This route gives you the
+default **Tier 1** build; the feature-gated Tier 2 / Tier 3 sources below need
+`cargo`.
+
+### cargo — if you want the optional sources
+
 ```sh
 cargo install doiget-cli                                    # Tier 1 only (default)
 cargo install doiget-cli --features metadata               # +OpenAlex / Semantic Scholar / DOAJ
 cargo install doiget-cli --features metadata,tdm-springer  # add Springer Nature OA TDM
 ```
 
-The default build compiles **Tier 1 (Open Access)** sources only. Tier 2 metadata
+Needs a C linker. The default build compiles **Tier 1 (Open Access)** sources only. Tier 2 metadata
 enrichment and Tier 3 institutional TDM connectors are individually feature-flagged and
 must be opted in at build time. There is no `tdm-all` umbrella feature by design.
 

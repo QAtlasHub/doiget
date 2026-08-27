@@ -12,6 +12,15 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[docs]** `crates/doiget-cli/README.md` now documents the npm route. That file is
+  copied verbatim into the npm package by `scripts/stage-npm.sh`, so it is what a
+  visitor to npmjs.com/package/doiget-cli reads — and it said only
+  `cargo install doiget-cli`, telling an npm user to install a Rust toolchain
+  instead. Nothing in it was false; it was simply written for the other audience.
+  Both routes are there now, with the point that either way the command is
+  `doiget`, and with the one real difference named: npm gives the default Tier 1
+  build, and the feature-gated Tier 2 / Tier 3 sources need `cargo` (#511).
+
 - **[dist]** **The npm wrapper package is `doiget-cli`, not `doiget`.** npm refuses
   the unscoped `doiget` as too similar to the unrelated `giget` (`403 ... Package
   name too similar to existing package giget`), and that refusal is permanent for
