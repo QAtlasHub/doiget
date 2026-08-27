@@ -12,6 +12,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[dist]** `scripts/bootstrap-npm.sh` is resumable, runs from any working
+  directory, and no longer gives three pieces of authentication advice at once.
+  The first real run met npm's `403 ... Two-factor authentication or granular
+  access token with bypass 2fa enabled is required to publish packages` — so a
+  second factor is needed **per publish**, which makes a run stopping half way
+  through the NORMAL case rather than the exceptional one. The script refused to
+  start whenever any package already existed, which would have turned one
+  mistyped one-time password into "the remaining packages can never be published
+  by this script". It now skips what is done and publishes what is left, accepts
+  `OTP=` for a non-interactive run, and uses an absolute source path rather than
+  `./npm/<pkg>` relative to the caller's cwd (#511).
+
 - **[ci]** `version-check` was red on **every** PR to `next`, unconditionally.
   ADR-0025 D2-G5 wants a non-empty `## [X.Y.Z]` section for exactly the tagged
   version; D4 says that per-version section is generated and reviewed *at release

@@ -38,7 +38,13 @@
 #
 # Usage:
 #   scripts/bootstrap-npm.sh            # dry run: show what would happen
-#   scripts/bootstrap-npm.sh --publish  # actually publish
+#   scripts/bootstrap-npm.sh --publish  # publish; type the OTP when asked
+#   OTP=123456 scripts/bootstrap-npm.sh --publish   # non-interactive
+#
+# Re-running after a partial run is safe and expected: packages already on the
+# registry are skipped and the rest are published. npm asks for a fresh
+# one-time password per publish, so stopping half way through is the normal
+# case rather than the exceptional one.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -83,55 +89,87 @@ for p in $PACKAGES; do
 done
 echo
 
-# Refuse to re-run against packages that already exist. Bootstrapping is
-# once-only, and a second run would publish nothing useful while looking like
-# it had worked.
+# Work out what is left to do. Publishing five packages is five separate
+# registry calls, and npm demands a fresh one-time password for each when the
+# account has 2FA on — so a run stopping half way through is the NORMAL case,
+# not the exceptional one. An earlier version refused to start whenever any
+# package already existed, which turned one mistyped OTP into "the remaining
+# packages can never be published by this script". Skip what is done, do what
+# is left.
+TODO=""
 existing=0
 for p in $PACKAGES; do
   code="$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/$p")"
-  if [ "$code" = "200" ]; then
-    echo "already on the registry: $p"
-    existing=$((existing + 1))
-  elif [ "$code" != "404" ]; then
-    echo "error: unexpected HTTP $code for $p — check the registry is reachable" >&2
-    exit 1
-  fi
+  case "$code" in
+    200)
+      echo "already on the registry, skipping: $p"
+      existing=$((existing + 1))
+      ;;
+    404)
+      TODO="$TODO
+$p"
+      ;;
+    *)
+      echo "error: unexpected HTTP $code for $p — check the registry is reachable" >&2
+      exit 1
+      ;;
+  esac
 done
-if [ "$existing" -gt 0 ]; then
+TODO="$(printf '%s' "$TODO" | sed '/^$/d')"
+if [ -z "$TODO" ]; then
   echo
-  echo "$existing of these already exist. Bootstrapping is once-only; configure the"
-  echo "trusted publisher on them instead (fields below) rather than re-running."
-  if [ "$PUBLISH" = "1" ]; then
-    exit 1
-  fi
+  echo "All $existing packages are published. Nothing left to bootstrap —"
+  echo "configure the trusted publisher on them (fields below)."
 fi
 
 if [ "$PUBLISH" = "0" ]; then
   echo
   echo "DRY RUN. Nothing was published. Re-run with --publish to do it."
-  echo "Before that: npm login, 2FA enabled, and a granular access token with"
-  echo "write access to packages."
-else
+  echo
+  echo "npm requires a second factor for every publish. Two ways:"
+  echo "  * run this in an INTERACTIVE terminal and type the OTP when npm asks"
+  echo "    (once per package, so five times, plus the deprecations);"
+  echo "  * or set OTP=123456 for a single code that covers the whole run, if"
+  echo "    your authenticator's window is long enough."
+  echo "A granular access token with 'bypass 2FA' also works and is what npm's"
+  echo "own 403 suggests, but npm is restricting those for direct publishing —"
+  echo "and the point of this bootstrap is to stop needing tokens at all."
+elif [ -n "$TODO" ]; then
   who="$(npm whoami 2>/dev/null || true)"
   if [ -z "$who" ]; then
     echo "error: not logged in to npm. Run 'npm login' first." >&2
     exit 1
   fi
-  echo "publishing as: $who"
   echo
-  for p in $PACKAGES; do
+  echo "publishing as: $who"
+  # An OTP is accepted for a short window, so one code can cover several
+  # calls. Passing it explicitly also lets this run without a TTY.
+  OTP_ARGS=""
+  if [ -n "${OTP:-}" ]; then
+    OTP_ARGS="--otp=$OTP"
+  fi
+  echo
+  published=""
+  for p in $TODO; do
     echo "--- $p"
     # `./` is load-bearing: a bare `npm/doiget-linux-x64` matches npm's
     # `owner/repo` GitHub shorthand and is never read as a directory. That is
-    # the bug that took down the v0.8.11 npm job.
-    npm publish "./npm/$p" --access public --tag "$PLACEHOLDER_TAG"
+    # the bug that took down the v0.8.11 npm job. `$SRC` rather than a
+    # relative path so this works from any working directory.
+    # shellcheck disable=SC2086
+    npm publish "$SRC/$p" --access public --tag "$PLACEHOLDER_TAG" $OTP_ARGS
+    published="$published $p"
   done
-  echo
-  echo "marking the placeholders so nobody installs one by accident:"
-  for p in $PACKAGES; do
-    npm deprecate "$p@0.0.0" \
-      "placeholder published to bootstrap npm trusted publishing; use a real release" || true
-  done
+  if [ -n "$published" ]; then
+    echo
+    echo "marking the placeholders so nobody installs one by accident:"
+    for p in $published; do
+      # shellcheck disable=SC2086
+      npm deprecate "$p@0.0.0" \
+        "placeholder published to bootstrap npm trusted publishing; use a real release" \
+        $OTP_ARGS || echo "  (deprecate failed for $p — cosmetic, re-run 'npm deprecate' later)"
+    done
+  fi
 fi
 
 cat <<EOF
