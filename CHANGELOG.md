@@ -12,6 +12,34 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[dist]** `scripts/bootstrap-npm.sh` is resumable, runs from any working
+  directory, and no longer gives three pieces of authentication advice at once.
+  The first real run met npm's `403 ... Two-factor authentication or granular
+  access token with bypass 2fa enabled is required to publish packages` — so a
+  second factor is needed **per publish**, which makes a run stopping half way
+  through the NORMAL case rather than the exceptional one. The script refused to
+  start whenever any package already existed, which would have turned one
+  mistyped one-time password into "the remaining packages can never be published
+  by this script". It now skips what is done and publishes what is left, accepts
+  `OTP=` for a non-interactive run, and uses an absolute source path rather than
+  `./npm/<pkg>` relative to the caller's cwd (#511).
+
+  The absolute-path half of that was wrong and is reverted. `$SRC` is a POSIX
+  path under WSL or Git Bash, and the `npm` on PATH may well be the *Windows*
+  npm — which read `/mnt/c/...` as relative and tried to open `C:\mnt\c\...`.
+  The `./` was never the only reason the relative form worked. The script now
+  `cd`s to the repository root and keeps the relative spec, so cwd-independence
+  comes from the `cd` rather than from spelling the path out, and the two
+  environments agree on where "here" is.
+
+  It also checks for two-factor auth before publishing. npm requires a second
+  factor to publish; with 2FA *disabled* there is no code to ask for, so npm
+  does not prompt — it returns `403 ... Two-factor authentication or granular
+  access token with bypass 2fa enabled is required`, which reads like a
+  permissions problem rather than "this account is not set up yet". That cost
+  two failed runs and a wrong diagnosis about tokens and paths. The script now
+  says which of the four setup steps is missing.
+
 - **[ci]** `version-check` was red on **every** PR to `next`, unconditionally.
   ADR-0025 D2-G5 wants a non-empty `## [X.Y.Z]` section for exactly the tagged
   version; D4 says that per-version section is generated and reviewed *at release
@@ -43,10 +71,19 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   publisher is configured under a package's Settings and an unpublished package has
   none. So the five packages have to be created once by hand before the pipeline
   that was built to publish them can run at all. The script publishes the checked-in
-  `0.0.0` templates under a `placeholder` dist-tag — never `latest`, so
-  `npm install doiget` keeps failing with "No matching version" rather than
-  installing a wrapper with no binary in it — then deprecates them and prints the
-  exact Trusted Publisher fields to enter (#511).
+  `0.0.0` templates under a `placeholder` dist-tag, deprecates them, and prints
+  the exact Trusted Publisher fields to enter (#511).
+
+  Two things this entry originally claimed are false, corrected here rather than
+  quietly rewritten. **`--tag placeholder` does not keep `latest` unset**: npm
+  sets `latest` on a package's first publish whatever `--tag` says, measured
+  after the real run as `doiget-linux-x64-> {'placeholder': '0.0.0', 'latest':
+  '0.0.0'}`. So a placeholder is exactly what `npm install <pkg>` resolves to
+  until a release moves `latest`, which makes the deprecation notice the only
+  warning a user gets rather than a nicety. And **the `doiget` wrapper is not
+  published**: npm refuses the name as too similar to the existing `giget`
+  (`403 ... Package name too similar`). The four per-platform packages are
+  published; a naming dispute is open with npm support.
 
 ### Fixed
 

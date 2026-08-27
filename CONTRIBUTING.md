@@ -240,10 +240,18 @@ Once, by a maintainer with an npm account:
    `release-plz.yml`, allowed action `npm publish`, environment empty.
 5. Revoke the token.
 
-`latest` is deliberately left unset. `npm publish` only moves `latest` when
-the tag is `latest`, so until a real release `npm install doiget` fails with
-"No matching version" — a clean error rather than an install of a wrapper
-with no binary in it.
+**`latest` is not left unset**, contrary to what this section first claimed.
+npm sets `latest` on a package's *first* publish regardless of `--tag`
+(measured: `doiget-linux-x64` came out as
+`{'placeholder': '0.0.0', 'latest': '0.0.0'}`). So the placeholders *are* what
+`npm install <pkg>` resolves to until a real release moves `latest`, and the
+deprecation in step 3 is the only warning a user gets — not a nicety.
+
+The wrapper is the one that matters: nobody installs a platform package
+directly, but `npm install doiget` would land on an empty `0.0.0`. As of
+2026-08-27 the wrapper is not published at all — npm refuses the name `doiget`
+as too similar to the existing `giget`, and a naming dispute is open. The four
+platform packages are published.
 
 ## ADR workflow
 
