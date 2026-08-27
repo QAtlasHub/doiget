@@ -12,6 +12,21 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[docs]** `crates/doiget-cli/README.md` now documents the npm route. That file is
+  copied verbatim into the npm package by `scripts/stage-npm.sh`, so it is what a
+  visitor to npmjs.com/package/doiget-cli reads — and it said only
+  `cargo install doiget-cli`, telling an npm user to install a Rust toolchain
+  instead. Nothing in it was false; it was simply written for the other audience.
+  Both routes are there now, with the point that either way the command is
+  `doiget`, and with the actual difference named: npm ships the release binary
+  (`--no-default-features --features oa-only,citation`, and `citation` implies
+  `metadata`) — so Tier 1, Tier 2 and the citation graph, identical to the shell
+  installer, the Release assets and the `.mcpb`. **Every prebuilt channel ships
+  the same binary.** The only thing none of them can carry is Tier 3: the TDM
+  connectors are Cargo features because each needs a signed publisher agreement,
+  so they are opted into at build time rather than shipped and gated at runtime
+  (#511).
+
 - **[dist]** **The npm wrapper package is `doiget-cli`, not `doiget`.** npm refuses
   the unscoped `doiget` as too similar to the unrelated `giget` (`403 ... Package
   name too similar to existing package giget`), and that refusal is permanent for
