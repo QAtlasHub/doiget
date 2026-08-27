@@ -779,7 +779,14 @@ jobs:
           # Platform packages first: the wrapper pins them by exact version
           # in optionalDependencies, so publishing it first would leave a
           # window in which `npm i doiget` resolves nothing to run.
-          for p in npm-stage/doiget-*; do
+          #
+          # The `./` is load-bearing. A bare `npm-stage/doiget-darwin-arm64`
+          # matches npm's `owner/repo` shorthand for a GitHub dependency, so
+          # npm never looks at the directory: on v0.8.11 it answered
+          # `EALLOWGIT: Refusing to fetch "github:npm-stage/doiget-darwin-arm64"`
+          # and the job died before reaching the registry at all. A path spec
+          # has to look like a path.
+          for p in ./npm-stage/doiget-*; do
             npm publish "$p" --provenance --access public --tag "$DIST_TAG"
           done
-          npm publish npm-stage/doiget --provenance --access public --tag "$DIST_TAG"
+          npm publish ./npm-stage/doiget --provenance --access public --tag "$DIST_TAG"

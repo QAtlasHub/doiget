@@ -10,6 +10,25 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Fixed
+
+- **[ci]** **The npm publish failed on the 0.8.11 release**, for a reason no part of
+  the two review rounds had looked for. `npm publish npm-stage/doiget-darwin-arm64`
+  is two path segments with no leading `./`, which is exactly npm's `owner/repo`
+  shorthand for a GitHub dependency — so npm never opened the directory and answered
+  `EALLOWGIT: Refusing to fetch "github:npm-stage/doiget-darwin-arm64"` before
+  reaching the registry at all. The job is `continue-on-error`, so 0.8.11 released
+  green with three crates, 18 signed assets, an MCP registry entry, and no npm
+  packages. The specs carry `./` now.
+
+  `stage-npm.test.sh` could not have caught it: it verified the staged tree and
+  stopped there, one step short of the command that consumes it. It now reads the
+  publish specs out of the workflow and runs `npm publish --dry-run` on each,
+  **verbatim**, from a directory laid out the way the release job lays it out —
+  rewriting them to absolute paths first would destroy the only property under
+  test, since npm accepts an absolute path either way and the collision is a fact
+  about the literal spelling (#511).
+
 ## [0.8.11] - 2026-08-27
 
 ### Added
