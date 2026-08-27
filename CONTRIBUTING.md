@@ -248,10 +248,16 @@ npm sets `latest` on a package's *first* publish regardless of `--tag`
 deprecation in step 3 is the only warning a user gets — not a nicety.
 
 The wrapper is the one that matters: nobody installs a platform package
-directly, but `npm install doiget` would land on an empty `0.0.0`. As of
-2026-08-27 the wrapper is not published at all — npm refuses the name `doiget`
-as too similar to the existing `giget`, and a naming dispute is open. The four
-platform packages are published.
+directly, but `npm install doiget-cli` landing on an empty `0.0.0` would be a
+broken first impression.
+
+**The wrapper is `doiget-cli`, not `doiget`.** npm refuses the unscoped
+`doiget` as too similar to the unrelated `giget`, and that refusal is permanent
+for the name. Matching the crate was the better answer anyway: one name on both
+registries. The *binary* is still `doiget`, exactly as `cargo install
+doiget-cli` puts `doiget` on PATH — verified by installing the staged package
+and reading `node_modules/.bin`, and `npx doiget-cli` resolves to it because the
+package declares a single bin.
 
 ## ADR workflow
 

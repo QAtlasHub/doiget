@@ -796,4 +796,4 @@ jobs:
           for p in ./npm-stage/doiget-*; do
             npm publish "$p" --provenance --access public --tag "$DIST_TAG"
           done
-          npm publish ./npm-stage/doiget --provenance --access public --tag "$DIST_TAG"
+          npm publish ./npm-stage/doiget-cli --provenance --access public --tag "$DIST_TAG"

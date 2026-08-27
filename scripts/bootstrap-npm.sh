@@ -69,7 +69,7 @@ fi
 # exact version, so publishing it first leaves a window in which
 # `npm install doiget` resolves nothing to run.
 PACKAGES="$PACKAGES
-doiget"
+doiget-cli"
 
 # Everything below uses paths relative to the repository root, so stand there.
 # See the note on the `npm publish` call for why relative rather than absolute.

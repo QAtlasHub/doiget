@@ -41,7 +41,7 @@ check() {
   fi
 }
 
-for d in doiget doiget-darwin-arm64 doiget-darwin-x64 doiget-linux-x64 doiget-win32-x64; do
+for d in doiget-cli doiget-darwin-arm64 doiget-darwin-x64 doiget-linux-x64 doiget-win32-x64; do
   if [ -d "$WORK/out/$d" ]; then check ok "staged $d"; else check no "staged $d"; fi
 done
 
@@ -55,7 +55,7 @@ for f in "$WORK/out"/*/package.json; do
   fi
 done
 
-if grep -q '"version": "9.9.9"' "$WORK/out/doiget/package.json"; then
+if grep -q '"version": "9.9.9"' "$WORK/out/doiget-cli/package.json"; then
   check ok "wrapper version is 9.9.9"
 else
   check no "wrapper version is 9.9.9"
@@ -63,7 +63,7 @@ fi
 
 # The wrapper pins its platform packages to the exact same version; a drift
 # here publishes a wrapper that resolves nothing.
-if grep -q '"doiget-linux-x64": "9.9.9"' "$WORK/out/doiget/package.json"; then
+if grep -q '"doiget-linux-x64": "9.9.9"' "$WORK/out/doiget-cli/package.json"; then
   check ok "optionalDependencies pinned to the same version"
 else
   check no "optionalDependencies pinned to the same version"
@@ -84,7 +84,7 @@ fi
 # The shim and the table it requires must both ship, or `npx doiget` throws
 # MODULE_NOT_FOUND on first run.
 for f in doiget.js platform.js; do
-  if [ -f "$WORK/out/doiget/bin/$f" ]; then
+  if [ -f "$WORK/out/doiget-cli/bin/$f" ]; then
     check ok "wrapper ships bin/$f"
   else
     check no "wrapper ships bin/$f"
