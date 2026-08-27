@@ -8,13 +8,41 @@ same library without coordination.
 
 ## Install
 
+This file is also the README of the **npm** package `doiget-cli`, so both routes
+are here. Either way the command you get is `doiget`.
+
+### npm — no toolchain, no compiler
+
+```sh
+npx -y doiget-cli serve      # stdio MCP server, nothing installed
+npm install -g doiget-cli    # puts `doiget` on PATH
+```
+
+The per-platform binaries ship as `optionalDependencies` carrying the same
+signed release artifacts, with **no postinstall download** — so this works under
+`--ignore-scripts` and through a registry mirror.
+
+**What you get is the release binary**, built `--no-default-features --features
+oa-only,citation`. `citation` implies `metadata`, so that is Tier 1 *and* Tier 2
+(OpenAlex, Semantic Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE, Europe PMC)
+*and* the citation graph. Identical to what the shell installer, the GitHub
+Release assets and the `.mcpb` Claude Desktop extension give you — every
+prebuilt channel ships the same binary.
+
+The one thing no prebuilt channel can give you is **Tier 3**: the institutional
+TDM connectors are Cargo features, and each needs a signed agreement with the
+publisher, so they are opted into at build time rather than shipped and gated at
+runtime. That needs the route below.
+
+### cargo — only route to the Tier 3 TDM connectors
+
 ```sh
 cargo install doiget-cli                                    # Tier 1 only (default)
 cargo install doiget-cli --features metadata               # +OpenAlex / Semantic Scholar / DOAJ
 cargo install doiget-cli --features metadata,tdm-springer  # add Springer Nature OA TDM
 ```
 
-The default build compiles **Tier 1 (Open Access)** sources only. Tier 2 metadata
+Needs a C linker. The default build compiles **Tier 1 (Open Access)** sources only. Tier 2 metadata
 enrichment and Tier 3 institutional TDM connectors are individually feature-flagged and
 must be opted in at build time. There is no `tdm-all` umbrella feature by design.
 
