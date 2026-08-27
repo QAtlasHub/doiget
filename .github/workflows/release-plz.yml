@@ -725,7 +725,10 @@ jobs:
             -p 'doiget-macos-aarch64' \
             -p 'doiget-macos-x86_64' \
             -p 'doiget-windows-x86_64.exe' \
-            -p 'doiget-*.sha256'
+            -p 'doiget-linux-x86_64.sha256' \
+            -p 'doiget-macos-aarch64.sha256' \
+            -p 'doiget-macos-x86_64.sha256' \
+            -p 'doiget-windows-x86_64.exe.sha256'
       - name: Verify every checksum before it goes into a package
         shell: bash
         # The whole argument for optionalDependencies over a postinstall
@@ -735,7 +738,16 @@ jobs:
         run: |
           set -euo pipefail
           cd dl
+          # The list above is four EXACT names, not a wildcard. The release
+          # also carries `doiget-sbom-<tag>.cdx.json.sha256` and
+          # `doiget-<ver>.mcpb.sha256`, which a `doiget-*.sha256` glob matches
+          # while their binaries are never fetched — `openssl dgst` on the
+          # missing file then aborts this job under `set -e`, and because the
+          # job is `continue-on-error` the release still reports green with
+          # npm silently unpublished.
+          verified=0
           for f in *.sha256; do
+            [ -e "$f" ] || { echo "::error::no .sha256 files were downloaded"; exit 1; }
             read -r want _rest < "$f"
             got="$(openssl dgst -sha256 -r "${f%.sha256}" | cut -d' ' -f1)"
             if [ "$want" != "$got" ]; then
@@ -743,7 +755,14 @@ jobs:
               exit 1
             fi
             echo "ok ${f%.sha256}"
+            verified=$((verified + 1))
           done
+          # A partial download is exactly what this step exists to catch; it
+          # must not read as a clean run over fewer files.
+          if [ "$verified" -ne 4 ]; then
+            echo "::error::verified $verified checksum(s), expected 4 — a platform binary is missing from the release"
+            exit 1
+          fi
       - name: Stage the packages
         shell: bash
         run: bash scripts/stage-npm.sh "${TAG#v}" dl npm-stage

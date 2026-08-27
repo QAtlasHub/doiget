@@ -15,7 +15,8 @@
 #
 # The asset names use x86_64/aarch64; npm's `cpu` field uses x64/arm64. That
 # mapping lives HERE and in `npm/doiget/bin/doiget.js`, and the
-# `npm-mapping` check in `.github/workflows/ci.yml` fails if the two drift.
+# `npm platform packages cover every release binary` step in
+# `.github/workflows/posture-lint.yml` fails if they drift.
 #
 # Dependency-light bash on purpose, matching scripts/build-mcpb.sh.
 
@@ -63,7 +64,11 @@ done
 
 mkdir -p "$OUTDIR/doiget/bin"
 stamp_version "$SRC/doiget/package.json" "$OUTDIR/doiget/package.json"
-cp "$SRC/doiget/bin/doiget.js" "$OUTDIR/doiget/bin/doiget.js"
+# Every file under bin/, not just the entry point: the shim `require`s
+# `platform.js`, and copying only `doiget.js` publishes a package that
+# throws MODULE_NOT_FOUND on first run. Caught by
+# `npm/doiget/test/stage-npm.test.sh`.
+cp "$SRC"/doiget/bin/*.js "$OUTDIR/doiget/bin/"
 cp "$REPO_ROOT/crates/doiget-cli/README.md" "$OUTDIR/doiget/README.md"
 echo "staged doiget (wrapper)"
 

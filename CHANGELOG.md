@@ -75,6 +75,14 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   to mean "invalid ref" was already wrong: 1 was also every network failure and
   every other code under the catch-all (#492, ADR-0049).
 
+  Pre-release review found the claim was not yet true: `tex-source` and
+  `frontier` never routed through the shared parser, so both still exited 1 and
+  `tex-source` leaked the `Caused by:` chain #477's contract replaced. Both are
+  fixed, `annotate`'s missing-argument path moves from 1 to 2 with them, and the
+  test's command table is now **read back from clap's `--help`** instead of
+  hand-listed — a second hand-maintained copy of the subcommand set is what let
+  three commands go uncovered in the first place.
+
 - **[docs]** `CONFIG.md` §6.1 named two things standing between an entitled network and
   a paywalled paper — the allowlist, and the publisher bot wall — and **neither was
   reached**. A third sits in front of both: for a closed work no candidate URL is ever
@@ -148,6 +156,44 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   saying `no OA PDF available`. Both addresses now resolve env → `config.toml` →
   default, `config doctor` names **which rung answered**, and `contact_email` — absent
   from the generated template entirely — is in it (#504).
+
+  Pre-release review found the fix stopped at the CLI: `doiget_paper_search`,
+  `doiget_link`, `doiget_expand_citation_graph` and `doiget_resolve_citation`
+  each read `DOIGET_CONTACT_EMAIL` directly, so a user who configured the
+  address in `config.toml` got the polite pool from `doiget fetch` and the
+  non-polite pool from every MCP tool — the interface doiget leads with. All
+  four now go through the same ladder. `config doctor` also reported
+  `unpaywall_email: unset` in the commonest configuration of all (only
+  `DOIGET_CONTACT_EMAIL` set) while the fetch it describes was sending the
+  contact address; it now reports `inherited from contact_email`.
+- **[ci]** **The npm publish would have failed on every release, silently.** The
+  `npm-publish` job downloaded `doiget-*.sha256`, a glob that also matches the SBOM's
+  and the `.mcpb`'s checksums — whose binaries it never downloads — so the verify
+  step ran `openssl dgst` on a missing file and aborted under `set -euo pipefail`
+  before staging anything. The job is `continue-on-error`, so the release would have
+  reported green with npm unpublished, while the entry above says npm packages ship.
+  The four platform checksums are now named exactly, and the step asserts it verified
+  all four rather than reporting a clean run over fewer (#511).
+- **[ci]** `posture-lint`'s npm mapping check compared two disjoint clusters of names,
+  so renaming both halves consistently-but-differently passed while the wrapper
+  depended on a package the staging script never produces. The four names now form one
+  connected chain. The packaging also gained **executable** tests — the name-list greps
+  could not catch a wrong binary name or a staging bug, and the first run of the new
+  `stage-npm.sh` test immediately caught one: the script copied only `doiget.js`, so
+  the shim's `require("./platform.js")` would have thrown `MODULE_NOT_FOUND` on the
+  first `npx doiget` (#511).
+- **[config]** `credentials.toml`'s failure modes reached only `tracing::warn!`, which
+  the CLI's default `EnvFilter` suppresses — so a malformed or group-readable file
+  produced no warning, no `doctor` line, and only the downstream "source unavailable"
+  the feature exists to prevent. `config doctor` now reports it the same way it already
+  reported `config.toml`, and a present-but-blank `api_key` — the one case with no log
+  call at all — is named rather than dropped (#509).
+- **[core]** `Credentials` no longer derives `Debug` over plain-`String` API keys; a
+  hand-written impl redacts them, applying one hop earlier the same protection
+  `secrecy::SecretString` gives the value once it reaches `TdmGrant`. The TDM env-var
+  pair also moved behind `AgreeVar`/`KeyVar` newtypes: they were adjacent `&str`
+  parameters, so transposing them at a call site type-checked and would have made the
+  KEY the agreement signal for a control `docs/LEGAL.md` §6a.2 calls enforced (#509).
 - **[cli/mcp]** The config-directory resolver existed as two hand-maintained copies whose
   own comment warned that divergence "would silently desync the user-extension allowlist
   surfaces". They had already diverged: the CLI accepted `XDG_CONFIG_HOME=""` and

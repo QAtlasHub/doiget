@@ -50,29 +50,95 @@ fn fetch_invalid_ref_emits_cargo_style_error_and_exit_2() {
 ///
 /// Table-driven on purpose: a new ref-taking subcommand is added to this
 /// list or it is not covered, and the failure names which one regressed.
+/// Every subcommand that takes a ref, read back from clap rather than
+/// hand-listed.
+///
+/// This was a literal, and it silently omitted `tex-source`, `frontier`
+/// and `annotate` — two of which then violated BOTH halves of the contract
+/// these tests exist to enforce, throughout the very release that claimed
+/// to have unified them. A second hand-maintained copy of the subcommand
+/// set is the #454 / #504 shape; this reads the one clap actually built.
+///
+/// Excluded by name, each for a stated reason:
+/// - `verify` takes a FILE PATH, so an unparsable value is a missing file.
+/// - `batch` takes a file of refs and reports per row, not per process.
+/// - `resolve-citation` takes free text, not a ref.
+/// - the rest simply take no ref.
+fn ref_taking_commands() -> Vec<Vec<String>> {
+    const NOT_A_REF: &[&str] = &[
+        "verify",
+        "batch",
+        "resolve-citation",
+        // Reads pending citations from the store; takes no argument.
+        "batch-resolve-citations",
+        "version",
+        "config",
+        "serve",
+        "search",
+        "list-recent",
+        "provenance",
+        "audit-log",
+        "lint",
+        "capabilities",
+        "help",
+    ];
+
+    let out = Command::cargo_bin("doiget")
+        .expect("doiget binary built")
+        .arg("--help")
+        .output()
+        .expect("run doiget --help");
+    let help = String::from_utf8_lossy(&out.stdout);
+
+    // clap lists subcommands indented, name first. Anything that is not a
+    // flag and not on the exclusion list is expected to take a ref — so a
+    // NEW ref-taking subcommand is covered by default, and a new non-ref
+    // one fails here until it is named, which is the safe direction.
+    let mut found: Vec<String> = help
+        .lines()
+        .filter(|l| l.starts_with("  "))
+        // `split_whitespace` already skips the leading indent; trimming
+        // first is what clippy's `trim_split_whitespace` flags.
+        .filter_map(|l| l.split_whitespace().next())
+        // Options share the two-space indent, so exclude anything that
+        // starts with a dash before the lowercase check (which `--color`
+        // would otherwise pass).
+        .filter(|n| !n.is_empty() && !n.starts_with('-'))
+        .filter(|n| n.chars().all(|c| c.is_ascii_lowercase() || c == '-'))
+        .filter(|n| !NOT_A_REF.contains(n))
+        .map(str::to_string)
+        .collect();
+    found.sort();
+    found.dedup();
+    assert!(
+        found.len() >= 9,
+        "parsed only {found:?} from --help — the parser has drifted from clap's output"
+    );
+
+    // Complete argv, bad ref included, because the ref is NOT the last
+    // positional everywhere: `annotate` is `<ref> <text>`.
+    found
+        .into_iter()
+        .map(|c| match c.as_str() {
+            "source" => vec!["source", "--out", ".", BAD_REF]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            "annotate" => vec!["annotate", BAD_REF, "a note"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            _ => vec![c, BAD_REF.to_string()],
+        })
+        .collect()
+}
+
+/// The value every command in the table is handed.
+const BAD_REF: &str = "not a doi";
+
 #[test]
 fn every_ref_taking_command_emits_the_error_code_contract() {
-    // `verify` is excluded: it takes a FILE PATH, not a ref, so an
-    // unparsable value is a missing file rather than a bad ref. It gets
-    // the `error:` misuse form instead -- see the test below.
-    let mut commands: Vec<Vec<&str>> = vec![
-        vec!["fetch"],
-        vec!["info"],
-        vec!["link"],
-        vec!["cite"],
-        vec!["text"],
-        vec!["bib"],
-        vec!["csl"],
-        // `source` needs `--out`; the ref is still the last positional.
-        vec!["source", "--out", "."],
-        vec!["tag"],
-    ];
-    // `graph` only exists in a `citation` build, and CI's default job runs
-    // plain `oa-only` -- where the subcommand is absent and clap answers
-    // "unrecognized subcommand", which is not this contract's business.
-    if cfg!(feature = "citation") {
-        commands.push(vec!["graph"]);
-    }
+    let commands = ref_taking_commands();
 
     let td = TempDir::new().expect("tempdir");
     let root = td.path().to_str().expect("utf-8");
@@ -83,12 +149,19 @@ fn every_ref_taking_command_emits_the_error_code_contract() {
         cmd.env("DOIGET_STORE_ROOT", root)
             .env("DOIGET_LOG_PATH", "")
             .env("DOIGET_CONTACT_EMAIL", "test@example.com")
-            .args(argv)
-            .arg("not a doi");
+            .args(argv);
         let out = cmd.output().expect("run doiget");
         let stderr = String::from_utf8_lossy(&out.stderr);
         let first = stderr.lines().next().unwrap_or("");
 
+        // A feature-gated subcommand (`graph` needs `citation`) is absent
+        // from a narrower build, and clap answers for it. That is clap's
+        // business, not this contract's — and `--help` is parsed from a
+        // binary that may have been built with a different feature set
+        // than the one under test when they share a target directory.
+        if first.starts_with("error: unrecognized subcommand") {
+            continue;
+        }
         if !first.starts_with("error[") {
             broken.push(format!("{}: {first}", argv.join(" ")));
         }
@@ -118,20 +191,7 @@ fn every_ref_taking_command_emits_the_error_code_contract() {
 /// subcommand is covered by both or by neither.
 #[test]
 fn every_ref_taking_command_exits_2_for_an_invalid_ref() {
-    let mut commands: Vec<Vec<&str>> = vec![
-        vec!["fetch"],
-        vec!["info"],
-        vec!["link"],
-        vec!["cite"],
-        vec!["text"],
-        vec!["bib"],
-        vec!["csl"],
-        vec!["source", "--out", "."],
-        vec!["tag"],
-    ];
-    if cfg!(feature = "citation") {
-        commands.push(vec!["graph"]);
-    }
+    let commands = ref_taking_commands();
 
     let td = TempDir::new().expect("tempdir");
     let root = td.path().to_str().expect("utf-8");
@@ -142,9 +202,14 @@ fn every_ref_taking_command_exits_2_for_an_invalid_ref() {
         cmd.env("DOIGET_STORE_ROOT", root)
             .env("DOIGET_LOG_PATH", "")
             .env("DOIGET_CONTACT_EMAIL", "test@example.com")
-            .args(argv)
-            .arg("not a doi");
+            .args(argv);
         let out = cmd.output().expect("run doiget");
+        // As above: a subcommand this build does not have is clap's answer,
+        // not this contract's.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stderr.starts_with("error: unrecognized subcommand") {
+            continue;
+        }
         if out.status.code() != Some(2) {
             wrong.push(format!("{}: exit {:?}", argv.join(" "), out.status.code()));
         }

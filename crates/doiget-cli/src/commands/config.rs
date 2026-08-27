@@ -58,7 +58,12 @@ pub struct ResolvedConfig {
     /// `store_root_source` exists (#441): a setting that did nothing must
     /// not look like a setting that worked.
     pub contact_email_source: String,
-    /// Unpaywall-specific contact email; falls back to `contact_email` when unset.
+    /// Unpaywall-specific contact email. Inherits `contact_email` when no
+    /// Unpaywall-specific rung is set, matching
+    /// `doiget_core::orchestrator::resolve_unpaywall_email` — the reporting
+    /// side used to omit that fallback and print `unset` for the commonest
+    /// configuration of all (only `DOIGET_CONTACT_EMAIL` set), while the
+    /// fetch it describes was sending the contact address.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unpaywall_email: Option<String>,
     /// Which rung produced `unpaywall_email` (#504).
@@ -76,6 +81,9 @@ pub(crate) enum EmailSource {
     Env(&'static str),
     /// `[network] <field>` in the user's `config.toml`.
     ConfigFile(&'static str),
+    /// No Unpaywall-specific rung is set, so it inherits `contact_email`.
+    /// Only ever produced for `unpaywall_email`.
+    InheritedFromContact,
     /// Nothing set it.
     Unset,
 }
@@ -86,6 +94,7 @@ impl EmailSource {
         match self {
             Self::Env(v) => v.to_string(),
             Self::ConfigFile(k) => format!("[network] {k} in config.toml"),
+            Self::InheritedFromContact => "inherited from contact_email".to_string(),
             Self::Unset => "unset".to_string(),
         }
     }
@@ -175,11 +184,24 @@ impl ResolvedConfig {
         let file = doiget_core::user_extension::load(&config_path).unwrap_or_default();
         let (contact_email, contact_email_source) =
             resolve_email("DOIGET_CONTACT_EMAIL", "contact_email", file.contact_email);
-        let (unpaywall_email, unpaywall_email_source) = resolve_email(
+        let (unpaywall_email, unpaywall_email_source) = match resolve_email(
             "DOIGET_UNPAYWALL_EMAIL",
             "unpaywall_email",
             file.unpaywall_email,
-        );
+        ) {
+            // No Unpaywall-specific rung: the fetch path falls back to the
+            // resolved contact address, so the report has to say so rather
+            // than `unset`.
+            (None, _) => (
+                contact_email.clone(),
+                if contact_email.is_some() {
+                    EmailSource::InheritedFromContact
+                } else {
+                    EmailSource::Unset
+                },
+            ),
+            found => found,
+        };
 
         Ok(Self {
             store_root,
@@ -398,6 +420,47 @@ pub async fn run(
                         "fix {} — see docs/CONFIG.md §3 for the \
                          [[network.additional_hosts]] schema",
                         cfg.config_path
+                    )),
+                    &mut all_ok,
+                ),
+            }
+            // #509 gave `credentials.toml` a reader; this gives it the same
+            // doctor visibility its sibling above already had. Without it
+            // the file's failure modes reach only `tracing::warn!`, which
+            // `EnvFilter::from_default_env()` suppresses at the default
+            // level — so a malformed or world-readable credentials file
+            // produced no warning, no doctor line, and only the downstream
+            // "source unavailable" the whole feature exists to prevent.
+            //
+            // A missing file is normal and reports `[ ok ]` with a count of
+            // zero: TDM is opt-in, and most installs have no such file.
+            // Keys are counted, never printed.
+            let cred_path = cfg.config_dir.join("credentials.toml");
+            match doiget_core::credentials::load(&cred_path) {
+                Ok(creds) => {
+                    check(
+                        &format!(
+                            "credentials.toml keys loaded: {} ({})",
+                            creds.len(),
+                            if creds.is_empty() {
+                                "none — TDM sources need DOIGET_KEY_* or this file"
+                            } else {
+                                "publisher names only; keys are never printed"
+                            }
+                        ),
+                        true,
+                        None,
+                        &mut all_ok,
+                    );
+                }
+                Err(e) => check(
+                    &format!("credentials.toml invalid: {e}"),
+                    false,
+                    Some(&format!(
+                        "fix {cred_path} — see docs/CONFIG.md §6 for the \
+                         [tdm.<publisher>] schema. Only `api_key` is read; \
+                         the agreement is DOIGET_AGREE_TDM_<PUBLISHER>=1 in \
+                         the environment (ADR-0050)"
                     )),
                     &mut all_ok,
                 ),
@@ -922,6 +985,46 @@ mod tests {
             cfg.contact_email_source, "[network] contact_email in config.toml",
             "doctor must name the rung that answered, or an inert setting looks like a live one"
         );
+    }
+
+    /// The commonest configuration of all: only `DOIGET_CONTACT_EMAIL` is
+    /// set. The fetch path sends that address to Unpaywall
+    /// (`resolve_unpaywall_email` falls back to the resolved contact), so
+    /// `doctor` and `show` must say so. They used to print `unset`, which
+    /// described a request doiget does not make.
+    #[test]
+    #[serial_test::serial]
+    fn an_unset_unpaywall_address_reports_the_contact_it_actually_inherits() {
+        let _g = unset_all_doiget_config_env();
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8PathBuf::from_path_buf(td.path().to_path_buf())
+            .expect("temp path is UTF-8");
+        let _scoped = scoped_config_home(dir.as_str());
+        let _c = EnvGuard::set("DOIGET_CONTACT_EMAIL", "only@institution.edu");
+
+        let cfg = ResolvedConfig::from_env().expect("config resolves");
+        assert_eq!(
+            cfg.unpaywall_email.as_deref(),
+            Some("only@institution.edu"),
+            "the report must match what the fetch path sends"
+        );
+        assert_eq!(cfg.unpaywall_email_source, "inherited from contact_email");
+    }
+
+    /// With nothing set at all there is nothing to inherit, so `unset` is
+    /// still the honest answer.
+    #[test]
+    #[serial_test::serial]
+    fn with_no_address_anywhere_unpaywall_still_reports_unset() {
+        let _g = unset_all_doiget_config_env();
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let dir = camino::Utf8PathBuf::from_path_buf(td.path().to_path_buf())
+            .expect("temp path is UTF-8");
+        let _scoped = scoped_config_home(dir.as_str());
+
+        let cfg = ResolvedConfig::from_env().expect("config resolves");
+        assert_eq!(cfg.unpaywall_email, None);
+        assert_eq!(cfg.unpaywall_email_source, "unset");
     }
 
     /// The env rung stays above the file rung, per field.
