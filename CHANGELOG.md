@@ -10,6 +10,26 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Fixed
+
+- **[docs]** Every `cargo install` command in `docs/SOURCES.md` named a crate that
+  does not exist. `cargo install doiget` returns 404 from crates.io — the crate is
+  `doiget-cli`, which produces the `doiget` binary. That included **all four Tier 3
+  install commands**, so the document that answers "how do I enable the institutional
+  TDM connectors" answered it with four commands that fail. Same in
+  `docs/MIGRATION.md` and the site's quick start.
+
+  `README.md` has said `cargo install doiget` does **not** work since the last time
+  this was found, and `CHANGELOG.md` records that earlier fix — it corrected the
+  README and left these behind. A grep would have found them then; nobody ran one
+  (#511).
+- **[docs]** `ARCHITECTURE.md`'s diagram said the MCP server exposes **9 tools**. It
+  exposes **22** — `#[tool(` appears 22 times in `doiget-mcp/src/lib.rs`, and
+  `MCP_TOOLS.md` documents 22 names. The count has been wrong since somewhere before
+  0.8.6, which is when the 22-tool safety annotations shipped;
+  `INTEGRATION/claude-code.md` says 22 correctly, so the two docs have been
+  contradicting each other in the same repository.
+
 ### Changed
 
 - **[docs]** `crates/doiget-cli/README.md` now documents the npm route. That file is
