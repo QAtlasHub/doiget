@@ -5,7 +5,7 @@
 // catch a wrong binary name, a missing platform, or a table that agrees
 // with itself while naming the wrong thing.
 //
-// Run: node npm/doiget/test/platform.test.js
+// Run: node npm/doiget-cli/test/platform.test.js
 "use strict";
 
 const assert = require("node:assert");

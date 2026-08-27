@@ -113,13 +113,16 @@ installers above — they need no compiler.
 
 ### npm / npx — one line in an agent config
 
-> **Not live yet.** The packages do not exist on the registry, so the commands
-> below fail today. See the channel table below for why, and what is left.
-
 ```sh
-npx -y doiget serve          # MCP server, no install step
-npm install -g doiget        # or put `doiget` on PATH
+npx -y doiget-cli serve      # MCP server, no install step
+npm install -g doiget-cli    # or put `doiget` on PATH
 ```
+
+The package is `doiget-cli` and the command it installs is `doiget` — the same
+shape as `cargo install doiget-cli`, which is where the name comes from. npm
+refuses the unscoped name `doiget` as too similar to the unrelated `giget`, and
+matching the crate turned out to be the better answer regardless: one name for
+the tool on both registries.
 
 The npm packages carry the same signed release binaries as `optionalDependencies`
 — npm resolves the one matching your platform, and there is **no postinstall
@@ -151,12 +154,12 @@ already on PATH is worse than no listing. Once npm is live the plugin can call
 | `cargo install doiget-cli` | shipping (needs a C linker) |
 | `.mcpb` Claude Desktop extension | shipping since 0.8.4 |
 | MCP Registry | listed |
-| npm / npx | **not live** — needs a one-time bootstrap, see below |
+| npm / npx | `doiget-cli` (installs the `doiget` command); see below for what is published |
 | Claude Code plugin | self-hosted marketplace, as above |
 | Homebrew tap, `.deb`, Docker | **not built** |
 | Nix | `flake.nix` exists; whether it exposes an installable package rather than a dev shell is unverified |
 
-npm is the one channel whose pipeline is written and whose packages do not
+npm was the one channel whose pipeline was written and whose packages did not
 exist. npm Trusted Publishing cannot perform a package's *first* publish — the
 setting lives under a package's Settings, and there is no Settings page for a
 package that has never been published — so the release job, which carries no
@@ -165,9 +168,9 @@ once-only placeholder publish that unblocks it; `CONTRIBUTING.md` has the
 runbook.
 
 As of 2026-08-27 the four per-platform packages are published as `0.0.0`
-placeholders and **the `doiget` wrapper is not**: npm refuses the name as too
-similar to the existing `giget` package, and a naming dispute is open. Until
-that resolves there is nothing to `npm install`.
+placeholders. npm points `latest` at a package's first publish whatever
+`--tag` says, so those placeholders are deprecated — that notice is the only
+warning until a release moves `latest` to a real version.
 
 [#247](https://github.com/QAtlasHub/doiget/issues/247) was closed as completed
 while four of its five channels did not exist; the remaining ones are tracked in

@@ -11,10 +11,10 @@
 # Layout, and why: the wrapper `doiget` declares the four platform packages
 # as `optionalDependencies`, so npm resolves exactly the one matching the
 # host and skips the rest. There is deliberately NO postinstall download —
-# see `npm/doiget/bin/doiget.js` for the four reasons.
+# see `npm/doiget-cli/bin/doiget.js` for the four reasons.
 #
 # The asset names use x86_64/aarch64; npm's `cpu` field uses x64/arm64. That
-# mapping lives HERE and in `npm/doiget/bin/doiget.js`, and the
+# mapping lives HERE and in `npm/doiget-cli/bin/platform.js`, and the
 # `npm platform packages cover every release binary` step in
 # `.github/workflows/posture-lint.yml` fails if they drift.
 #
@@ -62,15 +62,20 @@ echo "$MAP" | while IFS=: read -r pkg asset binname; do
   echo "staged $pkg  <- $asset"
 done
 
-mkdir -p "$OUTDIR/doiget/bin"
-stamp_version "$SRC/doiget/package.json" "$OUTDIR/doiget/package.json"
+# The wrapper package is `doiget-cli`, matching the crate. The BINARY it
+# installs is still `doiget` — the same shape as `cargo install doiget-cli`
+# putting `doiget` on PATH. npm refused the unscoped `doiget` as too similar
+# to the existing `giget`, and matching the crate was the better answer
+# anyway: one name for the tool across cargo and npm.
+mkdir -p "$OUTDIR/doiget-cli/bin"
+stamp_version "$SRC/doiget-cli/package.json" "$OUTDIR/doiget-cli/package.json"
 # Every file under bin/, not just the entry point: the shim `require`s
 # `platform.js`, and copying only `doiget.js` publishes a package that
 # throws MODULE_NOT_FOUND on first run. Caught by
-# `npm/doiget/test/stage-npm.test.sh`.
-cp "$SRC"/doiget/bin/*.js "$OUTDIR/doiget/bin/"
-cp "$REPO_ROOT/crates/doiget-cli/README.md" "$OUTDIR/doiget/README.md"
-echo "staged doiget (wrapper)"
+# `npm/doiget-cli/test/stage-npm.test.sh`.
+cp "$SRC"/doiget-cli/bin/*.js "$OUTDIR/doiget-cli/bin/"
+cp "$REPO_ROOT/crates/doiget-cli/README.md" "$OUTDIR/doiget-cli/README.md"
+echo "staged doiget-cli (wrapper)"
 
 echo
 echo "npm packages staged in $OUTDIR at version $VERSION"

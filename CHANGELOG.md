@@ -12,6 +12,19 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[dist]** **The npm wrapper package is `doiget-cli`, not `doiget`.** npm refuses
+  the unscoped `doiget` as too similar to the unrelated `giget` (`403 ... Package
+  name too similar to existing package giget`), and that refusal is permanent for
+  the name — npm's documented dispute process acts only on trademark claims, and
+  the similarity rule itself is undocumented. Matching the crate is the better
+  answer anyway: one name for the tool on both registries.
+
+  **The command is still `doiget`.** `npm install -g doiget-cli` puts `doiget` on
+  PATH, exactly as `cargo install doiget-cli` does; `npx -y doiget-cli serve`
+  resolves to it because the package declares a single bin. Both verified by
+  installing the staged package rather than assumed — `node_modules/.bin` carries
+  `doiget`, and `npx doiget-cli --version` reached the shim (#511).
+
 - **[dist]** `scripts/bootstrap-npm.sh` is resumable, runs from any working
   directory, and no longer gives three pieces of authentication advice at once.
   The first real run met npm's `403 ... Two-factor authentication or granular
