@@ -118,10 +118,10 @@ impl CapabilityProfile {
                 core:            env::var("DOIGET_ENABLE_CORE").is_ok(),
                 europe_pmc:      env::var("DOIGET_ENABLE_EUROPE_PMC").is_ok(),
             },
-            tdm_elsevier: read_tdm_grant("DOIGET_AGREE_TDM_ELSEVIER", "DOIGET_KEY_ELSEVIER")?,
-            tdm_aps:      read_tdm_grant("DOIGET_AGREE_TDM_APS",      "DOIGET_KEY_APS")?,
-            tdm_springer: read_tdm_grant("DOIGET_AGREE_TDM_SPRINGER", "DOIGET_KEY_SPRINGER")?,
-            tdm_ieee:     read_tdm_grant("DOIGET_AGREE_TDM_IEEE",     "DOIGET_KEY_IEEE")?,
+            tdm_elsevier: read_tdm_grant(AgreeVar::new("DOIGET_AGREE_TDM_ELSEVIER"), KeyVar::new("DOIGET_KEY_ELSEVIER"))?,
+            tdm_aps:      read_tdm_grant(AgreeVar::new("DOIGET_AGREE_TDM_APS"),      KeyVar::new("DOIGET_KEY_APS"))?,
+            tdm_springer: read_tdm_grant(AgreeVar::new("DOIGET_AGREE_TDM_SPRINGER"), KeyVar::new("DOIGET_KEY_SPRINGER"))?,
+            tdm_ieee:     read_tdm_grant(AgreeVar::new("DOIGET_AGREE_TDM_IEEE"),     KeyVar::new("DOIGET_KEY_IEEE"))?,
             rate_limits:  RateLimits::HARD_CODED,
         })
     }
@@ -129,9 +129,15 @@ impl CapabilityProfile {
 
 // `file_key` is `[tdm.<publisher>] api_key` from credentials.toml, one rung
 // BELOW the env var (#509, ADR-0050). The agreement has no file rung.
-fn read_tdm_grant(agree_var: &str, key_var: &str, file_key: Option<&str>)
+//
+// `AgreeVar`/`KeyVar` are newtypes over `&'static str` with private fields:
+// two adjacent `&str` parameters could be transposed at a call site and the
+// build would then treat the KEY as the agreement signal. The real signature
+// also takes `feature: &str` and `feature_enabled: bool`, elided here.
+fn read_tdm_grant(agree: AgreeVar, key: KeyVar, file_key: Option<&str>)
     -> Result<Option<TdmGrant>, CapabilityError>
 {
+    let (agree_var, key_var) = (agree.0, key.0);
     let agreed = matches!(env::var(agree_var).as_deref(), Ok("1"));
     let key    = env::var(key_var).ok().or_else(|| file_key.map(str::to_string));
     match (agreed, key) {

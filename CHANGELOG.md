@@ -162,10 +162,19 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   each read `DOIGET_CONTACT_EMAIL` directly, so a user who configured the
   address in `config.toml` got the polite pool from `doiget fetch` and the
   non-polite pool from every MCP tool — the interface doiget leads with. All
-  four now go through the same ladder. `config doctor` also reported
+  four now go through the same ladder. `config show` also reported
   `unpaywall_email: unset` in the commonest configuration of all (only
   `DOIGET_CONTACT_EMAIL` set) while the fetch it describes was sending the
   contact address; it now reports `inherited from contact_email`.
+
+  Round 2 found that fix had stopped at the MCP boundary: `graph`, `frontier`,
+  `link`, `search` and `resolve-citation` still read `DOIGET_CONTACT_EMAIL`
+  directly and so still ignored `config.toml`, with the fallback hand-copied five
+  times into two mutually inconsistent policies. All of them, and the dormant copy
+  in `OrchestratorConfig`, now go through the core resolver. `config doctor` also
+  gained the `unpaywall_email` line it never had — the round-1 note above credited
+  `doctor` for a change that landed in `show`, and `doctor` is the surface meant to
+  be worth trusting.
 - **[ci]** **The npm publish would have failed on every release, silently.** The
   `npm-publish` job downloaded `doiget-*.sha256`, a glob that also matches the SBOM's
   and the `.mcpb`'s checksums — whose binaries it never downloads — so the verify
@@ -185,15 +194,71 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 - **[config]** `credentials.toml`'s failure modes reached only `tracing::warn!`, which
   the CLI's default `EnvFilter` suppresses — so a malformed or group-readable file
   produced no warning, no `doctor` line, and only the downstream "source unavailable"
-  the feature exists to prevent. `config doctor` now reports it the same way it already
-  reported `config.toml`, and a present-but-blank `api_key` — the one case with no log
-  call at all — is named rather than dropped (#509).
+  the feature exists to prevent. Everything a reader can learn about the file is now
+  data rather than a log record: file-level failures are a `CredentialsError`, and
+  per-entry problems — a world-readable mode, an `api_key` the user typed and left
+  blank, an `agreed` doiget does not read — are `Advisory` values `config doctor`
+  prints as failing lines (#509).
+
+  Round 1 of the pre-release review claimed both halves of this and delivered
+  neither in full. `config doctor` surfaced only whole-file parse and IO errors: a
+  `chmod 644` on a file holding publisher keys still reported `[ ok ]`, which made
+  "the `0600` check is a real control rather than a sentence" untrue in the module
+  whose own doc comment says it. And the blank-key warning did not fire for
+  `api_key = ""` — `Option::unwrap_or_default()` collapses `None` and `Some("")` to
+  one empty string, so the commonest form of the case was still the silent one. Its
+  test used that exact input and asserted only the key count, so it passed.
 - **[core]** `Credentials` no longer derives `Debug` over plain-`String` API keys; a
   hand-written impl redacts them, applying one hop earlier the same protection
-  `secrecy::SecretString` gives the value once it reaches `TdmGrant`. The TDM env-var
-  pair also moved behind `AgreeVar`/`KeyVar` newtypes: they were adjacent `&str`
-  parameters, so transposing them at a call site type-checked and would have made the
-  KEY the agreement signal for a control `docs/LEGAL.md` §6a.2 calls enforced (#509).
+  `secrecy::SecretString` gives the value once it reaches `TdmGrant`. The two raw
+  deserialisation structs, which hold the key untrimmed and unredacted one hop before
+  that, no longer derive `Debug` either. The TDM env-var pair also moved behind
+  `AgreeVar`/`KeyVar` newtypes: they were adjacent `&str` parameters, so transposing
+  them at a call site type-checked and would have made the KEY the agreement signal
+  for a control `docs/LEGAL.md` §6a.2 calls enforced (#509).
+
+  Round 1 of the review closed that hole and **opened a more direct one**: making
+  `parse` fallible put a `toml::de::Error` inside `CredentialsError::Parse`, and that
+  error's `Display` quotes the offending source line verbatim. The commonest way this
+  file is malformed is a pasted key with a stray quote in it — so the error most
+  likely to reach a terminal was the one whose quoted line *is* the key, and `config
+  doctor` printed it. Its `Debug` is worse: it carries the whole file. The variant now
+  carries the path, line, column and the parser's own message, and a test asserts a
+  planted key appears in neither `Display` nor `Debug`.
+- **[ci]** `posture-lint`'s npm mapping check went red **with an empty log**. Its
+  grep read the platform table out of `npm/doiget/bin/doiget.js` after that table had
+  moved to `platform.js`; under `set -euo pipefail` a grep matching nothing exits 1
+  and kills the step before it can print anything, so a check that had correctly
+  detected drift looked like infrastructure flake — and the packaging tests queued
+  behind it never ran at all. Every grep in the step now goes through a helper that
+  turns "matched nothing" into a named error (#511).
+- **[ci]** `dco` could never pass on a `next → main` promotion. A promotion's commit
+  range is the whole release, and for the release that introduces ADR-0051 that range
+  holds commits predating the CLA which can never acquire a trailer — `next` is
+  protected and its history cannot be rewritten. A job that is red whatever the author
+  does is not a gate. Promotions are now exempt on the same structural grounds as
+  merge commits and bots: they re-present commits this job already gated when they
+  landed on `next` (ADR-0051).
+- **[cli]** `fetch` and `graph` were the last two commands carrying
+  `parse_ref_or_exit`'s body hand-inlined rather than calling it, which is how they
+  came to disagree about the exit code in the first place (#492).
+- **[core]** The whole rule set for `resolve_tdm_grant` — `docs/CAPABILITY.md` §2's
+  behaviour, the `AgreedButNoKey` / `KeyButNotAgreed` cases, the `credentials.toml`
+  precedence note — was rendering as the documentation of a one-line newtype. The
+  round-1 commit put `AgreeVar`'s doc block directly after the function's with no
+  separator, and rustdoc attaches a `///` run to the next item only, so the function
+  it describes had none at all. `AgreeVar`/`KeyVar` are `pub(crate)` with private
+  fields now: their only consumer is a private `fn`, and the public tuple field left
+  `AgreeVar("DOIGET_KEY_ELSEVIER")` — the same transposition expressed as content
+  rather than position — compiling cleanly (#509).
+- **[ci]** The `npm-publish` checksum loop and `stage-npm.sh`'s missing-asset guard
+  both gained tests that fail when they are broken. The guard's existing test checked
+  only the exit code, which stays non-zero when the guard is deleted because the `cp`
+  behind it fails too — so deleting it outright still passed, while leaving a
+  half-staged package on disk. The checksum loop, the fix for the defect this cluster
+  started from, had no test at all: it is now extracted from the workflow and run
+  against synthetic release directories, including the orphaned-checksum case that
+  caused the original silent failure (#511).
 - **[cli/mcp]** The config-directory resolver existed as two hand-maintained copies whose
   own comment warned that divergence "would silently desync the user-extension allowlist
   surfaces". They had already diverged: the CLI accepted `XDG_CONFIG_HOME=""` and

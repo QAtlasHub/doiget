@@ -399,10 +399,14 @@ impl OrchestratorConfig {
     fn from_env() -> Result<Self> {
         let store_root = super::resolve_store_root()?;
         let log_path = resolve_log_path()?;
-        let contact_email =
-            std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".into());
-        let unpaywall_email =
-            std::env::var("DOIGET_UNPAYWALL_EMAIL").unwrap_or_else(|_| contact_email.clone());
+        // Through the core resolver even though this struct is not read
+        // yet: a dormant third copy of the ladder is still a copy, and it
+        // is the one nobody would think to update.
+        let contact_email = doiget_core::orchestrator::contact_email_or_placeholder();
+        let unpaywall_email = std::env::var("DOIGET_UNPAYWALL_EMAIL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| contact_email.clone());
         Ok(Self {
             store_root,
             log_path,
@@ -723,17 +727,11 @@ pub async fn run_with_options(
     // mode.
     // Step 1: parse + safekey. Issue #119: render the cargo-style
     // `error[INVALID_REF]:` line + carry the exit code, rather than
-    // letting the granular `RefParseError` fall out as an opaque
-    // anyhow `{:?}` dump.
-    let ref_ = match Ref::parse(&input) {
-        Ok(r) => r,
-        Err(e) => {
-            super::render_ref_parse_error(&e);
-            return Err(anyhow::Error::new(CliExit(cli_exit_code(
-                ErrorCode::InvalidRef,
-            ))));
-        }
-    };
+    // letting the granular `RefParseError` fall out as an opaque anyhow
+    // `{:?}` dump. Through the shared helper (#492) so a change to the
+    // wording or the code reaches every command at once — this and `graph`
+    // were the last two hand-inlined copies of its body.
+    let ref_ = super::parse_ref_or_exit(&input)?;
 
     // Dry-run branch: build the plan and emit it. NO harness, NO network,
     // NO store write, NO provenance row. Posture-lint ADR-0022 §5 will

@@ -60,7 +60,7 @@ pub struct ResolvedConfig {
     pub contact_email_source: String,
     /// Unpaywall-specific contact email. Inherits `contact_email` when no
     /// Unpaywall-specific rung is set, matching
-    /// `doiget_core::orchestrator::resolve_unpaywall_email` — the reporting
+    /// `doiget_core::orchestrator::resolve_contact_emails` — the reporting
     /// side used to omit that fallback and print `unset` for the commonest
     /// configuration of all (only `DOIGET_CONTACT_EMAIL` set), while the
     /// fetch it describes was sending the contact address.
@@ -102,7 +102,7 @@ impl EmailSource {
 
 /// Resolve one address across env → `config.toml` → nothing.
 ///
-/// Mirrors `doiget_core::orchestrator::resolve_contact_email`. Two
+/// Mirrors `doiget_core::orchestrator::configured_contact_email`. Two
 /// separate readers is the hazard #441 named, so the shared half — which
 /// file, and how it parses — lives in `doiget_core::user_extension`, and
 /// only the rung order is restated here. Both ends are pinned:
@@ -364,6 +364,21 @@ pub async fn run(
                 ),
                 &mut all_ok,
             );
+            // `config show` reports which rung answered for Unpaywall;
+            // doctor did not mention the address at all, so the surface
+            // meant to be the trustworthy one was silent about a request
+            // doiget actually makes. Never a failure on its own — it
+            // inherits `contact_email`, whose line above carries the remedy.
+            check(
+                &format!(
+                    "unpaywall_email: {} (from: {})",
+                    cfg.unpaywall_email.as_deref().unwrap_or("unset"),
+                    cfg.unpaywall_email_source
+                ),
+                true,
+                None,
+                &mut all_ok,
+            );
             // ADR-0028 D2: surface user-extension allowlist health. A
             // missing config.toml is normal (curated set only); a
             // present-but-malformed config.toml is a doctor failure so
@@ -452,6 +467,23 @@ pub async fn run(
                         None,
                         &mut all_ok,
                     );
+                    // A file that parses can still be wrong in ways that
+                    // cost the user a key: mode 0644 on a file holding
+                    // publisher credentials, an `api_key = ""` they believe
+                    // is set, an `agreed` this tool does not read. Each was
+                    // a `tracing::warn!` and nothing else, which the
+                    // default `EnvFilter` throws away — so the `0600` check
+                    // `docs/CONFIG.md` §6 promises reached nobody. Each is
+                    // a failing line here, because each is a thing the user
+                    // has to act on.
+                    for advisory in creds.advisories() {
+                        check(
+                            &format!("credentials.toml: {advisory}"),
+                            false,
+                            None,
+                            &mut all_ok,
+                        );
+                    }
                 }
                 Err(e) => check(
                     &format!("credentials.toml invalid: {e}"),
@@ -989,7 +1021,7 @@ mod tests {
 
     /// The commonest configuration of all: only `DOIGET_CONTACT_EMAIL` is
     /// set. The fetch path sends that address to Unpaywall
-    /// (`resolve_unpaywall_email` falls back to the resolved contact), so
+    /// (`resolve_contact_emails` falls back to the resolved contact), so
     /// `doctor` and `show` must say so. They used to print `unset`, which
     /// described a request doiget does not make.
     #[test]
@@ -1368,6 +1400,90 @@ mod tests {
             .downcast_ref::<CliExit>()
             .expect("failing doctor must carry a CliExit");
         assert_eq!(cli_exit.0, 2);
+    }
+
+    /// `credentials.toml`'s reader is unit-tested; its WIRING into doctor
+    /// was not. Nothing failed if `cred_path` were built from the wrong
+    /// directory, or if the `Err` arm stopped setting `all_ok = false` —
+    /// which is the whole reason the check was added.
+    ///
+    /// Linux only, for the same reason as
+    /// `doctor_fails_with_malformed_user_extension_config`: `XDG_CONFIG_HOME`
+    /// is the only hermetic way to redirect the config dir.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn doctor_fails_when_credentials_toml_is_malformed() {
+        let _g = unset_all_doiget_config_env();
+        let _email = EnvGuard::set("DOIGET_CONTACT_EMAIL", "alice@example.org");
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg_root = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+        let doiget_dir = cfg_root.join("doiget");
+        std::fs::create_dir_all(doiget_dir.as_std_path()).expect("mk dir");
+        // An unterminated string: the commonest way a pasted key breaks
+        // this file, and the case whose parser message must not be echoed.
+        std::fs::write(
+            doiget_dir.join("credentials.toml").as_std_path(),
+            "[tdm.elsevier]\napi_key = \"sk-unterminated\n",
+        )
+        .expect("write credentials.toml");
+        let _x = EnvGuard::set("XDG_CONFIG_HOME", cfg_root.as_str());
+
+        let err = run(
+            "doctor".into(),
+            crate::commands::output::OutputMode::Human,
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect_err("doctor must fail when credentials.toml is malformed");
+        assert_eq!(
+            err.downcast_ref::<CliExit>()
+                .expect("failing doctor must carry a CliExit")
+                .0,
+            2
+        );
+    }
+
+    /// A file that parses but carries an advisory must fail doctor too.
+    /// Otherwise `[ ok ] credentials.toml keys loaded: 0` is the entire
+    /// report for a user who typed a key and did not get one.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn doctor_fails_when_credentials_toml_carries_an_advisory() {
+        let _g = unset_all_doiget_config_env();
+        let _email = EnvGuard::set("DOIGET_CONTACT_EMAIL", "alice@example.org");
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg_root = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+        let doiget_dir = cfg_root.join("doiget");
+        std::fs::create_dir_all(doiget_dir.as_std_path()).expect("mk dir");
+        // Well-formed TOML; the key is present and blank.
+        std::fs::write(
+            doiget_dir.join("credentials.toml").as_std_path(),
+            "[tdm.aps]\napi_key = \"\"\n",
+        )
+        .expect("write credentials.toml");
+        let _x = EnvGuard::set("XDG_CONFIG_HOME", cfg_root.as_str());
+
+        let err = run(
+            "doctor".into(),
+            crate::commands::output::OutputMode::Human,
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect_err("a blank api_key must be reported, not passed over");
+        assert_eq!(
+            err.downcast_ref::<CliExit>()
+                .expect("failing doctor must carry a CliExit")
+                .0,
+            2
+        );
     }
 
     /// Issue #322: `check` must emit a `tip:` line to stderr when the
