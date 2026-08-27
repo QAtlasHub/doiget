@@ -56,8 +56,9 @@ pub fn parse_ref_or_exit(input: &str) -> anyhow::Result<doiget_core::Ref> {
     }
 }
 
-/// The renderer on its own, for the two call sites that build their own
-/// `CliExit` rather than going through [`parse_ref_or_exit`].
+/// The renderer on its own, for call sites holding a
+/// [`doiget_core::RefParseError`] that did not come from
+/// [`parse_ref_or_exit`].
 ///
 /// Both now take the exit code from `fetch::cli_exit_code(InvalidRef)`,
 /// which is **2** since #492 / ADR-0049. Before that `fetch` fell to the

@@ -256,7 +256,8 @@ environment-only and cannot be given here — see below, and ADR-0050.
 
 ```toml
 # ~/.config/doiget/credentials.toml — optional.
-# Permissions SHOULD be 0600 on POSIX; doiget warns at startup otherwise.
+# Permissions SHOULD be 0600 on POSIX. `doiget config doctor` fails on a
+# group- or world-readable file, and the fetch path logs a warning.
 
 [tdm.elsevier]
 api_key = "..."
@@ -301,6 +302,14 @@ including the `0600` warning, and no code path opened it; a user who followed
 this section wrote their key into a file doiget ignored and then reported the
 source unavailable for want of a key. Both the reader and the permission
 warning exist as of 0.8.11.
+
+**Where the problems show up.** Run `doiget config doctor`. A file that cannot
+be read or does not parse fails a check naming the position — never quoting the
+line, because the line that fails to parse is usually the one holding the key. A
+file that parses fails a check for each thing worth acting on: a group- or
+world-readable mode, an `api_key` present but blank, an `agreed` that grants
+nothing, a `[tdm.<publisher>]` naming a publisher doiget does not know. None of
+these is fatal to a fetch, and none of them is silent.
 
 ## 6.1 Institutional networks: what works and what does not
 

@@ -15,6 +15,17 @@ name: dco
 #                      cannot grant a copyright license, so asking them to
 #                      certify one is meaningless. Matched on the `[bot]`
 #                      suffix GitHub appends to every App author name.
+#   * promotion PRs  — `next` -> `main` is not a contribution. It re-presents
+#                      commits this same job already gated when they landed
+#                      on `next`, so checking them again asks one question
+#                      twice and can answer it differently: a promotion's
+#                      range is the whole release, and for any release
+#                      spanning ADR-0051's own introduction that range holds
+#                      commits which predate the CLA and can never acquire a
+#                      trailer — `next` is protected, its history cannot be
+#                      rewritten. A job that is red whatever the author does
+#                      is not a gate; it is noise that teaches people to
+#                      ignore the gate.
 #
 # Third-party Actions are SHA-pinned (repo invariant / ADR-0013 supply-chain).
 
@@ -47,7 +58,27 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
 
+      # Structural, not discretionary — see the exemption list in the header.
+      # `head_ref` is compared too, so a topic branch that merely targets
+      # `main` is still checked; only the literal `next` -> `main` promotion
+      # is exempt.
+      - name: Is this the next -> main promotion?
+        id: promotion
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$BASE_REF" = "main" ] && [ "$HEAD_REF" = "next" ]; then
+            echo "promotion=true" >> "$GITHUB_OUTPUT"
+            echo "next -> main promotion: every commit here was sign-off gated when it landed on next."
+          else
+            echo "promotion=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Every non-bot, non-merge commit carries a Signed-off-by trailer
+        if: steps.promotion.outputs.promotion != 'true'
         shell: bash
         env:
           BASE_REF: ${{ github.base_ref }}

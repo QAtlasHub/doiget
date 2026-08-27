@@ -63,7 +63,10 @@ pub async fn run(
         url::Url::parse(&raw)
             .with_context(|| format!("DOIGET_OPENALEX_BASE is not a URL: {raw}"))?
     };
-    let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
+    // `unwrap_or_default`, not the placeholder: an unset address means
+    // `mailto` is omitted rather than sent as `doiget@localhost`. Routed
+    // through the core resolver so config.toml's rung counts (#504).
+    let contact_email = doiget_core::orchestrator::configured_contact_email().unwrap_or_default();
 
     let harness = FetchHarness::from_env().context("building fetch harness")?;
     harness

@@ -92,11 +92,30 @@ done
 
 # A missing release asset must fail loudly rather than stage a package with
 # no binary in it.
+#
+# The exit code alone proves nothing: `set -euo pipefail` makes the `cp` after
+# the guard fail too, so deleting the guard outright still exits non-zero —
+# with a raw `cp: cannot stat` instead of the `::error::` annotation, and,
+# since `mkdir`/`stamp_version` run before that `cp`, with a half-staged
+# package left on disk. So assert on the annotation AND on the absence of the
+# wreckage, never on the exit code alone.
 rm -f "$BIN/doiget-linux-x86_64"
-if bash "$ROOT/scripts/stage-npm.sh" 9.9.9 "$BIN" "$WORK/out2" >/dev/null 2>&1; then
+if bash "$ROOT/scripts/stage-npm.sh" 9.9.9 "$BIN" "$WORK/out2" > "$WORK/log2" 2>&1; then
   check no "a missing release asset fails the staging script"
 else
   check ok "a missing release asset fails the staging script"
+fi
+if grep -q '::error::missing release asset' "$WORK/log2"; then
+  check ok "the failure names the missing asset"
+else
+  check no "the failure names the missing asset"
+  cat "$WORK/log2"
+fi
+if [ -e "$WORK/out2/doiget-linux-x64" ]; then
+  check no "no half-staged package is left behind"
+  find "$WORK/out2/doiget-linux-x64" -print
+else
+  check ok "no half-staged package is left behind"
 fi
 
 exit "$fail"

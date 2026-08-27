@@ -218,7 +218,8 @@ async fn run_external(
     // Leave `mailto` unset when no contact email is configured: send a real
     // address (polite pool) or none, never a non-routable placeholder. The
     // empty string is skipped by `build_search_url` / `resolve_entity_id`.
-    let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
+    // Resolved through the core ladder so config.toml's rung counts (#504).
+    let contact_email = doiget_core::orchestrator::configured_contact_email().unwrap_or_default();
 
     let harness = FetchHarness::from_env().context("building fetch harness")?;
     harness

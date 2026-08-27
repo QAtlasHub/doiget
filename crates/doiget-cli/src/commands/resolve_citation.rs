@@ -34,8 +34,10 @@ fn build_context() -> Result<FetchContext> {
 }
 
 fn build_crossref_source() -> Result<CrossrefSource> {
-    let contact_email =
-        std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
+    // Through the core resolver, not `std::env::var`: `[network]
+    // contact_email` in config.toml is a documented rung (#504), and a
+    // command that reads only the environment silently ignores it.
+    let contact_email = doiget_core::orchestrator::contact_email_or_placeholder();
     match std::env::var("DOIGET_CROSSREF_BASE").ok() {
         Some(base_str) => {
             let base = url::Url::parse(&base_str).context("invalid DOIGET_CROSSREF_BASE")?;

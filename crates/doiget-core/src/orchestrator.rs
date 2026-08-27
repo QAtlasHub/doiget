@@ -603,27 +603,47 @@ pub fn contact_email_or_placeholder() -> String {
     configured_contact_email().unwrap_or_else(|| FALLBACK_CONTACT_EMAIL.to_string())
 }
 
+/// The two contact addresses a fetch sends, resolved together.
+///
+/// Named fields rather than a `(String, String)`: a tuple made "which
+/// address goes to which service" a matter of destructuring order, so
+/// reordering one `let` would silently hand Crossref the Unpaywall
+/// identity. That is the defect [`crate::AgreeVar`] exists to close, one
+/// module over, and it is worth closing the same way.
+struct ContactAddresses {
+    /// The polite-pool identity for Crossref, OpenAlex and the rest.
+    crossref: String,
+    /// The `email=` Unpaywall requires. Falls back to `crossref`.
+    unpaywall: String,
+}
+
 /// Both addresses, from a single read of `config.toml`.
 ///
 /// Resolving them independently meant two reads per fetch, and — in a
 /// long-lived `doiget serve` — a window in which an edit landing between
 /// them gave one address from the old file and one from the new. One read,
 /// one generation.
-fn resolve_contact_emails() -> (String, String) {
+fn resolve_contact_emails() -> ContactAddresses {
     let env_contact = env_nonempty("DOIGET_CONTACT_EMAIL");
     let env_unpaywall = env_nonempty("DOIGET_UNPAYWALL_EMAIL");
     // Fully env-configured processes never touch the disk at all.
-    if let (Some(contact), Some(unpaywall)) = (&env_contact, &env_unpaywall) {
-        return (contact.clone(), unpaywall.clone());
+    if let (Some(crossref), Some(unpaywall)) = (&env_contact, &env_unpaywall) {
+        return ContactAddresses {
+            crossref: crossref.clone(),
+            unpaywall: unpaywall.clone(),
+        };
     }
     let file = crate::user_extension::load_or_default();
-    let contact = env_contact
+    let crossref = env_contact
         .or(file.contact_email)
         .unwrap_or_else(|| FALLBACK_CONTACT_EMAIL.to_string());
     let unpaywall = env_unpaywall
         .or(file.unpaywall_email)
-        .unwrap_or_else(|| contact.clone());
-    (contact, unpaywall)
+        .unwrap_or_else(|| crossref.clone());
+    ContactAddresses {
+        crossref,
+        unpaywall,
+    }
 }
 
 fn arxiv_source_from_env() -> ArxivSource {
@@ -1265,7 +1285,9 @@ async fn fetch_paper_doi(
     store_root: &Utf8Path,
     safekey: &Safekey,
 ) -> Result<FetchPaperOutcome, FetchError> {
-    let (contact, unpaywall_contact) = resolve_contact_emails();
+    let addresses = resolve_contact_emails();
+    let contact = addresses.crossref;
+    let unpaywall_contact = addresses.unpaywall;
     let crossref = crossref_source_from_env(&contact);
     // Issue #120: Crossref is NON-fatal. A transient Crossref failure
     // must not abort the whole DOI fetch when Unpaywall alone can
@@ -2812,7 +2834,10 @@ mod tests {
         );
         let _env = LadderEnv::scoped(&dir);
 
-        let (contact, unpaywall) = resolve_contact_emails();
+        let ContactAddresses {
+            crossref: contact,
+            unpaywall,
+        } = resolve_contact_emails();
         assert_eq!(contact, "file@institution.edu");
         assert_eq!(unpaywall, "up@institution.edu");
     }
@@ -2827,7 +2852,10 @@ mod tests {
         let mut env = LadderEnv::scoped(&dir);
         env.set("DOIGET_CONTACT_EMAIL", "env@institution.edu");
 
-        let (contact, unpaywall) = resolve_contact_emails();
+        let ContactAddresses {
+            crossref: contact,
+            unpaywall,
+        } = resolve_contact_emails();
         assert_eq!(contact, "env@institution.edu");
         assert_eq!(
             unpaywall, "env@institution.edu",
@@ -2847,7 +2875,10 @@ mod tests {
             .to_string();
         let _env = LadderEnv::scoped(&dir);
 
-        let (contact, unpaywall) = resolve_contact_emails();
+        let ContactAddresses {
+            crossref: contact,
+            unpaywall,
+        } = resolve_contact_emails();
         assert_eq!(contact, FALLBACK_CONTACT_EMAIL);
         assert_eq!(unpaywall, FALLBACK_CONTACT_EMAIL);
     }

@@ -3,7 +3,7 @@
 // `doiget.js` used to hold this inline, which meant the npm packaging had
 // no executable test at all — only a grep in posture-lint comparing name
 // lists across three files. A grep cannot catch a wrong `require.resolve`
-// path or a mis-forwarded exit code.
+// path or an exit code forwarded wrongly.
 "use strict";
 
 // npm's `os`/`cpu` vocabulary. The release assets use x86_64/aarch64; the

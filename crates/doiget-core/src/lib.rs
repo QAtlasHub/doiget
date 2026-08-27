@@ -1378,29 +1378,29 @@ impl CapabilityProfile {
         // `credentials` module docs and `docs/LEGAL.md` §6a.2.
         let creds = crate::credentials::load_or_default();
         let tdm_elsevier = resolve_tdm_grant(
-            AgreeVar("DOIGET_AGREE_TDM_ELSEVIER"),
-            KeyVar("DOIGET_KEY_ELSEVIER"),
+            AgreeVar::new("DOIGET_AGREE_TDM_ELSEVIER"),
+            KeyVar::new("DOIGET_KEY_ELSEVIER"),
             "tdm-elsevier",
             cfg!(feature = "tdm-elsevier"),
             creds.api_key("elsevier"),
         )?;
         let tdm_aps = resolve_tdm_grant(
-            AgreeVar("DOIGET_AGREE_TDM_APS"),
-            KeyVar("DOIGET_KEY_APS"),
+            AgreeVar::new("DOIGET_AGREE_TDM_APS"),
+            KeyVar::new("DOIGET_KEY_APS"),
             "tdm-aps",
             cfg!(feature = "tdm-aps"),
             creds.api_key("aps"),
         )?;
         let tdm_springer = resolve_tdm_grant(
-            AgreeVar("DOIGET_AGREE_TDM_SPRINGER"),
-            KeyVar("DOIGET_KEY_SPRINGER"),
+            AgreeVar::new("DOIGET_AGREE_TDM_SPRINGER"),
+            KeyVar::new("DOIGET_KEY_SPRINGER"),
             "tdm-springer",
             cfg!(feature = "tdm-springer"),
             creds.api_key("springer"),
         )?;
         let tdm_ieee = resolve_tdm_grant(
-            AgreeVar("DOIGET_AGREE_TDM_IEEE"),
-            KeyVar("DOIGET_KEY_IEEE"),
+            AgreeVar::new("DOIGET_AGREE_TDM_IEEE"),
+            KeyVar::new("DOIGET_KEY_IEEE"),
             "tdm-ieee",
             cfg!(feature = "tdm-ieee"),
             creds.api_key("ieee"),
@@ -1442,6 +1442,57 @@ fn resolve_metadata_flag(env_var: &str, feature: &str, feature_enabled: bool) ->
     }
 }
 
+/// The env var carrying the per-publisher agreement.
+///
+/// A newtype because `agree_var` and `key_var` were adjacent `&str`
+/// parameters: transposing them at a call site type-checked, and the
+/// resulting build would treat the KEY as the agreement signal and the
+/// AGREEMENT as the key. `docs/LEGAL.md` §6a.2 makes that agreement an
+/// enforced control, so "nothing stops a fifth publisher's call site from
+/// being copy-pasted wrong" is not a risk worth carrying for two saved
+/// characters.
+///
+/// `pub(crate)` with a private field: the only consumer is a private `fn`
+/// in this module, so a public tuple struct added semver surface nothing
+/// outside the crate can reach. The private field also closes the variant
+/// the newtype alone did not — `AgreeVar("DOIGET_KEY_ELSEVIER")` is the
+/// same transposition expressed as content rather than position, and it
+/// compiled. [`AgreeVar::new`] refuses it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AgreeVar(&'static str);
+
+/// The env var carrying the per-publisher API key. See [`AgreeVar`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct KeyVar(&'static str);
+
+impl AgreeVar {
+    /// # Panics
+    ///
+    /// If `var` is not a `DOIGET_AGREE_TDM_*` name. Every argument is a
+    /// literal in this file, so this is a typo caught at the first test
+    /// run, not a runtime failure mode.
+    pub(crate) fn new(var: &'static str) -> Self {
+        assert!(
+            var.starts_with("DOIGET_AGREE_TDM_"),
+            "{var} is not an agreement variable"
+        );
+        Self(var)
+    }
+}
+
+impl KeyVar {
+    /// # Panics
+    ///
+    /// If `var` is not a `DOIGET_KEY_*` name. See [`AgreeVar::new`].
+    pub(crate) fn new(var: &'static str) -> Self {
+        assert!(
+            var.starts_with("DOIGET_KEY_"),
+            "{var} is not a key variable"
+        );
+        Self(var)
+    }
+}
+
 /// Resolve a Tier 3 TDM grant from the agreement env var, the key (env var
 /// or `credentials.toml`), and the per-publisher Cargo feature.
 ///
@@ -1462,22 +1513,6 @@ fn resolve_metadata_flag(env_var: &str, feature: &str, feature_enabled: bool) ->
 /// `KeyButNotAgreed` now also fires for a file-supplied key with no
 /// `DOIGET_AGREE_TDM_<PUBLISHER>=1`. That is the point — `docs/LEGAL.md`
 /// §6a.2 is an enforced control, and a convenience must not dilute it.
-/// The env var carrying the per-publisher agreement.
-///
-/// A newtype because `agree_var` and `key_var` were adjacent `&str`
-/// parameters: transposing them at a call site type-checked, and the
-/// resulting build would treat the KEY as the agreement signal and the
-/// AGREEMENT as the key. `docs/LEGAL.md` §6a.2 makes that agreement an
-/// enforced control, so "nothing stops a fifth publisher's call site from
-/// being copy-pasted wrong" is not a risk worth carrying for two saved
-/// characters.
-#[derive(Debug, Clone, Copy)]
-pub struct AgreeVar(pub &'static str);
-
-/// The env var carrying the per-publisher API key. See [`AgreeVar`].
-#[derive(Debug, Clone, Copy)]
-pub struct KeyVar(pub &'static str);
-
 fn resolve_tdm_grant(
     agree: AgreeVar,
     key: KeyVar,
@@ -1800,8 +1835,8 @@ agreed = true
         let _g = unset_all_capability_env_vars();
 
         let granted = resolve_tdm_grant(
-            AgreeVar("DOIGET_AGREE_TDM_ELSEVIER"),
-            KeyVar("DOIGET_KEY_ELSEVIER"),
+            AgreeVar::new("DOIGET_AGREE_TDM_ELSEVIER"),
+            KeyVar::new("DOIGET_KEY_ELSEVIER"),
             "tdm-elsevier",
             false,
             Some("file-key"),
@@ -1813,8 +1848,8 @@ agreed = true
 
         let _key = EnvGuard::set("DOIGET_KEY_ELSEVIER", "   ");
         match resolve_tdm_grant(
-            AgreeVar("DOIGET_AGREE_TDM_ELSEVIER"),
-            KeyVar("DOIGET_KEY_ELSEVIER"),
+            AgreeVar::new("DOIGET_AGREE_TDM_ELSEVIER"),
+            KeyVar::new("DOIGET_KEY_ELSEVIER"),
             "tdm-elsevier",
             false,
             Some("file-key"),
@@ -1826,8 +1861,8 @@ agreed = true
         let _agree = EnvGuard::set("DOIGET_AGREE_TDM_ELSEVIER", "1");
         assert!(
             resolve_tdm_grant(
-                AgreeVar("DOIGET_AGREE_TDM_ELSEVIER"),
-                KeyVar("DOIGET_KEY_ELSEVIER"),
+                AgreeVar::new("DOIGET_AGREE_TDM_ELSEVIER"),
+                KeyVar::new("DOIGET_KEY_ELSEVIER"),
                 "tdm-elsevier",
                 false,
                 Some("file-key"),
