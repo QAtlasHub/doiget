@@ -1,8 +1,12 @@
 # Reproducible-build settings. See docs/SECURITY.md §1.9.
-# Per-developer overrides may go in .cargo/config.local.toml (gitignored).
-
-[build]
-# Default to the host triple. CI overrides per matrix entry.
+#
+# Per-developer overrides do NOT go in a sibling file here. Cargo reads only
+# `config.toml` from a `.cargo` directory, and the `include = [...]` that
+# would make a sibling real is a HARD ERROR before any cargo command runs
+# when the included file is absent — which it is in every fresh clone and on
+# every CI runner, because such a file would be gitignored. See
+# CONTRIBUTING.md "Per-developer settings" for the two mechanisms that work
+# ($CARGO_HOME/config.toml and CARGO_TARGET_DIR).
 
 [net]
 git-fetch-with-cli = false

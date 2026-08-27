@@ -1,42 +1,58 @@
 # Integration guides
 
-> **Status: INFORMATIVE (placeholder).** Concrete host-integration snippets land
-> in **Phase 3** alongside the MCP server (`doiget serve`). Until then, this
-> directory is a pointer rather than a recipe collection.
+> **Status: INFORMATIVE.** `doiget serve` ships; these are the host-side
+> snippets. Each page states whether it has been exercised against that
+> host, and the ones that have not say so.
 
-## Why this is empty today
+`doiget serve` is a stdio MCP server. It is the same entry point everywhere —
+`mcpb/manifest.json` runs `doiget serve`, and so does the MCP Registry entry.
+The differences between hosts are only where the config file lives and what it
+is called.
 
-Phase 0 ships specifications (see [`../MCP_TOOLS.md`](../MCP_TOOLS.md) and
-[`../PUBLIC_API.md`](../PUBLIC_API.md)) but no functional MCP server. Without a
-runnable `doiget serve`, integration snippets would either be untested aspirational
-config or would lead a reader to a Phase 0 stub error. Phase 3 ships the actual
-server and the corresponding host snippets in this directory.
-
-## Planned files (Phase 3)
-
-| File | Host | Status |
+| File | Host | Exercised? |
 |---|---|---|
-| `claude-desktop.md` | Claude Desktop (stdio MCP) | Phase 3 (stub) |
-| `cursor.md` | Cursor | Phase 3 (stub) |
-| `codex.md` | OpenAI Codex CLI | Phase 3 (stub) |
-| `claude-code.md` | Claude Code (this tool) | Phase 3 (stub) |
-| `obsidian.md` | Obsidian backend export | Phase 7 (optional, stub) |
-| `chain-with-paperqa.md` | Composition with paper-qa for content processing | Phase 3+ (stub) |
+| [`claude-code.md`](./claude-code.md) | Claude Code | **Yes** — this is what the project is developed under |
+| [`claude-desktop.md`](./claude-desktop.md) | Claude Desktop (`.mcpb`, or manual stdio) | **Yes**, for the `.mcpb` route (shipping since 0.8.4) |
+| [`cursor.md`](./cursor.md) | Cursor | No |
+| [`codex.md`](./codex.md) | OpenAI Codex CLI | No |
+| [`obsidian.md`](./obsidian.md) | Obsidian | Not applicable — Obsidian hosts no MCP server; the page says what does work |
+| [`chain-with-paperqa.md`](./chain-with-paperqa.md) | Composition with paper-qa | No, as a chain |
 
-## What to read in the meantime
+## The one setting to get right
 
-- **MCP tool spec:** [`../MCP_TOOLS.md`](../MCP_TOOLS.md) — the exact tool surface
-  Phase 3 will expose. Sufficient to plan a host integration in advance.
-- **Public Rust API:** [`../PUBLIC_API.md`](../PUBLIC_API.md) — for embedders that
-  link `doiget-core` directly rather than going through the MCP server.
-- **Architecture overview:** [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §4-6 — for
-  how tools, transport, and the capability gate fit together.
-- **Configuration:** [`../CONFIG.md`](../CONFIG.md) — env-var precedence and the
-  `~/.config/doiget/` layout that any host-side wiring will need to respect.
+`DOIGET_STORE_ROOT`, as an absolute path.
+
+The store root defaults to `./papers` **relative to the process's working
+directory** (ADR-0036). For a CLI run that is exactly right — artifacts land
+where you are working. For an MCP server it is not: the working directory
+belongs to the host, so the store lands somewhere you did not choose and a
+later CLI run does not see it. That is
+[#369](https://github.com/QAtlasHub/doiget/issues/369).
+
+`DOIGET_CONTACT_EMAIL` is the second one. Without it every request goes out as
+`doiget@localhost` on the non-polite pool, where a throttled answer is
+indistinguishable from "this paper has no OA copy"
+([#504](https://github.com/QAtlasHub/doiget/issues/504)).
+
+Everything else is off by default and documented in
+[`../CAPABILITY.md`](../CAPABILITY.md).
+
+## Also worth reading
+
+- **Tool surface:** [`../MCP_TOOLS.md`](../MCP_TOOLS.md) — every tool with its
+  JSON Schema. `doiget_capability_profile` reports the same thing at runtime
+  for the build you actually have.
+- **Configuration:** [`../CONFIG.md`](../CONFIG.md) — precedence and the
+  `config.toml` schema.
+- **Errors:** [`../ERRORS.md`](../ERRORS.md) — the closed set of error codes
+  and what an agent should do with each.
+- **Rust API:** [`../PUBLIC_API.md`](../PUBLIC_API.md) — for embedders linking
+  `doiget-core` directly instead of going through MCP.
 
 ## Contributing a snippet
 
-If you have a working integration with an MCP host that is not in the planned list,
-open a GitHub Discussion describing the host, the JSON-RPC trace, and any
-host-specific config quirks. PRs adding a new file under `docs/INTEGRATION/` will
-be accepted in Phase 3+ once `doiget serve` is real and the snippet is verifiable.
+A working configuration for a host not listed here is welcome. Open a
+[GitHub Discussion](https://github.com/QAtlasHub/doiget/discussions) with the
+host, the config file and its path, and anything host-specific that bit you —
+or a PR adding a page in the shape of the others, including an honest
+"exercised?" line.

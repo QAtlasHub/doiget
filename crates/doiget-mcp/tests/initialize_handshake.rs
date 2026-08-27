@@ -561,7 +561,7 @@ async fn doiget_metadata_only_doi_crossref_happy_path_returns_metadata_envelope(
     Mock::given(method("GET"))
         .and(path("/works/10.1234/example"))
         .respond_with(ResponseTemplate::new(200).set_body_string(
-            r#"{"status":"ok","message":{"title":["Example Paper"],"link":[{"URL":"https://example.org/oa.pdf"}]}}"#,
+            r#"{"status":"ok","message":{"title":["Example Paper"],"link":[{"URL":"https://example.org/oa.pdf","content-type":"application/pdf","intended-application":"unspecified"}]}}"#,
         ))
         .mount(&server)
         .await;
@@ -614,8 +614,13 @@ async fn doiget_metadata_only_doi_crossref_happy_path_returns_metadata_envelope(
     // Crossref does not surface a license directly (Phase 1; future
     // slices will chain Unpaywall for license enrichment).
     assert_eq!(structured["license"], serde_json::Value::Null);
-    // OA URL discovered via `message.link[]`. Surfaced but never
-    // followed — the test does not mount a mock for it.
+    // Publisher URL discovered via `message.link[]`. The
+    // `intended-application: unspecified` marker is load-bearing since
+    // #517: an entry scoped to Similarity Check / syndication / TDM, or
+    // one with the field absent, is refused rather than surfaced.
+    //
+    // `metadata_only` still never follows it — the test mounts no mock
+    // for the URL, and a request would fail the run.
     assert_eq!(
         structured["oa_url"],
         serde_json::json!("https://example.org/oa.pdf")

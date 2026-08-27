@@ -1,0 +1,13 @@
+{
+  "name": "doiget",
+  "description": "Turn DOIs and arXiv IDs into local PDFs and structured metadata via official Open-Access APIs. Never bypasses paywalls.",
+  "version": "0.8.11",
+  "author": {
+    "name": "Sota Shimozono",
+    "url": "https://github.com/QAtlasHub/doiget"
+  },
+  "homepage": "https://github.com/QAtlasHub/doiget",
+  "repository": "https://github.com/QAtlasHub/doiget",
+  "license": "MIT",
+  "keywords": ["doi", "arxiv", "open-access", "bibliography", "crossref", "unpaywall", "research"]
+}

@@ -38,6 +38,42 @@ subcommand list, and any `doiget <subcommand>` returns a `Phase 0 stub` error.
 `cargo test` runs the four smoke tests in
 `crates/doiget-core/src/lib.rs::tests`.
 
+### Per-developer settings
+
+**Do not put them in the repository.** `.cargo/config.toml` is tracked and pins
+the reproducibility settings ([`docs/SECURITY.md`](docs/SECURITY.md) §1.9); it is
+not a place for your machine's preferences. There is no
+`.cargo/config.local.toml` — cargo reads only `config.toml` from a `.cargo`
+directory, and the `include = [...]` that would make a sibling file real is a
+hard error before any cargo command runs when the file is missing, which it
+would be in every fresh clone and on every CI runner (#521).
+
+Two mechanisms work and need no change to this repository:
+
+**`$CARGO_HOME/config.toml`** (`~/.cargo/config.toml`) — cargo merges it into
+the config hierarchy automatically for every project. Per cargo's documented
+precedence it sits *below* the repository's `.cargo/config.toml`, so the pinned
+`[net]` / `[term]` / reproducibility values still win where the two overlap.
+That is the right way round: your defaults apply to everything the repo does
+not deliberately fix.
+
+**`CARGO_TARGET_DIR`** (or `--target-dir`) for build output. Worth being
+deliberate about:
+
+```sh
+# per-checkout, and it goes away with the checkout
+cargo build                       # -> ./target
+
+# shared across checkouts — pick a path you will actually look at
+export CARGO_TARGET_DIR="$HOME/.cache/cargo-target/doiget"
+```
+
+A shared target directory grows without bound and nothing prunes it. On
+2026-08-26 two of them — set ad hoc to fixed paths under `%TEMP%` — held
+**115 GB and 81 GB** on one machine and took it to 95% full; deleting them
+recovered 195 GB. If you share one, put it somewhere you will notice, and
+`cargo clean --target-dir <path>` occasionally.
+
 ## Before you open a PR
 
 1. Read [docs/SCOPE.md](docs/SCOPE.md) for the **Permanent non-goals** list. PRs that move

@@ -3906,20 +3906,10 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
 /// case the caller downgrades to "user extension disabled" rather
 /// than failing the whole request.
 fn config_dir_utf8() -> anyhow::Result<Utf8PathBuf> {
-    if let Ok(s) = std::env::var("XDG_CONFIG_HOME") {
-        if !s.is_empty() {
-            return Ok(Utf8PathBuf::from(s));
-        }
-    }
-    if let Ok(s) = std::env::var("APPDATA") {
-        if !s.is_empty() {
-            return Ok(Utf8PathBuf::from(s));
-        }
-    }
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| anyhow::anyhow!("neither HOME nor USERPROFILE is set"))?;
-    Ok(Utf8PathBuf::from(home).join(".config"))
+    // Delegated to `doiget_core::user_extension::config_dir` (#504): this
+    // was the second of three hand-maintained copies, and the CLI's
+    // already disagreed with it about a blank `XDG_CONFIG_HOME`.
+    Ok(doiget_core::user_extension::config_dir()?)
 }
 
 /// Resolve the provenance log path. Mirrors the CLI's precedence
@@ -4731,6 +4721,45 @@ mod tests {
                 client.source_allowlist(key).is_some(),
                 "the production MCP client has no allowlist for `{key}`; a TDM fetch \
                  would die at UnknownSource (#454)"
+            );
+        }
+    }
+
+    /// #516: the MCP half of the Tier-2 transport gate.
+    ///
+    /// The CLI builder had this extend behind `#[cfg(feature =
+    /// "citation")]` while the sources it serves are gated on
+    /// `metadata`, so a `metadata`-only build reached them and died at
+    /// `UnknownSource`. `build_http_client_for_fetch` registers
+    /// `tier_2_allowlist()` unconditionally and is therefore correct
+    /// today — this pins that, because "correct today in one of two
+    /// hand-maintained twins" is exactly the state #454 was filed from.
+    #[test]
+    #[serial_test::serial]
+    fn the_production_client_registers_every_tier_2_source_key() {
+        // Any base override takes the test-mode branch, which registers
+        // whatever it is handed and would prove nothing.
+        let _guards = [
+            EnvGuard::unset("DOIGET_ARXIV_BASE"),
+            EnvGuard::unset("DOIGET_ARXIV_SRC_BASE"),
+            EnvGuard::unset("DOIGET_CROSSREF_BASE"),
+            EnvGuard::unset("DOIGET_UNPAYWALL_BASE"),
+            EnvGuard::unset("DOIGET_OA_PUBLISHER_BASE"),
+            EnvGuard::unset("DOIGET_OPENALEX_BASE"),
+            EnvGuard::unset("DOIGET_AR5IV_BASE"),
+        ];
+
+        let client = build_http_client_for_fetch().expect("production client builds");
+
+        let keys: Vec<String> = tier_2_allowlist()
+            .iter()
+            .map(|a| a.source.clone())
+            .collect();
+        assert!(!keys.is_empty(), "the guard must have checked something");
+        for key in keys {
+            assert!(
+                client.source_allowlist(&key).is_some(),
+                "the production MCP client has no allowlist for `{key}`; the \n                 optional chain reaches this source and the fetch would \n                 die at UnknownSource (#516)"
             );
         }
     }
