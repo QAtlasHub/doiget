@@ -235,12 +235,17 @@ Once, by a maintainer with an npm account:
    lost.
 3. `scripts/bootstrap-npm.sh --publish` — publishes the five templates
    verbatim under the `placeholder` dist-tag, then deprecates them.
-4. On npmjs.com, for **each** of the five: Packages → *package* → Settings →
-   **Trusted publishing** → GitHub Actions
-   (`https://www.npmjs.com/package/<name>/settings`), org `QAtlasHub`, repo
-   `doiget`, workflow filename `release-plz.yml` — filename only, no path —
-   environment name empty, allowed actions `npm publish`. The workflow filename
-   must match exactly or the OIDC claim will not match and the publish fails.
+4. On npmjs.com, for **each** of the five: go to
+   **`https://www.npmjs.com/package/<name>/access`** and find *Trusted
+   Publisher* → GitHub Actions. Org `QAtlasHub`, repo `doiget`, workflow
+   filename `release-plz.yml` — a filename, no path — environment name empty,
+   allowed actions `npm publish`. The workflow filename must match exactly or
+   the OIDC claim will not match and the publish fails without saying why.
+
+   The URL is the **access** page, confirmed by setting it up. npm's own docs
+   describe the route as "your package settings … the 'Trusted Publisher'
+   section", which reads like a Settings tab and is not one — following that
+   wording sends you to a page that does not exist.
 5. Revoke the token.
 
 **`latest` is not left unset**, contrary to what this section first claimed.

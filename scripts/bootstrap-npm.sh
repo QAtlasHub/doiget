@@ -225,7 +225,7 @@ cat <<EOF
 
 Next, on npmjs.com, for EACH of these packages:
 
-  Packages -> <package> -> Settings -> Trusted publishing -> GitHub Actions
+  the package's ACCESS page (below) -> Trusted Publisher -> GitHub Actions
 
     Organization or user   QAtlasHub
     Repository             doiget
@@ -233,7 +233,7 @@ Next, on npmjs.com, for EACH of these packages:
     Environment name       (leave empty)
     Allowed actions        npm publish
 
-$(for p in $PACKAGES; do echo "  https://www.npmjs.com/package/$p/settings"; done)
+$(for p in $PACKAGES; do echo "  https://www.npmjs.com/package/$p/access"; done)
 
 Then revoke the token used here — the release workflow authenticates over OIDC
 and needs no stored credential.
