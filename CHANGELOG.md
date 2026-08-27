@@ -32,6 +32,14 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   comes from the `cd` rather than from spelling the path out, and the two
   environments agree on where "here" is.
 
+  It also checks for two-factor auth before publishing. npm requires a second
+  factor to publish; with 2FA *disabled* there is no code to ask for, so npm
+  does not prompt — it returns `403 ... Two-factor authentication or granular
+  access token with bypass 2fa enabled is required`, which reads like a
+  permissions problem rather than "this account is not set up yet". That cost
+  two failed runs and a wrong diagnosis about tokens and paths. The script now
+  says which of the four setup steps is missing.
+
 - **[ci]** `version-check` was red on **every** PR to `next`, unconditionally.
   ADR-0025 D2-G5 wants a non-empty `## [X.Y.Z]` section for exactly the tagged
   version; D4 says that per-version section is generated and reviewed *at release

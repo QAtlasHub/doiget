@@ -146,6 +146,26 @@ elif [ -n "$TODO" ]; then
   fi
   echo
   echo "publishing as: $who"
+  # npm requires a second factor to publish. With 2FA disabled there is no
+  # code to ask for, so npm does not prompt -- it just returns
+  #   403 ... Two-factor authentication or granular access token with bypass
+  #   2fa enabled is required to publish packages
+  # which reads like a permissions problem rather than "your account is not
+  # set up yet". Say so before spending an OTP prompt that will never appear.
+  if npm profile get 2>/dev/null | grep -qi "two-factor auth: disabled"; then
+    echo >&2
+    echo "error: this npm account has two-factor auth disabled, and npm requires" >&2
+    echo "       a second factor to publish. Nothing here can work until it is on." >&2
+    echo >&2
+    echo "  1. npmjs.com -> Account -> Two-Factor Authentication (authenticator" >&2
+    echo "     app). Save the recovery codes." >&2
+    echo "  2. While there, link your GitHub account: it is npm's documented" >&2
+    echo "     fallback if the 2FA device AND the recovery codes are both lost." >&2
+    echo "  3. npm logout && npm login -- the current session token predates" >&2
+    echo "     2FA and is not second-factor verified." >&2
+    echo "  4. Re-run this script." >&2
+    exit 1
+  fi
   # An OTP is accepted for a short window, so one code can cover several
   # calls. Passing it explicitly also lets this run without a TTY.
   OTP_ARGS=""
