@@ -12,6 +12,15 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[dist]** `scripts/bootstrap-npm.sh` printed the wrong URL for the trusted
+  publisher setup. `/package/<name>/access` is the collaborator page; the setting
+  lives at `/package/<name>/settings` under **Trusted publishing**. The runbook in
+  `CONTRIBUTING.md` said "Settings → Trusted Publisher", which is close enough to
+  navigate by but does not match the label npm actually uses. Both now match npm's
+  own documented path, and the runbook notes that the workflow filename is a
+  filename with no path, and that a mismatch there fails the OIDC claim rather
+  than producing a useful error (#511).
+
 - **[mcp]** **Every release binary shipped without `doiget_expand_citation_graph`**,
   the tool it was built to ship. `Server::new` drops that route on
   `cfg!(feature = "citation")` *evaluated inside `doiget-mcp`*, and `doiget-cli`'s

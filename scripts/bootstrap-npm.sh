@@ -225,15 +225,15 @@ cat <<EOF
 
 Next, on npmjs.com, for EACH of these packages:
 
-  Settings -> Trusted Publisher -> GitHub Actions
+  Packages -> <package> -> Settings -> Trusted publishing -> GitHub Actions
 
     Organization or user   QAtlasHub
     Repository             doiget
-    Workflow filename      release-plz.yml
+    Workflow filename      release-plz.yml     (filename only, no path)
+    Environment name       (leave empty)
     Allowed actions        npm publish
-    Environment            (leave empty)
 
-$(for p in $PACKAGES; do echo "  https://www.npmjs.com/package/$p/access"; done)
+$(for p in $PACKAGES; do echo "  https://www.npmjs.com/package/$p/settings"; done)
 
 Then revoke the token used here — the release workflow authenticates over OIDC
 and needs no stored credential.
