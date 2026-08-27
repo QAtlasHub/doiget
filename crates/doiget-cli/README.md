@@ -20,11 +20,21 @@ npm install -g doiget-cli    # puts `doiget` on PATH
 
 The per-platform binaries ship as `optionalDependencies` carrying the same
 signed release artifacts, with **no postinstall download** — so this works under
-`--ignore-scripts` and through a registry mirror. This route gives you the
-default **Tier 1** build; the feature-gated Tier 2 / Tier 3 sources below need
-`cargo`.
+`--ignore-scripts` and through a registry mirror.
 
-### cargo — if you want the optional sources
+**What you get is the release binary**, built `--no-default-features --features
+oa-only,citation`. `citation` implies `metadata`, so that is Tier 1 *and* Tier 2
+(OpenAlex, Semantic Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE, Europe PMC)
+*and* the citation graph. Identical to what the shell installer, the GitHub
+Release assets and the `.mcpb` Claude Desktop extension give you — every
+prebuilt channel ships the same binary.
+
+The one thing no prebuilt channel can give you is **Tier 3**: the institutional
+TDM connectors are Cargo features, and each needs a signed agreement with the
+publisher, so they are opted into at build time rather than shipped and gated at
+runtime. That needs the route below.
+
+### cargo — only route to the Tier 3 TDM connectors
 
 ```sh
 cargo install doiget-cli                                    # Tier 1 only (default)
