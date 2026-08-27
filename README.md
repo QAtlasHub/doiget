@@ -113,6 +113,9 @@ installers above — they need no compiler.
 
 ### npm / npx — one line in an agent config
 
+> **Not live yet.** The packages do not exist on the registry, so the commands
+> below fail today. See the channel table below for why, and what is left.
+
 ```sh
 npx -y doiget serve          # MCP server, no install step
 npm install -g doiget        # or put `doiget` on PATH
@@ -133,7 +136,11 @@ packages ship from tagged releases, so a very new commit may be ahead of them.
 
 Reads `.claude-plugin/` from this repository's default branch. The plugin's
 `.mcp.json` runs `doiget serve`, so install the binary by one of the routes
-above first.
+above first — the plugin installs nothing itself. That is also why this is a
+self-hosted marketplace rather than a submission to the Anthropic plugin
+directory: a listing whose first run fails for everyone without the binary
+already on PATH is worse than no listing. Once npm is live the plugin can call
+`npx -y doiget serve` and need nothing installed.
 
 ### Channel status
 
@@ -144,10 +151,19 @@ above first.
 | `cargo install doiget-cli` | shipping (needs a C linker) |
 | `.mcpb` Claude Desktop extension | shipping since 0.8.4 |
 | MCP Registry | listed |
-| npm / npx | publishes from the next tagged release |
+| npm / npx | **not live** — needs a one-time bootstrap, see below |
 | Claude Code plugin | self-hosted marketplace, as above |
 | Homebrew tap, `.deb`, Docker | **not built** |
 | Nix | `flake.nix` exists; whether it exposes an installable package rather than a dev shell is unverified |
+
+npm is the one channel whose pipeline is written and whose packages do not
+exist. npm Trusted Publishing cannot perform a package's *first* publish — the
+setting lives under a package's Settings, and there is no Settings page for a
+package that has never been published — so the release job, which carries no
+token by design, cannot create them. `scripts/bootstrap-npm.sh` does the
+once-only placeholder publish that unblocks it; `CONTRIBUTING.md` has the
+runbook. Until then `npm install doiget` fails with "No matching version",
+which is the intended failure: no `latest` is ever pointed at an empty wrapper.
 
 [#247](https://github.com/QAtlasHub/doiget/issues/247) was closed as completed
 while four of its five channels did not exist; the remaining ones are tracked in
