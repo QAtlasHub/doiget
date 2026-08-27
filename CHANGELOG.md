@@ -71,10 +71,19 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   publisher is configured under a package's Settings and an unpublished package has
   none. So the five packages have to be created once by hand before the pipeline
   that was built to publish them can run at all. The script publishes the checked-in
-  `0.0.0` templates under a `placeholder` dist-tag — never `latest`, so
-  `npm install doiget` keeps failing with "No matching version" rather than
-  installing a wrapper with no binary in it — then deprecates them and prints the
-  exact Trusted Publisher fields to enter (#511).
+  `0.0.0` templates under a `placeholder` dist-tag, deprecates them, and prints
+  the exact Trusted Publisher fields to enter (#511).
+
+  Two things this entry originally claimed are false, corrected here rather than
+  quietly rewritten. **`--tag placeholder` does not keep `latest` unset**: npm
+  sets `latest` on a package's first publish whatever `--tag` says, measured
+  after the real run as `doiget-linux-x64-> {'placeholder': '0.0.0', 'latest':
+  '0.0.0'}`. So a placeholder is exactly what `npm install <pkg>` resolves to
+  until a release moves `latest`, which makes the deprecation notice the only
+  warning a user gets rather than a nicety. And **the `doiget` wrapper is not
+  published**: npm refuses the name as too similar to the existing `giget`
+  (`403 ... Package name too similar`). The four per-platform packages are
+  published; a naming dispute is open with npm support.
 
 ### Fixed
 

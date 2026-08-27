@@ -23,12 +23,18 @@
 # is inert. The wrapper's `optionalDependencies` pin `0.0.0`, which resolves to
 # those inert packages.
 #
-# Under `--tag placeholder`, NOT `latest`. `npm publish` only moves `latest`
-# when the tag is `latest`, so after this runs `npm install doiget` fails with
-# "No matching version" rather than installing a wrapper with no binary in it.
-# That is the honest state until a real release: this repo has only ever pushed
-# stable tags (38 tags, zero betas), and the release job publishes betas under
-# `beta`, so `latest` first appears at the next STABLE release.
+# Under `--tag placeholder`. This does NOT keep `latest` unset -- an earlier
+# version of this comment claimed it did, and the registry disagrees: npm sets
+# `latest` on a package's FIRST publish regardless of `--tag`. Measured after
+# the real run:
+#
+#   doiget-linux-x64  dist-tags: {'placeholder': '0.0.0', 'latest': '0.0.0'}
+#
+# So a placeholder IS what `npm install <pkg>` resolves to until a real release
+# moves `latest`. That is why the deprecation below is not cosmetic: it is the
+# only warning a user gets. It is also why the wrapper matters most -- nobody
+# installs a platform package directly, but `npm install doiget` would have
+# landed on an empty 0.0.0.
 #
 # WHAT IT DOES NOT DO
 #
@@ -173,7 +179,6 @@ elif [ -n "$TODO" ]; then
     OTP_ARGS="--otp=$OTP"
   fi
   echo
-  published=""
   for p in $TODO; do
     echo "--- $p"
     # RELATIVE, from $REPO_ROOT, and both halves matter.
@@ -191,18 +196,29 @@ elif [ -n "$TODO" ]; then
     # spelling the path out.
     # shellcheck disable=SC2086
     npm publish "./npm/$p" --access public --tag "$PLACEHOLDER_TAG" $OTP_ARGS
-    published="$published $p"
   done
-  if [ -n "$published" ]; then
-    echo
-    echo "marking the placeholders so nobody installs one by accident:"
-    for p in $published; do
-      # shellcheck disable=SC2086
-      npm deprecate "$p@0.0.0" \
-        "placeholder published to bootstrap npm trusted publishing; use a real release" \
-        $OTP_ARGS || echo "  (deprecate failed for $p — cosmetic, re-run 'npm deprecate' later)"
-    done
-  fi
+fi
+
+# Deprecate every 0.0.0 on the registry, not only the ones this run published.
+# A run that stops half way leaves the earlier packages undeprecated, and since
+# npm points `latest` at them they are exactly what `npm install` resolves to --
+# the notice is the only warning anyone gets, so it must not depend on the run
+# reaching the end.
+if [ "$PUBLISH" = "1" ]; then
+  echo
+  echo "marking placeholders so nobody installs one by accident:"
+  for p in $PACKAGES; do
+    code="$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/$p")"
+    [ "$code" = "200" ] || continue
+    if curl -s "https://registry.npmjs.org/$p" | grep -q '"deprecated"'; then
+      echo "  already deprecated: $p@0.0.0"
+      continue
+    fi
+    # shellcheck disable=SC2086
+    npm deprecate "$p@0.0.0" \
+      "placeholder published to bootstrap npm trusted publishing; use a real release" \
+      $OTP_ARGS || echo "  (deprecate failed for $p — re-run this script to retry)"
+  done
 fi
 
 cat <<EOF
@@ -222,7 +238,8 @@ $(for p in $PACKAGES; do echo "  https://www.npmjs.com/package/$p/access"; done)
 Then revoke the token used here — the release workflow authenticates over OIDC
 and needs no stored credential.
 
-Note: 'latest' is deliberately unset. It is first written by the next STABLE
-release; betas publish under the 'beta' dist-tag. Until then 'npm install
-doiget' fails cleanly rather than installing an empty wrapper.
+Note: npm sets 'latest' to 0.0.0 on a first publish whatever --tag says, so
+until a real release these placeholders ARE what 'npm install <pkg>' resolves
+to. The deprecation notice is the only thing warning anyone. The next release
+moves 'latest' to a real version.
 EOF

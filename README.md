@@ -162,8 +162,12 @@ setting lives under a package's Settings, and there is no Settings page for a
 package that has never been published — so the release job, which carries no
 token by design, cannot create them. `scripts/bootstrap-npm.sh` does the
 once-only placeholder publish that unblocks it; `CONTRIBUTING.md` has the
-runbook. Until then `npm install doiget` fails with "No matching version",
-which is the intended failure: no `latest` is ever pointed at an empty wrapper.
+runbook.
+
+As of 2026-08-27 the four per-platform packages are published as `0.0.0`
+placeholders and **the `doiget` wrapper is not**: npm refuses the name as too
+similar to the existing `giget` package, and a naming dispute is open. Until
+that resolves there is nothing to `npm install`.
 
 [#247](https://github.com/QAtlasHub/doiget/issues/247) was closed as completed
 while four of its five channels did not exist; the remaining ones are tracked in
