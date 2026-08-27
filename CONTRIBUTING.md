@@ -216,6 +216,35 @@ is the binding spec and full runbook. Summary:
   to the fixed commit (the pipeline runs the workflow/scripts *as of the
   tagged tree*). Do not reintroduce a perpetual "release PR".
 
+### npm: the one-time bootstrap
+
+The `publish to npm` job authenticates over OIDC and holds no `NPM_TOKEN`.
+That is the right end state and it cannot bootstrap itself: **npm Trusted
+Publishing cannot perform a package's first publish**, because the trusted
+publisher is configured under a package's Settings and an unpublished package
+has none. v0.8.11 shipped with that job red and the five packages still
+absent from the registry.
+
+Once, by a maintainer with an npm account:
+
+1. `scripts/bootstrap-npm.sh` — dry run. It reads the package list from
+   `scripts/stage-npm.sh`, checks each template is still at the `0.0.0`
+   placeholder, and refuses to proceed if any package already exists.
+2. `npm login`, with 2FA enabled and the GitHub account linked — npm's
+   documented fallback when a 2FA device and its recovery codes are both
+   lost.
+3. `scripts/bootstrap-npm.sh --publish` — publishes the five templates
+   verbatim under the `placeholder` dist-tag, then deprecates them.
+4. On npmjs.com, for **each** of the five: Settings → Trusted Publisher →
+   GitHub Actions, org `QAtlasHub`, repo `doiget`, workflow
+   `release-plz.yml`, allowed action `npm publish`, environment empty.
+5. Revoke the token.
+
+`latest` is deliberately left unset. `npm publish` only moves `latest` when
+the tag is `latest`, so until a real release `npm install doiget` fails with
+"No matching version" — a clean error rather than an install of a wrapper
+with no binary in it.
+
 ## ADR workflow
 
 When proposing a binding decision:

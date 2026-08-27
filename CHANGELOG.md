@@ -10,6 +10,20 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Added
+
+- **[dist]** `scripts/bootstrap-npm.sh`, and the runbook for it in
+  `CONTRIBUTING.md`. The `publish to npm` job authenticates over OIDC and holds no
+  token, which is the right end state and cannot bootstrap itself: **npm Trusted
+  Publishing cannot perform a package's first publish**, because the trusted
+  publisher is configured under a package's Settings and an unpublished package has
+  none. So the five packages have to be created once by hand before the pipeline
+  that was built to publish them can run at all. The script publishes the checked-in
+  `0.0.0` templates under a `placeholder` dist-tag — never `latest`, so
+  `npm install doiget` keeps failing with "No matching version" rather than
+  installing a wrapper with no binary in it — then deprecates them and prints the
+  exact Trusted Publisher fields to enter (#511).
+
 ### Fixed
 
 - **[ci]** **The npm publish failed on the 0.8.11 release**, for a reason no part of

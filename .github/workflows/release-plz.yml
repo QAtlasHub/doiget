@@ -688,8 +688,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: [github-release, sign]
     # Runs for betas too — they publish under the `beta` dist-tag, never
-    # `latest`. ADR-0033's cadence means most tags are betas, so gating this
-    # on stable would leave the npm channel months behind the binaries.
+    # `latest`. Note that has never actually happened: every tag pushed to
+    # this repository so far is stable (38 tags, zero betas), so in practice
+    # every run moves `latest`. Kept because a beta tag is legal under
+    # ADR-0025 and would otherwise silently take `latest`.
+    #
+    # This job cannot CREATE a package. npm Trusted Publishing has no way to
+    # perform a first publish, so the five packages must be bootstrapped once
+    # by hand — `scripts/bootstrap-npm.sh`, runbook in CONTRIBUTING.md. Until
+    # that is done this job fails on authentication however correct it is.
     #
     # `continue-on-error` matches `mcp-registry` / `desktop-extension`: a
     # publish failure must not fail a release whose crates and binaries are
