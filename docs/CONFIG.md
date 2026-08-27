@@ -368,7 +368,7 @@ network (--network):
   egress          not probed (needs a third-party echo service; try `curl ifconfig.me`)
                   a proxy fixes addressing, never a bot wall
   unpaywall       polite pool as you@institution.edu
-  oa-publisher    22 host patterns allowlisted
+  oa-publisher    24 host patterns allowlisted
   probe link.springer.com      200 3100 bytes    ok
   probe arxiv.org              200 5854 bytes    ok
   probe ieeexplore.ieee.org    not allowlisted   no request sent; ...

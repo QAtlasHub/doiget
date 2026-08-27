@@ -1340,7 +1340,13 @@ impl Server {
         };
         // Omit `mailto` when no contact email is configured (never a
         // placeholder); the empty string is skipped downstream.
-        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
+        //
+        // Goes through the core ladder so `[network] contact_email` in
+        // `config.toml` counts here too — reading the env var directly meant
+        // #504's fix stopped at `doiget fetch` and never reached the MCP
+        // tools, which is the interface doiget leads with.
+        let contact_email =
+            doiget_core::orchestrator::configured_contact_email().unwrap_or_default();
 
         let ctx = match build_fetch_context() {
             Ok(c) => c,
@@ -1714,7 +1720,8 @@ impl Server {
                 )));
             }
         };
-        let contact_email = std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_default();
+        let contact_email =
+            doiget_core::orchestrator::configured_contact_email().unwrap_or_default();
 
         let ctx = match build_fetch_context() {
             Ok(c) => c,
@@ -2010,8 +2017,7 @@ impl Server {
                 }
             };
 
-            let contact_email = std::env::var("DOIGET_CONTACT_EMAIL")
-                .unwrap_or_else(|_| "doiget@localhost".to_string());
+            let contact_email = doiget_core::orchestrator::contact_email_or_placeholder();
             let source = if let Ok(base) = std::env::var("DOIGET_OPENALEX_BASE") {
                 if let Ok(url) = url::Url::parse(&base) {
                     doiget_core::sources::openalex::OpenalexSource::with_base(url, contact_email)
@@ -3746,8 +3752,7 @@ fn build_fetch_context() -> anyhow::Result<FetchContext> {
 ///
 /// Returns `Err(String)` — callers convert it into a structured tool error.
 fn crossref_source_from_env() -> Result<CrossrefSource, String> {
-    let contact_email =
-        std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget@localhost".to_string());
+    let contact_email = doiget_core::orchestrator::contact_email_or_placeholder();
     match std::env::var("DOIGET_CROSSREF_BASE").ok() {
         Some(base_str) => {
             let base = url::Url::parse(&base_str)

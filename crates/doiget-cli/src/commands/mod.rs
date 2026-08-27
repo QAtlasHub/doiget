@@ -19,7 +19,9 @@
 //! - [`list_recent`] — prints up to N most-recently-fetched entries.
 //! - [`search`] — case-insensitive substring search over stored metadata.
 //!
-//! Other subcommands (`serve`) land in separate PRs.
+//! `serve` has no module here: it delegates straight to `doiget-mcp`. It
+//! is wired in `main.rs` and is what every `docs/INTEGRATION/` guide tells
+//! users to run.
 
 /// Parse a ref, or render the failure in the `docs/ERRORS.md` §3
 /// "Researcher (CLI human)" form and return the CLI exit error.

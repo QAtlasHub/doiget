@@ -33,7 +33,12 @@ pub async fn run(
     mode: OutputMode,
     quiet_was_explicit: bool,
 ) -> Result<()> {
-    let parsed = Ref::parse(&ref_).with_context(|| format!("invalid ref {ref_:?}"))?;
+    // #492 / ADR-0049: one renderer, one exit code. This used to be
+    // `Ref::parse(..).with_context(..)?`, which exited 1 and leaked the
+    // `Caused by:` chain that #477's contract exists to replace — the ADR
+    // claimed the rule held for "every ref-taking command" and this was one
+    // of two that were never in the set.
+    let parsed = super::parse_ref_or_exit(&ref_)?;
     let id: ArxivId = match parsed {
         Ref::Arxiv(a) => a,
         Ref::Doi(_) => {

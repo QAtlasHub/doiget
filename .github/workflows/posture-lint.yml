@@ -165,8 +165,29 @@ jobs:
             printf 'package.json:\n%s\nnpm/:\n%s\n' "$declared" "$onDisk"
             fail=1
           fi
+          # Without this edge the checks form TWO disjoint clusters —
+          # {assets,staged} and {pkgs,shimmed} versus {declared,onDisk} — so
+          # renaming both halves consistently but differently from each other
+          # passed every check while the wrapper depended on a package the
+          # staging script never produces.
+          if [ "$pkgs" != "$declared" ]; then
+            echo "::error::posture-lint npm: scripts/stage-npm.sh and npm/doiget/package.json name different packages (#511)"
+            printf 'stage-npm.sh:\n%s\npackage.json:\n%s\n' "$pkgs" "$declared"
+            fail=1
+          fi
           [ "$fail" -eq 0 ]
           echo "npm mapping OK: $(echo "$pkgs" | tr '\n' ' ')"
+
+      - name: npm packaging tests (#511)
+        shell: bash
+        # The name-list greps above cannot catch a wrong binary name, a
+        # mis-forwarded exit code, or a staging script that produces the
+        # wrong layout. These actually run. node is preinstalled on the
+        # runner, so no action is pinned for it.
+        run: |
+          set -euo pipefail
+          node npm/doiget/test/platform.test.js
+          bash npm/doiget/test/stage-npm.test.sh
 
   network-purity:
     # Phase 0 must make zero outbound network calls from the unit / integration

@@ -12,19 +12,12 @@
 
 const { spawnSync } = require("node:child_process");
 
-// npm's `os`/`cpu` fields use these names; the release assets use
-// x86_64/aarch64. The mapping lives here and in the release workflow, and
-// `npm-packages-cover-every-release-asset` in that workflow keeps them in
-// step.
-const PACKAGES = {
-  "darwin-arm64": "doiget-darwin-arm64",
-  "darwin-x64": "doiget-darwin-x64",
-  "linux-x64": "doiget-linux-x64",
-  "win32-x64": "doiget-win32-x64",
-};
+// The platform table lives in `platform.js` so it can be unit-tested; this
+// file is the thin exec wrapper around it.
+const { PACKAGES, packageFor, binaryName } = require("./platform.js");
 
 const key = `${process.platform}-${process.arch}`;
-const pkg = PACKAGES[key];
+const pkg = packageFor(process.platform, process.arch);
 
 if (!pkg) {
   process.stderr.write(
@@ -38,7 +31,7 @@ if (!pkg) {
 
 let binary;
 try {
-  binary = require.resolve(`${pkg}/bin/${process.platform === "win32" ? "doiget.exe" : "doiget"}`);
+  binary = require.resolve(`${pkg}/bin/${binaryName(process.platform)}`);
 } catch {
   process.stderr.write(
     `doiget: the platform package \`${pkg}\` is not installed.\n` +

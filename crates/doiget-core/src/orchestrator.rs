@@ -574,9 +574,56 @@ fn env_nonempty(key: &str) -> Option<String> {
 /// environment, and one small read is free next to the network legs it
 /// precedes.
 fn resolve_contact_email() -> String {
+    contact_email_or_placeholder()
+}
+
+/// The polite-pool contact address the user configured, or `None`.
+///
+/// Env var, then `[network] contact_email` in `config.toml` (#504). Public
+/// because `doiget-mcp` needs the SAME ladder: `doiget_paper_search`,
+/// `doiget_link`, `doiget_expand_citation_graph` and
+/// `doiget_resolve_citation` each read `DOIGET_CONTACT_EMAIL` directly, so
+/// a user who set the address in `config.toml` got the polite pool from
+/// `doiget fetch` and the non-polite pool from every one of those tools —
+/// the "documented setting that does nothing" defect #504 was filed to
+/// close, surviving in the surface doiget leads with.
+///
+/// Returns `None` rather than a placeholder so callers that must omit
+/// `mailto` entirely when nothing is configured can still do so.
+#[must_use]
+pub fn configured_contact_email() -> Option<String> {
     env_nonempty("DOIGET_CONTACT_EMAIL")
         .or_else(|| crate::user_extension::load_or_default().contact_email)
-        .unwrap_or_else(|| FALLBACK_CONTACT_EMAIL.to_string())
+}
+
+/// [`configured_contact_email`] with `doiget@localhost` as the last rung,
+/// for callers that always need some address.
+#[must_use]
+pub fn contact_email_or_placeholder() -> String {
+    configured_contact_email().unwrap_or_else(|| FALLBACK_CONTACT_EMAIL.to_string())
+}
+
+/// Both addresses, from a single read of `config.toml`.
+///
+/// Resolving them independently meant two reads per fetch, and — in a
+/// long-lived `doiget serve` — a window in which an edit landing between
+/// them gave one address from the old file and one from the new. One read,
+/// one generation.
+fn resolve_contact_emails() -> (String, String) {
+    let env_contact = env_nonempty("DOIGET_CONTACT_EMAIL");
+    let env_unpaywall = env_nonempty("DOIGET_UNPAYWALL_EMAIL");
+    // Fully env-configured processes never touch the disk at all.
+    if let (Some(contact), Some(unpaywall)) = (&env_contact, &env_unpaywall) {
+        return (contact.clone(), unpaywall.clone());
+    }
+    let file = crate::user_extension::load_or_default();
+    let contact = env_contact
+        .or(file.contact_email)
+        .unwrap_or_else(|| FALLBACK_CONTACT_EMAIL.to_string());
+    let unpaywall = env_unpaywall
+        .or(file.unpaywall_email)
+        .unwrap_or_else(|| contact.clone());
+    (contact, unpaywall)
 }
 
 fn arxiv_source_from_env() -> ArxivSource {
@@ -1218,8 +1265,7 @@ async fn fetch_paper_doi(
     store_root: &Utf8Path,
     safekey: &Safekey,
 ) -> Result<FetchPaperOutcome, FetchError> {
-    let contact = resolve_contact_email();
-    let unpaywall_contact = resolve_unpaywall_email(&contact);
+    let (contact, unpaywall_contact) = resolve_contact_emails();
     let crossref = crossref_source_from_env(&contact);
     // Issue #120: Crossref is NON-fatal. A transient Crossref failure
     // must not abort the whole DOI fetch when Unpaywall alone can
@@ -2592,27 +2638,6 @@ fn strip_arxiv_version(id: &str) -> &str {
     id
 }
 
-/// Unpaywall contact: `DOIGET_UNPAYWALL_EMAIL`, then
-/// `[network] unpaywall_email`, then whatever the caller resolved as the
-/// general contact address (#504).
-///
-/// The more specific field wins at each rung, which is how
-/// `DOIGET_UNPAYWALL_EMAIL` already beat `DOIGET_CONTACT_EMAIL`.
-///
-/// `[network] unpaywall_email` was written by `config init`, called
-/// STRONGLY RECOMMENDED by the template's own prose, and read by nothing
-/// for four releases. The cost is not politeness. The template says so
-/// itself: the automatic arXiv-preprint fallback fires on what Unpaywall
-/// reports, so a throttled answer from the non-polite pool quietly costs
-/// that fallback — and the run still exits 0 with `metadata-only: no OA
-/// PDF available`. A degraded search and a true negative were the same
-/// observable.
-fn resolve_unpaywall_email(fallback_contact: &str) -> String {
-    env_nonempty("DOIGET_UNPAYWALL_EMAIL")
-        .or_else(|| crate::user_extension::load_or_default().unpaywall_email)
-        .unwrap_or_else(|| fallback_contact.to_string())
-}
-
 // ---------------------------------------------------------------------------
 // batch_fetch — multi-ref orchestrator (Slice 2)
 // ---------------------------------------------------------------------------
@@ -2787,9 +2812,9 @@ mod tests {
         );
         let _env = LadderEnv::scoped(&dir);
 
-        let contact = resolve_contact_email();
+        let (contact, unpaywall) = resolve_contact_emails();
         assert_eq!(contact, "file@institution.edu");
-        assert_eq!(resolve_unpaywall_email(&contact), "up@institution.edu");
+        assert_eq!(unpaywall, "up@institution.edu");
     }
 
     /// The env rung stays on top, per field, and `unpaywall_email` still
@@ -2802,11 +2827,10 @@ mod tests {
         let mut env = LadderEnv::scoped(&dir);
         env.set("DOIGET_CONTACT_EMAIL", "env@institution.edu");
 
-        let contact = resolve_contact_email();
+        let (contact, unpaywall) = resolve_contact_emails();
         assert_eq!(contact, "env@institution.edu");
         assert_eq!(
-            resolve_unpaywall_email(&contact),
-            "env@institution.edu",
+            unpaywall, "env@institution.edu",
             "no unpaywall rung is set, so it must inherit the resolved contact"
         );
     }
@@ -2823,9 +2847,9 @@ mod tests {
             .to_string();
         let _env = LadderEnv::scoped(&dir);
 
-        let contact = resolve_contact_email();
+        let (contact, unpaywall) = resolve_contact_emails();
         assert_eq!(contact, FALLBACK_CONTACT_EMAIL);
-        assert_eq!(resolve_unpaywall_email(&contact), FALLBACK_CONTACT_EMAIL);
+        assert_eq!(unpaywall, FALLBACK_CONTACT_EMAIL);
     }
 
     /// A blank value is not an address. Both rungs treat it as unset —
