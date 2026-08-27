@@ -12,7 +12,7 @@ machines.
 ### 1. BiblioFetch.jl user trying doiget for the first time
 
 ```sh
-cargo install doiget
+cargo install doiget-cli
 doiget info <DOI of an existing entry>      # should read what BiblioFetch wrote
 ```
 

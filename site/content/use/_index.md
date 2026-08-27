@@ -21,7 +21,7 @@ sources; institutional TDM access is opt-in at build time per publisher.
 
 ```sh
 # install (after Phase 6 release lands)
-cargo install doiget
+cargo install doiget-cli
 
 # fetch a paper by DOI
 doiget fetch 10.1103/PhysRevLett.130.200601
