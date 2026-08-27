@@ -67,6 +67,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0048 | The access ceiling is written down, and widening it amends the written form | Accepted | `docs/497-access-invariant` | #497 |
 | 0049 | An unparsable ref is misuse (exit 2), and one function decides it | Accepted | `fix/492-invalid-ref-exit-code` | #492 |
 | 0050 | credentials.toml carries the key; the agreement stays in the environment | Accepted | `feat/509-credentials-file` | #509 |
+| 0051 | Contributions carry a relicensable grant, recorded as a commit sign-off | Accepted | `chore/cla-relicensing-grant` | - |
 | 0052 | Crossref `link[]` is programme-scoped, so the fetch path does not carry it | Accepted | `feat/517-publisher-candidate` | #517 |
 
 ## Conventions

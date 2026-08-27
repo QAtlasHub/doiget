@@ -14,6 +14,12 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Added
 
+- **[ci]** `dco.yml` fails a PR whose commits lack a well-formed `Signed-off-by`
+  trailer. Merge commits and bot authors are exempt — GitHub writes the former, and
+  neither Dependabot nor github-actions is a legal person who could certify a
+  license grant. Deliberately not a required status check: it blocks in its own job,
+  so a missing sign-off is visible before a human merges without disturbing the
+  auto-merge chain (ADR-0051 D4).
 - **[config]** `~/.config/doiget/credentials.toml` is **read**. `docs/CONFIG.md` §6
   had specified it in full — schema, precedence, a `0600` warning "at startup" — and
   nothing opened it, so a user who followed a NORMATIVE document wrote their Elsevier
@@ -49,6 +55,16 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[docs]** `CONTRIBUTING.md`'s one-line "your contribution is MIT" clause becomes a
+  Contributor License Agreement: a sublicensable copyright grant permitting
+  distribution under any license terms, an Apache-ICLA-shaped patent grant with
+  defensive termination, and a written promise that public releases stay under an
+  OSI-approved open source license. Inbound = outbound made the outbound license a
+  one-way door — changing it later needs permission from every past contributor, and
+  one unreachable contributor pins it forever. doiget is at the single moment when
+  reopening that door costs nothing: `git shortlog -sne --all` lists exactly one
+  human. Assent is a commit sign-off, and the change is not retroactive — everything
+  merged before it stays MIT-only (ADR-0051).
 - **[cli]** **Breaking for scripts.** An unparsable ref now exits **2** (misuse) on
   every ref-taking command, not 1. `docs/ERRORS.md` §4 already reserved 1 for "at
   least one fetch was attempted and failed", and an unparsable ref fetches nothing —

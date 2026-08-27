@@ -50,6 +50,7 @@ in the same PR or in a paired PR and link it here.
 - [ ] No accidental NORMATIVE doc edits (per ADR-0014)
 - [ ] If a workflow file is added/modified, all third-party Actions are SHA-pinned (ADR-0013)
 - [ ] If Cargo.toml/Cargo.lock changed, dep churn reviewed
+- [ ] Every commit is signed off (`git commit -s`) — CONTRIBUTING.md, CLA §4
 - [ ] Reviewer checklist: maintainer auto-assigned via CODEOWNERS
 
 ## Posture checks
