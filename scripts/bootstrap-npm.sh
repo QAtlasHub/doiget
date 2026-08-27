@@ -65,6 +65,10 @@ fi
 PACKAGES="$PACKAGES
 doiget"
 
+# Everything below uses paths relative to the repository root, so stand there.
+# See the note on the `npm publish` call for why relative rather than absolute.
+cd "$REPO_ROOT"
+
 PUBLISH=0
 case "${1:-}" in
   --publish) PUBLISH=1 ;;
@@ -152,12 +156,21 @@ elif [ -n "$TODO" ]; then
   published=""
   for p in $TODO; do
     echo "--- $p"
+    # RELATIVE, from $REPO_ROOT, and both halves matter.
+    #
     # `./` is load-bearing: a bare `npm/doiget-linux-x64` matches npm's
     # `owner/repo` GitHub shorthand and is never read as a directory. That is
-    # the bug that took down the v0.8.11 npm job. `$SRC` rather than a
-    # relative path so this works from any working directory.
+    # the bug that took down the v0.8.11 npm job.
+    #
+    # Relative is load-bearing too. An absolute `$SRC` is a POSIX path under
+    # WSL or Git Bash, and `npm` on PATH may well be the WINDOWS npm, which
+    # reads `/mnt/c/...` as a relative path and opens `C:\mnt\c\...`. A
+    # relative path sidesteps the whole question: WSL translates the working
+    # directory when it launches a Windows binary, so both agree on where
+    # "here" is. cwd-independence comes from the `cd` above, not from
+    # spelling the path out.
     # shellcheck disable=SC2086
-    npm publish "$SRC/$p" --access public --tag "$PLACEHOLDER_TAG" $OTP_ARGS
+    npm publish "./npm/$p" --access public --tag "$PLACEHOLDER_TAG" $OTP_ARGS
     published="$published $p"
   done
   if [ -n "$published" ]; then

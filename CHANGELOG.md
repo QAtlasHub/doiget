@@ -24,6 +24,14 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   `OTP=` for a non-interactive run, and uses an absolute source path rather than
   `./npm/<pkg>` relative to the caller's cwd (#511).
 
+  The absolute-path half of that was wrong and is reverted. `$SRC` is a POSIX
+  path under WSL or Git Bash, and the `npm` on PATH may well be the *Windows*
+  npm — which read `/mnt/c/...` as relative and tried to open `C:\mnt\c\...`.
+  The `./` was never the only reason the relative form worked. The script now
+  `cd`s to the repository root and keeps the relative spec, so cwd-independence
+  comes from the `cd` rather than from spelling the path out, and the two
+  environments agree on where "here" is.
+
 - **[ci]** `version-check` was red on **every** PR to `next`, unconditionally.
   ADR-0025 D2-G5 wants a non-empty `## [X.Y.Z]` section for exactly the tagged
   version; D4 says that per-version section is generated and reviewed *at release
