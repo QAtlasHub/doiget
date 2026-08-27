@@ -12,6 +12,14 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[dist]** The npm trusted-publisher runbook now says where the setting actually
+  is: **`https://www.npmjs.com/package/<name>/access`**. npm's own documentation
+  describes the route as "your package settings … the 'Trusted Publisher' section",
+  which reads like a Settings tab and is not one — following that wording leads to
+  a page that does not exist. Confirmed by setting it up for all five packages.
+  Also spelled out that **Workflow filename** takes a filename with no path, and
+  that a mismatch there fails the OIDC claim without saying why (#511).
+
 - **[mcp]** **Every release binary shipped without `doiget_expand_citation_graph`**,
   the tool it was built to ship. `Server::new` drops that route on
   `cfg!(feature = "citation")` *evaluated inside `doiget-mcp`*, and `doiget-cli`'s

@@ -225,13 +225,13 @@ cat <<EOF
 
 Next, on npmjs.com, for EACH of these packages:
 
-  Settings -> Trusted Publisher -> GitHub Actions
+  the package's ACCESS page (below) -> Trusted Publisher -> GitHub Actions
 
     Organization or user   QAtlasHub
     Repository             doiget
-    Workflow filename      release-plz.yml
+    Workflow filename      release-plz.yml     (filename only, no path)
+    Environment name       (leave empty)
     Allowed actions        npm publish
-    Environment            (leave empty)
 
 $(for p in $PACKAGES; do echo "  https://www.npmjs.com/package/$p/access"; done)
 

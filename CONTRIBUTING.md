@@ -235,9 +235,17 @@ Once, by a maintainer with an npm account:
    lost.
 3. `scripts/bootstrap-npm.sh --publish` — publishes the five templates
    verbatim under the `placeholder` dist-tag, then deprecates them.
-4. On npmjs.com, for **each** of the five: Settings → Trusted Publisher →
-   GitHub Actions, org `QAtlasHub`, repo `doiget`, workflow
-   `release-plz.yml`, allowed action `npm publish`, environment empty.
+4. On npmjs.com, for **each** of the five: go to
+   **`https://www.npmjs.com/package/<name>/access`** and find *Trusted
+   Publisher* → GitHub Actions. Org `QAtlasHub`, repo `doiget`, workflow
+   filename `release-plz.yml` — a filename, no path — environment name empty,
+   allowed actions `npm publish`. The workflow filename must match exactly or
+   the OIDC claim will not match and the publish fails without saying why.
+
+   The URL is the **access** page, confirmed by setting it up. npm's own docs
+   describe the route as "your package settings … the 'Trusted Publisher'
+   section", which reads like a Settings tab and is not one — following that
+   wording sends you to a page that does not exist.
 5. Revoke the token.
 
 **`latest` is not left unset**, contrary to what this section first claimed.
@@ -250,6 +258,17 @@ deprecation in step 3 is the only warning a user gets — not a nicety.
 The wrapper is the one that matters: nobody installs a platform package
 directly, but `npm install doiget-cli` landing on an empty `0.0.0` would be a
 broken first impression.
+
+**npmjs.com will show "This package has been deprecated" until the release.**
+That is expected and self-resolving: npm has no package-level deprecation
+field, so the site derives the banner from whether the `latest` version is
+deprecated. Right now `latest` is the deprecated `0.0.0`, because it is the
+only version. (`glob` has 160 of its 168 versions deprecated and shows no
+banner, because its `latest` is healthy; `request` shows one because all of
+its versions including `latest` are.) The first real release takes `latest`
+and the banner goes. **Do not un-deprecate `0.0.0` to make it disappear** —
+that version really is an empty placeholder and the notice is the only thing
+warning anyone who pins it.
 
 **The wrapper is `doiget-cli`, not `doiget`.** npm refuses the unscoped
 `doiget` as too similar to the unrelated `giget`, and that refusal is permanent
