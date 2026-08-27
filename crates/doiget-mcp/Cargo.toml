@@ -17,11 +17,20 @@ workspace = true
 
 [features]
 default = []
-# Phase 4 / Slice 15. Enables the `doiget_expand_citation_graph` MCP
-# tool by turning on `doiget-core/citation` (which itself enables
-# `doiget-core/metadata`). Default release binaries (built without
-# `--features citation`) ship without the graph tool; `tools/list`
-# advertises 12 tools instead of 13 in that build.
+# Phase 4 / Slice 15. Enables the `doiget_expand_citation_graph` MCP tool by
+# turning on `doiget-core/citation` (which itself enables
+# `doiget-core/metadata`).
+#
+# Release binaries DO enable it: they are built `--features oa-only,citation`
+# so the graph tool ships (#373). This comment used to say the opposite — that
+# release binaries ship without it, advertising "12 tools instead of 13" — and
+# both halves were wrong: the counts are 21 and 22, and the intent reversed at
+# #373 without this being updated. A stale comment describing the old intent is
+# how the missing `doiget-mcp/citation` forward in `doiget-cli` survived: the
+# behaviour matched the comment, so it looked deliberate.
+#
+# A build WITHOUT this feature still ships 21 tools; the graph route is removed
+# in `Server::new` rather than left to answer NOT_IMPLEMENTED (#379).
 citation = ["doiget-core/citation"]
 
 # Tier 3 — opt-in build only, never published (ADR-0002). doiget-mcp has

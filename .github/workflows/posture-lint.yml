@@ -119,6 +119,48 @@ jobs:
           fi
           echo "LICENSE OK: verbatim SPDX MIT, no trailing prose, ends at SOFTWARE., LF."
 
+      - name: doiget-cli forwards every doiget-mcp feature (#373 / #516)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `doiget serve` runs `doiget-mcp` code, and `doiget-mcp` reads its
+          # OWN `cfg!(feature = ...)`. So a `doiget-cli` feature that forwards
+          # only to `doiget-core` leaves the MCP surface behind.
+          #
+          # Not hypothetical: `citation` did exactly this, and the release
+          # binary — built `-p doiget-cli --features oa-only,citation` so the
+          # graph tool would ship (#373) — advertised 21 tools instead of 22,
+          # while `doiget graph` and `capability_profile` both reported the
+          # citation graph as available.
+          #
+          # The whole test matrix missed it. CI builds with `--workspace
+          # --features oa-only,citation`, which enables the feature on
+          # `doiget-mcp` DIRECTLY; only a `-p doiget-cli` build goes through
+          # the forwarding. So this is checked structurally, where the defect
+          # lives, rather than by a feature-flagged test that cannot see it.
+          mcp_features="$(awk '/^\[features\]/{f=1;next} /^\[/{f=0} f && /^[a-z][a-z0-9-]*[[:space:]]*=/{sub(/[[:space:]]*=.*/,""); print}' \
+                          crates/doiget-mcp/Cargo.toml | grep -v '^default$' | sort -u)"
+          if [ -z "$mcp_features" ]; then
+            echo "::error::posture-lint features: read no [features] from crates/doiget-mcp/Cargo.toml"
+            exit 1
+          fi
+          fail=0
+          for f in $mcp_features; do
+            line="$(grep -E "^${f}[[:space:]]*=" crates/doiget-cli/Cargo.toml || true)"
+            if [ -z "$line" ]; then
+              echo "::error::posture-lint features: doiget-mcp has feature '${f}' but doiget-cli has none of that name, so nothing can enable it in a '-p doiget-cli' build"
+              fail=1
+              continue
+            fi
+            if ! printf '%s' "$line" | grep -q "doiget-mcp/${f}"; then
+              echo "::error::posture-lint features: doiget-cli's '${f}' does not forward to doiget-mcp/${f} — 'doiget serve' will behave as if the feature is off (#373)"
+              printf '  %s\n' "$line"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ]
+          echo "doiget-cli forwards every doiget-mcp feature: $(echo "$mcp_features" | tr '\n' ' ')"
+
       - name: npm platform packages cover every release binary (#511)
         shell: bash
         run: |

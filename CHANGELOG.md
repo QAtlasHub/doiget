@@ -12,6 +12,29 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[mcp]** **Every release binary shipped without `doiget_expand_citation_graph`**,
+  the tool it was built to ship. `Server::new` drops that route on
+  `cfg!(feature = "citation")` *evaluated inside `doiget-mcp`*, and `doiget-cli`'s
+  `citation` feature forwarded only to `doiget-core`. The release build is
+  `-p doiget-cli --no-default-features --features oa-only,citation`, chosen
+  precisely so the graph tool ships (#373) — so `tools/list` advertised 21 tools
+  instead of 22 while `doiget graph` worked and `doiget_capability_profile`
+  reported `citation` as compiled in. An agent reading the profile would look for
+  the tool and not find it. Same shape as this feature's own missing `metadata`
+  implication (#516), one crate over; the `tdm-*` features already forwarded
+  correctly, `citation` alone did not.
+
+  **The test matrix could not see it.** CI's citation job builds
+  `--workspace --features oa-only,citation`, which turns the feature on for
+  `doiget-mcp` *directly*; only a `-p doiget-cli` build exercises the forwarding.
+  So the regression is pinned structurally, in posture-lint: every `doiget-mcp`
+  feature must be forwarded by the `doiget-cli` feature of the same name. Verified
+  by mutation — reverting the fix fails the check.
+
+  Found by running `doiget serve` out of an actually-installed npm package and
+  diffing `tools/list` against `MCP_TOOLS.md`, which is the first time the npm
+  packaging had been exercised with a real binary rather than a fixture.
+
 - **[docs]** Every `cargo install` command in `docs/SOURCES.md` named a crate that
   does not exist. `cargo install doiget` returns 404 from crates.io — the crate is
   `doiget-cli`, which produces the `doiget` binary. That included **all four Tier 3
