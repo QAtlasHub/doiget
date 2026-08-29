@@ -10,6 +10,35 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Changed
+
+- **[dist]** The Claude Code plugin runs `npx -y doiget-cli serve` instead of a bare
+  `doiget serve`, so installing it **needs nothing installed beforehand** — npm
+  fetches the wrapper and the one matching platform binary on first run. Until now
+  the plugin only worked for people who had already installed doiget some other
+  way, which is why it was kept as a self-hosted marketplace rather than submitted
+  to the Anthropic plugin directory: a listing whose first run fails for everyone
+  without the binary on PATH is worse than no listing. That objection is gone, so
+  the directory submission is now viable (#513).
+
+  Verified by launching it: `npx -y doiget-cli serve` from the real registry
+  answers `initialize` as `doiget 0.8.12` and lists 22 tools, with pure JSON-RPC on
+  stdout and zero bytes on stderr.
+
+### Fixed
+
+- **[dist]** `.claude-plugin/plugin.json` and `marketplace.json` said **0.8.11**
+  while the repository was two releases ahead. Nothing stamps them — no script, no
+  workflow references either file — so they drift silently, and `/plugin
+  marketplace add` reads the default branch, meaning users saw the stale number.
+  Set to 0.8.12, the last released version (#513).
+- **[docs]** Two more references the `doiget` → `doiget-cli` rename left behind:
+  `README.md`'s plugin paragraph promised `npx -y doiget serve`, and the 0.8.11
+  release notes lead with two npm commands that were never valid — the wrapper is
+  not called `doiget`, and that release's npm publish failed outright, so nothing
+  was on the registry to install. The 0.8.11 entry is annotated rather than
+  rewritten (#511).
+
 ### Fixed
 
 - **[ci]** The npm publish job published the wrapper **twice** and failed on the
@@ -247,6 +276,12 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   supply-chain shape a reviewer is trained to reject. Published by the release
   workflow over npm Trusted Publishing (OIDC, no long-lived token), after verifying
   each binary against the release's own `.sha256` (#511).
+
+  **Neither command in this entry was ever valid.** The npm publish failed on this
+  release (see the `[ci]` entry below), so nothing was on the registry; and the
+  wrapper is `doiget-cli`, not `doiget` — npm refuses the bare name as too similar
+  to the unrelated `giget`. The channel first went live at 0.8.12. Left in place
+  rather than rewritten, with this note, because the failure is the point.
 - **[dist]** **Claude Code plugin.** `/plugin marketplace add QAtlasHub/doiget` then
   `/plugin install doiget@doiget`. Self-hosted, so it needs approval from nobody;
   both manifests pass `claude plugin validate` (#513).

@@ -1,8 +1,10 @@
 {
   "mcpServers": {
     "doiget": {
-      "command": "doiget",
+      "command": "npx",
       "args": [
+        "-y",
+        "doiget-cli",
         "serve"
       ]
     }

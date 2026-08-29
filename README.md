@@ -138,12 +138,12 @@ packages ship from tagged releases, so a very new commit may be ahead of them.
 ```
 
 Reads `.claude-plugin/` from this repository's default branch. The plugin's
-`.mcp.json` runs `doiget serve`, so install the binary by one of the routes
-above first — the plugin installs nothing itself. That is also why this is a
-self-hosted marketplace rather than a submission to the Anthropic plugin
-directory: a listing whose first run fails for everyone without the binary
-already on PATH is worse than no listing. Once npm is live the plugin can call
-`npx -y doiget serve` and need nothing installed.
+`.mcp.json` runs `npx -y doiget-cli serve`, so it needs **nothing installed
+beforehand** — npm fetches the wrapper and the one matching platform binary on
+first run. Until this it ran a bare `doiget`, which meant the plugin worked
+only for people who had already installed doiget some other way; that is why it
+was self-hosted rather than submitted to the Anthropic plugin directory, and
+why it is now submittable.
 
 ### Channel status
 
