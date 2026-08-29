@@ -29,7 +29,7 @@ via the `serve` subcommand. Every fetch passes through a fail-closed provenance 
 flowchart TB
     User[CLI user / Agent host]
     User --> CLI[doiget-cli<br/>fetch / batch / info / serve]
-    CLI --> MCP[doiget-mcp<br/>stdio JSON-RPC, 9 tools]
+    CLI --> MCP[doiget-mcp<br/>stdio JSON-RPC, 22 tools]
     CLI --> Core[doiget-core]
     MCP --> Core
 

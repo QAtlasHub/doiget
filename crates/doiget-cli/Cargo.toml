@@ -27,7 +27,14 @@ metadata = ["doiget-core/metadata"]
 # CLI-level implication `cfg(feature = "metadata")` is FALSE in a
 # `--features citation` build, so anything gated on `metadata` here
 # silently drops out of the richer build (#516).
-citation = ["metadata", "doiget-core/citation"]
+# The `doiget-mcp/citation` half is what makes the graph tool appear in
+# `tools/list`: `Server::new` trims that route on `cfg!(feature = "citation")`
+# evaluated IN `doiget-mcp`, so forwarding only to `doiget-core` left the
+# release binary — built `--features oa-only,citation` precisely so the tool
+# ships (#373) — advertising 21 tools instead of 22, while `doiget graph` and
+# `capability_profile` both reported the citation graph as available. Same
+# shape as this feature's own `metadata` omission (#516), one crate over.
+citation = ["metadata", "doiget-core/citation", "doiget-mcp/citation"]
 # The `doiget-mcp/*` half matters: `doiget serve` builds its client
 # through the MCP twin of `build_http_client`, so a CLI-only feature
 # would leave the MCP surface without the Tier-3 transport gate (#454).

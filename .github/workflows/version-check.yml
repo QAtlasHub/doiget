@@ -16,7 +16,14 @@ name: version-check
 # every PR to `next` and `main`.
 #
 # Reading the result:
-#   * green on `next`  — the beta version (X.Y.Z-beta.N) is release-ready.
+#   * green on `next`  — the beta version (X.Y.Z-beta.N) is release-ready,
+#                        i.e. there are release notes for what is on this
+#                        branch. Amendment 7: on the beta lane G5 accepts a
+#                        non-empty `## [Unreleased]`, which is where the notes
+#                        live until the cut writes the per-version heading.
+#                        Before that this job was red on EVERY PR to `next`,
+#                        which made it decorative — an always-red check says
+#                        as much as an always-green one.
 #   * green on `main`  — main carries a promoted, not-yet-published version
 #                        (the promotion window); tagging would release.
 #   * red              — tagging now would NOT cleanly release, e.g. the
@@ -25,6 +32,11 @@ name: version-check
 #                        releases), the CHANGELOG section is missing/empty,
 #                        or Cargo.lock drifted. Advisory only — does not
 #                        block the PR.
+#
+#                        On `next` the interesting case is an EMPTY
+#                        `## [Unreleased]`: a change landed and nobody wrote
+#                        it down. That signal did not exist before Amendment
+#                        7, because the job was red regardless.
 
 on:
   pull_request:
@@ -73,6 +85,15 @@ jobs:
           fi
           echo "tag=v$V" >> "$GITHUB_OUTPUT"
           echo "Prospective tag: v$V"
+      # G5 is the #164 fix and had no test until Amendment 7 changed it.
+      # This job is where it belongs: the gate's G2 runs `cargo metadata
+      # --locked`, and the toolchain is already installed above.
+      - name: The gate's G5 behaves on both lanes (ADR-0025 Amendment 7)
+        shell: bash
+        env:
+          CARGO: cargo
+        run: bash scripts/release-version-gate.test.sh
+
       - name: Run the release version gate (advisory dry-run)
         shell: bash
         env:

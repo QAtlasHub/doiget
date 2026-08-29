@@ -111,11 +111,11 @@ none.
 
 ## 3. Default release binaries
 
-`cargo install doiget` (default) compiles Tier 1 only. The optional source surface
+`cargo install doiget-cli` (default) compiles Tier 1 only. The optional source surface
 requires an opt-in build:
 
 ```sh
-cargo install doiget --features metadata
+cargo install doiget-cli --features metadata
 ```
 
 **What `metadata` means (ADR-0040, NORMATIVE).** The feature name predates the sources
@@ -134,10 +134,10 @@ download.
 Tier 3 TDM sources are individually feature-flagged and require user-driven build:
 
 ```sh
-cargo install doiget --features metadata,tdm-springer
-cargo install doiget --features metadata,tdm-aps
-cargo install doiget --features metadata,tdm-elsevier
-cargo install doiget --features metadata,tdm-ieee
+cargo install doiget-cli --features metadata,tdm-springer
+cargo install doiget-cli --features metadata,tdm-aps
+cargo install doiget-cli --features metadata,tdm-elsevier
+cargo install doiget-cli --features metadata,tdm-ieee
 ```
 
 There is no `tdm-all` umbrella feature ([`SCOPE.md`](SCOPE.md) §non-goal 12).

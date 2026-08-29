@@ -120,44 +120,82 @@ fi
 pass "G2: Cargo.lock in sync (cargo metadata --locked OK)"
 
 # ---------------------------------------------------------------------------
-# G5 — CHANGELOG.md has a non-empty `## [X.Y.Z]` section.
-# THE #164-class structural fix: strict — the section must EXIST and have at
-# least one non-blank content line before the next `## ` heading. (Run before
-# the network checks so a local dry-run surfaces this without a network.)
+# G5 — CHANGELOG.md carries non-empty release notes for this version.
+#
+# THE #164-class structural fix: nothing ships without notes a human wrote.
+#
+# STABLE lane: strict. `## [X.Y.Z]` must exist and have at least one non-blank
+# line before the next `## `. That is the case #164 actually bit.
+#
+# BETA lane: `## [Unreleased]` satisfies it too (ADR-0025 Amendment 7). D4 says
+# the curated per-version section is produced at RELEASE time from git-cliff and
+# reviewed before the release commit; until then the notes accumulate under
+# `## [Unreleased]`, which is where every beta commit in this repository has
+# kept them. Demanding a heading per beta.N would mean a dozen headings for one
+# release, so in practice this was unsatisfiable on `next` — Amendment 6
+# describes green-on-`next` as the normal reading while the gate made it
+# unreachable. An always-red check carries exactly as much information as an
+# always-green one.
+#
+# What this does NOT relax: emptiness. A beta tag, and every advisory
+# `version-check` run on `next`, still fails when `## [Unreleased]` is empty —
+# which is the useful signal the check never had: a change landed on `next` and
+# nobody wrote it down.
+#
+# An explicit `## [X.Y.Z-beta.N]` still wins if the maintainer wrote one.
+#
+# (Runs before the network checks so a local dry-run surfaces it offline.)
 # ---------------------------------------------------------------------------
 if [ ! -f "$CHANGELOG" ]; then
   fail "G5: $CHANGELOG not found"
 fi
-# Match `## [X.Y.Z]` or `## [X.Y.Z](...)` exactly (TAG_VERSION may include the
-# -PRE suffix; that is the section the maintainer must have written).
-CL_SECTION="$(awk -v ver="$TAG_VERSION" '
-  BEGIN { in_sec = 0; content = 0 }
-  {
-    # Heading lines like: ## [0.1.4] - 2026-05-18  OR  ## [0.1.4](url) - ...
-    if ($0 ~ /^## \[/) {
-      if (in_sec == 1) { exit }                 # reached the next section
-      hv = $0
-      sub(/^## \[/, "", hv)
-      sub(/\].*$/, "", hv)
-      if (hv == ver) { in_sec = 1; next }
+# Match `## [X]` or `## [X](...)` exactly. Extracted into a function so it can
+# be called twice; exercised by scripts/release-version-gate.test.sh.
+changelog_section_status() {
+  awk -v ver="$1" '
+    BEGIN { in_sec = 0; content = 0 }
+    {
+      # Heading lines like: ## [0.1.4] - 2026-05-18  OR  ## [0.1.4](url) - ...
+      if ($0 ~ /^## \[/) {
+        if (in_sec == 1) { exit }               # reached the next section
+        hv = $0
+        sub(/^## \[/, "", hv)
+        sub(/\].*$/, "", hv)
+        if (hv == ver) { in_sec = 1; next }
+      }
+      if (in_sec == 1) {
+        line = $0
+        gsub(/[[:space:]]/, "", line)
+        if (length(line) > 0) { content = 1 }
+      }
     }
-    if (in_sec == 1) {
-      line = $0
-      gsub(/[[:space:]]/, "", line)
-      if (length(line) > 0) { content = 1 }
-    }
-  }
-  END { print in_sec "|" content }
-' "$CHANGELOG")"
+    END { print in_sec "|" content }
+  ' "$CHANGELOG"
+}
+
+CL_HEADING="$TAG_VERSION"
+CL_SECTION="$(changelog_section_status "$TAG_VERSION")"
 CL_FOUND="${CL_SECTION%%|*}"
+if [ "$CL_FOUND" != "1" ] && [ "$LANE" = "beta" ]; then
+  CL_HEADING="Unreleased"
+  CL_SECTION="$(changelog_section_status "Unreleased")"
+  CL_FOUND="${CL_SECTION%%|*}"
+fi
 CL_HASCONTENT="${CL_SECTION##*|}"
+
 if [ "$CL_FOUND" != "1" ]; then
+  if [ "$LANE" = "beta" ]; then
+    fail "G5: CHANGELOG.md has neither a '## [$TAG_VERSION]' section nor a '## [Unreleased]' one. ADR-0025 D2-G5 (Amendment 7): a beta may carry its notes under Unreleased, but there must be notes. Add the section, review it, then re-tag."
+  fi
   fail "G5: CHANGELOG.md has no '## [$TAG_VERSION]' section. ADR-0025 D2-G5: a release cannot proceed unless CHANGELOG.md already contains a curated section for exactly this version (this is the #164-class fix). Add the section, review it, then re-tag."
 fi
 if [ "$CL_HASCONTENT" != "1" ]; then
+  if [ "$CL_HEADING" = "Unreleased" ]; then
+    fail "G5: CHANGELOG.md '## [Unreleased]' is empty (no non-blank content line before the next '## '). Nothing on this branch has been written down — add the entry for the change you are shipping."
+  fi
   fail "G5: CHANGELOG.md '## [$TAG_VERSION]' section is empty (no non-blank content line before the next '## '). Curate the section before tagging."
 fi
-pass "G5: CHANGELOG.md has a non-empty [$TAG_VERSION] section"
+pass "G5: CHANGELOG.md has a non-empty [$CL_HEADING] section"
 
 # ---------------------------------------------------------------------------
 # G6 — prerelease consistency: tag has `-PRE` ⇔ manifest has `-PRE` ⇔ lane.

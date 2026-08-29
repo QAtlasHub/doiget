@@ -10,6 +10,189 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+## [0.8.12] - 2026-08-27
+
+### Security
+
+- **[deps]** `chacha20` 0.10.1 was yanked from crates.io; moved to 0.10.2. Caught by
+  `cargo deny` on the promotion PR, not by anything in this release's own changes —
+  the lock had been fine when the cut was made and the yank landed after it. No
+  RUSTSEC advisory accompanies the yank, so this is a hygiene fix rather than a
+  known-exploitable one, but pinning a yanked version in a release is not something
+  to ship past. Reached through `rand`. The `cargo vet` exemption moved with it,
+  which is required or the next `vet` run goes red.
+
+### Added
+
+- **[ci]** `scripts/release-version-gate.test.sh` — G5's first test. It runs the
+  real gate over six crafted CHANGELOGs inside a throwaway `git worktree`, and it
+  copies the working-tree script in rather than trusting the worktree's `HEAD`
+  copy, because otherwise it would silently pass over an uncommitted change to
+  the very thing under test. Wired into `version-check.yml`, which already
+  installs the toolchain G2 needs.
+
+- **[dist]** `scripts/bootstrap-npm.sh`, and the runbook for it in
+  `CONTRIBUTING.md`. The `publish to npm` job authenticates over OIDC and holds no
+  token, which is the right end state and cannot bootstrap itself: **npm Trusted
+  Publishing cannot perform a package's first publish**, because the trusted
+  publisher is configured on a package's own page and an unpublished package has
+  none. So the five packages have to be created once by hand before the pipeline
+  that was built to publish them can run at all. The script publishes the checked-in
+  `0.0.0` templates under a `placeholder` dist-tag, deprecates them, and prints
+  the exact Trusted Publisher fields to enter (#511).
+
+  Two things this entry originally claimed are false, corrected here rather than
+  quietly rewritten. **`--tag placeholder` does not keep `latest` unset**: npm
+  sets `latest` on a package's first publish whatever `--tag` says, measured
+  after the real run as `doiget-linux-x64-> {'placeholder': '0.0.0', 'latest':
+  '0.0.0'}`. So a placeholder is exactly what `npm install <pkg>` resolves to
+  until a release moves `latest`, which makes the deprecation notice the only
+  warning a user gets rather than a nicety. And **the `doiget` wrapper is not
+  published**: npm refuses the name as too similar to the existing `giget`
+  (`403 ... Package name too similar`). The four per-platform packages are
+  published; a naming dispute is open with npm support.
+
+### Changed
+
+- **[docs]** `crates/doiget-cli/README.md` now documents the npm route. That file is
+  copied verbatim into the npm package by `scripts/stage-npm.sh`, so it is what a
+  visitor to npmjs.com/package/doiget-cli reads — and it said only
+  `cargo install doiget-cli`, telling an npm user to install a Rust toolchain
+  instead. Nothing in it was false; it was simply written for the other audience.
+  Both routes are there now, with the point that either way the command is
+  `doiget`, and with the actual difference named: npm ships the release binary
+  (`--no-default-features --features oa-only,citation`, and `citation` implies
+  `metadata`) — so Tier 1, Tier 2 and the citation graph, identical to the shell
+  installer, the Release assets and the `.mcpb`. **Every prebuilt channel ships
+  the same binary.** The only thing none of them can carry is Tier 3: the TDM
+  connectors are Cargo features because each needs a signed publisher agreement,
+  so they are opted into at build time rather than shipped and gated at runtime
+  (#511).
+
+- **[dist]** **The npm wrapper package is `doiget-cli`, not `doiget`.** npm refuses
+  the unscoped `doiget` as too similar to the unrelated `giget` (`403 ... Package
+  name too similar to existing package giget`), and that refusal is permanent for
+  the name — npm's documented dispute process acts only on trademark claims, and
+  the similarity rule itself is undocumented. Matching the crate is the better
+  answer anyway: one name for the tool on both registries.
+
+  **The command is still `doiget`.** `npm install -g doiget-cli` puts `doiget` on
+  PATH, exactly as `cargo install doiget-cli` does; `npx -y doiget-cli serve`
+  resolves to it because the package declares a single bin. Both verified by
+  installing the staged package rather than assumed — `node_modules/.bin` carries
+  `doiget`, and `npx doiget-cli --version` reached the shim (#511).
+
+- **[dist]** `scripts/bootstrap-npm.sh` is resumable, runs from any working
+  directory, and no longer gives three pieces of authentication advice at once.
+  The first real run met npm's `403 ... Two-factor authentication or granular
+  access token with bypass 2fa enabled is required to publish packages` — so a
+  second factor is needed **per publish**, which makes a run stopping half way
+  through the NORMAL case rather than the exceptional one. The script refused to
+  start whenever any package already existed, which would have turned one
+  mistyped one-time password into "the remaining packages can never be published
+  by this script". It now skips what is done and publishes what is left, accepts
+  `OTP=` for a non-interactive run, and uses an absolute source path rather than
+  `./npm/<pkg>` relative to the caller's cwd (#511).
+
+  The absolute-path half of that was wrong and is reverted. `$SRC` is a POSIX
+  path under WSL or Git Bash, and the `npm` on PATH may well be the *Windows*
+  npm — which read `/mnt/c/...` as relative and tried to open `C:\mnt\c\...`.
+  The `./` was never the only reason the relative form worked. The script now
+  `cd`s to the repository root and keeps the relative spec, so cwd-independence
+  comes from the `cd` rather than from spelling the path out, and the two
+  environments agree on where "here" is.
+
+  It also checks for two-factor auth before publishing. npm requires a second
+  factor to publish; with 2FA *disabled* there is no code to ask for, so npm
+  does not prompt — it returns `403 ... Two-factor authentication or granular
+  access token with bypass 2fa enabled is required`, which reads like a
+  permissions problem rather than "this account is not set up yet". That cost
+  two failed runs and a wrong diagnosis about tokens and paths. The script now
+  says which of the four setup steps is missing.
+
+- **[ci]** `version-check` was red on **every** PR to `next`, unconditionally.
+  ADR-0025 D2-G5 wants a non-empty `## [X.Y.Z]` section for exactly the tagged
+  version; D4 says that per-version section is generated and reviewed *at release
+  time*, so between releases the notes live under `## [Unreleased]` — which is
+  where every beta commit in this repository has kept them. The state Amendment 6
+  describes as the normal reading, "green on `next`", was unreachable. An
+  always-red check carries exactly as much information as an always-green one:
+  nobody reads it, and the day it goes red for a real reason nobody notices.
+  On the **beta** lane G5 now accepts a non-empty `## [Unreleased]`; an explicit
+  `## [X.Y.Z-beta.N]` still wins if one was written. On the **stable** lane it is
+  unchanged and strict — that is the lane #164 bit, and a test pins that the
+  relaxation does not leak into it. Emptiness is *not* relaxed, which gives the
+  check the signal it never had: a change landed on `next` and nobody wrote it
+  down (ADR-0025 Amendment 7).
+
+### Fixed
+
+- **[dist]** The npm trusted-publisher runbook now says where the setting actually
+  is: **`https://www.npmjs.com/package/<name>/access`**. npm's own documentation
+  describes the route as "your package settings … the 'Trusted Publisher' section",
+  which reads like a Settings tab and is not one — following that wording leads to
+  a page that does not exist. Confirmed by setting it up for all five packages.
+  Also spelled out that **Workflow filename** takes a filename with no path, and
+  that a mismatch there fails the OIDC claim without saying why (#511).
+
+- **[mcp]** **Every release binary shipped without `doiget_expand_citation_graph`**,
+  the tool it was built to ship. `Server::new` drops that route on
+  `cfg!(feature = "citation")` *evaluated inside `doiget-mcp`*, and `doiget-cli`'s
+  `citation` feature forwarded only to `doiget-core`. The release build is
+  `-p doiget-cli --no-default-features --features oa-only,citation`, chosen
+  precisely so the graph tool ships (#373) — so `tools/list` advertised 21 tools
+  instead of 22 while `doiget graph` worked and `doiget_capability_profile`
+  reported `citation` as compiled in. An agent reading the profile would look for
+  the tool and not find it. Same shape as this feature's own missing `metadata`
+  implication (#516), one crate over; the `tdm-*` features already forwarded
+  correctly, `citation` alone did not.
+
+  **The test matrix could not see it.** CI's citation job builds
+  `--workspace --features oa-only,citation`, which turns the feature on for
+  `doiget-mcp` *directly*; only a `-p doiget-cli` build exercises the forwarding.
+  So the regression is pinned structurally, in posture-lint: every `doiget-mcp`
+  feature must be forwarded by the `doiget-cli` feature of the same name. Verified
+  by mutation — reverting the fix fails the check.
+
+  Found by running `doiget serve` out of an actually-installed npm package and
+  diffing `tools/list` against `MCP_TOOLS.md`, which is the first time the npm
+  packaging had been exercised with a real binary rather than a fixture.
+
+- **[docs]** Every `cargo install` command in `docs/SOURCES.md` named a crate that
+  does not exist. `cargo install doiget` returns 404 from crates.io — the crate is
+  `doiget-cli`, which produces the `doiget` binary. That included **all four Tier 3
+  install commands**, so the document that answers "how do I enable the institutional
+  TDM connectors" answered it with four commands that fail. Same in
+  `docs/MIGRATION.md` and the site's quick start.
+
+  `README.md` has said `cargo install doiget` does **not** work since the last time
+  this was found, and `CHANGELOG.md` records that earlier fix — it corrected the
+  README and left these behind. A grep would have found them then; nobody ran one
+  (#511).
+- **[docs]** `ARCHITECTURE.md`'s diagram said the MCP server exposes **9 tools**. It
+  exposes **22** — `#[tool(` appears 22 times in `doiget-mcp/src/lib.rs`, and
+  `MCP_TOOLS.md` documents 22 names. The count has been wrong since somewhere before
+  0.8.6, which is when the 22-tool safety annotations shipped;
+  `INTEGRATION/claude-code.md` says 22 correctly, so the two docs have been
+  contradicting each other in the same repository.
+
+- **[ci]** **The npm publish failed on the 0.8.11 release**, for a reason no part of
+  the two review rounds had looked for. `npm publish npm-stage/doiget-darwin-arm64`
+  is two path segments with no leading `./`, which is exactly npm's `owner/repo`
+  shorthand for a GitHub dependency — so npm never opened the directory and answered
+  `EALLOWGIT: Refusing to fetch "github:npm-stage/doiget-darwin-arm64"` before
+  reaching the registry at all. The job is `continue-on-error`, so 0.8.11 released
+  green with three crates, 18 signed assets, an MCP registry entry, and no npm
+  packages. The specs carry `./` now.
+
+  `stage-npm.test.sh` could not have caught it: it verified the staged tree and
+  stopped there, one step short of the command that consumes it. It now reads the
+  publish specs out of the workflow and runs `npm publish --dry-run` on each,
+  **verbatim**, from a directory laid out the way the release job lays it out —
+  rewriting them to absolute paths first would destroy the only property under
+  test, since npm accepts an absolute path either way and the collision is a fact
+  about the literal spelling (#511).
+
 ## [0.8.11] - 2026-08-27
 
 ### Added

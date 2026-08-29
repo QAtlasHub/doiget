@@ -1,5 +1,5 @@
 {
-  "name": "doiget",
+  "name": "doiget-cli",
   "version": "0.0.0",
   "description": "Turn DOIs and arXiv IDs into local PDFs and metadata via official Open-Access APIs. CLI + stdio MCP server. Never bypasses paywalls.",
   "keywords": ["doi", "arxiv", "open-access", "mcp", "modelcontextprotocol", "bibliography", "crossref", "unpaywall", "research"],

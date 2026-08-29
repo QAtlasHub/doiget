@@ -119,6 +119,48 @@ jobs:
           fi
           echo "LICENSE OK: verbatim SPDX MIT, no trailing prose, ends at SOFTWARE., LF."
 
+      - name: doiget-cli forwards every doiget-mcp feature (#373 / #516)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `doiget serve` runs `doiget-mcp` code, and `doiget-mcp` reads its
+          # OWN `cfg!(feature = ...)`. So a `doiget-cli` feature that forwards
+          # only to `doiget-core` leaves the MCP surface behind.
+          #
+          # Not hypothetical: `citation` did exactly this, and the release
+          # binary — built `-p doiget-cli --features oa-only,citation` so the
+          # graph tool would ship (#373) — advertised 21 tools instead of 22,
+          # while `doiget graph` and `capability_profile` both reported the
+          # citation graph as available.
+          #
+          # The whole test matrix missed it. CI builds with `--workspace
+          # --features oa-only,citation`, which enables the feature on
+          # `doiget-mcp` DIRECTLY; only a `-p doiget-cli` build goes through
+          # the forwarding. So this is checked structurally, where the defect
+          # lives, rather than by a feature-flagged test that cannot see it.
+          mcp_features="$(awk '/^\[features\]/{f=1;next} /^\[/{f=0} f && /^[a-z][a-z0-9-]*[[:space:]]*=/{sub(/[[:space:]]*=.*/,""); print}' \
+                          crates/doiget-mcp/Cargo.toml | grep -v '^default$' | sort -u)"
+          if [ -z "$mcp_features" ]; then
+            echo "::error::posture-lint features: read no [features] from crates/doiget-mcp/Cargo.toml"
+            exit 1
+          fi
+          fail=0
+          for f in $mcp_features; do
+            line="$(grep -E "^${f}[[:space:]]*=" crates/doiget-cli/Cargo.toml || true)"
+            if [ -z "$line" ]; then
+              echo "::error::posture-lint features: doiget-mcp has feature '${f}' but doiget-cli has none of that name, so nothing can enable it in a '-p doiget-cli' build"
+              fail=1
+              continue
+            fi
+            if ! printf '%s' "$line" | grep -q "doiget-mcp/${f}"; then
+              echo "::error::posture-lint features: doiget-cli's '${f}' does not forward to doiget-mcp/${f} — 'doiget serve' will behave as if the feature is off (#373)"
+              printf '  %s\n' "$line"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ]
+          echo "doiget-cli forwards every doiget-mcp feature: $(echo "$mcp_features" | tr '\n' ' ')"
+
       - name: npm platform packages cover every release binary (#511)
         shell: bash
         run: |
@@ -126,7 +168,7 @@ jobs:
           # The npm `os`/`cpu` names (darwin/win32, x64/arm64) and the release
           # asset names (macos/windows, x86_64/aarch64) are different
           # vocabularies for the same four targets, so the mapping is written
-          # twice: `scripts/stage-npm.sh` (MAP) and `npm/doiget/bin/platform.js`
+          # twice: `scripts/stage-npm.sh` (MAP) and `npm/doiget-cli/bin/platform.js`
           # (PACKAGES). Two hand-maintained copies of one table is the #454 /
           # #504 shape, so it is checked rather than trusted.
           #
@@ -154,7 +196,7 @@ jobs:
                     | sed 's/artifact: //' | sort -u)"
           staged="$(capture '^doiget-[a-z0-9-]+:doiget-[a-z0-9_.-]+:' scripts/stage-npm.sh \
                     | cut -d: -f2 | sort -u)"
-          shimmed="$(capture '"doiget-(darwin|linux|win32)-[a-z0-9]+"' npm/doiget/bin/platform.js \
+          shimmed="$(capture '"doiget-(darwin|linux|win32)-[a-z0-9]+"' npm/doiget-cli/bin/platform.js \
                      | tr -d '"' | sort -u)"
           pkgs="$(capture '^doiget-[a-z0-9-]+:' scripts/stage-npm.sh | tr -d ':' | sort -u)"
 
@@ -167,16 +209,19 @@ jobs:
             fail=1
           fi
           if [ "$pkgs" != "$shimmed" ]; then
-            echo "::error::posture-lint npm: scripts/stage-npm.sh and npm/doiget/bin/platform.js name different packages (#511)"
+            echo "::error::posture-lint npm: scripts/stage-npm.sh and npm/doiget-cli/bin/platform.js name different packages (#511)"
             printf 'stage-npm.sh:\n%s\nshim:\n%s\n' "$pkgs" "$shimmed"
             fail=1
           fi
           # Every package the wrapper declares must exist as a directory, and
           # vice versa — an optionalDependency that resolves to nothing fails
           # SILENTLY at install time, which is the whole failure mode.
-          declared="$(capture '"doiget-(darwin|linux|win32)-[a-z0-9]+"' npm/doiget/package.json \
+          declared="$(capture '"doiget-(darwin|linux|win32)-[a-z0-9]+"' npm/doiget-cli/package.json \
                       | tr -d '"' | sort -u)"
-          onDisk="$(find npm -maxdepth 1 -mindepth 1 -type d -name 'doiget-*' -printf '%f\n' | sort -u)"
+          # `! -name doiget-cli` because the wrapper now matches `doiget-*`
+          # too. Without it the wrapper's own directory joins the list of
+          # platform packages and this check fails on every run.
+          onDisk="$(find npm -maxdepth 1 -mindepth 1 -type d -name 'doiget-*' ! -name 'doiget-cli' -printf '%f\n' | sort -u)"
           if [ "$declared" != "$onDisk" ]; then
             echo "::error::posture-lint npm: optionalDependencies and npm/ directories disagree (#511)"
             printf 'package.json:\n%s\nnpm/:\n%s\n' "$declared" "$onDisk"
@@ -188,7 +233,7 @@ jobs:
           # passed every check while the wrapper depended on a package the
           # staging script never produces.
           if [ "$pkgs" != "$declared" ]; then
-            echo "::error::posture-lint npm: scripts/stage-npm.sh and npm/doiget/package.json name different packages (#511)"
+            echo "::error::posture-lint npm: scripts/stage-npm.sh and npm/doiget-cli/package.json name different packages (#511)"
             printf 'stage-npm.sh:\n%s\npackage.json:\n%s\n' "$pkgs" "$declared"
             fail=1
           fi
@@ -197,7 +242,7 @@ jobs:
 
       - name: release checksum verification test (#511)
         shell: bash
-        run: bash npm/doiget/test/release-checksums.test.sh
+        run: bash npm/doiget-cli/test/release-checksums.test.sh
 
       - name: npm packaging tests (#511)
         shell: bash
@@ -207,8 +252,8 @@ jobs:
         # runner, so no action is pinned for it.
         run: |
           set -euo pipefail
-          node npm/doiget/test/platform.test.js
-          bash npm/doiget/test/stage-npm.test.sh
+          node npm/doiget-cli/test/platform.test.js
+          bash npm/doiget-cli/test/stage-npm.test.sh
 
   network-purity:
     # Phase 0 must make zero outbound network calls from the unit / integration

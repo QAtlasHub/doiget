@@ -14,6 +14,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
+WORKFLOW="$ROOT/.github/workflows/release-plz.yml"
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -40,7 +41,7 @@ check() {
   fi
 }
 
-for d in doiget doiget-darwin-arm64 doiget-darwin-x64 doiget-linux-x64 doiget-win32-x64; do
+for d in doiget-cli doiget-darwin-arm64 doiget-darwin-x64 doiget-linux-x64 doiget-win32-x64; do
   if [ -d "$WORK/out/$d" ]; then check ok "staged $d"; else check no "staged $d"; fi
 done
 
@@ -54,7 +55,7 @@ for f in "$WORK/out"/*/package.json; do
   fi
 done
 
-if grep -q '"version": "9.9.9"' "$WORK/out/doiget/package.json"; then
+if grep -q '"version": "9.9.9"' "$WORK/out/doiget-cli/package.json"; then
   check ok "wrapper version is 9.9.9"
 else
   check no "wrapper version is 9.9.9"
@@ -62,7 +63,7 @@ fi
 
 # The wrapper pins its platform packages to the exact same version; a drift
 # here publishes a wrapper that resolves nothing.
-if grep -q '"doiget-linux-x64": "9.9.9"' "$WORK/out/doiget/package.json"; then
+if grep -q '"doiget-linux-x64": "9.9.9"' "$WORK/out/doiget-cli/package.json"; then
   check ok "optionalDependencies pinned to the same version"
 else
   check no "optionalDependencies pinned to the same version"
@@ -83,7 +84,7 @@ fi
 # The shim and the table it requires must both ship, or `npx doiget` throws
 # MODULE_NOT_FOUND on first run.
 for f in doiget.js platform.js; do
-  if [ -f "$WORK/out/doiget/bin/$f" ]; then
+  if [ -f "$WORK/out/doiget-cli/bin/$f" ]; then
     check ok "wrapper ships bin/$f"
   else
     check no "wrapper ships bin/$f"
@@ -116,6 +117,54 @@ if [ -e "$WORK/out2/doiget-linux-x64" ]; then
   find "$WORK/out2/doiget-linux-x64" -print
 else
   check ok "no half-staged package is left behind"
+fi
+
+# Every path the publish step hands to `npm publish` must be one npm reads as
+# a directory. `npm-stage/doiget-darwin-arm64` is two segments with no leading
+# `./`, which is exactly npm's `owner/repo` shorthand for a GitHub dependency,
+# so npm never looks at the directory. That is how the v0.8.11 npm publish
+# died: `EALLOWGIT: Refusing to fetch "github:npm-stage/doiget-darwin-arm64"`,
+# before any registry call, in a job that is `continue-on-error`.
+#
+# The specs are read out of the workflow and used VERBATIM, from a directory
+# laid out the way the release job lays it out. Rewriting them to absolute
+# paths first would destroy the only property under test: npm accepts an
+# absolute path either way, and the shorthand collision is a fact about the
+# literal spelling.
+#
+# `--dry-run` needs no credentials and, on a real directory, no registry
+# round-trip either: it packs locally and reports what it would upload. A spec
+# npm reads as a GitHub shorthand fails instead, which is the case being
+# detected. `GIT_TERMINAL_PROMPT=0` keeps that failure from stopping to ask
+# for credentials on a machine that has a terminal.
+#
+# Skipped when npm is absent, so this file stays runnable outside CI.
+if command -v npm > /dev/null 2>&1; then
+  export GIT_TERMINAL_PROMPT=0
+  cp -r "$WORK/out" "$WORK/npm-stage"
+  globs="$(grep -oE '^ *for p in [^;]+' "$WORKFLOW" | sed 's/.*for p in //')"
+  direct="$(grep -oE 'npm publish [^ "$]+' "$WORKFLOW" | awk '{print $3}')"
+  if [ -z "$globs" ] || [ -z "$direct" ]; then
+    check no "found the npm publish invocations in release-plz.yml"
+  fi
+  for spec in $globs $direct; do
+    # Expand the glob where the release job would expand it.
+    entries="$(cd "$WORK" && printf '%s\n' $spec)"
+    for d in $entries; do
+      if ! ( cd "$WORK" && [ -d "$d" ] ); then
+        check no "publish spec $d resolves to a staged directory"
+        continue
+      fi
+      if ( cd "$WORK" && npm publish --dry-run "$d" ) > "$WORK/dry" 2>&1; then
+        check ok "npm reads $d as a directory"
+      else
+        check no "npm reads $d as a directory"
+        tail -4 "$WORK/dry"
+      fi
+    done
+  done
+else
+  echo "skip  npm not on PATH; publish-spec check not run"
 fi
 
 exit "$fail"

@@ -216,6 +216,68 @@ is the binding spec and full runbook. Summary:
   to the fixed commit (the pipeline runs the workflow/scripts *as of the
   tagged tree*). Do not reintroduce a perpetual "release PR".
 
+### npm: the one-time bootstrap
+
+The `publish to npm` job authenticates over OIDC and holds no `NPM_TOKEN`.
+That is the right end state and it cannot bootstrap itself: **npm Trusted
+Publishing cannot perform a package's first publish**, because the trusted
+publisher is configured under a package's Settings and an unpublished package
+has none. v0.8.11 shipped with that job red and the five packages still
+absent from the registry.
+
+Once, by a maintainer with an npm account:
+
+1. `scripts/bootstrap-npm.sh` — dry run. It reads the package list from
+   `scripts/stage-npm.sh`, checks each template is still at the `0.0.0`
+   placeholder, and refuses to proceed if any package already exists.
+2. `npm login`, with 2FA enabled and the GitHub account linked — npm's
+   documented fallback when a 2FA device and its recovery codes are both
+   lost.
+3. `scripts/bootstrap-npm.sh --publish` — publishes the five templates
+   verbatim under the `placeholder` dist-tag, then deprecates them.
+4. On npmjs.com, for **each** of the five: go to
+   **`https://www.npmjs.com/package/<name>/access`** and find *Trusted
+   Publisher* → GitHub Actions. Org `QAtlasHub`, repo `doiget`, workflow
+   filename `release-plz.yml` — a filename, no path — environment name empty,
+   allowed actions `npm publish`. The workflow filename must match exactly or
+   the OIDC claim will not match and the publish fails without saying why.
+
+   The URL is the **access** page, confirmed by setting it up. npm's own docs
+   describe the route as "your package settings … the 'Trusted Publisher'
+   section", which reads like a Settings tab and is not one — following that
+   wording sends you to a page that does not exist.
+5. Revoke the token.
+
+**`latest` is not left unset**, contrary to what this section first claimed.
+npm sets `latest` on a package's *first* publish regardless of `--tag`
+(measured: `doiget-linux-x64` came out as
+`{'placeholder': '0.0.0', 'latest': '0.0.0'}`). So the placeholders *are* what
+`npm install <pkg>` resolves to until a real release moves `latest`, and the
+deprecation in step 3 is the only warning a user gets — not a nicety.
+
+The wrapper is the one that matters: nobody installs a platform package
+directly, but `npm install doiget-cli` landing on an empty `0.0.0` would be a
+broken first impression.
+
+**npmjs.com will show "This package has been deprecated" until the release.**
+That is expected and self-resolving: npm has no package-level deprecation
+field, so the site derives the banner from whether the `latest` version is
+deprecated. Right now `latest` is the deprecated `0.0.0`, because it is the
+only version. (`glob` has 160 of its 168 versions deprecated and shows no
+banner, because its `latest` is healthy; `request` shows one because all of
+its versions including `latest` are.) The first real release takes `latest`
+and the banner goes. **Do not un-deprecate `0.0.0` to make it disappear** —
+that version really is an empty placeholder and the notice is the only thing
+warning anyone who pins it.
+
+**The wrapper is `doiget-cli`, not `doiget`.** npm refuses the unscoped
+`doiget` as too similar to the unrelated `giget`, and that refusal is permanent
+for the name. Matching the crate was the better answer anyway: one name on both
+registries. The *binary* is still `doiget`, exactly as `cargo install
+doiget-cli` puts `doiget` on PATH — verified by installing the staged package
+and reading `node_modules/.bin`, and `npx doiget-cli` resolves to it because the
+package declares a single bin.
+
 ## ADR workflow
 
 When proposing a binding decision:
