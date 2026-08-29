@@ -10,6 +10,25 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Fixed
+
+- **[mcp]** `doiget_paper_search` returning nothing now says whether that is about
+  the query or about the literature. OpenAlex free-text matching degrades sharply
+  past roughly eight terms and returns **nothing** rather than a partial match; a
+  human reading `0 results` shortens the query and retries, but an agent reading
+  `ok: true` with an empty array reads it as a fact about the world and stops. In
+  the session behind #534 that happened eleven times in a row, and a known 1992
+  *Am J Psychiatry* paper was written off as unavailable — until an unrelated
+  three-term query surfaced it immediately.
+
+  A zero-result search is a **success** envelope, so #506's error-disposition work
+  does not reach it and #505's is scoped to the CLI. The envelope now carries a
+  `hint` naming the submitted term count and what to retry with, at the exact point
+  an agent would otherwise conclude absence. Short queries get no hint: a two-term
+  search really may mean the work is not indexed, and hinting on every empty result
+  would train readers to skip it. The tool description says the same thing, so the
+  advice survives an agent that reads schemas but not envelopes (#534).
+
 ### Changed
 
 - **[dist]** The Claude Code plugin runs `npx -y doiget-cli serve` instead of a bare
