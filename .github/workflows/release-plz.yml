@@ -793,7 +793,19 @@ jobs:
           # `EALLOWGIT: Refusing to fetch "github:npm-stage/doiget-darwin-arm64"`
           # and the job died before reaching the registry at all. A path spec
           # has to look like a path.
-          for p in ./npm-stage/doiget-*; do
-            npm publish "$p" --provenance --access public --tag "$DIST_TAG"
+          # The platform list comes from `stage-npm.sh`'s MAP, not from a
+          # `doiget-*` glob. The glob used to be safe because the wrapper was
+          # named `doiget`; renaming it to `doiget-cli` made the glob match it
+          # too, so v0.8.12 published the wrapper inside the loop AND again on
+          # the line below -- `npm error You cannot publish over the previously
+          # published versions: 0.8.12`, after everything had in fact shipped.
+          # It also sorted first, so the wrapper went out ahead of the packages
+          # it pins: exactly the window the paragraph above warns about.
+          #
+          # Reading the MAP cannot drift the same way. It lists platform
+          # packages only, so the wrapper is excluded by construction rather
+          # than by a name test somebody has to remember to update.
+          for pkg in $(grep -oE '^doiget-[a-z0-9-]+:' scripts/stage-npm.sh | tr -d ':' | sort -u); do
+            npm publish "./npm-stage/$pkg" --provenance --access public --tag "$DIST_TAG"
           done
           npm publish ./npm-stage/doiget-cli --provenance --access public --tag "$DIST_TAG"

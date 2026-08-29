@@ -142,12 +142,46 @@ fi
 if command -v npm > /dev/null 2>&1; then
   export GIT_TERMINAL_PROMPT=0
   cp -r "$WORK/out" "$WORK/npm-stage"
-  globs="$(grep -oE '^ *for p in [^;]+' "$WORKFLOW" | sed 's/.*for p in //')"
+  # A `npm-stage/doiget-*` glob is banned outright. It matches the WRAPPER --
+  # `doiget-cli` starts with `doiget-` too -- so the wrapper is published
+  # inside the loop and again on the explicit line after it. v0.8.12's release
+  # job died on `You cannot publish over the previously published versions:
+  # 0.8.12`, after everything had already shipped: red job, complete release.
+  # It also sorted first, so the wrapper went out ahead of the packages its
+  # optionalDependencies pin.
+  #
+  # This is checked as a shape, not as a duplicate count, because the glob is
+  # the thing that is wrong. The same trap was spotted and excluded in
+  # posture-lint's `find -name doiget-*` in the very PR that renamed the
+  # wrapper, and missed here.
+  if grep -qE 'npm-stage/doiget-\*' "$WORKFLOW"; then
+    check no "the publish step does not glob npm-stage/doiget-*"
+    grep -nE 'npm-stage/doiget-\*' "$WORKFLOW" | sed 's/^/  /'
+  else
+    check ok "the publish step does not glob npm-stage/doiget-*"
+  fi
+
+  # The platform list the loop actually iterates, from the same source it reads.
+  looped="$(grep -oE '^doiget-[a-z0-9-]+:' "$ROOT/scripts/stage-npm.sh" | tr -d ':' | sort -u | sed 's#^#./npm-stage/#')"
   direct="$(grep -oE 'npm publish [^ "$]+' "$WORKFLOW" | awk '{print $3}')"
-  if [ -z "$globs" ] || [ -z "$direct" ]; then
+  if [ -z "$looped" ] || [ -z "$direct" ]; then
     check no "found the npm publish invocations in release-plz.yml"
   fi
-  for spec in $globs $direct; do
+
+  all_specs="$(printf '%s
+%s
+' "$looped" "$direct" | sed '/^$/d' | sed 's#^\./##')"
+  dupes="$(printf '%s
+' "$all_specs" | sort | uniq -d)"
+  if [ -n "$dupes" ]; then
+    check no "no package is published twice"
+    printf '  duplicated: %s
+' "$dupes"
+  else
+    check ok "no package is published twice"
+  fi
+
+  for spec in $looped $direct; do
     # Expand the glob where the release job would expand it.
     entries="$(cd "$WORK" && printf '%s\n' $spec)"
     for d in $entries; do
