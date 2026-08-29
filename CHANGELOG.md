@@ -10,6 +10,31 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Fixed
+
+- **[ci]** The npm publish job published the wrapper **twice** and failed on the
+  second attempt: `npm error You cannot publish over the previously published
+  versions: 0.8.12`. The loop globbed `./npm-stage/doiget-*`, which was safe while
+  the wrapper was named `doiget` and stopped being safe the moment it was renamed
+  to `doiget-cli` — that name starts with `doiget-` too. So the wrapper went out
+  inside the loop and again on the explicit line after it. It also sorts before
+  `doiget-darwin-*`, so it published ahead of the packages its
+  `optionalDependencies` pin: the exact window the comment above that loop warns
+  about.
+
+  Everything had already shipped by then, which is the worst shape a failure can
+  take — a red job on a complete release. The 0.8.12 npm packages are correct and
+  live; only the job's exit status was wrong.
+
+  The loop now reads the platform list from `stage-npm.sh`'s MAP, which lists
+  platform packages only, so the wrapper is excluded by construction rather than by
+  a name test somebody has to remember. `stage-npm.test.sh` bans the glob outright
+  and asserts no package is published twice; mutation-checked in both directions.
+
+  Worth recording: the identical trap was spotted in `posture-lint`'s
+  `find -name 'doiget-*'` and excluded there, in the very PR that did the rename
+  (#549). One of the two `doiget-*` patterns got the fix (#511).
+
 ## [0.8.12] - 2026-08-27
 
 ### Security
