@@ -12,6 +12,16 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [0.8.12] - 2026-08-27
 
+### Security
+
+- **[deps]** `chacha20` 0.10.1 was yanked from crates.io; moved to 0.10.2. Caught by
+  `cargo deny` on the promotion PR, not by anything in this release's own changes —
+  the lock had been fine when the cut was made and the yank landed after it. No
+  RUSTSEC advisory accompanies the yank, so this is a hygiene fix rather than a
+  known-exploitable one, but pinning a yanked version in a release is not something
+  to ship past. Reached through `rand`. The `cargo vet` exemption moved with it,
+  which is required or the next `vet` run goes red.
+
 ### Added
 
 - **[ci]** `scripts/release-version-gate.test.sh` — G5's first test. It runs the
