@@ -10,56 +10,37 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
-### Fixed
+## [0.8.12] - 2026-08-27
 
-- **[dist]** The npm trusted-publisher runbook now says where the setting actually
-  is: **`https://www.npmjs.com/package/<name>/access`**. npm's own documentation
-  describes the route as "your package settings … the 'Trusted Publisher' section",
-  which reads like a Settings tab and is not one — following that wording leads to
-  a page that does not exist. Confirmed by setting it up for all five packages.
-  Also spelled out that **Workflow filename** takes a filename with no path, and
-  that a mismatch there fails the OIDC claim without saying why (#511).
+### Added
 
-- **[mcp]** **Every release binary shipped without `doiget_expand_citation_graph`**,
-  the tool it was built to ship. `Server::new` drops that route on
-  `cfg!(feature = "citation")` *evaluated inside `doiget-mcp`*, and `doiget-cli`'s
-  `citation` feature forwarded only to `doiget-core`. The release build is
-  `-p doiget-cli --no-default-features --features oa-only,citation`, chosen
-  precisely so the graph tool ships (#373) — so `tools/list` advertised 21 tools
-  instead of 22 while `doiget graph` worked and `doiget_capability_profile`
-  reported `citation` as compiled in. An agent reading the profile would look for
-  the tool and not find it. Same shape as this feature's own missing `metadata`
-  implication (#516), one crate over; the `tdm-*` features already forwarded
-  correctly, `citation` alone did not.
+- **[ci]** `scripts/release-version-gate.test.sh` — G5's first test. It runs the
+  real gate over six crafted CHANGELOGs inside a throwaway `git worktree`, and it
+  copies the working-tree script in rather than trusting the worktree's `HEAD`
+  copy, because otherwise it would silently pass over an uncommitted change to
+  the very thing under test. Wired into `version-check.yml`, which already
+  installs the toolchain G2 needs.
 
-  **The test matrix could not see it.** CI's citation job builds
-  `--workspace --features oa-only,citation`, which turns the feature on for
-  `doiget-mcp` *directly*; only a `-p doiget-cli` build exercises the forwarding.
-  So the regression is pinned structurally, in posture-lint: every `doiget-mcp`
-  feature must be forwarded by the `doiget-cli` feature of the same name. Verified
-  by mutation — reverting the fix fails the check.
+- **[dist]** `scripts/bootstrap-npm.sh`, and the runbook for it in
+  `CONTRIBUTING.md`. The `publish to npm` job authenticates over OIDC and holds no
+  token, which is the right end state and cannot bootstrap itself: **npm Trusted
+  Publishing cannot perform a package's first publish**, because the trusted
+  publisher is configured on a package's own page and an unpublished package has
+  none. So the five packages have to be created once by hand before the pipeline
+  that was built to publish them can run at all. The script publishes the checked-in
+  `0.0.0` templates under a `placeholder` dist-tag, deprecates them, and prints
+  the exact Trusted Publisher fields to enter (#511).
 
-  Found by running `doiget serve` out of an actually-installed npm package and
-  diffing `tools/list` against `MCP_TOOLS.md`, which is the first time the npm
-  packaging had been exercised with a real binary rather than a fixture.
-
-- **[docs]** Every `cargo install` command in `docs/SOURCES.md` named a crate that
-  does not exist. `cargo install doiget` returns 404 from crates.io — the crate is
-  `doiget-cli`, which produces the `doiget` binary. That included **all four Tier 3
-  install commands**, so the document that answers "how do I enable the institutional
-  TDM connectors" answered it with four commands that fail. Same in
-  `docs/MIGRATION.md` and the site's quick start.
-
-  `README.md` has said `cargo install doiget` does **not** work since the last time
-  this was found, and `CHANGELOG.md` records that earlier fix — it corrected the
-  README and left these behind. A grep would have found them then; nobody ran one
-  (#511).
-- **[docs]** `ARCHITECTURE.md`'s diagram said the MCP server exposes **9 tools**. It
-  exposes **22** — `#[tool(` appears 22 times in `doiget-mcp/src/lib.rs`, and
-  `MCP_TOOLS.md` documents 22 names. The count has been wrong since somewhere before
-  0.8.6, which is when the 22-tool safety annotations shipped;
-  `INTEGRATION/claude-code.md` says 22 correctly, so the two docs have been
-  contradicting each other in the same repository.
+  Two things this entry originally claimed are false, corrected here rather than
+  quietly rewritten. **`--tag placeholder` does not keep `latest` unset**: npm
+  sets `latest` on a package's first publish whatever `--tag` says, measured
+  after the real run as `doiget-linux-x64-> {'placeholder': '0.0.0', 'latest':
+  '0.0.0'}`. So a placeholder is exactly what `npm install <pkg>` resolves to
+  until a release moves `latest`, which makes the deprecation notice the only
+  warning a user gets rather than a nicety. And **the `doiget` wrapper is not
+  published**: npm refuses the name as too similar to the existing `giget`
+  (`403 ... Package name too similar`). The four per-platform packages are
+  published; a naming dispute is open with npm support.
 
 ### Changed
 
@@ -134,37 +115,56 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   check the signal it never had: a change landed on `next` and nobody wrote it
   down (ADR-0025 Amendment 7).
 
-### Added
-
-- **[ci]** `scripts/release-version-gate.test.sh` — G5's first test. It runs the
-  real gate over six crafted CHANGELOGs inside a throwaway `git worktree`, and it
-  copies the working-tree script in rather than trusting the worktree's `HEAD`
-  copy, because otherwise it would silently pass over an uncommitted change to
-  the very thing under test. Wired into `version-check.yml`, which already
-  installs the toolchain G2 needs.
-
-- **[dist]** `scripts/bootstrap-npm.sh`, and the runbook for it in
-  `CONTRIBUTING.md`. The `publish to npm` job authenticates over OIDC and holds no
-  token, which is the right end state and cannot bootstrap itself: **npm Trusted
-  Publishing cannot perform a package's first publish**, because the trusted
-  publisher is configured under a package's Settings and an unpublished package has
-  none. So the five packages have to be created once by hand before the pipeline
-  that was built to publish them can run at all. The script publishes the checked-in
-  `0.0.0` templates under a `placeholder` dist-tag, deprecates them, and prints
-  the exact Trusted Publisher fields to enter (#511).
-
-  Two things this entry originally claimed are false, corrected here rather than
-  quietly rewritten. **`--tag placeholder` does not keep `latest` unset**: npm
-  sets `latest` on a package's first publish whatever `--tag` says, measured
-  after the real run as `doiget-linux-x64-> {'placeholder': '0.0.0', 'latest':
-  '0.0.0'}`. So a placeholder is exactly what `npm install <pkg>` resolves to
-  until a release moves `latest`, which makes the deprecation notice the only
-  warning a user gets rather than a nicety. And **the `doiget` wrapper is not
-  published**: npm refuses the name as too similar to the existing `giget`
-  (`403 ... Package name too similar`). The four per-platform packages are
-  published; a naming dispute is open with npm support.
-
 ### Fixed
+
+- **[dist]** The npm trusted-publisher runbook now says where the setting actually
+  is: **`https://www.npmjs.com/package/<name>/access`**. npm's own documentation
+  describes the route as "your package settings … the 'Trusted Publisher' section",
+  which reads like a Settings tab and is not one — following that wording leads to
+  a page that does not exist. Confirmed by setting it up for all five packages.
+  Also spelled out that **Workflow filename** takes a filename with no path, and
+  that a mismatch there fails the OIDC claim without saying why (#511).
+
+- **[mcp]** **Every release binary shipped without `doiget_expand_citation_graph`**,
+  the tool it was built to ship. `Server::new` drops that route on
+  `cfg!(feature = "citation")` *evaluated inside `doiget-mcp`*, and `doiget-cli`'s
+  `citation` feature forwarded only to `doiget-core`. The release build is
+  `-p doiget-cli --no-default-features --features oa-only,citation`, chosen
+  precisely so the graph tool ships (#373) — so `tools/list` advertised 21 tools
+  instead of 22 while `doiget graph` worked and `doiget_capability_profile`
+  reported `citation` as compiled in. An agent reading the profile would look for
+  the tool and not find it. Same shape as this feature's own missing `metadata`
+  implication (#516), one crate over; the `tdm-*` features already forwarded
+  correctly, `citation` alone did not.
+
+  **The test matrix could not see it.** CI's citation job builds
+  `--workspace --features oa-only,citation`, which turns the feature on for
+  `doiget-mcp` *directly*; only a `-p doiget-cli` build exercises the forwarding.
+  So the regression is pinned structurally, in posture-lint: every `doiget-mcp`
+  feature must be forwarded by the `doiget-cli` feature of the same name. Verified
+  by mutation — reverting the fix fails the check.
+
+  Found by running `doiget serve` out of an actually-installed npm package and
+  diffing `tools/list` against `MCP_TOOLS.md`, which is the first time the npm
+  packaging had been exercised with a real binary rather than a fixture.
+
+- **[docs]** Every `cargo install` command in `docs/SOURCES.md` named a crate that
+  does not exist. `cargo install doiget` returns 404 from crates.io — the crate is
+  `doiget-cli`, which produces the `doiget` binary. That included **all four Tier 3
+  install commands**, so the document that answers "how do I enable the institutional
+  TDM connectors" answered it with four commands that fail. Same in
+  `docs/MIGRATION.md` and the site's quick start.
+
+  `README.md` has said `cargo install doiget` does **not** work since the last time
+  this was found, and `CHANGELOG.md` records that earlier fix — it corrected the
+  README and left these behind. A grep would have found them then; nobody ran one
+  (#511).
+- **[docs]** `ARCHITECTURE.md`'s diagram said the MCP server exposes **9 tools**. It
+  exposes **22** — `#[tool(` appears 22 times in `doiget-mcp/src/lib.rs`, and
+  `MCP_TOOLS.md` documents 22 names. The count has been wrong since somewhere before
+  0.8.6, which is when the 22-tool safety annotations shipped;
+  `INTEGRATION/claude-code.md` says 22 correctly, so the two docs have been
+  contradicting each other in the same repository.
 
 - **[ci]** **The npm publish failed on the 0.8.11 release**, for a reason no part of
   the two review rounds had looked for. `npm publish npm-stage/doiget-darwin-arm64`
