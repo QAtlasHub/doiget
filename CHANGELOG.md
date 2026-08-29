@@ -10,6 +10,23 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Fixed
+
+- **[docs]** Four tools shipped in every release with no entry in `MCP_TOOLS.md`:
+  `doiget_batch_from_bibliography`, `doiget_paper_tex_source`, `doiget_tag` and
+  `doiget_annotate`. That document is what an integrator reads to decide what the
+  server can do, and `docs/INTEGRATION/*.md` points at it, so a tool absent from it
+  is discoverable only by calling `tools/list` and reading JSON Schemas — the work
+  the document exists to save. Two of the four arrived with the tags work (#294) and
+  one with the TeX source work: the tool landed, the reference page did not (#553).
+- **[ci]** `posture-lint` now compares the tool table against the router in **both**
+  directions. Nothing did, and it had drifted both ways at once: four tools with no
+  row (#553) and one row with no tool (#552, the citation graph absent from every
+  release binary). Neither is visible from inside the other file. rmcp derives a
+  tool's name from its `#[tool]` method name, so the method list is the router's own
+  truth; the table rows are the document's. Mutation-checked in both directions —
+  deleting a row and inventing one each fail the check with the right message.
+
 ### Changed
 
 - **[dist]** The Claude Code plugin runs `npx -y doiget-cli serve` instead of a bare
