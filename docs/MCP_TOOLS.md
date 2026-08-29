@@ -33,6 +33,10 @@ Additional tools:
 | `doiget_csl_export` | CSL JSON for one or many entries. |
 | `doiget_resolve_citation` | Resolve a free-form bibliographic citation string to ranked DOI candidates. |
 | `doiget_batch_resolve_citations` | Batch resolve bibliographic citation strings to ranked DOI candidates. |
+| `doiget_batch_from_bibliography` | Fetch every OA-resolvable entry in a Zotero / Mendeley CSL-JSON export. |
+| `doiget_paper_tex_source` | Fetch an **arXiv** paper's raw LaTeX source. More reliable than `doiget_paper_text` for papers ar5iv has not processed through LaTeXML. A DOI is not a valid input. |
+| `doiget_tag` | Add or remove tags and collection membership on a stored entry, for local knowledge-base organisation (#294). |
+| `doiget_annotate` | Attach or clear a freeform note on a stored entry (#294). |
 
 ## 2. Naming and convention
 
