@@ -239,7 +239,7 @@ const TRANSPARENT_RESOLVER_HOSTS: &[&str] = &["doi.org", "dx.doi.org", "hdl.hand
 
 /// Whether `host` is a DOI resolver rather than a content host (#533).
 ///
-/// Exact match against [`TRANSPARENT_RESOLVER_HOSTS`], deliberately without
+/// Exact match against `TRANSPARENT_RESOLVER_HOSTS`, deliberately without
 /// wildcard support: `evil-doi.org`, `doi.org.evil.test` and `www.doi.org`
 /// are all NOT resolvers, and the first two are what an attacker would
 /// register.
@@ -1764,10 +1764,10 @@ mod tests {
 
     /// Exact hosts, no wildcards. `*.doi.org` would sweep in `www.doi.org`,
     /// which is the DOI Foundation's website and not a resolver, plus
-    /// whatever else is ever stood up there; and the look-alikes below are
+    /// whatever else is ever stood up there; and the impostor hosts below are
     /// precisely what an attacker registers.
     #[test]
-    fn resolver_lookalikes_are_not_transparent() {
+    fn resolver_impostor_hosts_are_not_transparent() {
         for host in [
             "doi.org",
             "dx.doi.org",
