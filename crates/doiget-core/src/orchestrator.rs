@@ -4541,15 +4541,15 @@ pub fn nothing_was_consulted(attempts: &[SourceAttempt]) -> bool {
 fn classify_attempt(e: &FetchError) -> AttemptOutcome {
     match e {
         FetchError::NotFound { .. } => AttemptOutcome::NoRecord,
-        // Sources signal "found it, cannot give it to you" through
-        // SourceSchema with an explicit hint (OpenAIRE access rights,
-        // Europe PMC isOpenAccess, HAL openAccess_bool). The hint is
-        // carried verbatim so the reason survives into the message.
-        FetchError::SourceSchema { hint } if is_access_refusal(hint) => {
-            AttemptOutcome::NotOpenAccess {
-                detail: hint.clone(),
-            }
-        }
+        // A source saying "found it, cannot give it to you" says so in the
+        // type now (#538). This used to be `SourceSchema` plus a substring
+        // search over the hint, which meant the phrasing of an error message
+        // decided how the row rendered -- and #503 reworded one and silently
+        // turned every Europe PMC refusal into `Failed`. The detail is still
+        // carried verbatim, because the reason is for a reader, not a match.
+        FetchError::NotRetrievable { detail, .. } => AttemptOutcome::NotOpenAccess {
+            detail: detail.clone(),
+        },
         // A policy refusal before the untyped fallback (#470). The
         // conversion already exists and yields exactly the reason /
         // attempted / expected / hop_index that `remediation::for_denial`
@@ -4745,38 +4745,6 @@ mod attempt_denial_tests {
             "row: {row}"
         );
     }
-}
-
-/// Whether a `SourceSchema` hint describes an access refusal rather than a
-/// malformed response.
-///
-/// The coupling is prose: a source says why it refused in free text and
-/// this reads the text back. That is fragile, and #503 is the proof — it
-/// reworded Europe PMC's refusal from "not open access" to "advertises no
-/// retrievable PDF" and the row silently reclassified from
-/// `NotOpenAccess` to `Failed`, which reads to an operator as "the source
-/// broke" rather than "the source has it and cannot give it to us".
-///
-/// It is caught rather than prevented: `an_access_refusal_is_recorded_
-/// distinctly_from_a_miss` drives the real chain, so any source whose
-/// wording drifts out of this predicate fails there. A typed refusal on
-/// `FetchError` would prevent it instead, at the cost of widening the
-/// closed error set in `docs/ERRORS.md` §3.
-#[cfg(any(
-    feature = "metadata",
-    feature = "tdm-elsevier",
-    feature = "tdm-aps",
-    feature = "tdm-springer",
-    feature = "tdm-ieee"
-))]
-fn is_access_refusal(hint: &str) -> bool {
-    hint.contains("not open access")
-        || hint.contains("openAccess")
-        // #503: Europe PMC refuses on "nothing retrievable is
-        // advertised", which is a strictly narrower claim than "outside
-        // the OA subset" and is still an access refusal, not a schema
-        // failure.
-        || hint.contains("no retrievable PDF")
 }
 
 /// Run the optional resolution chain and record one [`SourceAttempt`] per
@@ -5485,8 +5453,10 @@ mod chain_tests {
     ///
     /// This record carries no `fullTextUrlList` at all, so after #503 it is
     /// refused for the narrower reason and must still classify as
-    /// `NotOpenAccess` — see `is_access_refusal`, whose coupling to the
-    /// wording this test is the only thing guarding.
+    /// `NotOpenAccess`. Until #538 this test was the only thing guarding
+    /// that, because classification read the wording back out of the hint;
+    /// the refusal is a `FetchError::NotRetrievable` now, so the compiler
+    /// guards it and this asserts the behaviour rather than the phrasing.
     #[tokio::test]
     #[serial_test::serial]
     async fn an_access_refusal_is_recorded_distinctly_from_a_miss() {

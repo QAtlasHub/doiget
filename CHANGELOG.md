@@ -89,6 +89,33 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[core]** An access refusal was classified by reading an error message back.
+  A source saying "I found it and cannot give it to you" returned
+  `FetchError::SourceSchema` with an explanatory hint, and the orchestrator
+  decided what the trace row said by substring-matching that hint for
+  `not open access` / `openAccess` / `no retrievable PDF`. Match and the row
+  read *"found, not open access"*; miss and it read *"failed"* - which tells an
+  operator the source broke rather than that the paper is not free there (#538).
+
+  It had already fired. #503 reworded Europe PMC's refusal for good reasons, the
+  hint fell out of the predicate, and every Europe PMC refusal silently became
+  `Failed`. Nothing in the source said the wording was load-bearing, and `hal`
+  matched on `openAccess` - a JSON **field name**, not prose anyone chose.
+
+  Sources now return `FetchError::NotRetrievable { source_key, detail }` and the
+  classifier matches the variant. `is_access_refusal` is gone. The compiler
+  found a second exhaustive match the substring approach had no way to flag.
+
+  It collapses to the **existing** `NO_OA_AVAILABLE` rather than adding a wire
+  code: "found it, no free copy" is what that already means, so the closed set
+  in `docs/ERRORS.md` §3 does not widen. Its §2 description does - it said
+  "Tier 1 sources reported no OA URL" and now also covers an optional source
+  holding the record with nothing retrievable. See ADR-0054.
+
+  Side effect worth naming: `SourceSchema` collapses to `INTERNAL_ERROR`, so
+  until now a paper simply not being free at one repository could be reported as
+  a bug in doiget. It no longer is.
+
 - **[fetch]** A gold-OA, cc-by paper was refused at `doi.org`, one hop before the
   publisher whose host was already on the allowlist. Unpaywall reports
   `best_oa_location.url` for `10.1002/pcn5.205` as literally

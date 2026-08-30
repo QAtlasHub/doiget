@@ -176,8 +176,9 @@ impl Source for HalSource {
             .and_then(serde_json::Value::as_bool)
             != Some(true)
         {
-            return Err(FetchError::SourceSchema {
-                hint: "hal deposit is not open access (openAccess_bool != true)".to_string(),
+            return Err(FetchError::NotRetrievable {
+                source_key: "hal".to_string(),
+                detail: "deposit is not open access (openAccess_bool != true)".to_string(),
             });
         }
 
@@ -425,9 +426,18 @@ mod tests {
             .fetch(&ref_, &profile(true), &ctx)
             .await
             .expect_err("closed deposits must not be returned");
+        // #538: the CATEGORY, not "some schema error". `SourceSchema`
+        // collapses to INTERNAL_ERROR at the boundary, which said the source
+        // broke; a refusal is `NoOaAvailable`, which says the work is not
+        // free here.
         assert!(
-            matches!(err, FetchError::SourceSchema { .. }),
-            "got {err:?}"
+            matches!(err, FetchError::NotRetrievable { .. }),
+            "an access refusal is its own variant, not a schema failure: {err:?}"
+        );
+        assert_eq!(
+            crate::ErrorCode::from(&err),
+            crate::ErrorCode::NoOaAvailable,
+            "and it must not surface as an internal error: {err:?}"
         );
     }
 
