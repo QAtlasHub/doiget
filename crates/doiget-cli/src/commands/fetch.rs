@@ -596,6 +596,15 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
                 "fetched {} (metadata-only: no OA PDF available) -> {}",
                 label, outcome.path
             ));
+            // #505: this is the ONLY outcome that reads as a result rather
+            // than an error, which is why it had no trace -- there was no
+            // `error[...]` block to hang one on. It is also the one where the
+            // absence misleads most: the line above is byte-identical whether
+            // the optional sources were on and had nothing, or off and never
+            // asked.
+            for line in not_found_trace_lines(ref_, &outcome.attempts) {
+                print_err(format_args!("{line}"));
+            }
         }
         // Issue #325: publisher PDF was blocked, arXiv preprint auto-fetched.
         PdfLegStatus::PreprintFallback { arxiv_id, .. } => {
@@ -1259,6 +1268,64 @@ fn render_blocked_error(
 /// indication that none of the five had been consulted.
 ///
 /// Pure so the wording is asserted rather than assumed.
+/// The diagnostics for a found-nothing fetch (#505).
+///
+/// `no OA PDF available` means only "the sources that ran had nothing". With
+/// the default profile that is three of eleven, and the sentence does not say
+/// so -- #413 built the trace for exactly this distinction ("we asked and it
+/// had nothing" versus "we never asked") and this was the path it never
+/// reached.
+///
+/// Three blocks: what ran, what did not, and the line to paste.
+fn not_found_trace_lines(ref_: &Ref, attempts: &[SourceAttempt]) -> Vec<String> {
+    let mut out = Vec::new();
+    if attempts.is_empty() {
+        return out;
+    }
+
+    out.push("  = note: no OA copy found. sources this run:".to_string());
+    out.extend(
+        doiget_core::orchestrator::render_attempts(attempts)
+            .lines()
+            .map(|l| format!("  {l}")),
+    );
+
+    // Split the widening advice by whether it can actually be acted on.
+    //
+    // `resolve_metadata_flag` returns false when the variable IS set but the
+    // Cargo feature was not compiled in -- it warns through `tracing` and
+    // moves on, so the source reports `Disabled` naming a variable the user
+    // has already set. Printing "set DOIGET_ENABLE_X" at someone who set it
+    // an hour ago is the same species of unhelpful as the bare
+    // `no OA PDF available` this issue is about, so say which case it is.
+    let (unset, already_set): (Vec<_>, Vec<_>) = doiget_core::orchestrator::widening_env(attempts)
+        .into_iter()
+        .partition(|v| std::env::var_os(v).is_none());
+
+    if !unset.is_empty() {
+        let assignments = unset
+            .iter()
+            .map(|v| format!("{v}=1"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let target = match ref_ {
+            Ref::Arxiv(id) => id.as_str().to_string(),
+            Ref::Doi(doi) => doi.as_str().to_string(),
+        };
+        out.push("  = suggest: to widen the search:".to_string());
+        out.push(format!("      {assignments} doiget fetch {target}"));
+    }
+
+    if !already_set.is_empty() {
+        out.push(format!(
+            "  = note: {} already set, but the source is still off -- this              binary was built without the Cargo feature that provides it.              Widening needs a differently-built binary, not another variable.",
+            already_set.join(", ")
+        ));
+    }
+
+    out
+}
+
 fn blocked_trace_lines(attempts: &[SourceAttempt], message: &str) -> Vec<String> {
     let mut out = Vec::new();
     // A rate limit is the one failure where retrying the same host later is
@@ -2225,6 +2292,93 @@ host = "*.uj.edu.pl"
 
     /// The half of #445 that the #413 trace already answered for
     /// `NotFound`: *did anything else have it?*
+    /// #505: the found-nothing path is the one outcome that reads as a
+    /// result, so its silence is the most misleading. `no OA PDF available`
+    /// is byte-identical whether the optional sources were on and had
+    /// nothing or off and never asked.
+    #[test]
+    fn a_found_nothing_fetch_says_what_it_consulted_and_what_it_did_not() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let ref_ = Ref::parse("10.1137/0117004").expect("valid doi");
+        let attempts = vec![
+            SourceAttempt::new("unpaywall", AttemptOutcome::NoRecord),
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_HAL"],
+                },
+            ),
+        ];
+        let joined = not_found_trace_lines(&ref_, &attempts).join(
+            "
+",
+        );
+
+        assert!(
+            joined.contains("unpaywall") && joined.contains("no record"),
+            "what ran, and what it said:
+{joined}"
+        );
+        assert!(
+            joined.contains("DOIGET_ENABLE_HAL"),
+            "a source never asked must still name its switch:
+{joined}"
+        );
+        // The line to paste, not prose about it.
+        assert!(
+            joined.contains("DOIGET_ENABLE_HAL=1 doiget fetch 10.1137/0117004"),
+            "the widening command must be runnable as printed:
+{joined}"
+        );
+    }
+
+    /// No trace at all when there is nothing to say. An empty attempt list
+    /// means the chain never recorded anything, and inventing a block for it
+    /// would be noise on the one path users see most.
+    #[test]
+    fn no_attempts_means_no_found_nothing_trace() {
+        let ref_ = Ref::parse("10.1137/0117004").expect("valid doi");
+        assert!(not_found_trace_lines(&ref_, &[]).is_empty());
+    }
+
+    /// The advice has to be actionable to be worth printing.
+    ///
+    /// `resolve_metadata_flag` returns false when the variable is SET but the
+    /// Cargo feature was not compiled in, so the source still reports
+    /// `Disabled` naming a variable the user already set. Telling them to set
+    /// it again is the same species of unhelpful as the bare
+    /// `no OA PDF available` this issue is about.
+    #[test]
+    #[serial]
+    fn an_already_set_switch_is_reported_as_a_build_problem_not_a_config_one() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let _guard = EnvGuard::save("DOIGET_ENABLE_HAL");
+        std::env::set_var("DOIGET_ENABLE_HAL", "1");
+
+        let ref_ = Ref::parse("10.1137/0117004").expect("valid doi");
+        let attempts = vec![SourceAttempt::new(
+            "hal",
+            AttemptOutcome::Disabled {
+                env: &["DOIGET_ENABLE_HAL"],
+            },
+        )];
+        let joined = not_found_trace_lines(&ref_, &attempts).join(
+            "
+",
+        );
+
+        assert!(
+            !joined.contains("doiget fetch 10.1137/0117004"),
+            "must NOT tell them to set what they have already set:
+{joined}"
+        );
+        assert!(
+            joined.contains("built without"),
+            "must name the real blocker, which is the build:
+{joined}"
+        );
+    }
+
     #[test]
     fn a_blocked_leg_reports_which_other_sources_were_consulted() {
         use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};

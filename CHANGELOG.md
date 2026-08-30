@@ -53,6 +53,40 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   answers `initialize` as `doiget 0.8.12` and lists 22 tools, with pure JSON-RPC on
   stdout and zero bytes on stderr.
 
+### Added
+
+- **[cli]** The found-nothing fetch now reports what it consulted. Previously
+  `fetched ... (metadata-only: no OA PDF available)` was byte-identical whether
+  the optional sources were on and had nothing or off and never asked - and it
+  exits 0, so unlike the blocked path there was no `error[...]` block for the
+  #413 trace to hang on. It is the one outcome that reads as a *result*, which is
+  where the silence misleads most: with the default profile that sentence means
+  only "three of eleven sources had nothing" (#505).
+
+  It now prints the same attempt trace the blocked and NOT_FOUND paths already
+  print, plus the command that widens the search - the line to paste, not prose
+  about it:
+
+  ```
+    = suggest: to widen the search:
+        DOIGET_ENABLE_HAL=1 DOIGET_ENABLE_CORE=1 doiget fetch 10.1137/0117004
+  ```
+
+  The variables come from the `Disabled` rows themselves rather than a second
+  registry, so the advice cannot claim a source was skipped when it was
+  consulted, or name a switch the chain does not read.
+
+  A switch that is **already set** is reported as a build problem instead:
+  `resolve_metadata_flag` returns false when the variable is set but the Cargo
+  feature was not compiled in, so the source still reports `Disabled` naming a
+  variable the user set an hour ago. Telling them to set it again would be the
+  same species of unhelpful as the bare `no OA PDF available`.
+
+  Part 3 of #505 - ranking which source is most likely to hold the paper - is
+  deliberately not here. The issue makes the case that a wrong ranking is worse
+  than none because it makes people stop early, and that deserves its own change.
+  #505 stays open for it.
+
 ### Fixed
 
 - **[fetch]** A gold-OA, cc-by paper was refused at `doi.org`, one hop before the
