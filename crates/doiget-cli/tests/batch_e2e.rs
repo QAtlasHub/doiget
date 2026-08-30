@@ -315,6 +315,7 @@ async fn batch_with_malformed_ref_continues_and_returns_err() {
 
 #[tokio::test]
 #[serial]
+#[ignore = "612 s at arXiv's published 3 s/request rate; run by the `test (slow)` CI job via --ignored"]
 async fn batch_above_window_size_fetches_every_ref() {
     // Issue #304: a refs file LARGER than `MCP_BATCH_MAX_SIZE` must no longer
     // abort fetching nothing — every ref is processed across multiple
@@ -323,9 +324,23 @@ async fn batch_above_window_size_fetches_every_ref() {
     // just the windowing arithmetic), so it confirms counters accumulate
     // across windows and the bookends are emitted exactly once.
     //
-    // Slow by construction: `MCP_BATCH_MAX_SIZE + 2` real fetches through the
-    // hard-coded 5-per-second rate cap (~20 s). Kept `#[serial]` so it never
-    // contends with the other batch fixtures.
+    // SLOW BY CONSTRUCTION, and far slower than this comment used to claim.
+    // It said "~20 s", counting only the global 5-per-second cap. Two things
+    // it missed:
+    //
+    //   * `SOURCE_RATE_OVERRIDES` puts 3 s between arXiv requests, because
+    //     arXiv's Terms of Use do (2cc32ab, 2026-08-25 -- after this test was
+    //     written, which is why the estimate was right when it was made);
+    //   * one arXiv attempt issues TWO requests, the Atom feed then the PDF,
+    //     and #493 paced the second one too.
+    //
+    // So the real cost is 102 * 2 * 3 s = 612 s, and CI measured 609 s. That
+    // is not waste -- it is arXiv's published rate, faithfully obeyed -- but
+    // it is a property of the dispatch loop, which varies with neither OS nor
+    // Cargo feature. `#[ignore]` keeps it off the five broad `test` jobs; the
+    // `test (slow)` job runs it once with `--ignored`.
+    //
+    // Kept `#[serial]` so it never contends with the other batch fixtures.
     let server = MockServer::start().await;
     let body = b"%PDF-1.7\n%batch-window-fixture\n".to_vec();
     // One regex mock serves every generated arXiv id rather than mounting one
