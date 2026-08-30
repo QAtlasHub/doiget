@@ -136,6 +136,35 @@ pub enum FetchError {
     /// source receives a borrowed string from upstream and re-validates).
     #[error("invalid ref: {0}")]
     InvalidRef(#[from] RefParseError),
+    /// A source found the record and **cannot supply a copy** — an access
+    /// refusal, not a failure.
+    ///
+    /// The distinction is the whole point: "the source has it and cannot
+    /// give it to us" and "the source broke" lead an operator to different
+    /// conclusions, and only the second is a bug to chase.
+    ///
+    /// This exists as a variant because it used to be a *substring search*.
+    /// A refusal was [`Self::SourceSchema`] with an explanatory hint, and
+    /// `orchestrator::is_access_refusal` read the hint back looking for
+    /// "not open access" / "openAccess" / "no retrievable PDF". #503
+    /// reworded Europe PMC's refusal for good reasons, the hint fell out of
+    /// that list, and every Europe PMC refusal silently became
+    /// `AttemptOutcome::Failed`. Nothing in the source said the wording was
+    /// load-bearing, and `hal` matched on `openAccess` — a JSON *field
+    /// name*, not prose anyone chose (#538).
+    ///
+    /// Collapses to [`crate::ErrorCode::NoOaAvailable`], which is an
+    /// EXISTING wire code: "found it, no free copy" is exactly what that
+    /// means, so the closed set in `docs/ERRORS.md` §3 does not widen. See
+    /// ADR-0054.
+    #[error("{source_key} has the record but no retrievable copy: {detail}")]
+    NotRetrievable {
+        /// Which source refused.
+        source_key: String,
+        /// Why, in the source's own terms — the flags or codes a reader
+        /// checks next. Displayed, never parsed: that is the point.
+        detail: String,
+    },
     /// Source-side schema mismatch (unexpected JSON shape, missing
     /// required field). Surfaces to [`crate::ErrorCode::InternalError`]
     /// at the public boundary.
@@ -234,6 +263,9 @@ impl From<&FetchError> for crate::ErrorCode {
             FetchError::Http(_) => crate::ErrorCode::NetworkError,
             FetchError::Log(_) => crate::ErrorCode::LogError,
             FetchError::InvalidRef(_) => crate::ErrorCode::InvalidRef,
+            // An access refusal is not an internal error. Before #538 it
+            // was reported as one, because it travelled as `SourceSchema`.
+            FetchError::NotRetrievable { .. } => crate::ErrorCode::NoOaAvailable,
             FetchError::SourceSchema { .. } => crate::ErrorCode::InternalError,
             // Slice 2: a too-large batch is a request-shape failure, so
             // collapse to `INVALID_REF` (closest closed-set fit). The
@@ -282,6 +314,12 @@ impl From<&FetchError> for Option<crate::DenialContext> {
             // `TooManyRefs` is a request-shape failure, not a denial —
             // adding it to the None arm keeps the mapping table consistent.)
             FetchError::NoOaAvailable
+            // #538: a source refusing because the work is not open there is
+            // NOT a denial in the ADR-0023 sense. Nothing was withheld by
+            // policy, so there is no capability to grant and no allowlist to
+            // widen -- a `DenialContext` would send a reader after a
+            // configuration change that does not exist.
+            | FetchError::NotRetrievable { .. }
             | FetchError::NotFound { .. }
             | FetchError::Ambiguous { .. }
             | FetchError::Log(_)
