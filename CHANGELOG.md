@@ -10,6 +10,21 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Changed
+
+- **[dist]** The Claude Code plugin runs `npx -y doiget-cli serve` instead of a bare
+  `doiget serve`, so installing it **needs nothing installed beforehand** — npm
+  fetches the wrapper and the one matching platform binary on first run. Until now
+  the plugin only worked for people who had already installed doiget some other
+  way, which is why it was kept as a self-hosted marketplace rather than submitted
+  to the Anthropic plugin directory: a listing whose first run fails for everyone
+  without the binary on PATH is worse than no listing. That objection is gone, so
+  the directory submission is now viable (#513).
+
+  Verified by launching it: `npx -y doiget-cli serve` from the real registry
+  answers `initialize` as `doiget 0.8.12` and lists 22 tools, with pure JSON-RPC on
+  stdout and zero bytes on stderr.
+
 ### Fixed
 
 - **[mcp]** `doiget_paper_search` returning nothing now says whether that is about
@@ -28,23 +43,20 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   search really may mean the work is not indexed, and hinting on every empty result
   would train readers to skip it. The tool description says the same thing, so the
   advice survives an agent that reads schemas but not envelopes (#534).
-
-### Changed
-
-- **[dist]** The Claude Code plugin runs `npx -y doiget-cli serve` instead of a bare
-  `doiget serve`, so installing it **needs nothing installed beforehand** — npm
-  fetches the wrapper and the one matching platform binary on first run. Until now
-  the plugin only worked for people who had already installed doiget some other
-  way, which is why it was kept as a self-hosted marketplace rather than submitted
-  to the Anthropic plugin directory: a listing whose first run fails for everyone
-  without the binary on PATH is worse than no listing. That objection is gone, so
-  the directory submission is now viable (#513).
-
-  Verified by launching it: `npx -y doiget-cli serve` from the real registry
-  answers `initialize` as `doiget 0.8.12` and lists 22 tools, with pure JSON-RPC on
-  stdout and zero bytes on stderr.
-
-### Fixed
+- **[docs]** Four tools shipped in every release with no entry in `MCP_TOOLS.md`:
+  `doiget_batch_from_bibliography`, `doiget_paper_tex_source`, `doiget_tag` and
+  `doiget_annotate`. That document is what an integrator reads to decide what the
+  server can do, and `docs/INTEGRATION/*.md` points at it, so a tool absent from it
+  is discoverable only by calling `tools/list` and reading JSON Schemas — the work
+  the document exists to save. Two of the four arrived with the tags work (#294) and
+  one with the TeX source work: the tool landed, the reference page did not (#553).
+- **[ci]** `posture-lint` now compares the tool table against the router in **both**
+  directions. Nothing did, and it had drifted both ways at once: four tools with no
+  row (#553) and one row with no tool (#552, the citation graph absent from every
+  release binary). Neither is visible from inside the other file. rmcp derives a
+  tool's name from its `#[tool]` method name, so the method list is the router's own
+  truth; the table rows are the document's. Mutation-checked in both directions —
+  deleting a row and inventing one each fail the check with the right message.
 
 - **[dist]** `.claude-plugin/plugin.json` and `marketplace.json` said **0.8.11**
   while the repository was two releases ahead. Nothing stamps them — no script, no
@@ -57,8 +69,6 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   not called `doiget`, and that release's npm publish failed outright, so nothing
   was on the registry to install. The 0.8.11 entry is annotated rather than
   rewritten (#511).
-
-### Fixed
 
 - **[ci]** The npm publish job published the wrapper **twice** and failed on the
   second attempt: `npm error You cannot publish over the previously published

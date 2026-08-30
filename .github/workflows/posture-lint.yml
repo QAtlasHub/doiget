@@ -119,6 +119,45 @@ jobs:
           fi
           echo "LICENSE OK: verbatim SPDX MIT, no trailing prose, ends at SOFTWARE., LF."
 
+      - name: MCP_TOOLS.md lists exactly the tools the router exposes (#553)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `MCP_TOOLS.md` is what an integrator reads to decide what the server
+          # can do, and `docs/INTEGRATION/*.md` points at it. Nothing checked it
+          # against the router, and it had drifted in BOTH directions at once:
+          # four tools shipped with no entry (#553), and one had an entry while
+          # not shipping at all (#552). Neither is visible from inside the other
+          # file.
+          #
+          # rmcp derives a tool's name from its `#[tool]` method name, so the
+          # method list is the router's own truth. Compared against the table
+          # rows, which are the document's.
+          fns="$(grep -oE '^[[:space:]]+(pub )?async fn doiget_[a-z_0-9]+' \
+                 crates/doiget-mcp/src/lib.rs \
+                 | grep -oE 'doiget_[a-z_0-9]+' | sort -u)"
+          rows="$(grep -oE '^\| .doiget_[a-z_0-9]+.' docs/MCP_TOOLS.md \
+                  | grep -oE 'doiget_[a-z_0-9]+' | sort -u)"
+          if [ -z "$fns" ] || [ -z "$rows" ]; then
+            echo "::error::posture-lint mcp-tools: read no tools from the router or no rows from MCP_TOOLS.md — one of the two patterns has stopped matching (#553)"
+            exit 1
+          fi
+          missing="$(comm -23 <(printf '%s\n' "$fns") <(printf '%s\n' "$rows"))"
+          extra="$(comm -13 <(printf '%s\n' "$fns") <(printf '%s\n' "$rows"))"
+          fail=0
+          if [ -n "$missing" ]; then
+            echo "::error::posture-lint mcp-tools: these tools ship but have no row in docs/MCP_TOOLS.md (#553)"
+            printf '  %s\n' $missing
+            fail=1
+          fi
+          if [ -n "$extra" ]; then
+            echo "::error::posture-lint mcp-tools: docs/MCP_TOOLS.md documents these, but the router has no such tool (#552)"
+            printf '  %s\n' $extra
+            fail=1
+          fi
+          [ "$fail" -eq 0 ]
+          echo "MCP_TOOLS.md and the router agree on $(printf '%s\n' "$fns" | wc -l | tr -d ' ') tools"
+
       - name: doiget-cli forwards every doiget-mcp feature (#373 / #516)
         shell: bash
         run: |
