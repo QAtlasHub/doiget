@@ -41,9 +41,9 @@ features-doc-link = "docs/SOURCES.md"
 
 [workspace.dependencies]
 # Core
-doiget-core = { path = "crates/doiget-core", version = "0.8.13-beta.5" }
-doiget-cli  = { path = "crates/doiget-cli", version = "0.8.13-beta.5" }
-doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.13-beta.5" }
+doiget-core = { path = "crates/doiget-core", version = "0.8.13-beta.6" }
+doiget-cli  = { path = "crates/doiget-cli", version = "0.8.13-beta.6" }
+doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.13-beta.6" }
 
 # Async runtime — features are deliberately limited (avoid `full`).
 tokio = { version = "1", default-features = false, features = [
