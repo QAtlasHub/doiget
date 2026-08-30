@@ -906,8 +906,76 @@ pub struct DenialContext {
 // ResolvedCandidate / ResolveResult (Issue #242)
 // ---------------------------------------------------------------------------
 
+/// How much of the query a candidate actually matched, as something an
+/// agent can branch on (#536).
+///
+/// `score` alone is not judgement material. For it to work as a gate, the
+/// consumer has to already know that the scorer is token overlap rather than
+/// semantic similarity, that 0.5 is the FLOOR so the worst candidate the tool
+/// will ever emit still looks like a positive number, and that for a citation
+/// string carrying author + title + journal + volume + year, 0.5 means most of
+/// it did not match. None of that is in the envelope, and an agent consuming a
+/// ranked list takes the head of it.
+///
+/// The reported case: a citation for a paper in *Psychiatria Danubina* came
+/// back as a different 2010 paper in a different journal by a different author
+/// at `score: 0.5` — `quality`, `life`, `bipolar` and `2010` were enough to
+/// clear the floor — in the same shape as a `score: 1.0` identity.
+///
+/// # These are bands over token overlap, not a semantic verdict
+///
+/// [`Self::Exact`] means every token in the query was found somewhere in the
+/// candidate record. That is a strong signal and it is still not proof: a
+/// short query can match the wrong paper completely. The bands make the
+/// difference between "identity" and "coincidence" legible; they do not
+/// remove the need to verify before citing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Confidence {
+    /// Every query token matched. Verify before citing, but this is an
+    /// identity rather than an overlap.
+    Exact,
+    /// At least four query tokens in five matched.
+    Probable,
+    /// Cleared the 0.5 floor and no more. For a known-item lookup this is a
+    /// NEGATIVE result wearing a positive number.
+    Weak,
+}
+
+impl Confidence {
+    /// Band a token-overlap score.
+    ///
+    /// The floor is 0.5 (`MIN_CITATION_SCORE`), so the range actually in play
+    /// is 0.5..=1.0 and the split at 0.8 asks for four tokens in five. `Exact`
+    /// compares against 0.999 rather than 1.0 because the score is a division:
+    /// asking for bit-exact equality would band an all-tokens match as
+    /// `Probable` on a rounding accident.
+    #[must_use]
+    pub fn from_score(score: f64) -> Self {
+        if score >= 0.999 {
+            Self::Exact
+        } else if score >= 0.8 {
+            Self::Probable
+        } else {
+            Self::Weak
+        }
+    }
+
+    /// The wire token, allocation-free.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Probable => "probable",
+            Self::Weak => "weak",
+        }
+    }
+}
+
 /// A candidate paper resolved from a bibliographic citation string.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ResolvedCandidate {
     /// Resolved DOI.
     pub doi: String,
@@ -918,7 +986,20 @@ pub struct ResolvedCandidate {
     /// Publication year, if resolved.
     pub year: Option<i32>,
     /// Token similarity overlap score in `0.0..=1.0`.
+    ///
+    /// Thresholded at `0.5`, so this is never below the floor — which is
+    /// exactly why it reads as a positive number even at its worst. Branch on
+    /// [`Self::confidence`] instead (#536).
     pub score: f64,
+    /// [`Self::score`] banded into something an agent can branch on without
+    /// knowing anything about the scorer (#536).
+    pub confidence: Confidence,
+    /// The query tokens that were found in this candidate's record.
+    ///
+    /// The evidence behind the score, so a reader can see *what* matched: in
+    /// the #536 case it was `quality`, `life`, `bipolar`, `2010` — none of
+    /// them the author or the journal, which is the whole story.
+    pub matched: Vec<String>,
     /// Resolving metadata source (e.g. `"crossref"`).
     pub source: String,
 }

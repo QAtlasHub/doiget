@@ -2194,10 +2194,10 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: Resolve a free-form bibliographic citation string (e.g. 'Onsager 1944') to ranked DOI candidates.\n\
                        INPUTS: query (bibliographic citation query string), limit (maximum number of candidates to return, default: 5).\n\
-                       OUTPUTS: { ok: true, query, candidates: [ { doi, title, author, year, score, source } ] } OR { ok: false, error }.\n\
+                       OUTPUTS: { ok: true, query, candidates: [ { doi, title, author, year, score, confidence, matched, source } ] } OR { ok: false, error }.\n\
                        COSTS: 1-2 s round-trip.\n\
                        SIDE EFFECTS: none.\n\
-                       LIMITS: Returns candidates with similarity score >= 0.5.",
+                       LIMITS: Returns candidates with similarity score >= 0.5. BRANCH ON confidence, NOT score: the score is token overlap against your query string and 0.5 is the FLOOR, so the worst candidate this tool can emit still looks like a positive number. confidence is exact (every query token matched), probable (four in five), or weak (cleared the floor and no more) - for a known-item lookup a weak candidate is a near-miss, not a match, so verify it with doiget_resolve_paper before citing. matched lists which of your tokens were found, which is how you see whether the author and the journal were among them.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2249,10 +2249,10 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: Resolve multiple free-form bibliographic citation strings in batch.\n\
                        INPUTS: queries (array of query strings), limit (maximum number of candidates per query, default: 5).\n\
-                       OUTPUTS: { ok: true, results: [ { query, candidates: [ { doi, title, author, year, score, source } ] } ] } OR { ok: false, error }.\n\
+                       OUTPUTS: { ok: true, results: [ { query, candidates: [ { doi, title, author, year, score, confidence, matched, source } ] } ] } OR { ok: false, error }.\n\
                        COSTS: 1-2 s round-trip per query.\n\
                        SIDE EFFECTS: none.\n\
-                       LIMITS: Returns candidates with similarity score >= 0.5. At most 50 queries per call.",
+                       LIMITS: Returns candidates with similarity score >= 0.5. At most 50 queries per call. BRANCH ON confidence, NOT score: the score is token overlap against your query string and 0.5 is the FLOOR, so the worst candidate this tool can emit still looks like a positive number. confidence is exact (every query token matched), probable (four in five), or weak (cleared the floor and no more) - for a known-item lookup a weak candidate is a near-miss, not a match, so verify it with doiget_resolve_paper before citing. matched lists which of your tokens were found, which is how you see whether the author and the journal were among them.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
