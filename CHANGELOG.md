@@ -88,6 +88,43 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   **`doiget-core` API:** `ResolvedCandidate` gains two fields and becomes
   `#[non_exhaustive]`, matching `MetadataOnlyOutcome` and `AttemptOutcome`, so
   the next field is not another break.
+- **[mcp]** Every failure envelope now carries `error.disposition`, so the retry
+  decision stops being a markdown table the agent never reads. `docs/ERRORS.md`
+  §2 has had good per-code guidance since Phase 0; none of it reached the wire
+  (`grep -riE 'retryable|transient|retry' crates/doiget-mcp` returned nothing in
+  the tool descriptions), so an agent's only signal was the **name** of the code
+  - and several names point the wrong way (#506).
+
+  Three states, because two cannot express the one that matters:
+
+  | value | meaning |
+  |---|---|
+  | `terminal` | the answer will not change. Do not retry. |
+  | `retry_after` | it may change on its own. Retry with backoff. |
+  | `needs_config` | it will not change by itself, but a named change makes it. |
+
+  `NO_OA_AVAILABLE` is `needs_config`. It is the most common failure there is,
+  and both its name and its old row ("Try later, or enable opt-in source") read
+  to a machine as *wait* when it is nearly always *configure* - an invitation to
+  loop forever over something that will not change.
+
+  Derived in one place (`ErrorCode::disposition`, an exhaustive match with no
+  wildcard) and built in one place (`error_object`), because a field present on
+  some failures and absent on others teaches the reader to go back to guessing.
+  `docs/ERRORS.md` §2 gains a Disposition column, and a test parses the shipped
+  document and asserts every row against the function - so the doc and the wire
+  cannot drift. The test also asserts it parsed exactly 15 rows, since a parser
+  that silently matches nothing passes every time.
+
+  The contract is stated in the MCP server `instructions`, which every client
+  receives on `initialize`, so an agent that has never opened `ERRORS.md` still
+  meets it. See ADR-0055.
+
+  Three parts of #506 are **not** here and it stays open for them:
+  `error.retry_after_ms` (the `Retry-After` is consumed inside the retry loop
+  and no honest number survives to the boundary - a plausible default would be
+  indistinguishable from a measured one), `remediation` on `ok:false`, and
+  `rate_limit_budget` on live responses.
 
 - **[cli]** The found-nothing fetch now reports what it consulted. Previously
   `fetched ... (metadata-only: no OA PDF available)` was byte-identical whether
