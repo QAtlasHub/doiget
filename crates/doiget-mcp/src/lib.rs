@@ -52,8 +52,8 @@ use doiget_core::http::{
 };
 use doiget_core::orchestrator::{
     batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
-    metadata_only_to_store, resolve_only as core_resolve_only, FetchPaperOutcome,
-    MetadataOnlyOutcome, PdfLegStatus,
+    metadata_only_to_store_with_options, resolve_only_with_options as core_resolve_only,
+    FetchPaperOutcome, MetadataOnlyOptions, MetadataOnlyOutcome, PdfLegStatus,
 };
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
@@ -248,11 +248,11 @@ impl Server {
     /// [`FetchPlan`]: doiget_core::dry_run::FetchPlan
     #[tool(
         description = "WHEN TO USE: User wants metadata for a DOI / arXiv id without paying for or being noticed by a PDF download.\n\
-                       INPUTS: ref (DOI or arXiv id), dry_run (optional bool).\n\
-                       OUTPUTS: { ok: true, ref, source, license?, oa_url, metadata } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, error }.\n\
-                       COSTS: 1-2 s metadata round-trip (or 0 when dry_run).\n\
+                       INPUTS: ref (DOI or arXiv id), dry_run (optional bool), include_oa_location (optional bool).\n\
+                       OUTPUTS: { ok: true, ref, source, license?, oa_url, oa_status, metadata } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, error }.\n\
+                       COSTS: 1-2 s metadata round-trip (or 0 when dry_run; roughly doubled when include_oa_location).\n\
                        SIDE EFFECTS: Appends a 'metadata-only' provenance row (unless dry_run). Writes the metadata TOML to the store. Never fetches PDF.\n\
-                       LIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed.",
+                       LIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed. oa_url is null unless include_oa_location is set: Crossref alone cannot supply one, because its link[] entries are scoped to a licensed programme (Similarity Check / TDM / syndication) rather than being general-purpose. A null oa_url is therefore NOT evidence that the work is closed. With include_oa_location set, oa_status says which answer you got: closed means the lookup completed and found no OA location, null means the lookup did not complete.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -368,7 +368,9 @@ impl Server {
             )));
         }
 
-        let outcome = metadata_only_to_store(&ref_, &self.profile, &ctx, &store).await;
+        let opts = MetadataOnlyOptions::default().with_oa_location(input.include_oa_location);
+        let outcome =
+            metadata_only_to_store_with_options(&ref_, &self.profile, &ctx, &store, opts).await;
 
         // SessionEnd bookend. Best-effort: if this append fails we still
         // surface the orchestrator's outcome (a fresh log error here
@@ -434,11 +436,11 @@ impl Server {
     /// `doiget_metadata_only` with `dry_run: true` instead.
     #[tool(
         description = "WHEN TO USE: User wants metadata for a DOI / arXiv id with no local persistence (audit log row only).\n\
-                       INPUTS: ref (DOI or arXiv id).\n\
-                       OUTPUTS: { ok: true, ref, source, resolver_profile, license?, oa_url, metadata, schema_version } OR { ok:false, ref, error }.\n\
-                       COSTS: 1-2 s metadata round-trip.\n\
+                       INPUTS: ref (DOI or arXiv id), include_oa_location (optional bool).\n\
+                       OUTPUTS: { ok: true, ref, source, resolver_profile, license?, oa_url, oa_status, metadata, schema_version } OR { ok:false, ref, error }.\n\
+                       COSTS: 1-2 s metadata round-trip (roughly doubled when include_oa_location).\n\
                        SIDE EFFECTS: Appends one provenance row per consulted resolver. NEVER writes a metadata TOML to the store. NEVER fetches PDF.\n\
-                       LIMITS: Subject to the same rate cap as metadata_only (5/sec). The OA URL is reported but never followed. dry_run is not supported; use metadata_only with dry_run for a preview.",
+                       LIMITS: Subject to the same rate cap as metadata_only (5/sec). The OA URL is reported but never followed. oa_url is null unless include_oa_location is set: Crossref alone cannot supply one, because its link[] entries are scoped to a licensed programme (Similarity Check / TDM / syndication) rather than being general-purpose. A null oa_url is therefore NOT evidence that the work is closed. With include_oa_location set, oa_status says which answer you got: closed means the lookup completed and found no OA location, null means the lookup did not complete. dry_run is not supported; use metadata_only with dry_run for a preview.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -501,7 +503,8 @@ impl Server {
             )));
         }
 
-        let outcome = core_resolve_only(&ref_, &self.profile, &ctx).await;
+        let opts = MetadataOnlyOptions::default().with_oa_location(input.include_oa_location);
+        let outcome = core_resolve_only(&ref_, &self.profile, &ctx, opts).await;
 
         // SessionEnd bookend. Best-effort.
         let session_ok = outcome.is_ok();
@@ -2577,6 +2580,25 @@ pub struct MetadataOnlyInput {
     /// either omit the field or pass `false`.
     #[serde(default)]
     pub dry_run: bool,
+    /// Consult Unpaywall for a real OA location, filling `oa_url`,
+    /// `oa_status` and `license`. Costs one extra metadata round-trip.
+    ///
+    /// Defaults to `false`, and when it is `false` `oa_url` is ALWAYS
+    /// `null`: the default path is Crossref-only, and Crossref's `link[]`
+    /// is a programme-scoped channel (Similarity Check, TDM, syndication),
+    /// never a general-purpose OA URL (#517). Before #539 the field was
+    /// advertised without that caveat, so an agent could read a permanent
+    /// `null` as "this work has no OA location".
+    ///
+    /// Set it and `oa_status` tells you which answer you got: `"closed"`
+    /// means the lookup completed and there is no OA location, while
+    /// `null` means the lookup itself did not complete.
+    ///
+    /// Plain `bool` rather than `Option<bool>` for the same reason as
+    /// `dry_run`: a wire `null` should be rejected at deserialize time
+    /// rather than silently meaning "no".
+    #[serde(default)]
+    pub include_oa_location: bool,
 }
 
 /// JSON-schema-derived input for the `doiget_resolve_paper` MCP tool.
@@ -2596,6 +2618,25 @@ pub struct ResolvePaperInput {
     #[serde(rename = "ref")]
     #[schemars(rename = "ref")]
     pub ref_: String,
+    /// Consult Unpaywall for a real OA location, filling `oa_url`,
+    /// `oa_status` and `license`. Costs one extra metadata round-trip.
+    ///
+    /// Defaults to `false`, and when it is `false` `oa_url` is ALWAYS
+    /// `null`: the default path is Crossref-only, and Crossref's `link[]`
+    /// is a programme-scoped channel (Similarity Check, TDM, syndication),
+    /// never a general-purpose OA URL (#517). Before #539 the field was
+    /// advertised without that caveat, so an agent could read a permanent
+    /// `null` as "this work has no OA location".
+    ///
+    /// Set it and `oa_status` tells you which answer you got: `"closed"`
+    /// means the lookup completed and there is no OA location, while
+    /// `null` means the lookup itself did not complete.
+    ///
+    /// Plain `bool` rather than `Option<bool>` for the same reason as
+    /// `dry_run`: a wire `null` should be rejected at deserialize time
+    /// rather than silently meaning "no".
+    #[serde(default)]
+    pub include_oa_location: bool,
 }
 
 // ---------------------------------------------------------------------------
