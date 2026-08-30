@@ -742,6 +742,98 @@ pub enum ErrorCode {
     TextUnavailable,
 }
 
+/// What a caller should DO about a failure, as opposed to what happened.
+///
+/// `docs/ERRORS.md` §2 has carried per-code retry guidance since Phase 0 and
+/// it is good guidance — but it is a markdown table, and the agent making the
+/// retry decision never reads it. Its only signal was the NAME of the code,
+/// and several names point the wrong way: `NO_OA_AVAILABLE` is the most common
+/// failure there is, and "no OA available" invites an unbounded retry loop for
+/// something that will not change until the configuration does (#506).
+///
+/// Three states, not two. "Retryable / not retryable" cannot express the case
+/// that matters most here — the answer will not change *by itself*, but a
+/// named one-line change makes it change. Facing that, an agent should neither
+/// loop nor give up silently; it should surface the specific change to a human.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Disposition {
+    /// The answer will not change. Do not retry, and do not wait for it.
+    ///
+    /// Includes failures a caller can act on by issuing a DIFFERENT request
+    /// (`INVALID_REF`, `AMBIGUOUS`, `TEXT_UNAVAILABLE`): this call is settled,
+    /// which is what the disposition is about.
+    Terminal,
+    /// The answer may change on its own. Retry, with backoff.
+    RetryAfter,
+    /// The answer will not change by itself, but a named change makes it.
+    /// Surface it; do not loop.
+    NeedsConfig,
+}
+
+impl Disposition {
+    /// The wire token, allocation-free.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Terminal => "terminal",
+            Self::RetryAfter => "retry_after",
+            Self::NeedsConfig => "needs_config",
+        }
+    }
+}
+
+impl ErrorCode {
+    /// What a caller should do about this code — see [`Disposition`].
+    ///
+    /// This is the single source of truth. `docs/ERRORS.md` §2 carries a
+    /// Disposition column, and `errors_md_disposition_column_matches_the_code`
+    /// parses that table and asserts it against this function for every
+    /// variant, so the document and the wire cannot drift (#506; the drift
+    /// pattern is #493).
+    ///
+    /// An exhaustive `match` with no wildcard: a new code must decide.
+    #[must_use]
+    pub const fn disposition(self) -> Disposition {
+        match self {
+            // Settled. The same call will return the same thing.
+            Self::InvalidRef
+            | Self::NotFound
+            | Self::InternalError
+            // ERRORS.md is explicit: "do not retry".
+            | Self::NotImplemented
+            // A different request may work (narrow the name / fetch the PDF
+            // instead), but THIS one is answered.
+            | Self::Ambiguous
+            | Self::TextUnavailable => Disposition::Terminal,
+
+            // May change on its own.
+            Self::RateLimited
+            | Self::NetworkError
+            | Self::FetchTimeout
+            | Self::LockTimeout => Disposition::RetryAfter,
+
+            // Will not change by itself; a named change makes it.
+            //
+            // `NoOaAvailable` sits here rather than in `RetryAfter` on
+            // purpose: it is the most common failure, and ERRORS.md's "Try
+            // later, or enable opt-in source" reads to a machine as the
+            // former when it is nearly always the latter.
+            //
+            // `StoreError` / `LogError` are disk and permission problems. A
+            // machine cannot name the fix, but it must not loop on it either,
+            // and "surface this to a human" is exactly what this disposition
+            // means.
+            Self::NoOaAvailable
+            | Self::CapabilityDenied
+            | Self::SchemaTooNew
+            | Self::StoreError
+            | Self::LogError => Disposition::NeedsConfig,
+        }
+    }
+}
+
 impl ErrorCode {
     /// The `SCREAMING_SNAKE_CASE` wire token for this code, as a
     /// `&'static str`. Identical to the serde representation but
@@ -2107,6 +2199,74 @@ agreed = true
                 input
             );
         }
+    }
+
+    /// #506: `docs/ERRORS.md` §2 and [`ErrorCode::disposition`] are the same
+    /// claim written twice, so this asserts they say the same thing.
+    ///
+    /// The issue asked for exactly this ("the ERRORS.md §2 table either
+    /// generated from it or asserted against it in a test — otherwise the doc
+    /// and the wire drift, which is the #493 pattern"). Generating the table
+    /// would have cost the per-code prose, which is the useful part; asserting
+    /// it keeps both.
+    ///
+    /// Reads the shipped document rather than a fixture copy, so a doc edit
+    /// that contradicts the code fails here and not in someone's agent.
+    #[test]
+    fn errors_md_disposition_column_matches_the_code() {
+        // Resolves relative to this file; three levels up is the workspace
+        // root (same reasoning as `safekey_matches_reference_vectors`).
+        let doc = include_str!("../../../docs/ERRORS.md");
+
+        let mut checked = 0usize;
+        for line in doc.lines() {
+            // `| \`CODE\` | meaning | \`disposition\` | recoverable |`
+            let Some(rest) = line.strip_prefix("| `") else {
+                continue;
+            };
+            let Some((code_str, tail)) = rest.split_once("` | ") else {
+                continue;
+            };
+            let cols: Vec<&str> = tail.split(" | ").collect();
+            if cols.len() < 3 {
+                continue;
+            }
+            let documented = cols[1].trim().trim_matches('`');
+
+            let code = match code_str {
+                "INVALID_REF" => ErrorCode::InvalidRef,
+                "NO_OA_AVAILABLE" => ErrorCode::NoOaAvailable,
+                "RATE_LIMITED" => ErrorCode::RateLimited,
+                "NETWORK_ERROR" => ErrorCode::NetworkError,
+                "NOT_FOUND" => ErrorCode::NotFound,
+                "AMBIGUOUS" => ErrorCode::Ambiguous,
+                "STORE_ERROR" => ErrorCode::StoreError,
+                "LOG_ERROR" => ErrorCode::LogError,
+                "CAPABILITY_DENIED" => ErrorCode::CapabilityDenied,
+                "FETCH_TIMEOUT" => ErrorCode::FetchTimeout,
+                "SCHEMA_TOO_NEW" => ErrorCode::SchemaTooNew,
+                "LOCK_TIMEOUT" => ErrorCode::LockTimeout,
+                "INTERNAL_ERROR" => ErrorCode::InternalError,
+                "NOT_IMPLEMENTED" => ErrorCode::NotImplemented,
+                "TEXT_UNAVAILABLE" => ErrorCode::TextUnavailable,
+                // Not a §2 row (e.g. the §6 mapping tables).
+                _ => continue,
+            };
+            assert_eq!(
+                documented,
+                code.disposition().as_wire(),
+                "docs/ERRORS.md §2 says {code_str} is `{documented}`, the code says                  `{}` — one of the two is wrong and an agent reads the second",
+                code.disposition().as_wire()
+            );
+            checked += 1;
+        }
+
+        // The guard the assertion above cannot be: a parser that silently
+        // matches nothing would pass every time. §2 has one row per code.
+        assert_eq!(
+            checked, 15,
+            "expected every ErrorCode to have a §2 row with a Disposition              column; parsed {checked}. Either a code was added without              documenting it, or the table's shape changed and this parser              stopped seeing it."
+        );
     }
 
     #[test]
