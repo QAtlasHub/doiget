@@ -173,6 +173,80 @@ impl SourceAllowlist {
             .iter()
             .any(|pat| host_matches_pattern(&host_lc, pat))
     }
+
+    /// Returns `true` if a request to `host` may proceed under this
+    /// allowlist: either it is on the list, or it is a transparent DOI
+    /// resolver ([`is_transparent_resolver`]).
+    ///
+    /// **This, not [`matches`](Self::matches), is what an adjudication site
+    /// calls.** `matches` answers "is this host on the list", which is a
+    /// question about the list; `permits` answers "may we go here", which is
+    /// the question every gate is actually asking. Keeping them separate
+    /// means the resolver set is not silently reported as part of any
+    /// source's `expected_hosts`.
+    ///
+    /// The four adjudication sites (the pre-fetch OA-URL check in
+    /// `orchestrator`, the two redirect-policy closures, and `probe`) all
+    /// route through here so they cannot disagree -- #533 was found because
+    /// only one of them was ever walked end to end.
+    #[must_use]
+    pub fn permits(&self, host: &str) -> bool {
+        is_transparent_resolver(host) || self.matches(host)
+    }
+}
+
+/// Hosts that are addressing, not hosting.
+///
+/// `doi.org` is the indirection layer every DOI passes through, and
+/// Unpaywall routinely reports it AS the OA location: for the gold cc-by
+/// paper in #533, `best_oa_location.url` is literally
+/// `https://doi.org/10.1002/pcn5.205` with no `url_for_pdf`. Adjudicating
+/// that hop as if it were a content host had two consequences, both wrong:
+///
+///   * the chain was refused at the FIRST hop, before it ever reached the
+///     publisher -- whose host, `*.wiley.com`, was already on the list; and
+///   * the denial's remediation told the user to allowlist `doi.org`, which
+///     does not widen the trusted surface toward one publisher. It removes
+///     the bound entirely, because every DOI in existence resolves through
+///     it. An agent following that advice would get the PDF and silently
+///     lose the invariant the allowlist exists to hold (ADR-0027).
+///
+/// These hosts are therefore FOLLOWED but never allowlisted, never named as
+/// remediation, and never counted as the source of the content. The host
+/// that actually serves the bytes is adjudicated exactly as before, so this
+/// is transparent to the invariant rather than an exception to it.
+///
+/// # Why a closed set and not "the terminal host"
+///
+/// #533's first suggestion was to adjudicate only the final host of a
+/// chain. That is a bigger change than it looks: it would let a chain
+/// traverse ANY host so long as it ended somewhere allowed, and every hop
+/// still sees the request. A named, closed set of resolvers keeps the bound.
+///
+/// # Why exact hosts and no wildcards
+///
+/// `*.doi.org` would sweep in `www.doi.org`, which is the DOI Foundation's
+/// website, not a resolver -- and any other subdomain the Foundation ever
+/// stands up. Each entry here is a host measured to 302 straight to the
+/// publisher (2026-08-30, `10.1002/pcn5.205`):
+///
+/// | host | what it is |
+/// |---|---|
+/// | `doi.org` | the canonical DOI resolver |
+/// | `dx.doi.org` | its long-standing alias, still in live metadata |
+/// | `hdl.handle.net` | the Handle System resolver `doi.org` proxies |
+const TRANSPARENT_RESOLVER_HOSTS: &[&str] = &["doi.org", "dx.doi.org", "hdl.handle.net"];
+
+/// Whether `host` is a DOI resolver rather than a content host (#533).
+///
+/// Exact match against `TRANSPARENT_RESOLVER_HOSTS`, deliberately without
+/// wildcard support: `evil-doi.org`, `doi.org.evil.test` and `www.doi.org`
+/// are all NOT resolvers, and the first two are what an attacker would
+/// register.
+#[must_use]
+pub fn is_transparent_resolver(host: &str) -> bool {
+    let host_lc = host.to_ascii_lowercase();
+    TRANSPARENT_RESOLVER_HOSTS.contains(&host_lc.as_str())
 }
 
 /// Returns `true` if `host` (already lowercased) matches `pattern` per
@@ -955,7 +1029,7 @@ impl HttpClient {
             .ok_or_else(|| HttpError::UnknownSource {
                 source_key: source.to_string(),
             })?;
-        if !allow.matches(&host) {
+        if !allow.permits(&host) {
             return Err(HttpError::RedirectDenied {
                 source_key: source.to_string(),
                 host,
@@ -1271,7 +1345,7 @@ fn build_client_allow_http(allowlist: SourceAllowlist) -> Result<Client, reqwest
                 });
             }
         };
-        if !allowlist_for_closure.matches(&host) {
+        if !allowlist_for_closure.permits(&host) {
             return attempt.error(HttpError::RedirectDenied {
                 source_key: allowlist_for_closure.source.clone(),
                 host,
@@ -1467,7 +1541,7 @@ fn build_client(allowlist: SourceAllowlist, ua: &str) -> Result<Client, reqwest:
                 });
             }
         };
-        if !allowlist_for_closure.matches(&host) {
+        if !allowlist_for_closure.permits(&host) {
             return attempt.error(HttpError::RedirectDenied {
                 source_key: allowlist_for_closure.source.clone(),
                 host,
@@ -1647,6 +1721,93 @@ mod tests {
     /// wildcard does not match an apex, and the redirect that motivated
     /// #405 (10.1109/access.2024.3495502, IEEE Access gold OA) targeted the
     /// bare apex.
+    /// #533, reproduced against the REAL allowlist rather than a fixture.
+    ///
+    /// Harada & Kato 2024 is gold OA, cc-by, and Unpaywall's
+    /// `best_oa_location.url` for it is literally `https://doi.org/10.1002/
+    /// pcn5.205` with no `url_for_pdf` (verified against the live API,
+    /// 2026-08-30). The chain was refused at that first hop -- while
+    /// `*.wiley.com`, where it lands, was already on the list.
+    #[test]
+    fn a_doi_resolver_hop_is_permitted_without_being_allowlisted() {
+        let lists = oa_publisher_allowlist();
+        let oa = lists
+            .iter()
+            .find(|a| a.source == "oa-publisher")
+            .expect("oa-publisher entry");
+
+        // The two questions stay distinct: a resolver is permitted, but it is
+        // NOT on the list and must never be reported as if it were.
+        assert!(oa.permits("doi.org"), "the hop the report was refused at");
+        assert!(
+            !oa.matches("doi.org"),
+            "a resolver must not be ON the allowlist -- `expected_hosts` is \
+             shown to the user as what to trust, and doi.org is every DOI"
+        );
+        assert!(
+            !oa.redirect_hosts.iter().any(|h| h.contains("doi.org")),
+            "and it must not leak into the expected-host list: {:?}",
+            oa.redirect_hosts
+        );
+
+        // The host the chain actually lands on was trusted all along. This is
+        // what makes the refusal a layer error rather than a missing entry.
+        assert!(
+            oa.permits("onlinelibrary.wiley.com"),
+            "the publisher was already covered by *.wiley.com: {:?}",
+            oa.redirect_hosts
+        );
+
+        // And the gate still gates.
+        assert!(!oa.permits("evil.example.com"));
+    }
+
+    /// Exact hosts, no wildcards. `*.doi.org` would sweep in `www.doi.org`,
+    /// which is the DOI Foundation's website and not a resolver, plus
+    /// whatever else is ever stood up there; and the impostor hosts below are
+    /// precisely what an attacker registers.
+    #[test]
+    fn resolver_impostor_hosts_are_not_transparent() {
+        for host in [
+            "doi.org",
+            "dx.doi.org",
+            "hdl.handle.net",
+            "DOI.ORG",
+            "Dx.Doi.Org",
+        ] {
+            assert!(is_transparent_resolver(host), "{host} is a resolver");
+        }
+        for host in [
+            "www.doi.org",
+            "doi.org.evil.test",
+            "evil-doi.org",
+            "notdoi.org",
+            "a.doi.org",
+            "handle.net",
+            "",
+        ] {
+            assert!(!is_transparent_resolver(host), "{host} is NOT a resolver");
+        }
+    }
+
+    /// Transparency is a property of the resolver, not of one source: a
+    /// resolver hop is addressing wherever it appears.
+    #[test]
+    fn every_tier_1_source_treats_a_resolver_hop_as_addressing() {
+        for a in tier_1_allowlist() {
+            assert!(
+                a.permits("doi.org"),
+                "source {} refuses the addressing layer",
+                a.source
+            );
+            assert!(
+                !a.matches("doi.org"),
+                "source {} lists a resolver as a content host",
+                a.source
+            );
+        }
+    }
+
     #[test]
     fn doaj_is_on_the_default_oa_publisher_allowlist() {
         let lists = oa_publisher_allowlist();
@@ -2323,7 +2484,10 @@ mod tests {
                     });
                 }
             };
-            if !allowlist_for_closure.matches(&h) {
+            // `permits`, mirroring production: this closure is a local copy
+            // of `build_client`'s policy, and a copy that adjudicates
+            // differently tests something that does not ship (#533).
+            if !allowlist_for_closure.permits(&h) {
                 return attempt.error(HttpError::RedirectDenied {
                     source_key: allowlist_for_closure.source.clone(),
                     host: h,

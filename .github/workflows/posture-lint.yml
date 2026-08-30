@@ -305,6 +305,31 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
 
+      - name: Host adjudication uses `permits`, never `matches` (#533)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `SourceAllowlist::matches` answers "is this host on the list".
+          # `SourceAllowlist::permits` answers "may we go here", which is what
+          # every gate is actually asking -- and it is the one that treats a
+          # DOI resolver as addressing rather than as a content host.
+          #
+          # #533 was a gate that asked the first question and acted on the
+          # answer: a gold-OA cc-by paper was refused at `doi.org`, one hop
+          # before the publisher whose host was already allowlisted. There
+          # were FIVE such gates and only one of them was ever walked end to
+          # end, which is #462's point exactly ("every 'unreachable source'
+          # bug passed its unit tests").
+          #
+          # The discriminator: adjudication passes a host VARIABLE
+          # (`.matches(&host)`); list-membership assertions in tests pass a
+          # LITERAL (`.matches("doaj.org")`). So a `.matches(&` anywhere is a
+          # gate that should be a `permits`.
+          if grep -rn --include='*.rs' '\.matches(&' crates/ ; then
+            echo "::error::posture-lint: host adjudication must call permits(), not matches() - see http::is_transparent_resolver (#533)"
+            exit 1
+          fi
+
       - name: No outbound-network APIs in unit / integration tests
         shell: bash
         run: |
