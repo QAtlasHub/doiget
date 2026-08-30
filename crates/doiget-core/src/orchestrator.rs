@@ -142,6 +142,79 @@ pub async fn metadata_only(
     profile: &CapabilityProfile,
     ctx: &FetchContext,
 ) -> Result<MetadataOnlyOutcome, FetchError> {
+    metadata_only_with_options(ref_, profile, ctx, MetadataOnlyOptions::default()).await
+}
+
+/// What a metadata-only resolve may spend beyond its single round-trip.
+///
+/// One knob, and it exists because #517 removed the reason there was none.
+/// The DOI path is Crossref-first, and its rationale was that Crossref's
+/// `message.link[]` supplied an OA URL for free. Measurement showed every
+/// entry is programme-scoped, so `extract_crossref_publisher_url`
+/// correctly returns `None` for every DOI -- leaving `oa_url` permanently
+/// null while `docs/MCP_TOOLS.md` s11 told callers to act on it (#539).
+///
+/// Crossref-first is still the right default: it resolves nearly every DOI
+/// in one request. What was wrong was promising a field it cannot fill. So
+/// the caller says whether it wants the second request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MetadataOnlyOptions {
+    /// Consult Unpaywall for a real OA location, filling `oa_url`,
+    /// `oa_status` and `license` from its record.
+    ///
+    /// Costs one extra request against Unpaywall. Unpaywall is a metadata
+    /// source, so this does not weaken the "never fetches a PDF, never
+    /// touches a publisher" guarantee: the URL is still reported and never
+    /// followed.
+    ///
+    /// Off by default. A caller that wants metadata should not pay for a
+    /// location it will not use.
+    ///
+    /// # Reading the result
+    ///
+    /// With this set, the `oa_status`/`oa_url` pair says which of three
+    /// things happened:
+    ///
+    /// | `oa_status` | `oa_url` | meaning |
+    /// |---|---|---|
+    /// | `"closed"` | `None` | asked; this work has no OA location |
+    /// | `"gold"`, `"green"`, ... | `Some` | asked; here it is |
+    /// | `None` | `None` | the lookup did not complete |
+    ///
+    /// The third row is why a failed Unpaywall call leaves *both* fields
+    /// `None` rather than filling in a plausible-looking `oa_status`: a
+    /// caller that paid for a lookup has to be able to tell "no OA location
+    /// exists" from "I could not find out", and that distinction is the
+    /// whole of #539.
+    pub include_oa_location: bool,
+}
+
+impl MetadataOnlyOptions {
+    /// Ask for the OA location (or not).
+    ///
+    /// A builder rather than a struct literal because the struct is
+    /// `#[non_exhaustive]`: a future option must not be a breaking change
+    /// for `doiget-mcp`, `doiget-cli`, or anyone else downstream.
+    #[must_use]
+    pub const fn with_oa_location(mut self, include: bool) -> Self {
+        self.include_oa_location = include;
+        self
+    }
+}
+
+/// [`metadata_only`], with the caller choosing what it is willing to spend.
+///
+/// # Errors
+///
+/// As [`metadata_only`]. A failure of the *optional* OA-location lookup is
+/// not an error here: see [`MetadataOnlyOptions`].
+pub async fn metadata_only_with_options(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    opts: MetadataOnlyOptions,
+) -> Result<MetadataOnlyOutcome, FetchError> {
     // Resolver cache (docs/CACHE.md): on a hit within TTL, return the
     // cached outcome without touching the network — this is what lets
     // `doiget verify` avoid upstream rate limits across repeated runs.
@@ -158,14 +231,18 @@ pub async fn metadata_only(
         ctx.cache_root.as_deref()
     };
 
+    // Keyed by the options, not just the ref: an entry written by a default
+    // resolve carries `oa_url: None`, and handing that to a caller that asked
+    // for the location would answer a question it did not ask. See
+    // `resolver_cache::cache_file_with_options`.
     if let Some(root) = cache_root {
-        if let Some(cached) = crate::resolver_cache::read(root, ref_) {
+        if let Some(cached) = crate::resolver_cache::read_with_options(root, ref_, opts) {
             return Ok(cached);
         }
     }
 
     let outcome = match ref_ {
-        Ref::Doi(doi) => metadata_only_doi(doi, ref_, profile, ctx).await?,
+        Ref::Doi(doi) => metadata_only_doi(doi, ref_, profile, ctx, opts).await?,
         Ref::Arxiv(id) => {
             let arxiv = arxiv_source_from_env();
             let metadata = arxiv.fetch_metadata_only(id, ctx).await?;
@@ -185,7 +262,7 @@ pub async fn metadata_only(
 
     // Best-effort cache write (never fails the resolve).
     if let Some(root) = cache_root {
-        crate::resolver_cache::write(root, ref_, &outcome);
+        crate::resolver_cache::write_with_options(root, ref_, &outcome, opts);
     }
     Ok(outcome)
 }
@@ -249,13 +326,27 @@ pub async fn resolve_only(
     profile: &CapabilityProfile,
     ctx: &FetchContext,
 ) -> Result<MetadataOnlyOutcome, FetchError> {
-    // Delegating to the PURE `metadata_only` is the contract-correct
-    // implementation, not a placeholder: `metadata_only` never writes
+    resolve_only_with_options(ref_, profile, ctx, MetadataOnlyOptions::default()).await
+}
+
+/// [`resolve_only`], with the caller choosing what it is willing to spend.
+///
+/// # Errors
+///
+/// As [`resolve_only`].
+pub async fn resolve_only_with_options(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    opts: MetadataOnlyOptions,
+) -> Result<MetadataOnlyOutcome, FetchError> {
+    // Delegating to the PURE `metadata_only_with_options` is the
+    // contract-correct implementation, not a placeholder: it never writes
     // to the store (the persisting path is the separate
     // `metadata_only_to_store`, which this function does not call), so
     // `resolve_only`'s "no store mutation" guarantee holds structurally
     // and cannot regress (#139).
-    metadata_only(ref_, profile, ctx).await
+    metadata_only_with_options(ref_, profile, ctx, opts).await
 }
 
 /// Resolve a [`Ref`] to metadata **and persist the metadata TOML to the
@@ -290,7 +381,24 @@ pub async fn metadata_only_to_store(
     ctx: &FetchContext,
     store: &dyn Store,
 ) -> Result<MetadataOnlyOutcome, FetchError> {
-    let outcome = metadata_only(ref_, profile, ctx).await?;
+    metadata_only_to_store_with_options(ref_, profile, ctx, store, MetadataOnlyOptions::default())
+        .await
+}
+
+/// [`metadata_only_to_store`], with the caller choosing what it is willing
+/// to spend.
+///
+/// # Errors
+///
+/// As [`metadata_only_to_store`].
+pub async fn metadata_only_to_store_with_options(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    store: &dyn Store,
+    opts: MetadataOnlyOptions,
+) -> Result<MetadataOnlyOutcome, FetchError> {
+    let outcome = metadata_only_with_options(ref_, profile, ctx, opts).await?;
     let safekey = ref_.safekey();
     let metadata = build_metadata_only_metadata(ref_, &outcome);
     // `pdf_src = None` => writes `<root>/.metadata/<safekey>.toml` and
@@ -688,37 +796,81 @@ fn unpaywall_source_from_env(contact: &str) -> UnpaywallSource {
     UnpaywallSource::new(contact.to_string())
 }
 
-/// DOI branch — Crossref first, with Unpaywall as a fallback when
-/// Crossref fails. Crossref's `message.link[]` array (when present)
-/// supplies the OA URL hint without making a publisher request.
+/// DOI branch: Crossref first, with Unpaywall as a fallback when Crossref
+/// fails, and as an *addition* when the caller asked for an OA location.
+///
+/// This doc used to say Crossref's `message.link[]` "supplies the OA URL
+/// hint without making a publisher request". It does not, and #517 is why:
+/// measured across twelve live `link[]` entries and eight captured
+/// fixtures, every one was programme-scoped, so
+/// [`extract_crossref_publisher_url`] correctly refuses all of them.
+/// Crossref-first is still the right default -- one request resolves nearly
+/// every DOI -- but the free OA hint that sentence promised never existed
+/// (#539).
 async fn metadata_only_doi(
     _doi: &Doi,
     ref_: &Ref,
     profile: &CapabilityProfile,
     ctx: &FetchContext,
+    opts: MetadataOnlyOptions,
 ) -> Result<MetadataOnlyOutcome, FetchError> {
     let contact = resolve_contact_email();
     let crossref = crossref_source_from_env(&contact);
     match crossref.fetch(ref_, profile, ctx).await {
         Ok(res) => {
             let metadata = res.metadata_json.unwrap_or(Value::Null);
-            let oa_url = extract_crossref_publisher_url(&metadata);
-            // Pure resolver — no store write here (see `metadata_only`
+            // `None` for every DOI in practice -- see the fn doc and #517.
+            // Kept because it is the gate that stops a Similarity Check URL
+            // being handed out under the name `oa_url`.
+            let mut oa_url = extract_crossref_publisher_url(&metadata);
+            // Crossref reports neither an OA status nor a license; both
+            // channels are Unpaywall's. They stay `None` unless the caller
+            // asked us to go and look.
+            let mut oa_status = None;
+            let mut license = None;
+
+            if opts.include_oa_location {
+                let unpaywall = unpaywall_source_from_env(&contact);
+                match unpaywall.fetch(ref_, profile, ctx).await {
+                    Ok(uw) => {
+                        let uw_metadata = uw.metadata_json.unwrap_or(Value::Null);
+                        oa_url = extract_unpaywall_oa_url(&uw_metadata);
+                        oa_status = extract_unpaywall_oa_status(&uw_metadata);
+                        license = if uw.license == "unknown" {
+                            None
+                        } else {
+                            Some(uw.license)
+                        };
+                    }
+                    Err(e) => {
+                        // Deliberately NOT an error, and deliberately
+                        // leaving `oa_status` as `None`. The caller still
+                        // gets the Crossref metadata it also asked for, and
+                        // a null `oa_status` is what distinguishes "could
+                        // not find out" from a completed lookup reporting
+                        // `"closed"`. Inventing a status here would
+                        // recreate the exact ambiguity this option exists
+                        // to remove (#539).
+                        tracing::debug!(
+                            error = %e,
+                            "metadata_only: OA location lookup failed; leaving oa_status null to say so"
+                        );
+                    }
+                }
+            }
+
+            // `metadata` stays Crossref's and `source` says so: the OA
+            // lookup adds three fields, it does not change whose record
+            // this is.
+            //
+            // Pure resolver -- no store write here (see `metadata_only`
             // doc); persistence is `metadata_only_to_store`'s job.
             Ok(MetadataOnlyOutcome {
                 source: crossref.name().to_string(),
                 resolver_profile: crossref.name().to_string(),
-                // Crossref does not surface a license directly; the
-                // license channel for DOI metadata is Unpaywall's
-                // `best_oa_location.license`. Leave `None` here; the
-                // agent can call `unpaywall` (or a follow-up slice's
-                // chained orchestrator) if it needs a license string.
-                license: None,
+                license,
                 oa_url,
-                // Crossref does not report OA status; "not determined".
-                // (The metadata path is Crossref-first and only consults
-                // Unpaywall on a Crossref failure — see the fallback arm.)
-                oa_status: None,
+                oa_status,
                 metadata,
             })
         }

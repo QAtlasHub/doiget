@@ -40,8 +40,6 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   serves over real localhost IO, and paused time auto-advances past reqwest's
   timeout.
 
-### Changed
-
 - **[dist]** The Claude Code plugin runs `npx -y doiget-cli serve` instead of a bare
   `doiget serve`, so installing it **needs nothing installed beforehand** — npm
   fetches the wrapper and the one matching platform binary on first run. Until now
@@ -88,6 +86,41 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   `SourceAllowlist::permits`, and a posture-lint step fails any gate that calls
   `matches` on a host variable, so a sixth cannot be added without the fifth's
   lesson.
+- **[mcp]** `oa_url` was documented as an OA URL "for the caller to act on
+  separately" and was, in practice, `null` for every DOI. The DOI path is
+  Crossref-first on the rationale that Crossref's `message.link[]` supplied an
+  OA URL without a second request - but #517 measured twelve live `link[]`
+  entries and eight captured fixtures and found **not one** general-purpose
+  entry: every one was scoped to a licensed programme (Similarity Check, TDM,
+  syndication). The extractor refuses all of them, correctly, which left the
+  field permanently empty while its documentation told agents to act on it. An
+  agent reading `oa_url: null` had no way to tell it from "this work has no free
+  copy" (#539).
+
+  A caller that wants a real OA location now passes `include_oa_location: true`
+  to `doiget_metadata_only` or `doiget_resolve_paper`, which consults Unpaywall.
+  It is off by default: the default path stays one round-trip, and nobody pays
+  for a location they will not use. No guarantee is weakened - Unpaywall is a
+  metadata source, and the URL is still reported and never followed.
+
+  With the flag set, `oa_status` says which answer you got: `"closed"` means the
+  lookup completed and there is no OA location; `null` means the lookup did not
+  complete. A failed Unpaywall call therefore leaves **both** fields null rather
+  than inventing a status, because asserting `"closed"` on the strength of a 500
+  would recreate the exact ambiguity being fixed. The Crossref metadata is still
+  returned; an optional extra failing does not sink the resolve. This mirrors
+  the `oa_status` + `pdf.status` pairing `doiget_fetch_paper` already uses.
+
+  The resolver cache keys on the options as well as the ref, so a default entry
+  is never served to a caller that asked for the location. The key is a
+  subdirectory rather than a `.oa` filename suffix: `Ref::safekey` keeps `.`, so
+  a suffix would make the DOI `10.1234/foo.oa` and the opt-in entry for
+  `10.1234/foo` collide on one file. That collision was written, then caught by
+  the test that now guards it.
+
+  `doiget-core` gains `MetadataOnlyOptions` and `*_with_options` variants of
+  `metadata_only`, `resolve_only` and `metadata_only_to_store`; the existing
+  three delegate with defaults, so nothing downstream breaks.
 
 - **[mcp]** `doiget_paper_search` returning nothing now says whether that is about
   the query or about the literature. OpenAlex free-text matching degrades sharply
