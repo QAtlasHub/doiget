@@ -2290,7 +2290,10 @@ async fn try_fetch_oa_pdf(
             .host_str()
             .map(|h| h.to_ascii_lowercase())
             .unwrap_or_default();
-        if !allowlist.matches(&host) {
+        // `permits`, not `matches`: a DOI resolver is addressing, not a
+        // content host, and Unpaywall routinely reports `doi.org` AS the OA
+        // location (#533). See `http::is_transparent_resolver`.
+        if !allowlist.permits(&host) {
             let e = HttpError::RedirectDenied {
                 source_key: SOURCE.to_string(),
                 host: host.clone(),

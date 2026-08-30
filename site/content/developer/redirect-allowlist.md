@@ -80,6 +80,42 @@ redirect_hosts = [
 
 The exact list of entries is given in §3.
 
+### 2.4 Transparent DOI resolvers (NORMATIVE)
+
+A small, closed set of hosts is **addressing, not hosting**, and is exempt from
+the rule in §2.2:
+
+| host | what it is |
+|---|---|
+| `doi.org` | the canonical DOI resolver |
+| `dx.doi.org` | its long-standing alias, still present in live metadata |
+| `hdl.handle.net` | the Handle System resolver `doi.org` proxies |
+
+These are **followed** but MUST NOT be added to any source's entry, MUST NOT
+appear in a denial's `expected` list, and MUST NOT be offered as remediation.
+The host that actually serves the response is adjudicated exactly as it would be
+otherwise, so this is transparent to §1's invariant rather than an exception to
+it.
+
+Matching is **exact**, not the §2.2 suffix-glob. `*.doi.org` would sweep in
+`www.doi.org`, which is the DOI Foundation's website and not a resolver;
+`evil-doi.org` and `doi.org.evil.test` are what an attacker registers.
+
+**Why this rule exists.** Unpaywall routinely reports a `doi.org` URL as
+`best_oa_location.url` for publisher-hosted gold OA — for `10.1002/pcn5.205` it
+is the *only* location, with no `url_for_pdf`. Adjudicating that first hop as a
+content host refused a cc-by paper one hop before the publisher that was already
+on the list, and the denial then advised adding `doi.org`, which does not widen
+the trusted surface toward one publisher: it removes the bound entirely, because
+every DOI resolves through it. See [ADR-0053](DECISIONS/0053-doi-resolvers-are-addressing.md)
+and #533.
+
+**Enforced by:** `http::is_transparent_resolver`, reached through
+`SourceAllowlist::permits` — the predicate every adjudication site calls.
+`SourceAllowlist::matches` remains the narrower "is this host on the list"
+question and is used only to build and assert the lists. A posture-lint step
+fails any gate that calls `matches` on a host variable.
+
 ## 3. Tier 1 entries
 
 The entries below are the binding redirect-host allowlist for the Tier 1

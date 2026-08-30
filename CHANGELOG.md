@@ -57,6 +57,38 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[fetch]** A gold-OA, cc-by paper was refused at `doi.org`, one hop before the
+  publisher whose host was already on the allowlist. Unpaywall reports
+  `best_oa_location.url` for `10.1002/pcn5.205` as literally
+  `https://doi.org/10.1002/pcn5.205`, with no `url_for_pdf` - the normal shape for
+  publisher-hosted gold OA - so the first host doiget touched on the fetch leg was
+  the DOI resolver, and it was adjudicated as though it were where the bytes come
+  from (#533).
+
+  The remediation the denial emitted was worse than the refusal: it advised adding
+  `doi.org` to `[[network.additional_hosts]]`. That does not widen the trusted
+  surface toward one publisher. It removes the bound entirely, because every DOI in
+  existence resolves through it, and an agent following the advice would get its
+  PDF while silently losing the invariant the allowlist exists to hold (ADR-0027).
+
+  A closed set of resolver hosts - `doi.org`, `dx.doi.org`, `hdl.handle.net`, each
+  measured issuing a single 302 straight to the publisher - is now **transparent**:
+  followed, but never allowlisted, never named as remediation, never counted as the
+  source of the content. Matching is exact, not the usual suffix-glob, because
+  `*.doi.org` would sweep in `www.doi.org` (the DOI Foundation's website, not a
+  resolver) and `evil-doi.org` is what an attacker registers. The host that actually
+  serves the response is adjudicated exactly as before. See ADR-0053.
+
+  This does **not** manufacture access. `10.1002/pcn5.205` now reaches Wiley and
+  meets Wiley's own cookie wall; it fails honestly at the publisher instead of
+  dishonestly at the addressing layer.
+
+  There were **five** gates asking this question and only one had ever been walked
+  end to end - #462's point exactly. They now share one predicate,
+  `SourceAllowlist::permits`, and a posture-lint step fails any gate that calls
+  `matches` on a host variable, so a sixth cannot be added without the fifth's
+  lesson.
+
 - **[mcp]** `doiget_paper_search` returning nothing now says whether that is about
   the query or about the literature. OpenAlex free-text matching degrades sharply
   past roughly eight terms and returns **nothing** rather than a partial match; a
