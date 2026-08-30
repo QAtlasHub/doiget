@@ -12,6 +12,36 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Changed
 
+- **[ci]** One test was taking ten minutes and being run five times. The five
+  `test` jobs each run the whole workspace suite, and 95% of that suite's time was
+  a single test: `batch_above_window_size_fetches_every_ref`, 627 s out of 663 s,
+  with the next-slowest at 36 s.
+
+  It is not waste. The test fetches `MCP_BATCH_MAX_SIZE + 2` arXiv refs;
+  `SOURCE_RATE_OVERRIDES` puts 3 s between arXiv requests because arXiv's Terms of
+  Use do, and one attempt issues two requests — the Atom feed then the PDF, both
+  paced since #493. So 102 x 2 x 3 s = 612 s, against 609 s measured. The rate
+  limit is a legal safeguard (`RateLimits`' fields are `pub(crate)` precisely so
+  tests cannot weaken it), and it stays exactly as it is.
+
+  What was wasteful was paying it five times, on three operating systems and two
+  feature sets, for a dispatch-loop property that varies with neither. The test is
+  now `#[ignore]`d and a `test (slow)` job runs it once via `--ignored` — exactly
+  one ignored test exists workspace-wide, so the split drops nothing and duplicates
+  nothing. The broad suite went from 627 s to 18 s locally; the slow job runs in
+  parallel rather than lengthening any of the others.
+
+  The test's own comment claimed "~20 s". That was true when it was written
+  (2026-06-16, 200 ms x 102); `2cc32ab` on 2026-08-25 gave arXiv its published 3 s
+  interval and made it 15x slower, and the only symptom was CI minutes. Corrected
+  in place with the arithmetic.
+
+  Not attempted: `tokio::time::pause()`. `http.rs` already records why — wiremock
+  serves over real localhost IO, and paused time auto-advances past reqwest's
+  timeout.
+
+### Changed
+
 - **[dist]** The Claude Code plugin runs `npx -y doiget-cli serve` instead of a bare
   `doiget serve`, so installing it **needs nothing installed beforehand** — npm
   fetches the wrapper and the one matching platform binary on first run. Until now

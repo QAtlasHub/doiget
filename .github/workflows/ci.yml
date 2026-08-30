@@ -89,6 +89,29 @@ jobs:
       # so test and clippy exercise an identical feature surface.
       - run: cargo test --workspace --all-targets --no-default-features --features oa-only
 
+  # The five jobs above skip `#[ignore]`d tests, which is where the one
+  # 10-minute test lives. It is a dispatch-loop property that varies with
+  # neither OS nor Cargo feature, so running it in all five spent ~50 minutes
+  # per CI run learning the same thing five times. Once is enough.
+  #
+  # NOT a sixth leg of the `test` matrix: it has to run in PARALLEL with the
+  # others rather than lengthen one of them, and it needs no OS spread.
+  test-slow:
+    name: test (slow)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          cache-bin: false
+      # `--ignored` runs ONLY the ignored tests, so this job is exactly the
+      # slow set and the five broad jobs are exactly everything else. Nothing
+      # is dropped by the split and nothing is run twice.
+      - run: cargo test --workspace --all-targets --no-default-features --features oa-only -- --ignored
+
   test-citation:
     name: test (citation feature)
     runs-on: ubuntu-latest
