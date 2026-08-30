@@ -4177,6 +4177,48 @@ mod tests {
         assert!(extract_metadata_authors(&json!({"x": 1})).is_empty());
         assert!(extract_metadata_authors(&json!({"authors": []})).is_empty());
     }
+    /// #505: the widening advice is derived from the trace, not from a
+    /// second registry, so it cannot claim a source was skipped when it was
+    /// consulted -- or name a variable the chain does not actually read.
+    #[test]
+    fn widening_env_is_deduped_and_in_chain_order() {
+        let attempts = vec![
+            SourceAttempt::new("crossref", AttemptOutcome::NoRecord),
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_HAL"],
+                },
+            ),
+            SourceAttempt::new(
+                "tdm-aps",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"],
+                },
+            ),
+            // A second source behind the same switch must not repeat it.
+            SourceAttempt::new(
+                "hal-again",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_HAL"],
+                },
+            ),
+        ];
+        assert_eq!(
+            widening_env(&attempts),
+            vec![
+                "DOIGET_ENABLE_HAL",
+                "DOIGET_KEY_APS",
+                "DOIGET_AGREE_TDM_APS"
+            ],
+            "chain order, de-duplicated, and a consulted source contributes nothing"
+        );
+        // Nothing skipped means nothing to suggest.
+        assert!(
+            widening_env(&[SourceAttempt::new("crossref", AttemptOutcome::NoRecord)]).is_empty()
+        );
+        assert!(widening_env(&[]).is_empty());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4447,6 +4489,29 @@ pub fn render_attempts(attempts: &[SourceAttempt]) -> String {
         .map(|a| format!("  {:<12} {}", a.source, a.outcome.render()))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Every environment variable the trace says would widen this search, in
+/// first-seen order and de-duplicated.
+///
+/// Built from the `Disabled` rows rather than from a separate registry, so
+/// it cannot drift from what the run actually skipped: a source that was
+/// consulted contributes nothing, and a source that was skipped contributes
+/// exactly the variables its own row already names.
+///
+/// Order is the chain's order, which is the order a user should set them in
+/// (`required_env` documents the same for the multi-variable Tier-3 case).
+#[must_use]
+pub fn widening_env(attempts: &[SourceAttempt]) -> Vec<&'static str> {
+    let mut seen = Vec::new();
+    for a in attempts {
+        for var in a.outcome.required_env().unwrap_or_default() {
+            if !seen.contains(var) {
+                seen.push(*var);
+            }
+        }
+    }
+    seen
 }
 
 /// True when no source in the trace was actually reached.
