@@ -165,6 +165,16 @@ async fn doiget_resolve_paper_invalid_ref_returns_invalid_ref_envelope() -> anyh
             .unwrap_or(false),
         "INVALID_REF message must mention 'invalid ref'; got: {structured:?}"
     );
+    // #506: the retry decision an agent has to make was encoded in a markdown
+    // table it never reads, so its only signal was the code's NAME. Asserted
+    // through the real tool rather than on the helper, because "the envelope
+    // carries it" is the claim -- a helper that is right and unreached would
+    // pass a unit test and change nothing.
+    assert_eq!(
+        structured["error"]["disposition"],
+        serde_json::json!("terminal"),
+        "a malformed ref will not become well-formed by waiting: {structured:?}"
+    );
 
     client.cancel().await?;
     server_handle.await??;

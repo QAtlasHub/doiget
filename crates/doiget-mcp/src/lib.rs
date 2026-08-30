@@ -962,10 +962,7 @@ impl Server {
                         "entry_key": entry_key,
                         "ref": raw,
                         "ok": false,
-                        "error": {
-                            "code":    ErrorCode::InvalidRef,
-                            "message": source.to_string(),
-                        },
+                        "error": error_object(ErrorCode::InvalidRef, source.to_string()),
                     }));
                 }
                 Err(doiget_core::refs::ParseError::NoIdentifier { entry_key }) => {
@@ -982,10 +979,7 @@ impl Server {
                         "entry_key": entry_key,
                         "ref":       Value::Null,
                         "ok":        false,
-                        "error": {
-                            "code":    ErrorCode::InvalidRef,
-                            "message": "entry has no DOI / arXiv id",
-                        },
+                        "error": error_object(ErrorCode::InvalidRef, "entry has no DOI / arXiv id"),
                     }));
                 }
                 Err(_) => {
@@ -996,10 +990,7 @@ impl Server {
                         "entry_key": Value::Null,
                         "ref":       Value::Null,
                         "ok":        false,
-                        "error": {
-                            "code":    ErrorCode::InvalidRef,
-                            "message": "unhandled bibliography parse error",
-                        },
+                        "error": error_object(ErrorCode::InvalidRef, "unhandled bibliography parse error"),
                     }));
                 }
             }
@@ -1999,10 +1990,10 @@ impl Server {
             let _ = input;
             return Ok(CallToolResult::structured(json!({
                 "ok": false,
-                "error": {
-                    "code": ErrorCode::NotImplemented,
-                    "message": "doiget_expand_citation_graph requires the `citation` Cargo feature; this binary was built without it",
-                },
+                "error": error_object(
+                    ErrorCode::NotImplemented,
+                    "doiget_expand_citation_graph requires the `citation` Cargo feature; this binary was built without it",
+                ),
             })));
         }
         #[cfg(feature = "citation")]
@@ -3051,7 +3042,7 @@ impl Server {
                 Err(e) => {
                     entries.push(json!({
                         "ref": r,
-                        "error": { "code": ErrorCode::InvalidRef, "message": format!("invalid ref: {e}") },
+                        "error": error_object(ErrorCode::InvalidRef, format!("invalid ref: {e}")),
                     }));
                     continue;
                 }
@@ -3088,7 +3079,7 @@ impl Server {
                 Err(e) => {
                     entries.push(json!({
                         "ref": r,
-                        "error": { "code": ErrorCode::StoreError, "message": format!("store read failed: {e}") },
+                        "error": error_object(ErrorCode::StoreError, format!("store read failed: {e}")),
                     }));
                 }
             }
@@ -3143,14 +3134,30 @@ fn entry_info_to_json(entry: &EntryInfo) -> Value {
 /// per-ref context). This shape-symmetry with the success envelopes
 /// (which always carry `"ref"`) means consumers can pattern-match
 /// uniformly across `ok:true` / `ok:false` envelopes.
+/// The `error` object every failure envelope carries (#506).
+///
+/// One builder rather than ten literals, because the point of `disposition`
+/// is that an agent can rely on it being there. A field present on some
+/// failures and absent on others is worse than no field: it teaches the reader
+/// to fall back to guessing from the code's name, which is the habit this
+/// exists to replace.
+///
+/// `disposition` is derived by [`doiget_core::ErrorCode::disposition`], which
+/// is the same function `docs/ERRORS.md` §2's Disposition column is asserted
+/// against.
+fn error_object(code: ErrorCode, message: impl Into<Value>) -> Value {
+    json!({
+        "code": code,
+        "message": message.into(),
+        "disposition": code.disposition().as_wire(),
+    })
+}
+
 fn read_path_error_envelope(ref_str: Option<&str>, code: ErrorCode, message: &str) -> Value {
     json!({
         "ok": false,
         "ref": ref_str.map(Value::from).unwrap_or(Value::Null),
-        "error": {
-            "code": code,
-            "message": message,
-        },
+        "error": error_object(code, message),
     })
 }
 
@@ -3175,15 +3182,11 @@ fn metadata_only_error_envelope(ref_str: Option<&str>, code: ErrorCode, message:
         // ref to surface) for shape-symmetry with the success
         // envelopes and `read_path_error_envelope`.
         "ref": ref_str.map(Value::from).unwrap_or(Value::Null),
-        "error": {
-            "code": code,
-            "message": message,
-            // denial_context is intentionally absent for these envelope
-            // shapes (parse-error / not-implemented); ADR-0023 §1 says
-            // the field is optional and consumers MUST tolerate it
-            // being absent (§3 covers the per-subfield optionality
-            // rules that apply when denial_context IS present).
-        },
+        // denial_context is intentionally absent for these envelope shapes
+        // (parse-error / not-implemented); ADR-0023 §1 says the field is
+        // optional and consumers MUST tolerate it being absent (§3 covers the
+        // per-subfield optionality rules that apply when it IS present).
+        "error": error_object(code, message),
     })
 }
 
@@ -3427,13 +3430,7 @@ fn fetch_paper_error_envelope(ref_str: Option<&str>, code: ErrorCode, message: &
     if let Some(r) = ref_str {
         obj.insert("ref".into(), json!(r));
     }
-    obj.insert(
-        "error".into(),
-        json!({
-            "code": code,
-            "message": message,
-        }),
-    );
+    obj.insert("error".into(), error_object(code, message));
     Value::Object(obj)
 }
 
@@ -3713,10 +3710,7 @@ fn build_batch_dry_run_envelope(plans: &[(Ref, doiget_core::dry_run::FetchPlan)]
 fn batch_fetch_error_envelope(code: ErrorCode, message: &str) -> Value {
     json!({
         "ok": false,
-        "error": {
-            "code": code,
-            "message": message,
-        },
+        "error": error_object(code, message),
     })
 }
 
@@ -4029,7 +4023,14 @@ impl ServerHandler for Server {
                 "doiget v{VERSION} \u{2014} Open Access paper fetcher (stdio MCP). \
                  Tier 1 sources are always-on; Tier 2/3 require build features and \
                  env-var grants. Call `doiget_capability_profile` for the runtime \
-                 view; call `doiget_health` for an operational sanity check."
+                 view; call `doiget_health` for an operational sanity check. \
+                 RETRY CONTRACT: every failure carries `error.disposition`. \
+                 `terminal` = the answer will not change, do not retry. \
+                 `retry_after` = it may change on its own, retry with backoff. \
+                 `needs_config` = it will not change by itself, but a named \
+                 change makes it — surface that to the user instead of \
+                 looping. Read that field, not the error code's name: \
+                 NO_OA_AVAILABLE is `needs_config`, not something to wait out."
             ))
     }
 }

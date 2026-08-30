@@ -70,6 +70,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0051 | Contributions carry a relicensable grant, recorded as a commit sign-off | Accepted | `chore/cla-relicensing-grant` | - |
 | 0052 | Crossref `link[]` is programme-scoped, so the fetch path does not carry it | Accepted | `feat/517-publisher-candidate` | #517 |
 | 0053 | A DOI resolver is addressing, not hosting | Accepted | `fix/533-resolver-hop-is-addressing` | #533 |
+| 0055 | A failure says what to do about it, in three states | Accepted | `feat/506-error-disposition` | #506 |
 
 ## Conventions
 

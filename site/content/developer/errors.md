@@ -39,29 +39,29 @@ Wire form (JSON / MCP): `"INVALID_REF"`, `"NO_OA_AVAILABLE"`, etc.
 
 ## 2. Code semantics
 
-| Code | Meaning | Recoverable? |
-|---|---|---|
-| `INVALID_REF` | DOI / arXiv id failed validation. | No (user must correct input). |
-| `NO_OA_AVAILABLE` | Tier 1 sources reported no OA URL. | Try later, or enable opt-in source. |
-| `RATE_LIMITED` | Internal rate cap hit, OR 429 from source. | Retry after `Retry-After` (or 1 s). |
-| `NETWORK_ERROR` | Transport / DNS / TLS failure. **Does NOT cover a deliberate supply-chain policy block** — see §6.1: an off-allowlist / redirect-denied / insecure-scheme OA-PDF leg is `CAPABILITY_DENIED`, not `NETWORK_ERROR`. | Retry usually fine. |
-| `NOT_FOUND` | Metadata source authoritatively reported the id does not exist: HTTP `404` / `410` / `451`, or a source-specific absence (arXiv returns HTTP 200 with an empty `<feed>` for an unknown id). Network-independent and reproducible — distinct from the transient `NETWORK_ERROR` / `RATE_LIMITED`. `doiget verify` treats it as a definite dead reference (`absent`). For a DOI it is emitted only when all configured sources (Crossref, Unpaywall) fail to resolve it; a DataCite-only DOI may thus be reported `NOT_FOUND`. | No (the id is wrong or retracted). |
-| `AMBIGUOUS` | A name filter (`--author` / `--venue` / `--publisher`) matched several entities with no clear winner; the error lists the candidates. Distinct from `NOT_FOUND` ("matched nothing"). CLI exit `2`. | Yes — narrow the name (add a first name / fuller title) or pass an exact id. |
-| `STORE_ERROR` | Filesystem write failed (disk, permission, etc.). | Depends on cause. |
-| `LOG_ERROR` | Provenance log write failed. **Fetch is aborted.** | Free disk / fix perms. |
-| `CAPABILITY_DENIED` | Source not in `CapabilityProfile`. | User opts in, or pick different source. |
-| `FETCH_TIMEOUT` | Per-request timeout exceeded. | Retry. |
-| `SCHEMA_TOO_NEW` | Store entry's `schema_version` is ahead. | Upgrade doiget. |
-| `LOCK_TIMEOUT` | Could not acquire `flock` within 5 s. | Retry; another process holds it. |
-| `INTERNAL_ERROR` | Bug. | Report at <https://github.com/QAtlasHub/doiget/issues>. |
-| `NOT_IMPLEMENTED` | Feature is spec'd but not yet wired in this Phase. | Wait for next minor release; do not retry. |
-| `TEXT_UNAVAILABLE` | The id is valid and resolvable, but the **requested representation** is missing: `doiget text` got a 200 from ar5iv with no extractable prose (the paper was never converted to HTML). Distinct from `NOT_FOUND` (the id *does* exist) and `NO_OA_AVAILABLE` (the paper may still be OA — only the HTML render is missing). Issue #302. | Yes — fetch the PDF instead (`doiget fetch <id>`); do not "fix" the identifier. |
+| Code | Meaning | Disposition | Recoverable? |
+|---|---|---|---|
+| `INVALID_REF` | DOI / arXiv id failed validation. | `terminal` | No (user must correct input). |
+| `NO_OA_AVAILABLE` | Tier 1 sources reported no OA URL. | `needs_config` | Try later, or enable opt-in source. |
+| `RATE_LIMITED` | Internal rate cap hit, OR 429 from source. | `retry_after` | Retry after `Retry-After` (or 1 s). |
+| `NETWORK_ERROR` | Transport / DNS / TLS failure. **Does NOT cover a deliberate supply-chain policy block** — see §6.1: an off-allowlist / redirect-denied / insecure-scheme OA-PDF leg is `CAPABILITY_DENIED`, not `NETWORK_ERROR`. | `retry_after` | Retry usually fine. |
+| `NOT_FOUND` | Metadata source authoritatively reported the id does not exist: HTTP `404` / `410` / `451`, or a source-specific absence (arXiv returns HTTP 200 with an empty `<feed>` for an unknown id). Network-independent and reproducible — distinct from the transient `NETWORK_ERROR` / `RATE_LIMITED`. `doiget verify` treats it as a definite dead reference (`absent`). For a DOI it is emitted only when all configured sources (Crossref, Unpaywall) fail to resolve it; a DataCite-only DOI may thus be reported `NOT_FOUND`. | `terminal` | No (the id is wrong or retracted). |
+| `AMBIGUOUS` | A name filter (`--author` / `--venue` / `--publisher`) matched several entities with no clear winner; the error lists the candidates. Distinct from `NOT_FOUND` ("matched nothing"). CLI exit `2`. | `terminal` | Yes — narrow the name (add a first name / fuller title) or pass an exact id. |
+| `STORE_ERROR` | Filesystem write failed (disk, permission, etc.). | `needs_config` | Depends on cause. |
+| `LOG_ERROR` | Provenance log write failed. **Fetch is aborted.** | `needs_config` | Free disk / fix perms. |
+| `CAPABILITY_DENIED` | Source not in `CapabilityProfile`. | `needs_config` | User opts in, or pick different source. |
+| `FETCH_TIMEOUT` | Per-request timeout exceeded. | `retry_after` | Retry. |
+| `SCHEMA_TOO_NEW` | Store entry's `schema_version` is ahead. | `needs_config` | Upgrade doiget. |
+| `LOCK_TIMEOUT` | Could not acquire `flock` within 5 s. | `retry_after` | Retry; another process holds it. |
+| `INTERNAL_ERROR` | Bug. | `terminal` | Report at <https://github.com/QAtlasHub/doiget/issues>. |
+| `NOT_IMPLEMENTED` | Feature is spec'd but not yet wired in this Phase. | `terminal` | Wait for next minor release; do not retry. |
+| `TEXT_UNAVAILABLE` | The id is valid and resolvable, but the **requested representation** is missing: `doiget text` got a 200 from ar5iv with no extractable prose (the paper was never converted to HTML). Distinct from `NOT_FOUND` (the id *does* exist) and `NO_OA_AVAILABLE` (the paper may still be OA — only the HTML render is missing). Issue #302. | `terminal` | Yes — fetch the PDF instead (`doiget fetch <id>`); do not "fix" the identifier. |
 
 ## 3. Persona × error matrix
 
 | Persona | Surface |
 |---|---|
-| Agent (MCP) | Structured, never throws. On failure: `{ ok: false, error: { code, message, denial_context? } }`. `remediation` and `attempts` are **not** carried here — they belong to the `{ ok: true, … }` envelope, as `pdf.remediation` (present when the PDF leg was blocked) and top-level `attempts`. A blocked PDF leg is an `ok: true` result with a failed leg, not an `ok: false` call. |
+| Agent (MCP) | Structured, never throws. On failure: `{ ok: false, error: { code, message, disposition, denial_context? } }`. `disposition` is ALWAYS present and is the field to branch a retry on — see §2 and ADR-0055. It is derived from `code` by `ErrorCode::disposition`, never hand-written per call site. `remediation` and `attempts` are **not** carried here — they belong to the `{ ok: true, … }` envelope, as `pdf.remediation` (present when the PDF leg was blocked) and top-level `attempts`. A blocked PDF leg is an `ok: true` result with a failed leg, not an `ok: false` call. |
 | Researcher (CLI human) | `cargo`-style stderr: `error[E0007]: rate limited from unpaywall: retry after 1s`. Exit code 1. |
 | CI / Batch (CLI `--json`) | JSON Lines record per ref with `{"ok":false, "error":{"code":"...","message":"...","denial_context":{...}?,"remediation":[...]?,"attempts":[...]?}}`. Exit code = number of failures (capped at 255). **Records are emitted in completion order, not input order** — see below. |
 | Library (Rust) | `Err(FetchError)` (typed via `thiserror`). |
