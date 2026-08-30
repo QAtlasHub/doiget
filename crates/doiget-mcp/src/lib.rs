@@ -1282,7 +1282,8 @@ impl Server {
                        OUTPUTS: { ok: true, scope: \"external\", query, total_results, count, results: [{ doi, openalex_id, arxiv, title, authors, year, venue, abstract, cited_by_count, oa_status, source }] } OR { ok:false, error }.\n\
                        COSTS: 1 OpenAlex request, plus 1 per supplied author/venue/publisher name to resolve.\n\
                        SIDE EFFECTS: Emits Metadata provenance rows. NEVER writes the store. NEVER fetches a PDF.\n\
-                       LIMITS: Tier-1, always-on (no DOIGET_ENABLE_OPENALEX gate). An ambiguous author/venue/publisher name → AMBIGUOUS (candidates listed); no match → NOT_FOUND.",
+                       LIMITS: Tier-1, always-on (no DOIGET_ENABLE_OPENALEX gate). An ambiguous author/venue/publisher name → AMBIGUOUS (candidates listed); no match → NOT_FOUND.\n\
+                       ZERO RESULTS ARE NOT EVIDENCE OF ABSENCE: OpenAlex free-text matching degrades sharply past roughly 8 terms and returns nothing rather than a partial match. On total_results: 0, retry with 3-5 distinctive terms before concluding the work is not indexed; the envelope carries a `hint` saying so.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1398,14 +1399,32 @@ impl Server {
         });
 
         match outcome {
-            Ok(results) => Ok(CallToolResult::structured(json!({
-                "ok": true,
-                "scope": "external",
-                "query": input.query,
-                "total_results": results.total_results,
-                "count": results.results.len(),
-                "results": results.results,
-            }))),
+            Ok(results) => {
+                let mut envelope = json!({
+                    "ok": true,
+                    "scope": "external",
+                    "query": input.query,
+                    "total_results": results.total_results,
+                    "count": results.results.len(),
+                    "results": results.results,
+                });
+                // A zero-result search is a SUCCESS envelope, so #506's work on
+                // error dispositions does not reach it. An agent reads
+                // `ok: true` with an empty array as a fact about the world --
+                // the paper is not indexed -- and stops looking. That happened:
+                // eleven consecutive searches returned 0 for papers a shorter
+                // query then found on the first try (#534).
+                //
+                // The cause is query length, not absence, so the envelope says
+                // so at the exact point an agent would otherwise conclude
+                // absence.
+                if results.results.is_empty() {
+                    if let Some(hint) = zero_result_hint(&input.query) {
+                        envelope["hint"] = json!(hint);
+                    }
+                }
+                Ok(CallToolResult::structured(envelope))
+            }
             // Canonical FetchError -> ErrorCode (AMBIGUOUS / NOT_FOUND /
             // NETWORK_ERROR / …) so an agent can branch on the code.
             Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
@@ -3999,6 +4018,34 @@ impl ServerHandler for Server {
 /// an unexpanded `${...}` placeholder. A Desktop-Extension config left blank
 /// passes the literal `${user_config.store_root}`, which must never become a
 /// filesystem path (it produced `os error 5` access-denied). See #369.
+/// Advice to attach to a `doiget_paper_search` that matched nothing (#534).
+///
+/// OpenAlex free-text matching degrades sharply as a query lengthens: past
+/// roughly eight terms it returns nothing at all rather than a partial match.
+/// A human reading `0 results` shortens the query and tries again. An agent
+/// reading `ok: true` with an empty array reads it as a fact about the world
+/// and stops -- in the session that produced #534, eleven consecutive searches
+/// returned zero for papers a three-to-five term query then found immediately,
+/// and a known study was written off as unavailable.
+///
+/// Returns `None` for short queries: a zero-result two-term search really may
+/// mean the work is not indexed, and a hint on every empty result would train
+/// readers to skip it.
+fn zero_result_hint(query: &str) -> Option<String> {
+    // Where OpenAlex free-text matching starts failing outright. Not a hard
+    // boundary -- a bound observed from the queries in #534, which is why the
+    // wording says "roughly".
+    const DEGRADES_PAST: usize = 8;
+
+    let terms = query.split_whitespace().count();
+    if terms <= DEGRADES_PAST {
+        return None;
+    }
+    Some(format!(
+        "This query has {terms} terms. OpenAlex free-text matching degrades sharply past roughly {DEGRADES_PAST} and returns nothing rather than a partial match, so zero results here is more likely to be about the query than about the literature. Retry with 3-5 distinctive terms - an author surname, a coined phrase, the distinguishing noun - before concluding the work is not indexed."
+    ))
+}
+
 fn store_root_env_is_usable(value: &str) -> bool {
     let v = value.trim();
     !v.is_empty() && !v.contains("${")
@@ -4179,6 +4226,36 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// #534: a long query matching nothing is far more likely to be a
+    /// query-length problem than an absent literature, and the agent reading
+    /// the envelope is the one who cannot tell the difference.
+    #[test]
+    fn a_long_zero_result_query_is_told_why_it_may_be_zero() {
+        let q = "lithium refractoriness after discontinuation kindling sensitization course of illness Post";
+        let hint = zero_result_hint(q).expect("10 terms is past the threshold");
+        assert!(hint.contains("10 terms"), "names the count: {hint}");
+        assert!(
+            hint.contains("3-5"),
+            "says what to do instead, not only what went wrong: {hint}"
+        );
+    }
+
+    /// A short query returning nothing may genuinely mean nothing is indexed.
+    /// Hinting on every empty result would teach readers to skip the hint.
+    #[test]
+    fn a_short_zero_result_query_is_left_alone() {
+        assert!(zero_result_hint("depersonalization derealization").is_none());
+        assert!(zero_result_hint("").is_none());
+    }
+
+    /// The threshold counts terms, not characters: one very long term is still
+    /// one term, and "shorten it" is not the advice to give.
+    #[test]
+    fn the_threshold_counts_terms_not_length() {
+        assert!(zero_result_hint(&"a".repeat(400)).is_none());
+        assert!(zero_result_hint("a b c d e f g h i").is_some());
+    }
 
     /// #406: the store-writability probe MUST NOT create anything.
     /// `doiget_health` is annotated `read_only_hint = true`, and the old
