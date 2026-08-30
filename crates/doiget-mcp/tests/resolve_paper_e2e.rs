@@ -469,7 +469,7 @@ async fn resolve_paper_with_include_oa_location_returns_a_real_oa_url() -> anyho
     let td = tempfile::TempDir::new().expect("tempdir");
     let log_path = camino::Utf8Path::from_path(td.path())
         .expect("tempdir is utf-8")
-        .join("mcp-resolve-optin.jsonl");
+        .join("mcp-resolve-opt-in.jsonl");
 
     let env = EnvGuard::new(ENV_KEYS);
     env.set("DOIGET_CROSSREF_BASE", &crossref.uri());
