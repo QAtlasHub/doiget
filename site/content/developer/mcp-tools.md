@@ -289,10 +289,43 @@ metadata. It **MUST NOT** trigger a publisher-side PDF fetch, even when the
 metadata source returns an OA URL. The OA URL, when known, is surfaced in the
 response as `oa_url` (string) for the caller to act on separately.
 
+### `oa_url` is opt-in (#539)
+
+By default `oa_url` is **always `null`**, and callers MUST NOT read that as
+"this work has no OA location".
+
+The DOI path is Crossref-first, on the rationale that Crossref's
+`message.link[]` supplied an OA URL without a second request. It does not:
+measured across twelve live entries and eight captured fixtures, every one
+carried an `intended-application` scoping it to a licensed programme
+(Similarity Check, TDM, syndication) rather than being general-purpose, and
+following one outside that programme would be taking a licensed route
+without the licence. So the extractor refuses all of them, correctly, and the
+field it was meant to fill stays empty (ADR-0052, #517).
+
+A caller that wants a real OA location passes `include_oa_location: true`,
+which consults Unpaywall. That costs one extra metadata round-trip; it does
+NOT weaken any guarantee above, because Unpaywall is a metadata source and
+the URL is still reported and never followed.
+
+With the flag set, the `oa_status`/`oa_url` pair says which answer you got:
+
+| `oa_status` | `oa_url` | meaning |
+|---|---|---|
+| `"closed"` | `null` | the lookup completed; this work has no OA location |
+| `"gold"`, `"green"`, `"hybrid"`, `"bronze"` | string | the lookup completed; here it is |
+| `null` | `null` | the lookup did not complete |
+
+A failed Unpaywall call is NOT an error: the Crossref metadata the caller also
+asked for is still returned, and the null `oa_status` is what distinguishes
+"could not find out" from a completed lookup reporting `"closed"`. This
+mirrors the `oa_status` + `pdf.status` pairing already used by
+`doiget_fetch_paper` (§4).
+
 ```jsonc
 {
   "name": "doiget_metadata_only",
-  "description": "WHEN TO USE: User wants metadata for a DOI / arXiv id without paying for or being noticed by a PDF download.\nINPUTS: ref (DOI or arXiv id), dry_run (optional bool).\nOUTPUTS: { ok: true, ref, source, license?, oa_url:string|null, metadata } or { ok:false, error }.\nCOSTS: 1-2 s metadata round-trip. No publisher fetch.\nSIDE EFFECTS: Appends a provenance row tagged 'metadata-only' (unless dry_run). Writes the metadata TOML to the store.\nLIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed.",
+  "description": "WHEN TO USE: User wants metadata for a DOI / arXiv id without paying for or being noticed by a PDF download.\nINPUTS: ref (DOI or arXiv id), dry_run (optional bool), include_oa_location (optional bool).\nOUTPUTS: { ok: true, ref, source, license?, oa_url:string|null, oa_status:string|null, metadata } or { ok:false, error }.\nCOSTS: 1-2 s metadata round-trip (roughly doubled when include_oa_location). No publisher fetch.\nSIDE EFFECTS: Appends a provenance row tagged 'metadata-only' (unless dry_run). Writes the metadata TOML to the store.\nLIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed. oa_url is null unless include_oa_location is set.",
   "inputSchema": {
     "type": "object",
     "required": ["ref"],
@@ -303,7 +336,8 @@ response as `oa_url` (string) for the caller to act on separately.
         "maxLength": 256,
         "pattern": "^(10\\.\\d{4,9}/[A-Za-z0-9._/()-]+|arXiv:\\d{4}\\.\\d{4,5}|\\d{4}\\.\\d{4,5})$"
       },
-      "dry_run": { "type": "boolean", "default": false }
+      "dry_run": { "type": "boolean", "default": false },
+      "include_oa_location": { "type": "boolean", "default": false }
     },
     "additionalProperties": false
   }
@@ -322,7 +356,11 @@ type MetadataOnlyResult =
       // Currently equal to `source` verbatim.
       resolver_profile: string,
       license: string,
+      // Null unless `include_oa_location` was set - see above. A null here is
+      // NOT evidence that the work has no OA location.
       oa_url: string | null,
+      // gold / green / hybrid / bronze / closed, or null when not determined.
+      oa_status: string | null,
       metadata: object,
       schema_version: string,
     }
