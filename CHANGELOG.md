@@ -55,6 +55,39 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Added
 
+- **[mcp]** Citation candidates now carry `confidence` and `matched`, so an
+  agent can tell an identity from a coincidence. A 0.5 near-miss and a 1.0 exact
+  match arrived in the same shape, and nothing in the envelope said which was
+  which (#536).
+
+  The reported case: a citation for a paper in *Psychiatria Danubina* came back
+  as a different 2010 paper, in a different journal, by a different author, at
+  `score: 0.5` - `quality`, `life`, `bipolar`, `2010` were enough to clear the
+  bar. Same structure as the `score: 1.0` identity returned minutes earlier.
+
+  A bare float is not judgement material. To use it as a gate the consumer has
+  to already know that the scorer is token overlap rather than semantic
+  similarity, and that **0.5 is the floor** - so the worst candidate the tool
+  can ever emit still looks like a positive number.
+
+  | `confidence` | meaning |
+  |---|---|
+  | `exact` | every query token was found |
+  | `probable` | at least four query tokens in five |
+  | `weak` | cleared the floor and no more - a near-miss, not a match |
+
+  `matched` lists which of the query's tokens were found. In the reported case
+  that is the whole story: not the author, not the journal.
+
+  This is the half of #372 that was never specified. #372's remedy - return the
+  top candidate with its score rather than an empty list, so the calling agent
+  can judge - is in place and correct; what the agent judges *with* was missing.
+  Both citation tool descriptions now say to branch on `confidence`, not
+  `score`.
+
+  **`doiget-core` API:** `ResolvedCandidate` gains two fields and becomes
+  `#[non_exhaustive]`, matching `MetadataOnlyOutcome` and `AttemptOutcome`, so
+  the next field is not another break.
 - **[mcp]** Every failure envelope now carries `error.disposition`, so the retry
   decision stops being a markdown table the agent never reads. `docs/ERRORS.md`
   §2 has had good per-code guidance since Phase 0; none of it reached the wire

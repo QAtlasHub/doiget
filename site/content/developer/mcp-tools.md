@@ -380,3 +380,28 @@ failure.
 `doiget_batch_resolve_citations` batch-resolves multiple citation strings (up to 50).
 
 Both tools calculate token-based overlap similarity scores, filter out results with a score < 0.5, and sort candidates by score descending. No local store writes or provenance logs are created.
+
+### Branch on `confidence`, not `score` (#536)
+
+Each candidate carries `confidence` and `matched` alongside `score`.
+
+`score` alone is not enough to judge with. It is **token overlap against your
+query string**, not semantic similarity, and 0.5 is the **floor** — so the
+worst candidate these tools can emit still looks like a positive number. A
+citation naming an author, a title, a journal, a volume and a year that comes
+back at 0.5 means most of it did not match, which for a known-item lookup is a
+negative result.
+
+| `confidence` | meaning |
+|---|---|
+| `exact` | every query token was found in the candidate's record |
+| `probable` | at least four query tokens in five |
+| `weak` | cleared the 0.5 floor and no more — a near-miss, not a match |
+
+`matched` lists which of your tokens were found, which is how you see whether
+the author and the journal were among them. In the case that produced #536 they
+were `quality`, `life`, `bipolar`, `2010` — and the returned paper was by a
+different author in a different journal.
+
+These are bands over token overlap, not a semantic verdict: `exact` is a strong
+signal and still not proof, so verify with `doiget_resolve_paper` before citing.
