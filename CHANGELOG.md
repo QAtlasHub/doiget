@@ -55,6 +55,36 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Added
 
+- **[cli]** The found-nothing path now orders the sources it did not consult -
+  and says which part of that order is a finding and which is not (#505 part 3).
+
+  The issue is emphatic about the risk, and it governs the whole design: *"a
+  ranking that is wrong is worse than no ranking, because it makes people stop
+  early."*
+
+  ```
+    = note: of the sources not consulted:
+        1. openalex     lists every location a work has -- a lookup, not a guess
+        then, in NO particular order: doaj  europe-pmc  hal  openaire
+        last: core      the broadest index outside Unpaywall, so never the first try
+  ```
+
+  Two positions have a real signal. `openalex` is categorically different from
+  everything else in the list: it *lists* a work's locations, so with it enabled
+  the answer is "this repository has it", not "might". `core` is last on its own
+  module's documented grounds - broadest means least discriminating.
+
+  **The middle is returned unordered, deliberately.** The issue proposes ranking
+  it on venue, author affiliation and funder; none of those reach this point -
+  `FetchPaperOutcome` carries title, authors and year, and the DOI-prefix map is
+  Tier-3-only (ADR-0041) and absent from an `oa-only` build entirely. Rendering
+  an invented order would put a guess in the shape of a finding, which is the
+  one thing this must not do, so the output says so instead.
+
+  It is an ordering of the **full** list, never a shortlist: a source dropped
+  from the list is a source the reader will not try, and there is a test that
+  every unconsulted source appears somewhere.
+
 - **[dist]** Homebrew. `#247` promised a tap in 2026-06 and was closed as
   completed; measured against 0.8.12 it was one of the rows that did not exist
   (#501).

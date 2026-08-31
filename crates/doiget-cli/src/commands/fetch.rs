@@ -1297,6 +1297,55 @@ fn render_blocked_error(
 /// reached.
 ///
 /// Three blocks: what ran, what did not, and the line to paste.
+/// Order the sources that were NOT consulted, for the found-nothing path
+/// (#505 part 3).
+///
+/// The issue is explicit about the risk, and it governs this whole function:
+///
+/// > a ranking that is wrong is worse than no ranking, because it makes people
+/// > stop early. So it must be an *ordering* of the full list, never a
+/// > shortlist, and it must name the signal it ranked on.
+///
+/// Two positions have a real signal and the middle does not, so only two are
+/// ranked:
+///
+/// * **`openalex` first.** It is categorically different from the rest: it
+///   *lists* every location a work has, so with it enabled the answer is "this
+///   repository has it", not "this repository might". Item 1 is a lookup; the
+///   others are guesses, and the issue is emphatic that presenting both in one
+///   list without saying which is which is the failure mode it is about.
+/// * **`core` last.** Not a guess either -- its own module doc calls it "the
+///   broadest single OA index outside Unpaywall and therefore the LAST fallback
+///   in the chain". Broadest means least discriminating, so it is never the
+///   first thing to try and never absent from the list.
+///
+/// **Everything between them is returned unordered, deliberately.** The issue
+/// proposes ranking the middle on venue, author affiliation and funder, and
+/// none of those reach this point: `FetchPaperOutcome` carries `title`,
+/// `authors` and `year`, and the DOI prefix map is Tier-3-only (ADR-0041,
+/// publisher TDM scoping) and absent from an `oa-only` build entirely. Putting
+/// them in an order anyway would render a guess in the shape of a finding,
+/// which is the one thing this must not do.
+fn rank_unconsulted(
+    attempts: &[SourceAttempt],
+) -> (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>) {
+    let mut first = Vec::new();
+    let mut middle = Vec::new();
+    let mut last = Vec::new();
+    for a in attempts {
+        if a.outcome.required_env().is_none() {
+            continue;
+        }
+        match a.source {
+            "openalex" => first.push(a.source),
+            "core" => last.push(a.source),
+            other => middle.push(other),
+        }
+    }
+    middle.sort_unstable();
+    (first, middle, last)
+}
+
 fn not_found_trace_lines(ref_: &Ref, attempts: &[SourceAttempt]) -> Vec<String> {
     let mut out = Vec::new();
     if attempts.is_empty() {
@@ -1341,6 +1390,38 @@ fn not_found_trace_lines(ref_: &Ref, attempts: &[SourceAttempt]) -> Vec<String> 
             "  = note: {} already set, but the source is still off -- this              binary was built without the Cargo feature that provides it.              Widening needs a differently-built binary, not another variable.",
             already_set.join(", ")
         ));
+    }
+
+    // #505 part 3. Ordered only where there is something to order on; see
+    // `rank_unconsulted`.
+    let (first, middle, last) = rank_unconsulted(attempts);
+    if !first.is_empty() || !middle.is_empty() || !last.is_empty() {
+        out.push("  = note: of the sources not consulted:".to_string());
+        for s in &first {
+            out.push(format!(
+                "      1. {s:<12} lists every location a work has -- a lookup, not a guess"
+            ));
+        }
+        if !middle.is_empty() {
+            out.push(format!(
+                "      then, in NO particular order: {}",
+                middle.join("  ")
+            ));
+        }
+        for s in &last {
+            out.push(format!(
+                "      last: {s:<9} the broadest index outside Unpaywall, so never the first try"
+            ));
+        }
+        // Naming the signal is half of what the ranking is for. Saying "the
+        // middle has none" is the honest form of that, and it stops the list
+        // reading as an ordering it is not.
+        if !middle.is_empty() {
+            out.push(
+                "  = note: the middle is unordered because nothing in this run distinguishes                  those sources -- venue, affiliation and funder would, and none of them reach                  here. An invented order would read as information."
+                    .to_string(),
+            );
+        }
     }
 
     out
@@ -2348,6 +2429,124 @@ host = "*.uj.edu.pl"
         assert!(
             joined.contains("DOIGET_ENABLE_HAL=1 doiget fetch 10.1137/0117004"),
             "the widening command must be runnable as printed:
+{joined}"
+        );
+    }
+
+    /// #505 part 3, and the property the issue cares about most: the ranking
+    /// is an ORDERING OF THE FULL LIST, never a shortlist.
+    ///
+    /// > a ranking that is wrong is worse than no ranking, because it makes
+    /// > people stop early.
+    ///
+    /// A source that is dropped from the list is a source the reader will not
+    /// try, so every unconsulted source must appear somewhere.
+    #[test]
+    fn the_ranking_lists_every_unconsulted_source_and_drops_none() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let disabled = |name: &'static str, env: &'static [&'static str]| {
+            SourceAttempt::new(name, AttemptOutcome::Disabled { env })
+        };
+        let attempts = vec![
+            SourceAttempt::new("crossref", AttemptOutcome::NoRecord),
+            disabled("core", &["DOIGET_ENABLE_CORE"]),
+            disabled("openalex", &["DOIGET_ENABLE_OPENALEX"]),
+            disabled("hal", &["DOIGET_ENABLE_HAL"]),
+            disabled("europe-pmc", &["DOIGET_ENABLE_EUROPE_PMC"]),
+        ];
+
+        let (first, middle, last) = rank_unconsulted(&attempts);
+        let mut all: Vec<&str> = first
+            .iter()
+            .chain(middle.iter())
+            .chain(last.iter())
+            .copied()
+            .collect();
+        all.sort_unstable();
+        assert_eq!(
+            all,
+            vec!["core", "europe-pmc", "hal", "openalex"],
+            "every source that was not consulted must appear, and only those"
+        );
+
+        // A consulted source contributes nothing: it already answered.
+        assert!(!all.contains(&"crossref"));
+
+        // The two positions that HAVE a signal.
+        assert_eq!(first, vec!["openalex"], "the lookup goes first");
+        assert_eq!(last, vec!["core"], "the broadest index goes last");
+        assert_eq!(middle, vec!["europe-pmc", "hal"]);
+    }
+
+    /// The rendered form must mark item 1 as categorically different and must
+    /// say the middle is unordered. Presenting a lookup and a guess in one
+    /// list without saying which is which is the failure mode #505 is about.
+    #[test]
+    fn the_rendered_ranking_says_which_part_is_a_guess() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let ref_ = Ref::parse("10.1137/0117004").expect("valid doi");
+        let attempts = vec![
+            SourceAttempt::new("crossref", AttemptOutcome::NoRecord),
+            SourceAttempt::new(
+                "openalex",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_OPENALEX"],
+                },
+            ),
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_HAL"],
+                },
+            ),
+            SourceAttempt::new(
+                "core",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_CORE"],
+                },
+            ),
+        ];
+        let joined = not_found_trace_lines(&ref_, &attempts).join(
+            "
+",
+        );
+
+        assert!(
+            joined.contains("a lookup, not a guess"),
+            "item 1 must be marked as categorically different:
+{joined}"
+        );
+        assert!(
+            joined.contains("NO particular order"),
+            "the middle must not read as an ordering:
+{joined}"
+        );
+        assert!(
+            joined.contains("An invented order would read as information"),
+            "and it must say WHY there is no order, which is the named signal:
+{joined}"
+        );
+        assert!(
+            joined.contains("never the first try"),
+            "core's position must carry its own reason:
+{joined}"
+        );
+    }
+
+    /// Nothing to rank when nothing was skipped, and the common path gains no
+    /// noise from a feature about the uncommon one.
+    #[test]
+    fn a_run_that_skipped_nothing_gets_no_ranking() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let ref_ = Ref::parse("10.1137/0117004").expect("valid doi");
+        let attempts = vec![SourceAttempt::new("crossref", AttemptOutcome::NoRecord)];
+        let joined = not_found_trace_lines(&ref_, &attempts).join(
+            "
+",
+        );
+        assert!(
+            !joined.contains("not consulted:"),
+            "no skipped sources means no ranking block:
 {joined}"
         );
     }
