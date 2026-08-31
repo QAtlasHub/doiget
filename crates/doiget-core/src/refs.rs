@@ -66,6 +66,28 @@ pub enum ParseError {
         /// The source bibliography's citation key, when known.
         entry_key: Option<String>,
     },
+    /// The entry DOES carry an identifier, and it is one doiget recognises
+    /// and cannot resolve yet (#500).
+    ///
+    /// Distinct from [`Self::NoIdentifier`] because the two send a reader in
+    /// opposite directions. "entry has no DOI / arXiv id" is accurate about
+    /// what the parser did and wrong about the entry: a PubMed-exported
+    /// `.bib` record carrying `pmid = {9659853}` is not deficient, and a user
+    /// who believes it is will go and edit a bibliography that was fine. The
+    /// missing piece is on doiget's side.
+    ///
+    /// Surfaces as `NOT_IMPLEMENTED` rather than `INVALID_REF`: the input is
+    /// valid and the support is absent, and the two carry different advice --
+    /// "wait for a release" versus "correct your input" (ADR-0055).
+    #[error("entry {entry_key:?} is identified only by {kind} {value:?}, which doiget cannot resolve yet (issue #500) -- it is NOT missing an identifier")]
+    UnsupportedIdentifier {
+        /// Human-facing name of the identifier class, e.g. `"PMID"`.
+        kind: &'static str,
+        /// The identifier as written in the entry.
+        value: String,
+        /// The source bibliography's citation key, when known.
+        entry_key: Option<String>,
+    },
     /// The identifier was present but `Ref::parse` rejected it
     /// (malformed DOI suffix, invalid arXiv id shape, etc.).
     #[error(
@@ -423,7 +445,51 @@ fn parse_bibtex_entry(
             };
         }
     }
+    // #500: before reporting "no identifier", check for one doiget simply
+    // does not support. Saying "no DOI / arXiv id" about an entry that
+    // carries a PMID is accurate about the parser and wrong about the entry.
+    if let Some((kind, value)) = unsupported_identifier(entry) {
+        return Err(ParseError::UnsupportedIdentifier {
+            kind,
+            value,
+            entry_key,
+        });
+    }
     Err(ParseError::NoIdentifier { entry_key })
+}
+
+/// An identifier doiget recognises but cannot resolve yet (#500).
+///
+/// Only classes doiget can *name*. An entry carrying some field this does not
+/// know about still reports [`ParseError::NoIdentifier`], which stays correct
+/// for it: the point is not to guess, it is to stop saying "no identifier"
+/// about the cases where there demonstrably is one.
+///
+/// `pmid = {...}` is what PubMed's own BibTeX export writes. The BibLaTeX
+/// shape is `eprint = {...}` with `eprinttype = {pubmed}`, which
+/// [`arxiv_eligible`] already refuses -- correctly, and until now silently.
+fn unsupported_identifier(entry: &biblatex::Entry) -> Option<(&'static str, String)> {
+    let field = |name: &str| -> Option<String> {
+        let v = entry.get(name)?.format_verbatim().trim().to_string();
+        (!v.is_empty()).then_some(v)
+    };
+
+    if let Some(v) = field("pmid") {
+        return Some(("PMID", v));
+    }
+    if let Some(v) = field("pmcid") {
+        return Some(("PMCID", v));
+    }
+    let names_pubmed = entry
+        .get("archiveprefix")
+        .or_else(|| entry.get("eprinttype"))
+        .is_some_and(|c| c.format_verbatim().to_ascii_lowercase().contains("pubmed"));
+    if names_pubmed {
+        if let Some(v) = field("eprint") {
+            return Some(("PMID", v));
+        }
+    }
+    None
 }
 
 /// Whether an `eprint` field should be interpreted as an arXiv id.
@@ -449,6 +515,94 @@ mod tests {
     use super::*;
 
     // ---- detect_format ---------------------------------------------
+
+    /// #500: the entry from PubMed's own BibTeX export. It carries `pmid`,
+    /// and reporting "entry has no DOI / arXiv id" about it is accurate about
+    /// the parser and wrong about the entry -- a user who believes it goes and
+    /// edits a bibliography that was fine.
+    ///
+    /// The PMID is real: `9659853` is Coryell 1998, whose DOI
+    /// `10.1176/ajp.155.7.895` NCBI's own esummary returns for it.
+    #[test]
+    fn a_pubmed_only_entry_says_it_has_a_pmid_not_that_it_has_nothing() {
+        let bib = r#"@article{coryell1998,
+  title = {Lithium discontinuation and subsequent effectiveness},
+  author = {Coryell, William},
+  year = {1998},
+  pmid = {9659853},
+}"#;
+        let out = parse_bibtex(bib);
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            Err(ParseError::UnsupportedIdentifier {
+                kind,
+                value,
+                entry_key,
+            }) => {
+                assert_eq!(kind, &"PMID");
+                assert_eq!(value, "9659853");
+                assert_eq!(entry_key.as_deref(), Some("coryell1998"));
+                let msg = out[0].as_ref().unwrap_err().to_string();
+                assert!(
+                    msg.contains("NOT missing an identifier"),
+                    "the message has to contradict the wrong conclusion                      explicitly, or the reader draws it anyway: {msg}"
+                );
+            }
+            other => panic!("expected UnsupportedIdentifier, got {other:?}"),
+        }
+    }
+
+    /// The BibLaTeX shape. `arxiv_eligible` already refused this -- correctly,
+    /// and until now silently, which is the whole complaint.
+    #[test]
+    fn the_biblatex_eprinttype_pubmed_shape_is_recognised_too() {
+        let bib = r#"@article{e,
+  title = {T},
+  eprint = {9659853},
+  eprinttype = {pubmed},
+}"#;
+        let out = parse_bibtex(bib);
+        assert!(
+            matches!(
+                &out[0],
+                Err(ParseError::UnsupportedIdentifier { kind: "PMID", .. })
+            ),
+            "got {:?}",
+            out[0]
+        );
+    }
+
+    /// An entry with genuinely nothing still reports `NoIdentifier`. The point
+    /// is not to relabel every failure -- it is to stop saying "no identifier"
+    /// about the cases where there demonstrably is one.
+    #[test]
+    fn an_entry_with_no_identifier_at_all_is_unchanged() {
+        let bib = "@article{x,
+  title = {T},
+  year = {2020},
+}";
+        let out = parse_bibtex(bib);
+        assert!(
+            matches!(&out[0], Err(ParseError::NoIdentifier { .. })),
+            "got {:?}",
+            out[0]
+        );
+    }
+
+    /// A DOI still wins. The new check runs only after every supported
+    /// identifier has been tried, so adding it cannot divert an entry doiget
+    /// could actually have resolved.
+    #[test]
+    fn a_doi_alongside_a_pmid_still_resolves() {
+        let bib = r#"@article{both,
+  title = {T},
+  doi = {10.1176/ajp.155.7.895},
+  pmid = {9659853},
+}"#;
+        let out = parse_bibtex(bib);
+        let parsed = out[0].as_ref().expect("the DOI must still win");
+        assert_eq!(parsed.ref_.as_input_str(), "10.1176/ajp.155.7.895");
+    }
 
     #[test]
     fn detect_by_bib_extension() {
@@ -703,12 +857,20 @@ doi:10.1234/foo
     }
 
     #[test]
-    fn bibtex_non_arxiv_eprinttype_is_skipped() {
-        // eprinttype names a different server → not an arXiv id, and
-        // there is no DOI, so the entry has no resolvable identifier.
+    fn bibtex_non_arxiv_eprinttype_reports_the_identifier_it_found() {
+        // This test used to assert `NoIdentifier`, with the comment "the entry
+        // has no resolvable identifier". The entry has a PMID. It is not
+        // resolvable BY DOIGET, which is a different statement, and the one
+        // #500 is about -- so the test was pinning the wrong claim.
         let body = "@article{x, eprint = {12345678}, eprinttype = {pubmed}}";
         let res = parse_bibtex(body).into_iter().next().unwrap();
-        assert!(matches!(res, Err(ParseError::NoIdentifier { .. })));
+        match res {
+            Err(ParseError::UnsupportedIdentifier { kind, value, .. }) => {
+                assert_eq!(kind, "PMID");
+                assert_eq!(value, "12345678");
+            }
+            other => panic!("expected UnsupportedIdentifier, got {other:?}"),
+        }
     }
 
     #[test]

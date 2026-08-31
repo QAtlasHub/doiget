@@ -208,6 +208,33 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[bib]** A PubMed-exported bibliography entry was reported as having **no
+  identifier**. It has a PMID (#500).
+
+  `entry has no DOI / arXiv id` is accurate about what the parser did and wrong
+  about the entry. A user reading it goes and edits a `.bib` that was fine; the
+  missing piece is on doiget's side. An existing test pinned exactly that claim,
+  with the comment "the entry has no resolvable identifier" - about an entry
+  carrying `eprinttype = {pubmed}`.
+
+  Both PubMed shapes are now named: the `pmid = {...}` field that PubMed's own
+  BibTeX export writes, and the BibLaTeX `eprint` + `eprinttype = {pubmed}` pair
+  that `arxiv_eligible` already refused, correctly and until now silently.
+  `pmcid` too.
+
+  It surfaces as **`NOT_IMPLEMENTED`, not `INVALID_REF`** - the input is valid
+  and the support is absent, and the two carry opposite advice ("wait for a
+  release" versus "correct your input"). Its disposition is `terminal`
+  accordingly (ADR-0055).
+
+  An entry with genuinely no identifier still reports `NoIdentifier`, and a DOI
+  alongside a PMID still wins: the check runs only after every supported
+  identifier has been tried, so it cannot divert an entry doiget could have
+  resolved.
+
+  This is the reporting half of #500. `Ref::Pmid` itself is blocked on something
+  the issue did not anticipate - see below.
+
 - **[mcp]** `error.disposition` was **missing from five failure envelopes**,
   including the two most common failures an agent sees. The change that
   introduced it converted the envelopes built by `error_object` and missed the

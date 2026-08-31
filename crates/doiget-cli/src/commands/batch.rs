@@ -121,6 +121,20 @@ pub async fn run_with_options(
         match entry {
             Ok(p) => inputs.push(p.ref_.as_input_str().to_string()),
             Err(ParseError::InvalidRef { raw, .. }) => inputs.push(raw),
+            // #500: a distinct placeholder, so the JSONL line says the entry
+            // HAS an identifier doiget cannot use rather than implying it has
+            // none. Same mechanism as the arm below; different claim.
+            Err(ParseError::UnsupportedIdentifier {
+                kind,
+                value,
+                entry_key,
+            }) => {
+                let placeholder = match entry_key {
+                    Some(k) => format!("<unsupported-{kind}:{value}:{k}>"),
+                    None => format!("<unsupported-{kind}:{value}>"),
+                };
+                inputs.push(placeholder);
+            }
             Err(ParseError::NoIdentifier { entry_key }) => {
                 // Synthesise a recognisable placeholder so Step 7's
                 // `Ref::parse` rejects this entry as `INVALID_REF`

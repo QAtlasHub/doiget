@@ -267,6 +267,27 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                     "error": { "code": "INVALID_REF", "message": source.to_string() },
                 }),
             ),
+            // #500: still unverifiable, but for a reason the reader can act on
+            // -- and the action is not "fix the bibliography".
+            Err(ParseError::UnsupportedIdentifier {
+                kind,
+                value,
+                entry_key,
+            }) => (
+                VerifyStatus::Unverifiable,
+                serde_json::json!({
+                    "ok": false,
+                    "ref": serde_json::Value::Null,
+                    "status": VerifyStatus::Unverifiable.as_wire(),
+                    "entry_key": entry_key,
+                    "error": {
+                        "code": "NOT_IMPLEMENTED",
+                        "message": format!(
+                            "entry is identified only by {kind} {value:?}, which doiget                              cannot resolve yet (issue #500); it is NOT missing an identifier"
+                        ),
+                    },
+                }),
+            ),
             Err(ParseError::NoIdentifier { entry_key }) => (
                 VerifyStatus::Unverifiable,
                 serde_json::json!({

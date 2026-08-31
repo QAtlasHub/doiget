@@ -980,6 +980,33 @@ impl Server {
                         "error": error_object(ErrorCode::InvalidRef, source.to_string()),
                     }));
                 }
+                // #500: NOT_IMPLEMENTED, not INVALID_REF. The entry is fine;
+                // doiget is what is missing, and the two codes carry opposite
+                // advice -- "wait for a release" versus "correct your input".
+                // Without this arm it fell into the wildcard below and became
+                // "unhandled bibliography parse error", losing the identifier
+                // it had just identified.
+                Err(doiget_core::refs::ParseError::UnsupportedIdentifier {
+                    kind,
+                    value,
+                    entry_key,
+                }) => {
+                    let msg = format!(
+                        "entry is identified only by {kind} {value:?}, which doiget                          cannot resolve yet (issue #500); it is NOT missing an identifier"
+                    );
+                    if input.strict {
+                        return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                            ErrorCode::NotImplemented,
+                            &format!("{msg} (strict mode aborts)"),
+                        )));
+                    }
+                    parse_errors.push(json!({
+                        "entry_key": entry_key,
+                        "ref":       Value::Null,
+                        "ok":        false,
+                        "error": error_object(ErrorCode::NotImplemented, msg),
+                    }));
+                }
                 Err(doiget_core::refs::ParseError::NoIdentifier { entry_key }) => {
                     if input.strict {
                         return Ok(CallToolResult::structured(batch_fetch_error_envelope(
