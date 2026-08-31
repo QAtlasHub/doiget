@@ -255,6 +255,66 @@ pub fn open_access_pdf_url(record: &serde_json::Value) -> Option<&str> {
         })
 }
 
+/// What OpenAlex actually said about where this work lives, for the case
+/// where [`open_access_pdf_url`] found nothing usable (#547).
+///
+/// That function needs `is_oa == true` AND a non-empty `pdf_url`, and a
+/// location can fail both while still being a real repository copy. The
+/// reported DOI has two locations, the second of which IS the institutional
+/// deposit -- but its `landing_page_url` is an author-listing page
+/// (`/view/author/70486.html`), not an item, and `is_oa` is `false`. So the
+/// extractor correctly returns `None`, the run reports "no OA PDF available",
+/// and the fact that a repository was NAMED goes nowhere.
+///
+/// "OpenAlex named 1 repository location; its URL is not an item page" points
+/// the reader at the repository. "no OA PDF available" points them at giving
+/// up. Returns `None` when there is nothing to say.
+#[must_use]
+pub fn describe_locations(record: &serde_json::Value) -> Option<String> {
+    let locations = record
+        .get("locations")
+        .and_then(serde_json::Value::as_array)?;
+    if locations.is_empty() {
+        return None;
+    }
+
+    let mut oa = 0usize;
+    let mut with_pdf = 0usize;
+    let mut named: Vec<&str> = Vec::new();
+    for loc in locations {
+        if loc.get("is_oa").and_then(serde_json::Value::as_bool) == Some(true) {
+            oa += 1;
+        }
+        if loc
+            .get("pdf_url")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|u| !u.is_empty())
+        {
+            with_pdf += 1;
+        }
+        if let Some(host) = loc
+            .get("source")
+            .and_then(|s| s.get("display_name"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            if !named.contains(&host) {
+                named.push(host);
+            }
+        }
+    }
+
+    let hosts = if named.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", named.join("; "))
+    };
+    Some(format!(
+        "openalex named {} location(s){hosts}: {oa} flagged open access,          {with_pdf} with a PDF URL. A location without a PDF URL may still be          a real deposit whose landing page is not an item page",
+        locations.len()
+    ))
+}
+
 fn truncate_for_hint(body: &[u8]) -> String {
     const MAX: usize = 200;
     let s = String::from_utf8_lossy(body);
@@ -272,6 +332,74 @@ fn truncate_for_hint(body: &[u8]) -> String {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
+
+    /// #547, with the shape the report measured for `10.1109/tsp.2023.3269664`.
+    ///
+    /// Two locations. The second IS the Strathprints deposit -- and it has no
+    /// `pdf_url`, `is_oa: false`, and a `landing_page_url` pointing at an
+    /// author-listing page rather than an item. `open_access_pdf_url`
+    /// correctly returns `None`; the run then reported `no OA PDF available`,
+    /// which is a different claim from what OpenAlex actually said.
+    #[test]
+    fn a_named_but_unusable_location_is_described_rather_than_dropped() {
+        let record = serde_json::json!({
+            "locations": [
+                {
+                    "is_oa": false,
+                    "pdf_url": serde_json::Value::Null,
+                    "landing_page_url": "https://doi.org/10.1109/tsp.2023.3269664",
+                    "source": { "display_name": "IEEE Transactions on Signal Processing" }
+                },
+                {
+                    "is_oa": false,
+                    "pdf_url": serde_json::Value::Null,
+                    "landing_page_url": "https://strathprints.strath.ac.uk/view/author/70486.html",
+                    "source": { "display_name": "Strathprints: The University of Strathclyde" }
+                }
+            ]
+        });
+
+        assert!(
+            open_access_pdf_url(&record).is_none(),
+            "premise: the extractor still finds nothing followable"
+        );
+
+        let d = describe_locations(&record).expect("locations were named");
+        assert!(d.contains("2 location"), "says how many: {d}");
+        assert!(
+            d.contains("Strathprints"),
+            "NAMES the repository, which is what the reader can act on: {d}"
+        );
+        assert!(
+            d.contains("0 with a PDF URL"),
+            "and why none was followed: {d}"
+        );
+    }
+
+    /// The control from the report: a proper item PDF URL at the same
+    /// repository still resolves, so this describes a gap rather than
+    /// papering over one.
+    #[test]
+    fn a_usable_location_still_resolves_and_needs_no_description() {
+        let record = serde_json::json!({
+            "locations": [{
+                "is_oa": true,
+                "pdf_url": "https://strathprints.strath.ac.uk/91130/7/Khattak-etal.pdf",
+                "source": { "display_name": "Strathprints: The University of Strathclyde" }
+            }]
+        });
+        assert_eq!(
+            open_access_pdf_url(&record),
+            Some("https://strathprints.strath.ac.uk/91130/7/Khattak-etal.pdf")
+        );
+    }
+
+    /// Nothing to say when nothing was named.
+    #[test]
+    fn no_locations_means_no_description() {
+        assert!(describe_locations(&serde_json::json!({})).is_none());
+        assert!(describe_locations(&serde_json::json!({"locations": []})).is_none());
+    }
     use super::*;
 
     use std::sync::Arc;
