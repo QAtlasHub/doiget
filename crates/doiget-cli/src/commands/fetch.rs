@@ -1388,7 +1388,7 @@ fn not_found_trace_lines(ref_: &Ref, attempts: &[SourceAttempt]) -> Vec<String> 
 
     if !already_set.is_empty() {
         out.push(format!(
-            "  = note: {} already set, but the source is still off -- this              binary was built without the Cargo feature that provides it.              Widening needs a differently-built binary, not another variable.",
+            "  = note: {} already set, but the source is still off -- this binary was built without the Cargo feature that provides it. Widening needs a differently-built binary, not another variable.",
             already_set.join(", ")
         ));
     }
@@ -1419,7 +1419,7 @@ fn not_found_trace_lines(ref_: &Ref, attempts: &[SourceAttempt]) -> Vec<String> 
         // reading as an ordering it is not.
         if !middle.is_empty() {
             out.push(
-                "  = note: the middle is unordered because nothing in this run distinguishes                  those sources -- venue, affiliation and funder would, and none of them reach                  here. An invented order would read as information."
+                "  = note: the middle is unordered because nothing in this run distinguishes those sources -- venue, affiliation and funder would, and none of them reach here. An invented order would read as information."
                     .to_string(),
             );
         }
