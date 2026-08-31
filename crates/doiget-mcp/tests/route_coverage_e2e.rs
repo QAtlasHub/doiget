@@ -92,9 +92,21 @@ fn tests_dir() -> Utf8PathBuf {
     Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests")
 }
 
-/// A claim of coverage must name a test that exists and that mentions the
-/// route. Without this the registry decays into a list of intentions: the
-/// covering test can be renamed or its assertion deleted, and nothing notices.
+/// A claim of coverage must name a test that exists, is NOT `#[ignore]`d, and
+/// asserts the route INSIDE ITS OWN BODY.
+///
+/// The first version was two whole-file string searches: does the file
+/// contain the test's name, and does the file contain the route string
+/// anywhere. Review pointed out that both are satisfiable without the claim
+/// being true -- a comment mentioning the function, plus some unrelated test
+/// in the same file containing the literal -- and, worse, that it had no
+/// concept of `#[ignore]`. A `By` entry pointing at an ignored test would
+/// have passed while CI ran nothing.
+///
+/// That is the same "correct component that nothing reaches" shape this file
+/// exists to catch, reproduced inside the mechanism meant to catch it. So it
+/// now extracts the named function's body and looks only there, and refuses a
+/// covering test that CI skips.
 #[test]
 fn every_claimed_covering_test_exists_and_asserts_its_route() {
     let mut problems = Vec::new();
@@ -107,13 +119,30 @@ fn every_claimed_covering_test_exists_and_asserts_its_route() {
             problems.push(format!("{route}: {file} does not exist"));
             continue;
         };
-        if !src.contains(test_fn) {
-            problems.push(format!("{route}: {file} has no `{test_fn}`"));
+
+        // The definition, not a mention of the name in prose.
+        let Some(def) = src.find(&format!("fn {test_fn}(")) else {
+            problems.push(format!("{route}: {file} defines no `fn {test_fn}`"));
+            continue;
+        };
+
+        // Attributes sit immediately above the fn line. Walk back over the
+        // contiguous attribute block and refuse `#[ignore]`: a test CI does
+        // not run cannot be evidence that a route is covered.
+        let line_start = src[..def].rfind('\n').map_or(0, |i| i + 1);
+        let attrs_from = src[..line_start].rfind("\n\n").map_or(0, |i| i + 2);
+        if src[attrs_from..line_start].contains("#[ignore") {
+            problems.push(format!(
+                "{route}: `{test_fn}` is #[ignore]d, so CI never runs it -- that is a                  Gap with a reason, not coverage"
+            ));
             continue;
         }
-        if !src.contains(&format!("\"{route}\"")) {
+
+        // The body only. A line that is exactly `}` ends a top-level fn.
+        let body_end = src[def..].find("\n}\n").map_or(src.len(), |i| def + i);
+        if !src[def..body_end].contains(&format!("\"{route}\"")) {
             problems.push(format!(
-                "{route}: {file} names `{test_fn}` but never asserts the string \"{route}\""
+                "{route}: `{test_fn}` never asserts the string \"{route}\" in its own body"
             ));
         }
     }

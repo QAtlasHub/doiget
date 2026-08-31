@@ -631,6 +631,22 @@ mod tests {
         assert_eq!(Confidence::from_score(0.9999), Confidence::Exact);
     }
 
+    /// A value that is not a token-overlap ratio gets the lowest band, not a
+    /// confident-looking one. `from_score` is public on a semver-strict crate
+    /// and its only caller's floor (`MIN_CITATION_SCORE`) is private to this
+    /// file, so the guard has to live in the function, not in the caller.
+    #[test]
+    fn a_score_outside_the_ratio_range_is_never_confident() {
+        use crate::Confidence;
+        for bad in [-5.0, 1.5, 50.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                Confidence::from_score(bad),
+                Confidence::Weak,
+                "{bad} is not a ratio and must not band as a match"
+            );
+        }
+    }
+
     /// The bands must stay ordered with the score they band, or the enum says
     /// something the number contradicts.
     #[test]

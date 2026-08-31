@@ -294,6 +294,43 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[review]** A six-agent review of the 0.8.13 promotion found eleven defects,
+  and most of them were the same class the release is about: **a statement that
+  was accurate about the mechanism and wrong about the world.** Fixed here.
+
+  - `oa_url` was documented as "always null unless `include_oa_location` is
+    set". **False.** The pre-existing Crossref-failure fallback fills it from
+    Unpaywall regardless of the flag. `source` distinguishes the two.
+  - `AttemptOutcome::NotOpenAccess` could assert the **opposite** of what
+    OpenAlex reported: a location with `is_oa: true` and no `pdf_url` was
+    labelled "not open access" on the machine-readable token, with the
+    contradicting evidence buried in prose. Now only when nothing was flagged
+    open.
+  - The "line to paste" rendered every widening variable as `VAR=1`, producing
+    `DOIGET_KEY_APS=1` - an API key that can never be valid.
+  - `docs/ERRORS.md` claimed `disposition` is **ALWAYS** present. Four tools
+    (`resolve_citation`, `batch_resolve_citations`, `tag`, `annotate`) put a
+    bare string in `error`. The claim now names its real scope.
+  - #507's bookend fix landed on the CLI and not on `doiget_fetch_paper`, so
+    the MCP path logged a blocked PDF leg as a clean, error-free success.
+  - `fetch_paper_fetch_error_envelope` hand-rolled a copy of
+    `From<&FetchError> for ErrorCode` ending in `_ => InternalError`, so a
+    mistyped DOI reported `INTERNAL_ERROR` instead of `NOT_FOUND`. It
+    delegates now.
+  - The #462 route registry's own self-check could be satisfied without the
+    claim being true, and had **no concept of `#[ignore]`** - a covering test
+    CI never runs would have counted. It now reads the named function's body
+    and refuses a skipped test. The guard had the bug it was built to catch.
+  - `Confidence::from_score` accepted any `f64` and answered confidently;
+    `europepmc`'s `NotRetrievable` carried `source_key: "europepmc"` against a
+    `Source::name()` of `"europe-pmc"`; `blocked_trace_lines` lost its doc
+    comment to a function inserted above it; ADR-0055 listed as "not in scope"
+    something the same cycle shipped; user-facing strings carried runs of
+    joined-line whitespace.
+
+  Also: `disposition` was inserted at six envelope sites and asserted at two -
+  deleting one insert failed no test. The batch site now asserts it.
+
 - **[mcp]** `error.disposition` was **missing from five failure envelopes**,
   including the two most common failures an agent sees. The change that
   introduced it converted the envelopes built by `error_object` and missed the

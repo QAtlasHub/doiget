@@ -490,6 +490,15 @@ async fn batch_fetch_partial_failure_emits_per_ref_outcomes() -> anyhow::Result<
         "transport per-ref error must surface denial_context (as null) per Slice 2 spec; got: {:?}",
         results[1],
     );
+    // #506: this envelope is one of the five assembled by hand, and review
+    // found `disposition` was inserted at six sites and asserted at two --
+    // deleting this one's insert failed no test. The error object is already
+    // in hand here, so the assertion costs nothing.
+    assert!(
+        results[1]["error"]["disposition"].is_string(),
+        "every failure envelope carries a disposition, including this one: {:?}",
+        results[1]["error"]
+    );
     assert!(
         results[1]["error"]["denial_context"].is_null(),
         "denial_context must be null for NETWORK_ERROR; got: {:?}",

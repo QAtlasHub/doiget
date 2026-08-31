@@ -187,7 +187,9 @@ impl Source for EuropePmcSource {
         // in the refusal because they are what a reader checks next.
         if open_access_pdf_url(record).is_none() {
             return Err(FetchError::NotRetrievable {
-                source_key: "europepmc".to_string(),
+                // Must match `Source::name()`, which is hyphenated; this said
+                // "europepmc" and only ever surfaced in a message string.
+                source_key: "europe-pmc".to_string(),
                 detail: format!(
                     "no \
                      fullTextUrlList entry has documentStyle = pdf with \
