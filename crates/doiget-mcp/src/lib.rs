@@ -3323,6 +3323,12 @@ fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value 
     // including the two most common failures an agent sees. A field that is
     // present on some failures and absent on others is worse than none.
     error_obj.insert("disposition".into(), json!(code.disposition().as_wire()));
+    // #506: only when the SERVER sent one. Absent otherwise rather than
+    // backfilled from our own backoff, which would be a guess wearing the
+    // name of a measurement.
+    if let Some(ms) = doiget_core::source::retry_after_ms(err) {
+        error_obj.insert("retry_after_ms".into(), json!(ms));
+    }
     if let Some(dc) = denial {
         // `DenialContext` is `Serialize` (`#[serde(deny_unknown_fields)]`,
         // optional fields) and `serde_json::to_value` cannot fail on a
@@ -3532,6 +3538,12 @@ fn fetch_paper_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value {
     // including the two most common failures an agent sees. A field that is
     // present on some failures and absent on others is worse than none.
     error_obj.insert("disposition".into(), json!(code.disposition().as_wire()));
+    // #506: only when the SERVER sent one. Absent otherwise rather than
+    // backfilled from our own backoff, which would be a guess wearing the
+    // name of a measurement.
+    if let Some(ms) = doiget_core::source::retry_after_ms(err) {
+        error_obj.insert("retry_after_ms".into(), json!(ms));
+    }
     if let Some(dc) = denial {
         error_obj.insert(
             "denial_context".into(),
@@ -3654,6 +3666,12 @@ fn build_bibliography_envelope(
                 // including the two most common failures an agent sees. A field that is
                 // present on some failures and absent on others is worse than none.
                 error_obj.insert("disposition".into(), json!(code.disposition().as_wire()));
+                // #506: only when the SERVER sent one. Absent otherwise rather than
+                // backfilled from our own backoff, which would be a guess wearing the
+                // name of a measurement.
+                if let Some(ms) = doiget_core::source::retry_after_ms(err) {
+                    error_obj.insert("retry_after_ms".into(), json!(ms));
+                }
                 if let Some(dc) = denial {
                     error_obj.insert(
                         "denial_context".into(),
@@ -3756,6 +3774,12 @@ fn batch_fetch_success_envelope(
                 // including the two most common failures an agent sees. A field that is
                 // present on some failures and absent on others is worse than none.
                 error_obj.insert("disposition".into(), json!(code.disposition().as_wire()));
+                // #506: only when the SERVER sent one. Absent otherwise rather than
+                // backfilled from our own backoff, which would be a guess wearing the
+                // name of a measurement.
+                if let Some(ms) = doiget_core::source::retry_after_ms(err) {
+                    error_obj.insert("retry_after_ms".into(), json!(ms));
+                }
                 if let Some(dc) = denial {
                     error_obj.insert(
                         "denial_context".into(),
