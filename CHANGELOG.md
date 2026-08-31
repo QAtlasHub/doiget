@@ -393,6 +393,23 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   This is the reporting half of #500. `Ref::Pmid` itself is blocked on something
   the issue did not anticipate - see below.
 
+  The sentence the user reads lives in one place now
+  (`refs::unsupported_identifier_claim`). It had been hand-copied to the CLI
+  `verify` row and the MCP `batch_from_bibliography` envelope, and both copies
+  had been wrapped across source lines and re-joined with the indentation still
+  in them - shipping `which doiget                cannot resolve yet` to a
+  reader. Nothing asserted the text, so nothing failed. `#[error]` already
+  carried the same claim; the copies existed only to drop the `entry_key`
+  prefix, which each site puts in a field of its own.
+
+  Three more of the same, pre-existing and found while looking: two `= note:`
+  lines in `fetch fetch`'s widening advice and the `config.toml could not be
+  read` warning in `commands/mod.rs`. A workspace-wide lint for the pattern was
+  written and abandoned - it flags `config doctor`'s aligned two-column output
+  and test assertion messages at every space threshold from four to ten, and a
+  lint that cries wolf is a lint that gets deleted. Removing the duplication is
+  the durable half.
+
 
 - **[mcp]** `error.disposition` was **missing from five failure envelopes**,
   including the two most common failures an agent sees. The change that

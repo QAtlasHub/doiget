@@ -282,8 +282,8 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                     "entry_key": entry_key,
                     "error": {
                         "code": "NOT_IMPLEMENTED",
-                        "message": format!(
-                            "entry is identified only by {kind} {value:?}, which doiget                              cannot resolve yet (issue #500); it is NOT missing an identifier"
+                        "message": doiget_core::refs::unsupported_identifier_claim(
+                            kind, &value,
                         ),
                     },
                 }),

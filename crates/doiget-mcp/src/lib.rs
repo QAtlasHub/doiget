@@ -1011,9 +1011,8 @@ impl Server {
                     value,
                     entry_key,
                 }) => {
-                    let msg = format!(
-                        "entry is identified only by {kind} {value:?}, which doiget                          cannot resolve yet (issue #500); it is NOT missing an identifier"
-                    );
+                    let msg =
+                        doiget_core::refs::unsupported_identifier_claim(kind, &value);
                     if input.strict {
                         return Ok(CallToolResult::structured(batch_fetch_error_envelope(
                             ErrorCode::NotImplemented,
@@ -4333,7 +4332,7 @@ fn store_root_from_config() -> Option<Utf8PathBuf> {
             tracing::warn!(
                 path = %path,
                 error = %e,
-                "config.toml could not be read; [store] root ignored and the default store                  root used instead"
+                "config.toml could not be read; [store] root ignored and the default store root used instead"
             );
             return None;
         }

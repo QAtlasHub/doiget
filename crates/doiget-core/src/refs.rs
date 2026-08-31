@@ -126,6 +126,19 @@ pub enum ParseError {
     },
 }
 
+/// The claim [`ParseError::UnsupportedIdentifier`] makes, without the
+/// `entry {entry_key:?}` prefix its `Display` carries.
+///
+/// Callers that put `entry_key` in a field of its own -- the CLI `verify`
+/// row and the MCP `batch_from_bibliography` envelope both do -- would
+/// otherwise say it twice. One definition rather than a copy at each site,
+/// because the copies drifted: two of the three carried a run of joined-line
+/// whitespace into user-facing output before anything asserted the text.
+#[must_use]
+pub fn unsupported_identifier_claim(kind: &str, value: &str) -> String {
+    format!("entry is identified only by {kind} {value:?}, which doiget cannot resolve yet (issue #500); it is NOT missing an identifier")
+}
+
 /// Input-shape discriminator per ADR-0030 D4.
 ///
 /// `Auto` means "detect from path extension and/or content
@@ -545,7 +558,7 @@ mod tests {
                 let msg = out[0].as_ref().unwrap_err().to_string();
                 assert!(
                     msg.contains("NOT missing an identifier"),
-                    "the message has to contradict the wrong conclusion                      explicitly, or the reader draws it anyway: {msg}"
+                    "the message has to contradict the wrong conclusion explicitly, or the reader draws it anyway: {msg}"
                 );
             }
             other => panic!("expected UnsupportedIdentifier, got {other:?}"),
@@ -985,5 +998,23 @@ doi:10.1234/foo
         assert_eq!(Format::Refs.as_wire(), "refs");
         assert_eq!(Format::CslJson.as_wire(), "csl-json");
         assert_eq!(Format::Bibtex.as_wire(), "bibtex");
+    }
+
+    #[test]
+    fn the_unsupported_identifier_claim_denies_the_wrong_reading() {
+        // #500's whole point: the sentence must put the gap on doiget's
+        // side. A reader who takes "no identifier" at face value goes and
+        // edits a `.bib` that was fine.
+        let msg = unsupported_identifier_claim("PMID", "9659853");
+        assert!(msg.contains("PMID"), "names the identifier kind: {msg}");
+        assert!(msg.contains("9659853"), "quotes the value: {msg}");
+        assert!(
+            msg.contains("NOT missing an identifier"),
+            "denies the wrong reading: {msg}"
+        );
+        assert!(msg.contains("#500"), "points at the issue: {msg}");
+        // The `entry_key` prefix belongs to `Display`, not here -- callers
+        // carry it in a field of its own and would say it twice.
+        assert!(!msg.starts_with("entry {"), "no entry_key prefix: {msg}");
     }
 }
