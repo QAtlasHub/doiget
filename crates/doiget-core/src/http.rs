@@ -684,6 +684,22 @@ pub enum HttpError {
         status: u16,
         /// The URL that produced the status.
         url: String,
+        /// The server's own `Retry-After`, in milliseconds, when it sent one
+        /// on the response that ended the attempt (#506).
+        ///
+        /// `parse_retry_after` already read this header, but only on the
+        /// retry path -- the terminal `return` discarded it, so by the time
+        /// the error reached a caller the number was gone and
+        /// `error.retry_after_ms` looked impossible to fill honestly. It is
+        /// not: the LAST response carries its own `Retry-After`, and that is
+        /// the one the caller should wait.
+        ///
+        /// `None` when the server sent no header. Deliberately not
+        /// substituted with `backoff_delay` -- doiget's internal backoff is a
+        /// guess about the server, and handing a caller a guess wearing the
+        /// name of a server-supplied value is the defect this field exists to
+        /// avoid.
+        retry_after_ms: Option<u64>,
     },
     /// No allowlist entry exists for this source. The caller asked
     /// [`HttpClient`] to fetch on behalf of a source that wasn't passed to
@@ -1147,6 +1163,10 @@ impl HttpClient {
                 }
                 return Err(HttpError::HttpStatus {
                     status: code,
+                    // Read from the response that ENDED the attempt, so it is
+                    // the server's number rather than ours (#506).
+                    retry_after_ms: parse_retry_after(response.headers())
+                        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
                     // Issue #146: Springer Nature authenticates via an
                     // `api_key` URL query parameter, and IEEE via
                     // `apikey` (#430) — neither documents a header
@@ -2611,6 +2631,7 @@ mod tests {
         // map to None per ADR-0023 §4.
         let e = HttpError::HttpStatus {
             status: 503,
+            retry_after_ms: None,
             url: "https://api.crossref.org/works/x".to_string(),
         };
         let dc: Option<DenialContext> = (&e).into();
@@ -2720,6 +2741,73 @@ mod tests {
             .await
             .expect("429+Retry-After then 200 must succeed");
         assert_eq!(&body[..], b"ok");
+    }
+
+    /// #506: the server's own `Retry-After` survives to the caller.
+    ///
+    /// `parse_retry_after` already read this header, but only on the RETRY
+    /// path -- the terminal `return` discarded it, so by the time the error
+    /// reached a caller the number was gone and `error.retry_after_ms` looked
+    /// impossible to fill honestly. It is not: the response that ends the
+    /// attempt carries its own header, and that is the one to wait.
+    #[tokio::test]
+    async fn a_terminal_429_carries_the_servers_retry_after() {
+        let server = MockServer::start().await;
+        // 429 on every attempt, so the retries are exhausted and the error is
+        // the terminal one -- the case that used to lose the header.
+        Mock::given(method("GET"))
+            .and(path("/p"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "7"))
+            .mount(&server)
+            .await;
+
+        let client = build_test_client_for_http("crossref", &host_of(&server));
+        let url: Url = format!("{}/p", server.uri()).parse().unwrap();
+        let err = client
+            .fetch_bytes("crossref", url)
+            .await
+            .expect_err("every attempt 429s");
+
+        match err {
+            HttpError::HttpStatus {
+                status,
+                retry_after_ms,
+                ..
+            } => {
+                assert_eq!(status, 429);
+                assert_eq!(
+                    retry_after_ms,
+                    Some(7_000),
+                    "the SERVER's number, in ms, not our backoff"
+                );
+            }
+            other => panic!("expected HttpStatus, got {other:?}"),
+        }
+    }
+
+    /// No header, no number. Backfilling from `backoff_delay` would hand the
+    /// caller a guess about the server wearing the name of a value the server
+    /// supplied -- the defect this field exists to avoid.
+    #[tokio::test]
+    async fn a_terminal_429_without_the_header_carries_no_number() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/p"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+
+        let client = build_test_client_for_http("crossref", &host_of(&server));
+        let url: Url = format!("{}/p", server.uri()).parse().unwrap();
+        let err = client
+            .fetch_bytes("crossref", url)
+            .await
+            .expect_err("every attempt 429s");
+
+        match err {
+            HttpError::HttpStatus { retry_after_ms, .. } => assert_eq!(retry_after_ms, None),
+            other => panic!("expected HttpStatus, got {other:?}"),
+        }
     }
 
     #[tokio::test]

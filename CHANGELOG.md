@@ -55,6 +55,25 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Added
 
+- **[mcp]** `error.retry_after_ms` - the server's own `Retry-After`, on the
+  failure envelope (#506).
+
+  I had deferred this on the grounds that no honest number survives to the
+  boundary: `Retry-After` is parsed by `parse_retry_after`, and the retries are
+  exhausted by the time an error surfaces. That was too pessimistic and worth
+  correcting. The header was read **only on the retry path**; the terminal
+  `return` discarded it. The response that *ends* the attempt carries its own
+  `Retry-After`, and that is exactly the one a caller should wait.
+
+  `HttpError::HttpStatus` carries it now, and the envelope surfaces it - but
+  **only when the server sent one**. It is never backfilled from doiget's
+  internal `backoff_delay`: that is a guess about the server, and a guess
+  wearing the name of a server-supplied value is the defect `disposition` and
+  this field exist to remove. Absent means absent.
+
+  Pairs with the disposition: `retry_after` says retry, and this says how long
+  the server asked you to wait first.
+
 - **[dist]** Homebrew. `#247` promised a tap in 2026-06 and was closed as
   completed; measured against 0.8.12 it was one of the rows that did not exist
   (#501).
