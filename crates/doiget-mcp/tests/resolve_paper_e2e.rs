@@ -624,6 +624,96 @@ async fn resolve_paper_leaves_oa_status_null_when_the_lookup_fails() -> anyhow::
 }
 
 // ---------------------------------------------------------------------------
+// 3c. #507 — the bookend records WHAT the call failed with
+// ---------------------------------------------------------------------------
+
+/// #507: the provenance log could say a call failed but not what it failed
+/// with, because every `SessionEnd` row carried `error_code: None`.
+///
+/// That is a gap in the audit trail on its own terms -- the log cannot answer
+/// "what did this session tell the caller about this ref?" -- and it is also
+/// what blocks the repeat suppression #507 asks for: the rule is "do not
+/// re-fetch a prior `terminal` or `needs_config` answer", and a disposition
+/// cannot be recovered from a row with no code.
+#[tokio::test]
+#[serial_test::serial]
+async fn a_failed_call_records_its_terminal_code_on_the_bookend() -> anyhow::Result<()> {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // Crossref and Unpaywall both answer 404, so the DOI resolves nowhere and
+    // the call ends as NOT_FOUND.
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&upstream)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let log_path = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .join("mcp-bookend.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_CROSSREF_BASE", &upstream.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", upstream.uri()));
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_CONTACT_EMAIL", "test@example.org");
+    env.set(
+        "DOIGET_STORE_ROOT",
+        td.path().to_str().expect("utf-8 tempdir"),
+    );
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/absent"));
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_resolve_paper").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_resolve_paper uses CallToolResult::structured");
+    assert_eq!(
+        structured["ok"],
+        serde_json::json!(false),
+        "premise: the call fails: {structured:?}"
+    );
+    let reported = structured["error"]["code"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+
+    client.cancel().await?;
+    server_handle.await??;
+
+    let raw = std::fs::read_to_string(&log_path).expect("read the provenance log");
+    let bookend = raw
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find(|r| r["event"] == "session_end")
+        .expect("a SessionEnd row was written");
+
+    assert_eq!(
+        bookend["result"],
+        serde_json::json!("err"),
+        "row: {bookend}"
+    );
+    assert_eq!(
+        bookend["error_code"].as_str().unwrap_or_default(),
+        reported,
+        "the row must record the code the CALLER was given, not null: {bookend}"
+    );
+    assert_eq!(bookend["ref"], serde_json::json!("10.1234/absent"));
+
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // 4. dry_run field rejection
 // ---------------------------------------------------------------------------
 

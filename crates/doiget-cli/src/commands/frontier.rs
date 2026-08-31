@@ -81,7 +81,11 @@ pub async fn run(
     };
 
     let outcome = frontier_view(&query, &base, &contact_email, &ctx).await;
-    harness.log_session_end(outcome.is_ok(), Some(&doi_str));
+    harness.log_session_end(
+        outcome.is_ok(),
+        Some(&doi_str),
+        outcome.as_ref().err().map(|e| ErrorCode::from(e).as_wire()),
+    );
 
     let mut results = match outcome {
         Ok(r) => r,

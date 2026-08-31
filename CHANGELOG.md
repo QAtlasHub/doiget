@@ -208,6 +208,35 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[provenance]** A `session_end` row recorded **that** a call failed and not
+  **what** it failed with: every one carried `error_code: null`, including the
+  rows that carry a `ref`. So the log could not answer "what did this session
+  tell the caller about this ref?" - only "something went wrong" (#507).
+
+  That is a gap in the audit trail on its own terms. It is also what blocks the
+  repeat suppression #507 asks for: the rule is "do not re-fetch a prior
+  `terminal` or `needs_config` answer", and a disposition (ADR-0055) cannot be
+  recovered from a row with no code. Measured before building anything - the
+  only per-`ref` `fetch`/`err` rows carry `NETWORK_ERROR`, whose disposition is
+  correctly `retry_after`, so a suppression guard written against today's log
+  fires on nothing at all.
+
+  The bookend now records the code the caller was given. For `doiget fetch`
+  that is deliberately **not** always the `Result`'s: a blocked PDF leg is `Ok`
+  with a failed leg and an unclean session, and it is the outcome an agent is
+  most likely to retry, so the leg's closed-set code is recorded rather than
+  `null`. `doiget graph` gains an exhaustive `GraphError` -> `ErrorCode`
+  mapping placed next to the `map_err` that renders it, so the row and the
+  message cannot disagree. A batch bookend spans many refs and still records
+  `null`, because there is no single code; the per-ref rows carry those.
+
+  `docs/PROVENANCE_LOG.md` §3 gains the `error_code` row it never had, and
+  states the layering explicitly: a failed `fetch` leg records the **transport**
+  mechanism (`NETWORK_ERROR` for a policy block, per `ERRORS.md` §6.1) while
+  `session_end` records the code the caller saw, after reclassification. The two
+  rows for one blocked fetch legitimately differ, and each is true about its own
+  layer.
+
 - **[fetch]** When OpenAlex named a repository copy that could not be followed, the
   run said `no OA PDF available` - a different claim from what OpenAlex actually
   reported (#547).

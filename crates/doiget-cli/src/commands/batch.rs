@@ -383,7 +383,9 @@ pub async fn run_with_options(
 
     // Step 9: SessionEnd, always. Failure to append is best-effort; the
     // caller already has whatever per-ref errors were observed.
-    harness.log_session_end(all_ok, None);
+    // A batch bookend spans many refs, so there is no single terminal
+    // code to record; the per-ref rows carry those.
+    harness.log_session_end(all_ok, None, None);
 
     // Step 10: stderr summary. ADR-0001: success / progress lines go to
     // stderr; the workspace `print_stderr` lint is `warn`, promoted to deny
