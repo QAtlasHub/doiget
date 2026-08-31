@@ -367,7 +367,11 @@ mod tests {
             "premise: the extractor still finds nothing followable"
         );
 
-        let d = describe_locations(&record).expect("locations were named");
+        let (oa, d) = describe_locations(&record).expect("locations were named");
+        assert_eq!(
+            oa, 0,
+            "the caller reclassifies to NotOpenAccess only when this is 0, so it              is part of the contract, not a detail"
+        );
         assert!(d.contains("2 location"), "says how many: {d}");
         assert!(
             d.contains("Strathprints"),
@@ -394,6 +398,30 @@ mod tests {
         assert_eq!(
             open_access_pdf_url(&record),
             Some("https://strathprints.strath.ac.uk/91130/7/Khattak-etal.pdf")
+        );
+    }
+
+    /// A location OpenAlex flagged OPEN, with no followable URL, must not be
+    /// reported as "not open access" -- the count is what stops the caller
+    /// asserting the opposite of what the source said.
+    #[test]
+    fn an_open_location_without_a_pdf_url_is_counted_as_open() {
+        let record = serde_json::json!({
+            "locations": [{
+                "is_oa": true,
+                "pdf_url": serde_json::Value::Null,
+                "landing_page_url": "https://repo.example/view/author/1.html",
+                "source": { "display_name": "Some Repository" }
+            }]
+        });
+        assert!(
+            open_access_pdf_url(&record).is_none(),
+            "premise: still nothing followable"
+        );
+        let (oa, d) = describe_locations(&record).expect("a location was named");
+        assert_eq!(
+            oa, 1,
+            "OpenAlex said this is open; labelling it `NotOpenAccess` would              assert the opposite on the machine-readable token: {d}"
         );
     }
 

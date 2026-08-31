@@ -36,15 +36,6 @@ use doiget_core::{ErrorCode, Ref};
 use super::fetch::{cli_exit_code, CliExit, FetchHarness};
 use super::output::print_err;
 
-/// Run the `graph` subcommand against the live source set.
-///
-/// `input` is the user-supplied ref string (DOI only — arXiv ids are
-/// rejected because OpenAlex's `referenced_works` field is keyed on
-/// DOI-derived Work IDs).
-///
-/// `depth` / `total` / `per_paper` are optional caller hints; each
-/// is clamped to the ADR-0010 maximum (3 / 100 / 20). Passing `None`
-/// uses the maximum.
 /// The closed-set code a `GraphError` is reported as (#507).
 ///
 /// The `map_err` below already decides this per variant, but it does so while
@@ -55,14 +46,29 @@ fn graph_error_code(e: &GraphError) -> ErrorCode {
     match e {
         GraphError::CapabilityDenied => ErrorCode::CapabilityDenied,
         // An indexing gap upstream: the seed is a valid DOI that OpenAlex does
-        // not hold, which is `NOT_FOUND` and not a misuse of the command.
-        GraphError::SeedNotIndexed => ErrorCode::NotFound,
+        // not hold. `NO_OA_AVAILABLE`, matching what the MCP tool has always
+        // reported for the same condition -- I wrote `NOT_FOUND` here without
+        // checking the sibling surface, which would have had the two disagree
+        // about one error.
+        GraphError::SeedNotIndexed => ErrorCode::NoOaAvailable,
         // These two already own a mapping; reuse it rather than restate it.
         GraphError::Source(fe) => ErrorCode::from(fe),
         GraphError::Log(_) => ErrorCode::LogError,
+        // `GraphError` is `#[non_exhaustive]`, so a wildcard is required from
+        // this crate. Kept last and explicit rather than implied.
+        _ => ErrorCode::InternalError,
     }
 }
 
+/// Run the `graph` subcommand against the live source set.
+///
+/// `input` is the user-supplied ref string (DOI only — arXiv ids are
+/// rejected because OpenAlex's `referenced_works` field is keyed on
+/// DOI-derived Work IDs).
+///
+/// `depth` / `total` / `per_paper` are optional caller hints; each
+/// is clamped to the ADR-0010 maximum (3 / 100 / 20). Passing `None`
+/// uses the maximum.
 pub async fn run(
     input: String,
     depth: Option<u32>,
