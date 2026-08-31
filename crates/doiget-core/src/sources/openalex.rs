@@ -270,7 +270,7 @@ pub fn open_access_pdf_url(record: &serde_json::Value) -> Option<&str> {
 /// the reader at the repository. "no OA PDF available" points them at giving
 /// up. Returns `None` when there is nothing to say.
 #[must_use]
-pub fn describe_locations(record: &serde_json::Value) -> Option<String> {
+pub fn describe_locations(record: &serde_json::Value) -> Option<(usize, String)> {
     let locations = record
         .get("locations")
         .and_then(serde_json::Value::as_array)?;
@@ -309,9 +309,12 @@ pub fn describe_locations(record: &serde_json::Value) -> Option<String> {
     } else {
         format!(" ({})", named.join("; "))
     };
-    Some(format!(
-        "openalex named {} location(s){hosts}: {oa} flagged open access,          {with_pdf} with a PDF URL. A location without a PDF URL may still be          a real deposit whose landing page is not an item page",
-        locations.len()
+    Some((
+        oa,
+        format!(
+        "openalex named {} location(s){hosts}: {oa} flagged open access, {with_pdf} with a PDF URL. A location without a PDF URL may still be a real deposit whose landing page is not an item page",
+            locations.len()
+        ),
     ))
 }
 

@@ -1279,15 +1279,6 @@ fn render_blocked_error(
     }
 }
 
-/// The `= note:`/`= suggest:` block appended to a blocked PDF leg (#445).
-///
-/// #413 attached the resolution trace to `NotFound` only. But "found
-/// nowhere" and "found at one host that refused me" raise the same next
-/// question — *did anything else have it?* — and only the first one got an
-/// answer. A user with five optional sources enabled saw a bare 429 and no
-/// indication that none of the five had been consulted.
-///
-/// Pure so the wording is asserted rather than assumed.
 /// The diagnostics for a found-nothing fetch (#505).
 ///
 /// `no OA PDF available` means only "the sources that ran had nothing". With
@@ -1372,9 +1363,19 @@ fn not_found_trace_lines(ref_: &Ref, attempts: &[SourceAttempt]) -> Vec<String> 
         .partition(|v| std::env::var_os(v).is_none());
 
     if !unset.is_empty() {
+        // `widening_env` returns Tier-2 switches AND Tier-3 credential pairs.
+        // Rendering every one as `VAR=1` produced `DOIGET_KEY_APS=1` -- an API
+        // key that can never be valid, in a line whose whole purpose is to be
+        // pasted. A flag is a flag; a key is a key.
         let assignments = unset
             .iter()
-            .map(|v| format!("{v}=1"))
+            .map(|v| {
+                if v.starts_with("DOIGET_KEY_") {
+                    format!("{v}=<your-api-key>")
+                } else {
+                    format!("{v}=1")
+                }
+            })
             .collect::<Vec<_>>()
             .join(" ");
         let target = match ref_ {
@@ -1427,6 +1428,15 @@ fn not_found_trace_lines(ref_: &Ref, attempts: &[SourceAttempt]) -> Vec<String> 
     out
 }
 
+/// The `= note:`/`= suggest:` block appended to a blocked PDF leg (#445).
+///
+/// #413 attached the resolution trace to `NotFound` only. But "found
+/// nowhere" and "found at one host that refused me" raise the same next
+/// question — *did anything else have it?* — and only the first one got an
+/// answer. A user with five optional sources enabled saw a bare 429 and no
+/// indication that none of the five had been consulted.
+///
+/// Pure so the wording is asserted rather than assumed.
 fn blocked_trace_lines(attempts: &[SourceAttempt], message: &str) -> Vec<String> {
     let mut out = Vec::new();
     // A rate limit is the one failure where retrying the same host later is
