@@ -228,7 +228,11 @@ async fn run_external(
     let ctx = harness.fetch_context();
 
     let outcome = paper_search(&base, &contact_email, &q, &ctx).await;
-    harness.log_session_end(outcome.is_ok(), Some(query));
+    harness.log_session_end(
+        outcome.is_ok(),
+        Some(query),
+        outcome.as_ref().err().map(|e| ErrorCode::from(e).as_wire()),
+    );
 
     let results = match outcome {
         Ok(r) => r,

@@ -45,6 +45,24 @@ use super::output::print_err;
 /// `depth` / `total` / `per_paper` are optional caller hints; each
 /// is clamped to the ADR-0010 maximum (3 / 100 / 20). Passing `None`
 /// uses the maximum.
+/// The closed-set code a `GraphError` is reported as (#507).
+///
+/// The `map_err` below already decides this per variant, but it does so while
+/// building a user-facing message and an exit code, so the value is not
+/// available to the provenance bookend that runs first. Kept next to it, and
+/// exhaustive, so the two cannot say different things about the same error.
+fn graph_error_code(e: &GraphError) -> ErrorCode {
+    match e {
+        GraphError::CapabilityDenied => ErrorCode::CapabilityDenied,
+        // An indexing gap upstream: the seed is a valid DOI that OpenAlex does
+        // not hold, which is `NOT_FOUND` and not a misuse of the command.
+        GraphError::SeedNotIndexed => ErrorCode::NotFound,
+        // These two already own a mapping; reuse it rather than restate it.
+        GraphError::Source(fe) => ErrorCode::from(fe),
+        GraphError::Log(_) => ErrorCode::LogError,
+    }
+}
+
 pub async fn run(
     input: String,
     depth: Option<u32>,
@@ -121,7 +139,13 @@ pub async fn run(
 
     let outcome = expand(&doi, caps, &source, &harness.profile, &ctx).await;
     let session_ok = outcome.is_ok();
-    harness.log_session_end(session_ok, Some(&input));
+    // `GraphError` has its own mapping to the closed set, applied just
+    // below; the bookend records the same code the caller is given (#507).
+    let session_err = outcome
+        .as_ref()
+        .err()
+        .map(|e| graph_error_code(e).as_wire());
+    harness.log_session_end(session_ok, Some(&input), session_err);
 
     let graph = outcome.map_err(|e| match e {
         GraphError::CapabilityDenied => {

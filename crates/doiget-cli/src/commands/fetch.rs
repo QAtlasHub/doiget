@@ -520,7 +520,15 @@ impl FetchHarness {
     /// argument; pass `None` for batch sessions. The result is best-effort —
     /// if this append fails, the caller already has the underlying fetch
     /// error (if any) and we don't override it.
-    pub(crate) fn log_session_end(&self, ok: bool, ref_input: Option<&str>) {
+    /// `error_code` is the terminal code the caller was given, and it is what
+    /// makes the row answer "what did this session tell the user about this
+    /// ref?" rather than only "something went wrong" (#507).
+    pub(crate) fn log_session_end(
+        &self,
+        ok: bool,
+        ref_input: Option<&str>,
+        error_code: Option<&str>,
+    ) {
         let result = if ok { LogResult::Ok } else { LogResult::Err };
         let _ = self.log.append(RowInput {
             event: LogEvent::SessionEnd,
@@ -528,7 +536,7 @@ impl FetchHarness {
             capability: Capability::Oa,
             ref_: ref_input,
             source: None,
-            error_code: None,
+            error_code,
             size_bytes: None,
             license: None,
             store_path: None,
@@ -776,7 +784,19 @@ pub async fn run_with_options(
         Ok(o) => outcome_is_clean_success(o),
         Err(_) => false,
     };
-    harness.log_session_end(session_ok, Some(ref_.as_input_str()));
+    // #507: the code the USER was given, which for this command is not
+    // always the `Result`'s. A blocked PDF leg is `Ok` with a failed leg and
+    // an unclean session, and the leg carries the closed-set code -- recording
+    // `None` there would log the one outcome an agent is most likely to retry
+    // as having no reason at all.
+    let session_err = match &result {
+        Err(e) => Some(doiget_core::ErrorCode::from(e).as_wire()),
+        Ok(o) => match &o.pdf_leg {
+            PdfLegStatus::Blocked { code, .. } => Some(code.as_wire()),
+            _ => None,
+        },
+    };
+    harness.log_session_end(session_ok, Some(ref_.as_input_str()), session_err);
 
     // Step 6: render the user-facing surface and map to `CliExit`.
     // The Blocked-PDF reclassification logic that used to live inside
