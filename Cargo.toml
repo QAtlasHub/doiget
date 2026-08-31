@@ -15,7 +15,7 @@ exclude = [
 ]
 
 [workspace.package]
-version       = "0.8.13-beta.20"
+version       = "0.8.13-beta.21"
 edition       = "2021"
 rust-version  = "1.86"
 license       = "MIT"
@@ -41,9 +41,9 @@ features-doc-link = "docs/SOURCES.md"
 
 [workspace.dependencies]
 # Core
-doiget-core = { path = "crates/doiget-core", version = "0.8.13-beta.20" }
-doiget-cli  = { path = "crates/doiget-cli", version = "0.8.13-beta.20" }
-doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.13-beta.20" }
+doiget-core = { path = "crates/doiget-core", version = "0.8.13-beta.21" }
+doiget-cli  = { path = "crates/doiget-cli", version = "0.8.13-beta.21" }
+doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.13-beta.21" }
 
 # Async runtime — features are deliberately limited (avoid `full`).
 tokio = { version = "1", default-features = false, features = [
@@ -156,7 +156,7 @@ url = "2"
 # response). Default features (no `serde`, no `encoding`) are sufficient
 # — we hand-roll a small event walker in `sources::arxiv`. Not on
 # `deny.toml`'s banned list.
-quick-xml = { version = "0.41", default-features = false }
+quick-xml = { version = "0.42", default-features = false }
 
 # BibTeX / BibLaTeX bibliography input parser (ADR-0030 D2). Enabled in
 # the default feature set — `.bib` is the dominant export format from

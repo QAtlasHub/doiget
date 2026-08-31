@@ -417,10 +417,10 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                let name_bytes = e.name();
-                let local = local_name(name_bytes.as_ref());
+                let name = e.name();
+                let local = local_name(name.as_ref());
                 if !in_entry {
-                    if local == b"entry" {
+                    if local == "entry" {
                         in_entry = true;
                         saw_entry = true;
                         depth = 0;
@@ -432,33 +432,33 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
                 // Depth==1 means a direct child of `<entry>`.
                 if depth == 1 {
                     match local {
-                        b"title" => target = Some(Target::Title),
-                        b"summary" => target = Some(Target::Summary),
-                        b"published" => target = Some(Target::Published),
-                        b"updated" => target = Some(Target::Updated),
+                        "title" => target = Some(Target::Title),
+                        "summary" => target = Some(Target::Summary),
+                        "published" => target = Some(Target::Published),
+                        "updated" => target = Some(Target::Updated),
                         // arXiv namespace; `local_name` strips the `arxiv:`
                         // prefix, so these match `<arxiv:doi>` /
                         // `<arxiv:journal_ref>`.
-                        b"doi" => target = Some(Target::Doi),
-                        b"journal_ref" => target = Some(Target::JournalRef),
-                        b"author" => {
+                        "doi" => target = Some(Target::Doi),
+                        "journal_ref" => target = Some(Target::JournalRef),
+                        "author" => {
                             in_author = true;
                             authors.push(String::new());
                         }
                         _ => {}
                     }
-                } else if depth == 2 && in_author && local == b"name" {
+                } else if depth == 2 && in_author && local == "name" {
                     target = Some(Target::AuthorName);
                 }
                 buf.clear();
             }
             Ok(Event::Empty(e)) => {
-                let name_bytes = e.name();
-                let local = local_name(name_bytes.as_ref());
-                if in_entry && depth == 0 && local == b"category" {
+                let name = e.name();
+                let local = local_name(name.as_ref());
+                if in_entry && depth == 0 && local == "category" {
                     // <category term="cs.LG" scheme="..."/> — extract `term`.
                     for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"term" {
+                        if attr.key.as_ref() == "term" {
                             // quick-xml 0.40: `unescape_value()` is
                             // deprecated in favour of `normalized_value()`
                             // (attribute-value normalization resolves the
@@ -475,15 +475,12 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
             }
             Ok(Event::Text(t)) => {
                 if let Some(tg) = target {
-                    // quick-xml 0.40 removed `BytesText::unescape`.
-                    // Reproduce the old behaviour: decode the bytes, then
-                    // unescape XML entities via `quick_xml::escape::unescape`.
-                    // Best-effort — skip the text on decode/unescape error.
-                    if let Some(s) = t.decode().ok().and_then(|raw| {
-                        quick_xml::escape::unescape(&raw)
-                            .ok()
-                            .map(|c| c.into_owned())
-                    }) {
+                    // quick-xml 0.40 removed `BytesText::unescape`, and 0.42
+                    // made the reader UTF-8 throughout, so the decode step is
+                    // gone too -- `BytesText` derefs to `str`. Entities still
+                    // need `quick_xml::escape::unescape`, best-effort: skip
+                    // the text if it fails.
+                    if let Some(s) = quick_xml::escape::unescape(&t).ok().map(|c| c.into_owned()) {
                         match tg {
                             Target::Title => title.get_or_insert_with(String::new).push_str(&s),
                             Target::Summary => {
@@ -512,9 +509,9 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
                     buf.clear();
                     continue;
                 }
-                let name_bytes = e.name();
-                let local = local_name(name_bytes.as_ref());
-                if depth == 0 && local == b"entry" {
+                let name = e.name();
+                let local = local_name(name.as_ref());
+                if depth == 0 && local == "entry" {
                     // Done with the first entry — stop. We deliberately
                     // ignore any subsequent entries since the orchestrator
                     // always queries a single id.
@@ -522,7 +519,7 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
                 }
                 depth -= 1;
                 if depth == 0 {
-                    if local == b"author" {
+                    if local == "author" {
                         in_author = false;
                         // Drop empty author names (defensive).
                         if let Some(last) = authors.last() {
@@ -532,7 +529,7 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
                         }
                     }
                     target = None;
-                } else if depth == 1 && in_author && local == b"name" {
+                } else if depth == 1 && in_author && local == "name" {
                     target = None;
                 }
                 buf.clear();
@@ -625,13 +622,13 @@ pub(crate) fn parse_atom_feed(xml: &[u8]) -> Result<Value, FetchError> {
 }
 
 /// Strip an XML namespace prefix from a qualified name, returning the
-/// local-part bytes. `b"atom:entry"` -> `b"entry"`. Atom uses the default
+/// local part. `"atom:entry"` -> `"entry"`. Atom uses the default
 /// namespace so most names arrive unprefixed; this helper makes the
 /// parser robust to either form without depending on quick-xml's
 /// namespace resolver (which would require us to thread a
 /// `NsReader` and explicit prefix bindings through every event).
-fn local_name(qname: &[u8]) -> &[u8] {
-    match qname.iter().rposition(|&b| b == b':') {
+fn local_name(qname: &str) -> &str {
+    match qname.rfind(':') {
         Some(idx) => &qname[idx + 1..],
         None => qname,
     }
