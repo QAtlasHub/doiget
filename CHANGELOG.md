@@ -55,6 +55,54 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Added
 
+- **[dist]** Homebrew. `#247` promised a tap in 2026-06 and was closed as
+  completed; measured against 0.8.12 it was one of the rows that did not exist
+  (#501).
+
+  ```sh
+  brew tap QAtlasHub/doiget https://github.com/QAtlasHub/doiget
+  brew install doiget
+  ```
+
+  The tap lives in this repository rather than a separate `homebrew-doiget`,
+  which is why the tap line carries an explicit URL; a dedicated tap repo would
+  shorten it and the formula would move across unchanged.
+
+  `Formula/doiget.rb` installs the same signed release binary the GitHub Release
+  publishes, pinned by the `sha256` from that release's own `.sha256` asset -
+  the file the shell installer verifies against, so the two channels cannot
+  disagree about what they installed.
+
+  The formula is **generated**, never hand-edited, by
+  `scripts/update-homebrew-formula.sh`, and CI fails if the committed file is
+  not what the generator produces. #247 was closed while four fifths of it had
+  not shipped, so this channel is asserted rather than trusted: the tests refuse
+  a bad or truncated checksum, catch a `v`-prefixed version that would install
+  but compare wrong, and catch a hand-edit.
+
+  Updating it after a stable release is a documented maintainer step rather than
+  an automated one, because the checksums do not exist until the release has
+  published and committing them back needs a token with write access to a
+  protected branch - which is what #426 says is broken. The step cannot be done
+  wrong, only forgotten.
+
+### Changed
+
+- **[docs]** The README channel table stopped guessing. Nix said "whether it
+  exposes an installable package rather than a dev shell is unverified"; it does
+  (`flake.nix` has `packages.default` and `packages.doiget`, not only a dev
+  shell), and the row now says that the outputs exist while `nix profile
+  install` has not been exercised - which is what is actually known.
+
+  **Docker is recorded as not planned**, with the reason. #501 ranked it second
+  on the grounds that a container is "the only architecture the Tier-3 features
+  can legally be used in". That premise does not survive ADR-0002, which decides
+  the default published binary contains no TDM source code at all - an image
+  built from it would ship `oa-only,citation` like every other prebuilt channel.
+  What remains is "a shape enterprises can pin and scan", and doiget is a single
+  statically-linked binary, so a container solves no dependency problem that the
+  existing checksum and cosign bundle do not already address.
+
 - **[mcp]** Citation candidates now carry `confidence` and `matched`, so an
   agent can tell an identity from a coincidence. A 0.5 near-miss and a 1.0 exact
   match arrived in the same shape, and nothing in the envelope said which was

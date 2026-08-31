@@ -283,6 +283,14 @@ jobs:
         shell: bash
         run: bash npm/doiget-cli/test/release-checksums.test.sh
 
+      - name: Homebrew formula is generator output (#501)
+        shell: bash
+        # `Formula/doiget.rb` is generated from a release's published `.sha256`
+        # assets. #247 was closed as completed while four fifths of it had not
+        # shipped, so the formula is asserted rather than trusted: this fails on
+        # a hand-edit, a bad checksum, or a tag/version confusion.
+        run: bash scripts/update-homebrew-formula.test.sh
+
       - name: npm packaging tests (#511)
         shell: bash
         # The name-list greps above cannot catch a wrong binary name, a
