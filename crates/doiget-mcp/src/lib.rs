@@ -3284,6 +3284,11 @@ fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value 
     let mut error_obj = serde_json::Map::new();
     error_obj.insert("code".into(), json!(code));
     error_obj.insert("message".into(), json!(message));
+    // #506: these five objects are assembled by hand rather than through
+    // `error_object`, so the first pass at the disposition missed them --
+    // including the two most common failures an agent sees. A field that is
+    // present on some failures and absent on others is worse than none.
+    error_obj.insert("disposition".into(), json!(code.disposition().as_wire()));
     if let Some(dc) = denial {
         // `DenialContext` is `Serialize` (`#[serde(deny_unknown_fields)]`,
         // optional fields) and `serde_json::to_value` cannot fail on a
@@ -3296,6 +3301,16 @@ fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value 
             "denial_context".into(),
             denial_context_to_value(&dc, "metadata_only"),
         );
+        // #506: `denial_context` says what was refused; this says what to do
+        // about it. `docs/ERRORS.md` §3 used to state outright that
+        // remediation "belongs to the ok:true envelope" -- so the one field
+        // naming the fix was present when the call succeeded with a blocked
+        // leg and absent when the call actually failed. Same core function
+        // the blocked leg and the CLI `= help:` block use.
+        let r = doiget_core::remediation::for_denial(&dc);
+        if !r.is_empty() {
+            error_obj.insert("remediation".into(), json!(r));
+        }
     }
     json!({
         "ok": false,
@@ -3358,6 +3373,11 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             o.insert("status".into(), json!("blocked"));
             o.insert("code".into(), json!(code));
             o.insert("message".into(), json!(message));
+            // #506: these five objects are assembled by hand rather than through
+            // `error_object`, so the first pass at the disposition missed them --
+            // including the two most common failures an agent sees. A field that is
+            // present on some failures and absent on others is worse than none.
+            o.insert("disposition".into(), json!(code.disposition().as_wire()));
             if let Some(dc) = denial {
                 // Route through the logged helper (#154): a bare
                 // `json!(dc)` here would silently coerce a future
@@ -3476,11 +3496,26 @@ fn fetch_paper_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value {
     let mut error_obj = serde_json::Map::new();
     error_obj.insert("code".into(), json!(code));
     error_obj.insert("message".into(), json!(err.to_string()));
+    // #506: these five objects are assembled by hand rather than through
+    // `error_object`, so the first pass at the disposition missed them --
+    // including the two most common failures an agent sees. A field that is
+    // present on some failures and absent on others is worse than none.
+    error_obj.insert("disposition".into(), json!(code.disposition().as_wire()));
     if let Some(dc) = denial {
         error_obj.insert(
             "denial_context".into(),
             denial_context_to_value(&dc, "fetch_paper"),
         );
+        // #506: `denial_context` says what was refused; this says what to do
+        // about it. `docs/ERRORS.md` §3 used to state outright that
+        // remediation "belongs to the ok:true envelope" -- so the one field
+        // naming the fix was present when the call succeeded with a blocked
+        // leg and absent when the call actually failed. Same core function
+        // the blocked leg and the CLI `= help:` block use.
+        let r = doiget_core::remediation::for_denial(&dc);
+        if !r.is_empty() {
+            error_obj.insert("remediation".into(), json!(r));
+        }
     }
     json!({
         "ok": false,
@@ -3583,11 +3618,26 @@ fn build_bibliography_envelope(
                 let mut error_obj = serde_json::Map::new();
                 error_obj.insert("code".into(), json!(code));
                 error_obj.insert("message".into(), json!(err.to_string()));
+                // #506: these five objects are assembled by hand rather than through
+                // `error_object`, so the first pass at the disposition missed them --
+                // including the two most common failures an agent sees. A field that is
+                // present on some failures and absent on others is worse than none.
+                error_obj.insert("disposition".into(), json!(code.disposition().as_wire()));
                 if let Some(dc) = denial {
                     error_obj.insert(
                         "denial_context".into(),
                         denial_context_to_value(&dc, "batch_from_bibliography"),
                     );
+                    // #506: `denial_context` says what was refused; this says what to do
+                    // about it. `docs/ERRORS.md` §3 used to state outright that
+                    // remediation "belongs to the ok:true envelope" -- so the one field
+                    // naming the fix was present when the call succeeded with a blocked
+                    // leg and absent when the call actually failed. Same core function
+                    // the blocked leg and the CLI `= help:` block use.
+                    let r = doiget_core::remediation::for_denial(&dc);
+                    if !r.is_empty() {
+                        error_obj.insert("remediation".into(), json!(r));
+                    }
                 } else {
                     error_obj.insert("denial_context".into(), Value::Null);
                 }
@@ -3670,11 +3720,26 @@ fn batch_fetch_success_envelope(
                 let mut error_obj = serde_json::Map::new();
                 error_obj.insert("code".into(), json!(code));
                 error_obj.insert("message".into(), json!(err.to_string()));
+                // #506: these five objects are assembled by hand rather than through
+                // `error_object`, so the first pass at the disposition missed them --
+                // including the two most common failures an agent sees. A field that is
+                // present on some failures and absent on others is worse than none.
+                error_obj.insert("disposition".into(), json!(code.disposition().as_wire()));
                 if let Some(dc) = denial {
                     error_obj.insert(
                         "denial_context".into(),
                         denial_context_to_value(&dc, "batch_fetch"),
                     );
+                    // #506: `denial_context` says what was refused; this says what to do
+                    // about it. `docs/ERRORS.md` §3 used to state outright that
+                    // remediation "belongs to the ok:true envelope" -- so the one field
+                    // naming the fix was present when the call succeeded with a blocked
+                    // leg and absent when the call actually failed. Same core function
+                    // the blocked leg and the CLI `= help:` block use.
+                    let r = doiget_core::remediation::for_denial(&dc);
+                    if !r.is_empty() {
+                        error_obj.insert("remediation".into(), json!(r));
+                    }
                 } else {
                     // Per the Slice 2 spec: transport (NETWORK_ERROR)
                     // entries carry `denial_context: null` so an agent

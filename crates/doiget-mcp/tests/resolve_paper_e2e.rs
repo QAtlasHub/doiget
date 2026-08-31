@@ -708,6 +708,16 @@ async fn a_failed_call_records_its_terminal_code_on_the_bookend() -> anyhow::Res
     );
     assert_eq!(bookend["ref"], serde_json::json!("10.1234/absent"));
 
+    // #506: this envelope is assembled field-by-field rather than through
+    // `error_object`, so the first pass at the disposition missed it -- and it
+    // is the shape an agent sees for the most ordinary failure there is.
+    // NOT_FOUND is terminal: an id does not become correct by waiting.
+    assert_eq!(
+        structured["error"]["disposition"],
+        serde_json::json!("terminal"),
+        "the hand-built failure envelope must carry it too: {structured:?}"
+    );
+
     drop(env);
     drop(td);
     Ok(())
