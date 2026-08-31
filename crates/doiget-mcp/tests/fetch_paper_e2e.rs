@@ -185,6 +185,16 @@ async fn fetch_paper_arxiv_happy_path_writes_pdf_and_returns_envelope() -> anyho
         serde_json::json!(true),
         "envelope: {structured:?}"
     );
+    // #462: WHICH ROUTE produced this, not merely that something did.
+    // Four "unreachable source" bugs shipped with green unit tests
+    // because nothing asserted the route, and a measurement over this
+    // suite found only one of the five `PdfLegStatus` routes asserted
+    // anywhere. See `route_coverage_e2e.rs`.
+    assert_eq!(
+        structured["pdf"]["status"],
+        serde_json::json!("fetched"),
+        "the arXiv happy path must report the `fetched` route: {structured:?}"
+    );
     assert_eq!(structured["source"], serde_json::json!("arxiv"));
     assert_eq!(structured["ref"], serde_json::json!("2401.12345"));
     assert_eq!(structured["license"], serde_json::json!("arxiv-default"));
