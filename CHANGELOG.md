@@ -53,6 +53,23 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   answers `initialize` as `doiget 0.8.12` and lists 22 tools, with pure JSON-RPC on
   stdout and zero bytes on stderr.
 
+- **[deps]** dependency bumps merged from Dependabot: `flate2` 1.1.9 -> 1.1.10,
+  `uuid` 1.25.0 -> 1.26.0 (#578), `quick-xml` 0.41.0 -> 0.42.0 (#579), and the
+  `github/codeql-action`, `taiki-e/install-action` and `crate-ci/typos` CI
+  actions (#581). `cargo-vet` `safe-to-deploy` exemptions updated to match.
+
+  `quick-xml` 0.42 is not a drop-in bump: the reader is UTF-8 throughout, so
+  `QName::as_ref()` and `Attribute::key` yield `&str` rather than `&[u8]` and
+  `BytesText::decode()` is gone. Both XML parsers were migrated -- `local_name`
+  takes and returns `&str`, XML-name comparisons lost their `b` prefixes, and
+  decode-then-unescape collapsed to `quick_xml::escape::unescape`. Behaviour is
+  unchanged; the existing parser tests cover the touched paths.
+
+  `flate2` 1.1.10 changes its own dependency set: with `rust_backend` it now
+  pulls `zlib-rs` 0.6.7, a dependency this tree did not have before. It is
+  exempted at `safe-to-deploy` like every other unaudited crate here, which is a
+  statement about process, not about anyone having read it.
+
 ### Added
 
 - **[mcp]** `error.retry_after_ms` - the server's own `Retry-After`, on the
