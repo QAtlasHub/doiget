@@ -1011,8 +1011,7 @@ impl Server {
                     value,
                     entry_key,
                 }) => {
-                    let msg =
-                        doiget_core::refs::unsupported_identifier_claim(kind, &value);
+                    let msg = doiget_core::refs::unsupported_identifier_claim(kind, &value);
                     if input.strict {
                         return Ok(CallToolResult::structured(batch_fetch_error_envelope(
                             ErrorCode::NotImplemented,
