@@ -36,7 +36,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use fs2::FileExt;
 use tracing::warn;
 
-use super::metadata::{DoigetExtension, Metadata};
+use super::metadata::{DoigetExtension, Metadata, LICENSE_UNDETERMINED};
 use super::{EntryInfo, Store, StoreError};
 use crate::{Safekey, SCHEMA_VERSION};
 
@@ -532,11 +532,30 @@ fn merge_metadata(existing: Metadata, incoming: Metadata) -> Metadata {
         out.arxiv_categories = existing.arxiv_categories;
     }
 
-    // [doiget]: doiget owns this table; incoming wins (already in `out`).
-    // If incoming has no [doiget] but existing did, keep the existing one
-    // so a metadata-only re-write doesn't silently drop a fetch record.
-    if out.doiget.is_none() && existing.doiget.is_some() {
-        out.doiget = existing.doiget;
+    // [doiget]: doiget owns this table, so a re-write wins (STORE.md §6) --
+    // except for the two fields whose "absent" value is a marker rather than
+    // a reading. `oa_status` is omitted when not determined (#281) and
+    // `license` falls back to `LICENSE_UNDETERMINED`. A `metadata_only` call
+    // without `include_oa_location` never runs the OA lookup, so it carries
+    // exactly those markers; letting them win replaces an answer with the
+    // absence of one. STORE.md §6 permits a `[doiget]` downgrade because it
+    // is reported to the operator (#118) -- on this path nothing is, which is
+    // what ADR-0056 closes. Preserving cannot suppress real news: a paper that
+    // stops being open access reports `Some("closed")`, and a license that
+    // changes reports the new string.
+    match (existing.doiget, out.doiget.as_mut()) {
+        (Some(existing_d), Some(incoming_d)) => {
+            if incoming_d.oa_status.is_none() {
+                incoming_d.oa_status = existing_d.oa_status;
+            }
+            if incoming_d.license == LICENSE_UNDETERMINED {
+                incoming_d.license = existing_d.license;
+            }
+        }
+        // Incoming carries no [doiget] at all: keep the existing fetch record
+        // rather than dropping it.
+        (Some(existing_d), None) => out.doiget = Some(existing_d),
+        (None, _) => {}
     }
 
     // `other` (unknown tables / fields): union, prefer EXISTING on key
@@ -868,6 +887,54 @@ mod tests {
     fn fresh_store(dir: &TempDir) -> FsStore {
         let root = tmp_dir_utf8(dir).join("papers");
         FsStore::new(root).expect("FsStore::new")
+    }
+
+    #[test]
+    fn a_default_rewrite_does_not_downgrade_a_known_oa_status_or_license() {
+        // Issue #583. `metadata_only` without `include_oa_location` never
+        // runs the OA lookup, so it carries `oa_status: None` and
+        // `license: "unknown"` -- the not-determined markers, not readings.
+        // Letting them win would replace an answer with the absence of one,
+        // and STORE.md §6 only permits a [doiget] downgrade that is reported.
+        let mut existing = sample_metadata();
+        existing.url = Some("https://example.org/paper.pdf".to_string());
+        let d = existing.doiget.as_mut().expect("sample has [doiget]");
+        d.oa_status = Some("gold".to_string());
+        d.license = "CC-BY-4.0".to_string();
+
+        let mut incoming = sample_metadata();
+        incoming.url = None;
+        let d = incoming.doiget.as_mut().expect("sample has [doiget]");
+        d.oa_status = None;
+        d.license = LICENSE_UNDETERMINED.to_string();
+
+        let out = merge_metadata(existing, incoming);
+        let d = out.doiget.expect("[doiget] survives");
+        assert_eq!(d.oa_status.as_deref(), Some("gold"));
+        assert_eq!(d.license, "CC-BY-4.0");
+        // `url` was already protected by `merge_opt!`; pinned so the two
+        // halves of #583 cannot drift apart.
+        assert_eq!(out.url.as_deref(), Some("https://example.org/paper.pdf"));
+    }
+
+    #[test]
+    fn a_rewrite_that_determined_a_new_oa_status_or_license_still_wins() {
+        // The other half: preserving must not suppress real news. A paper
+        // that stops being open access reports `Some("closed")`, not `None`.
+        let mut existing = sample_metadata();
+        let d = existing.doiget.as_mut().expect("sample has [doiget]");
+        d.oa_status = Some("gold".to_string());
+        d.license = "CC-BY-4.0".to_string();
+
+        let mut incoming = sample_metadata();
+        let d = incoming.doiget.as_mut().expect("sample has [doiget]");
+        d.oa_status = Some("closed".to_string());
+        d.license = "CC-BY-NC-4.0".to_string();
+
+        let out = merge_metadata(existing, incoming);
+        let d = out.doiget.expect("[doiget] survives");
+        assert_eq!(d.oa_status.as_deref(), Some("closed"));
+        assert_eq!(d.license, "CC-BY-NC-4.0");
     }
 
     #[test]
