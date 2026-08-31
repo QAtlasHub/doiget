@@ -55,6 +55,38 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Added
 
+- **[test]** A registry of which PDF route each e2e test asserts, because
+  measurement showed almost none of them did (#462).
+
+  Four "unreachable source" bugs shipped with green unit tests - #413, #442,
+  #454, #458 - and they share one shape: a source was implemented, gated,
+  allowlisted and unit-tested, and was never reached. The unit test drove the
+  `Source` impl directly and the production entry point was never in the
+  picture. #454's own guard carried a doc comment describing the failure it
+  could not catch.
+
+  Measured before writing anything: of the five `PdfLegStatus` routes, exactly
+  **one** (`blocked`) was asserted anywhere in the e2e suites. `tdm_fetched` had
+  none - which is how #458, "the Tier-3 chain is skipped whenever Crossref
+  answers", could ship.
+
+  `route_coverage_e2e.rs` records, per route, either the test that asserts it or
+  a stated reason it does not. Three checks keep that honest:
+
+  - a claim of coverage must name a test that **exists and contains the route
+    string**, so it cannot outlive the assertion it names. This caught a wrong
+    test name on its first run;
+  - a gap must carry a reason, because an unexplained gap is indistinguishable
+    from an oversight;
+  - the registry is compared against the `PdfLegStatus` variants in
+    `doiget-core`, so a new route cannot be added without deciding how it is
+    covered - the step all four bugs skipped.
+
+  `fetched` gained its first assertion here; `no_oa_url`, `preprint_fallback`
+  and `tdm_fetched` are recorded as gaps with reasons rather than left absent.
+  The known-gap count is asserted, so closing one is a visible edit rather than
+  a silent improvement.
+
 - **[cli]** The found-nothing path now orders the sources it did not consult -
   and says which part of that order is a finding and which is not (#505 part 3).
 
