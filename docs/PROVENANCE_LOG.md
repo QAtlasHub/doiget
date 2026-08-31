@@ -52,6 +52,7 @@ in all timestamps.
 | `size_bytes` | `u64` | event=fetch ok | |
 | `store_path` | string | event=fetch ok | Relative to store root. |
 | `capability` | enum | yes | `oa` / `metadata` / `tdm-elsevier` / `tdm-aps` / `tdm-springer` |
+| `error_code` | enum (`docs/ERRORS.md` §3) | `result=err` | The closed-set code for this row's failure. **Which code depends on the layer, deliberately:** a failed `fetch` leg records the *transport* mechanism (a policy-blocked OA leg is `NETWORK_ERROR` — see `ERRORS.md` §6.1), while a `session_end` row records the code the CALLER was given, after any reclassification. So the two rows for one blocked fetch legitimately differ, and each is true about its own layer. `null` on `result=ok` rows, and on a batch `session_end`, which spans many refs and has no single code (#507). |
 | `session_id` | ULID (26 chars) | yes | One per process invocation. |
 | `schema_version` | string | yes | Always the literal `"v2"` for rows written by current builds (ADR-0024). v1 rows (pre-Slice-4) lack this field; the migration tool in §"Schema migration" below brings them onto the v2 shape. |
 | `canonical_digest` | hex SHA-256 (64 lowercase chars) | event-dependent | ADR-0021 §1 canonical-digest of the `(source_type, source_id, resolver_profile, version)` tuple. Present on rows with a `ref` (`fetch` / `resolve` / `store_write`); `null` on session bookend rows. Two fetches of the same DOI through Crossref vs. Unpaywall produce two distinct digests. |

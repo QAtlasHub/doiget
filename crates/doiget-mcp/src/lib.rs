@@ -376,6 +376,11 @@ impl Server {
         // surface the orchestrator's outcome (a fresh log error here
         // would mask the more informative orchestrator error).
         let session_ok = outcome.is_ok();
+        // #507: the bookend recorded THAT the call failed and not WHAT it
+        // failed with, so the provenance log could not answer "what did this
+        // session tell the caller about this ref?" -- which is the question
+        // repeat suppression has to ask before it can suppress anything.
+        let session_err = outcome.as_ref().err().map(|e| ErrorCode::from(e).as_wire());
         let _ = ctx.log.append(RowInput {
             event: LogEvent::SessionEnd,
             result: if session_ok {
@@ -386,7 +391,7 @@ impl Server {
             capability: Capability::Metadata,
             ref_: Some(input.ref_.as_str()),
             source: None,
-            error_code: None,
+            error_code: session_err,
             size_bytes: None,
             license: None,
             store_path: None,
@@ -508,6 +513,11 @@ impl Server {
 
         // SessionEnd bookend. Best-effort.
         let session_ok = outcome.is_ok();
+        // #507: the bookend recorded THAT the call failed and not WHAT it
+        // failed with, so the provenance log could not answer "what did this
+        // session tell the caller about this ref?" -- which is the question
+        // repeat suppression has to ask before it can suppress anything.
+        let session_err = outcome.as_ref().err().map(|e| ErrorCode::from(e).as_wire());
         let _ = ctx.log.append(RowInput {
             event: LogEvent::SessionEnd,
             result: if session_ok {
@@ -518,7 +528,7 @@ impl Server {
             capability: Capability::Metadata,
             ref_: Some(input.ref_.as_str()),
             source: None,
-            error_code: None,
+            error_code: session_err,
             size_bytes: None,
             license: None,
             store_path: None,
@@ -649,6 +659,11 @@ impl Server {
         let outcome = core_fetch_paper(&ref_, &self.profile, &ctx, &store, &store_root).await;
 
         let session_ok = outcome.is_ok();
+        // #507: the bookend recorded THAT the call failed and not WHAT it
+        // failed with, so the provenance log could not answer "what did this
+        // session tell the caller about this ref?" -- which is the question
+        // repeat suppression has to ask before it can suppress anything.
+        let session_err = outcome.as_ref().err().map(|e| ErrorCode::from(e).as_wire());
         let _ = ctx.log.append(RowInput {
             event: LogEvent::SessionEnd,
             result: if session_ok {
@@ -659,7 +674,7 @@ impl Server {
             capability: Capability::Oa,
             ref_: Some(input.ref_.as_str()),
             source: None,
-            error_code: None,
+            error_code: session_err,
             size_bytes: None,
             license: None,
             store_path: None,
@@ -1375,6 +1390,11 @@ impl Server {
 
         let outcome = doiget_core::discovery::paper_search(&base, &contact_email, &q, &ctx).await;
         let session_ok = outcome.is_ok();
+        // #507: the bookend recorded THAT the call failed and not WHAT it
+        // failed with, so the provenance log could not answer "what did this
+        // session tell the caller about this ref?" -- which is the question
+        // repeat suppression has to ask before it can suppress anything.
+        let session_err = outcome.as_ref().err().map(|e| ErrorCode::from(e).as_wire());
         let _ = ctx.log.append(RowInput {
             event: LogEvent::SessionEnd,
             result: if session_ok {
@@ -1385,7 +1405,7 @@ impl Server {
             capability: Capability::Metadata,
             ref_: None,
             source: None,
-            error_code: None,
+            error_code: session_err,
             size_bytes: None,
             license: None,
             store_path: None,
@@ -2079,6 +2099,11 @@ impl Server {
                 doiget_core::citation_graph::expand(&doi, caps, &source, &self.profile, &ctx).await;
 
             let session_ok = outcome.is_ok();
+            // #507: the bookend recorded THAT the call failed and not WHAT it
+            // failed with, so the provenance log could not answer "what did this
+            // session tell the caller about this ref?" -- which is the question
+            // repeat suppression has to ask before it can suppress anything.
+            let session_err = outcome.as_ref().err().map(|e| ErrorCode::from(e).as_wire());
             let _ = ctx.log.append(RowInput {
                 event: LogEvent::SessionEnd,
                 result: if session_ok {
@@ -2089,7 +2114,7 @@ impl Server {
                 capability: Capability::Metadata,
                 ref_: Some(input.ref_.as_str()),
                 source: None,
-                error_code: None,
+                error_code: session_err,
                 size_bytes: None,
                 license: None,
                 store_path: None,

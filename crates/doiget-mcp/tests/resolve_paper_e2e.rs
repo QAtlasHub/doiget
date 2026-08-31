@@ -624,25 +624,25 @@ async fn resolve_paper_leaves_oa_status_null_when_the_lookup_fails() -> anyhow::
 }
 
 // ---------------------------------------------------------------------------
-// 3c. #506 — the hand-built failure envelope carries the disposition too
+// 3c. #507 — the bookend records WHAT the call failed with
 // ---------------------------------------------------------------------------
 
-/// #506's first pass converted the envelopes built by `error_object` and
-/// missed the five assembled field-by-field -- including this one, which is
-/// the shape an agent sees for the most ordinary failure there is.
+/// #507: the provenance log could say a call failed but not what it failed
+/// with, because every `SessionEnd` row carried `error_code: None`.
 ///
-/// A field present on some failures and absent on others is worse than no
-/// field: it teaches the reader to fall back to guessing from the code's name,
-/// which is the habit the disposition exists to replace. Asserted on the
-/// ORCHESTRATOR-failure path specifically, since the `INVALID_REF` test above
-/// covers only the `error_object` one.
+/// That is a gap in the audit trail on its own terms -- the log cannot answer
+/// "what did this session tell the caller about this ref?" -- and it is also
+/// what blocks the repeat suppression #507 asks for: the rule is "do not
+/// re-fetch a prior `terminal` or `needs_config` answer", and a disposition
+/// cannot be recovered from a row with no code.
 #[tokio::test]
 #[serial_test::serial]
-async fn an_orchestrator_failure_envelope_carries_the_disposition() -> anyhow::Result<()> {
+async fn a_failed_call_records_its_terminal_code_on_the_bookend() -> anyhow::Result<()> {
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    // Crossref and Unpaywall both answer 404: the DOI resolves nowhere.
+    // Crossref and Unpaywall both answer 404, so the DOI resolves nowhere and
+    // the call ends as NOT_FOUND.
     let upstream = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(404))
@@ -652,7 +652,7 @@ async fn an_orchestrator_failure_envelope_carries_the_disposition() -> anyhow::R
     let td = tempfile::TempDir::new().expect("tempdir");
     let log_path = camino::Utf8Path::from_path(td.path())
         .expect("tempdir is utf-8")
-        .join("mcp-disposition.jsonl");
+        .join("mcp-bookend.jsonl");
 
     let env = EnvGuard::new(ENV_KEYS);
     env.set("DOIGET_CROSSREF_BASE", &upstream.uri());
@@ -676,26 +676,48 @@ async fn an_orchestrator_failure_envelope_carries_the_disposition() -> anyhow::R
         .structured_content
         .as_ref()
         .expect("doiget_resolve_paper uses CallToolResult::structured");
-
     assert_eq!(
         structured["ok"],
         serde_json::json!(false),
         "premise: the call fails: {structured:?}"
     );
-    assert_eq!(
-        structured["error"]["code"],
-        serde_json::json!("NOT_FOUND"),
-        "{structured:?}"
-    );
-    assert_eq!(
-        structured["error"]["disposition"],
-        serde_json::json!("terminal"),
-        "an id does not become correct by waiting, and the envelope must say so \
-         on this path too: {structured:?}"
-    );
+    let reported = structured["error"]["code"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
 
     client.cancel().await?;
     server_handle.await??;
+
+    let raw = std::fs::read_to_string(&log_path).expect("read the provenance log");
+    let bookend = raw
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find(|r| r["event"] == "session_end")
+        .expect("a SessionEnd row was written");
+
+    assert_eq!(
+        bookend["result"],
+        serde_json::json!("err"),
+        "row: {bookend}"
+    );
+    assert_eq!(
+        bookend["error_code"].as_str().unwrap_or_default(),
+        reported,
+        "the row must record the code the CALLER was given, not null: {bookend}"
+    );
+    assert_eq!(bookend["ref"], serde_json::json!("10.1234/absent"));
+
+    // #506: this envelope is assembled field-by-field rather than through
+    // `error_object`, so the first pass at the disposition missed it -- and it
+    // is the shape an agent sees for the most ordinary failure there is.
+    // NOT_FOUND is terminal: an id does not become correct by waiting.
+    assert_eq!(
+        structured["error"]["disposition"],
+        serde_json::json!("terminal"),
+        "the hand-built failure envelope must carry it too: {structured:?}"
+    );
+
     drop(env);
     drop(td);
     Ok(())
