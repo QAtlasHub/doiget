@@ -208,6 +208,27 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[fetch]** When OpenAlex named a repository copy that could not be followed, the
+  run said `no OA PDF available` - a different claim from what OpenAlex actually
+  reported (#547).
+
+  `10.1109/tsp.2023.3269664` has two OpenAlex locations, and the second **is** the
+  Strathprints institutional deposit. It has no `pdf_url`, `is_oa` is `false`, and
+  its `landing_page_url` is an author-listing page (`/view/author/70486.html`)
+  rather than an item, so `open_access_pdf_url` correctly returns nothing. The
+  fact that a repository had been NAMED then reached only a `tracing::debug!`.
+
+  The attempt row now carries what the source said: how many locations, how many
+  flagged OA, how many had a PDF URL, and the repository's name. "openalex named
+  2 location(s) (IEEE Transactions on Signal Processing; Strathprints: The
+  University of Strathclyde): 0 flagged open access, 0 with a PDF URL" points the
+  reader at the repository. "no OA PDF available" points them at giving up.
+
+  Diagnostics only - no new request, no change to what is fetched. The report's
+  second suggestion, following a repository platform's own search when its URL is
+  not an item, is a real capability change and belongs with #474; #547 stays open
+  for it.
+
 - **[core]** An access refusal was classified by reading an error message back.
   A source saying "I found it and cannot give it to you" returned
   `FetchError::SourceSchema` with an explanatory hint, and the orchestrator

@@ -1882,6 +1882,21 @@ async fn fetch_paper_doi(
 /// request to arrive at a page the chain cannot read, and report a
 /// confusing failure. A source that contributes nothing is not a silent
 /// gap: it still appears in the attempt trace with its own outcome.
+/// What a source said about where the work lives, when it named somewhere
+/// but nothing followable (#547).
+///
+/// Only OpenAlex today: it is the source that reports EVERY location rather
+/// than a best one, so it is the one that can name a repository copy and still
+/// hand back no URL. The others surface a single document URL or nothing, and
+/// "nothing" is already what the trace says.
+#[cfg(feature = "metadata")]
+fn describe_optional_source_locations(source: &str, meta: &Value) -> Option<String> {
+    match source {
+        "openalex" => crate::sources::openalex::describe_locations(meta),
+        _ => None,
+    }
+}
+
 #[cfg(feature = "metadata")]
 fn optional_source_oa_url<'a>(source: &str, meta: &'a Value) -> Option<&'a str> {
     match source {
@@ -1972,6 +1987,17 @@ async fn try_optional_source_oa_fallback(
         }
     };
     let Some(raw) = optional_source_oa_url(name, &meta) else {
+        // #547: the source ANSWERED and named somewhere the work lives; what
+        // it named was just not followable. That is a different fact from
+        // "nobody has a copy", and it used to reach only a `tracing::debug!`
+        // -- so a run whose OpenAlex record pointed straight at an
+        // institutional repository reported `no OA PDF available` and gave the
+        // reader nothing to act on.
+        if let Some(detail) = describe_optional_source_locations(name, &meta) {
+            if let Some(row) = attempts.iter_mut().find(|a| a.source == name) {
+                row.outcome = AttemptOutcome::NotOpenAccess { detail };
+            }
+        }
         tracing::debug!(
             source = name,
             doi = %doi.as_str(),
