@@ -255,6 +255,7 @@ impl From<&FetchError> for crate::ErrorCode {
             // is treated as transient.
             FetchError::Http(HttpError::HttpStatus {
                 status: 404 | 410 | 451,
+                retry_after_ms: None,
                 ..
             }) => crate::ErrorCode::NotFound,
             FetchError::Http(HttpError::HttpStatus {
@@ -292,6 +293,23 @@ impl From<&FetchError> for crate::ErrorCode {
 /// still needs for `error.message` and the `From<FetchError> for
 /// ErrorCode` collapse above. The `Http` arm delegates to the
 /// `From<&HttpError> for Option<DenialContext>` impl in [`crate::http`].
+/// The server's own `Retry-After` for this failure, in milliseconds (#506).
+///
+/// `None` when the server sent no header, which is most failures. Deliberately
+/// NOT backfilled from doiget's internal backoff: that is a guess about the
+/// server, and a guess wearing the name of a server-supplied value is exactly
+/// the defect `error.disposition` and this field exist to remove.
+///
+/// Pairs with [`crate::Disposition::RetryAfter`] -- the disposition says
+/// "retry", and this says how long the server asked you to wait before you do.
+#[must_use]
+pub fn retry_after_ms(e: &FetchError) -> Option<u64> {
+    match e {
+        FetchError::Http(HttpError::HttpStatus { retry_after_ms, .. }) => *retry_after_ms,
+        _ => None,
+    }
+}
+
 impl From<&FetchError> for Option<crate::DenialContext> {
     fn from(e: &FetchError) -> Self {
         use crate::{DenialContext, DenialReason};
@@ -543,6 +561,7 @@ mod tests {
         for status in [404u16, 410, 451] {
             let e: ErrorCode = FetchError::Http(HttpError::HttpStatus {
                 status,
+                retry_after_ms: None,
                 url: "https://api.crossref.org/works/10.5555/absent".into(),
             })
             .into();
@@ -563,6 +582,7 @@ mod tests {
         // `doiget verify` tolerates it rather than failing a live id.
         let e: ErrorCode = FetchError::Http(HttpError::HttpStatus {
             status: 503,
+            retry_after_ms: None,
             url: "https://api.crossref.org/works/10.5555/down".into(),
         })
         .into();

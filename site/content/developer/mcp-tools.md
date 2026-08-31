@@ -291,8 +291,15 @@ response as `oa_url` (string) for the caller to act on separately.
 
 ### `oa_url` is opt-in (#539)
 
-By default `oa_url` is **always `null`**, and callers MUST NOT read that as
-"this work has no OA location".
+On the default path `oa_url` is `null` whenever Crossref answered -- which is
+nearly every DOI -- and callers MUST NOT read that as "this work has no OA
+location".
+
+It is **not** unconditionally null without the flag. `metadata_only_doi` keeps a
+pre-existing fallback: when Crossref *fails*, Unpaywall is consulted regardless
+of `include_oa_location`, and `oa_url` / `oa_status` come from that record.
+`source` tells the two apart -- `crossref` means the default path answered,
+`unpaywall` means the fallback did.
 
 The DOI path is Crossref-first, on the rationale that Crossref's
 `message.link[]` supplied an OA URL without a second request. It does not:
@@ -356,8 +363,9 @@ type MetadataOnlyResult =
       // Currently equal to `source` verbatim.
       resolver_profile: string,
       license: string,
-      // Null unless `include_oa_location` was set - see above. A null here is
-      // NOT evidence that the work has no OA location.
+      // Null whenever Crossref answered and `include_oa_location` was not set;
+      // see above for the Crossref-failure case, which fills it either way. A
+      // null here is NOT evidence that the work has no OA location.
       oa_url: string | null,
       // gold / green / hybrid / bronze / closed, or null when not determined.
       oa_status: string | null,
