@@ -166,7 +166,19 @@ existing on-disk value WINS over whatever doiget carries (issue #123).
 > entry's recorded state changes. This is intentional, not silent: as of issue #118 the
 > blocked-PDF reason is surfaced to the caller (CLI `note:` line / MCP `pdf.status`),
 > so the operator always learns the entry was downgraded and why. A guard that refuses
-> to downgrade is deferred (post-MVP) — it is a policy choice, not a correctness bug.
+> to downgrade a **determination** is deferred (post-MVP) — it is a policy choice, not a
+> correctness bug.
+>
+> This permission covers determinations only. Two `[doiget]` fields carry a
+> not-determined *marker* rather than a reading — `oa_status` is omitted when not
+> determined, and `license` falls back to `"unknown"` — and a re-write that carries
+> the marker did not look, so it is not news. Per
+> [ADR-0056](DECISIONS/0056-not-determined-is-not-an-answer.md) the merge keeps the
+> stored value in that case. A paper that genuinely stops being open access reports
+> `oa_status = "closed"`, and a changed license reports the new string; both still
+> win. The distinction matters because the permission above is granted on the
+> condition that the downgrade is reported, and a field the caller never asked about
+> has nothing to report it against (#583).
 
 ## 7. TOML normalization
 

@@ -10,6 +10,35 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ## [Unreleased]
 
+### Fixed
+
+- **[store]** A default `metadata_only` re-write **downgraded a known
+  `oa_status` and `license` to their not-determined markers**, and said nothing
+  (#583).
+
+  `docs/STORE.md` §6 does let a re-fetch rewrite the `[doiget]` table, but the
+  permission is conditional: *"This is intentional, not silent: ... the operator
+  always learns the entry was downgraded and why."* Since #539, `metadata_only`
+  only runs the OA lookup when `include_oa_location` is set, so the ordinary call
+  shape produces `oa_status: None` and `license: "unknown"` — and those won,
+  with no `note:`, no `pdf.status` and no log row. The condition the permission
+  rests on was not met.
+
+  Both values are markers, not readings: `oa_status` is "omitted when not
+  determined" and `license` falls back to `"unknown"`. A paper that genuinely
+  stops being open access reports `Some("closed")`; a license that changes
+  reports the new string. So a call that carries the marker did not look, and
+  preferring the stored value is not a guess about which is newer.
+  `merge_metadata` now keeps the stored value in exactly that case, and
+  `"unknown"` has a name (`LICENSE_UNDETERMINED`) so the check does not hang off
+  a bare literal. [ADR-0056](docs/DECISIONS/0056-not-determined-is-not-an-answer.md),
+  and `docs/STORE.md` §6's note is amended to scope its claim to determinations.
+
+  The issue as filed said `oa_url` was overwritten with null. It is not —
+  `merge_opt!(url)` already protected it, which a probe confirmed before any of
+  this was written. Only the two `[doiget]` fields were affected, and the fix is
+  a merge rule rather than the store partition the issue proposed.
+
 ### Changed
 
 - **[ci]** One test was taking ten minutes and being run five times. The five
