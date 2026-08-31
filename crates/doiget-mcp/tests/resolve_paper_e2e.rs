@@ -624,6 +624,84 @@ async fn resolve_paper_leaves_oa_status_null_when_the_lookup_fails() -> anyhow::
 }
 
 // ---------------------------------------------------------------------------
+// 3c. #506 — the hand-built failure envelope carries the disposition too
+// ---------------------------------------------------------------------------
+
+/// #506's first pass converted the envelopes built by `error_object` and
+/// missed the five assembled field-by-field -- including this one, which is
+/// the shape an agent sees for the most ordinary failure there is.
+///
+/// A field present on some failures and absent on others is worse than no
+/// field: it teaches the reader to fall back to guessing from the code's name,
+/// which is the habit the disposition exists to replace. Asserted on the
+/// ORCHESTRATOR-failure path specifically, since the `INVALID_REF` test above
+/// covers only the `error_object` one.
+#[tokio::test]
+#[serial_test::serial]
+async fn an_orchestrator_failure_envelope_carries_the_disposition() -> anyhow::Result<()> {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // Crossref and Unpaywall both answer 404: the DOI resolves nowhere.
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&upstream)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let log_path = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .join("mcp-disposition.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_CROSSREF_BASE", &upstream.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", upstream.uri()));
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_CONTACT_EMAIL", "test@example.org");
+    env.set(
+        "DOIGET_STORE_ROOT",
+        td.path().to_str().expect("utf-8 tempdir"),
+    );
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/absent"));
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_resolve_paper").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_resolve_paper uses CallToolResult::structured");
+
+    assert_eq!(
+        structured["ok"],
+        serde_json::json!(false),
+        "premise: the call fails: {structured:?}"
+    );
+    assert_eq!(
+        structured["error"]["code"],
+        serde_json::json!("NOT_FOUND"),
+        "{structured:?}"
+    );
+    assert_eq!(
+        structured["error"]["disposition"],
+        serde_json::json!("terminal"),
+        "an id does not become correct by waiting, and the envelope must say so \
+         on this path too: {structured:?}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // 4. dry_run field rejection
 // ---------------------------------------------------------------------------
 

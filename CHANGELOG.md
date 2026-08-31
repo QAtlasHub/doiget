@@ -208,6 +208,26 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
 ### Fixed
 
+- **[mcp]** `error.disposition` was **missing from five failure envelopes**,
+  including the two most common failures an agent sees. The change that
+  introduced it converted the envelopes built by `error_object` and missed the
+  ones assembled field-by-field, which are exactly the ones that also attach a
+  `denial_context` (#506).
+
+  A field present on some failures and absent on others is worse than no field:
+  it teaches the reader to fall back to guessing from the code's name, which is
+  the habit the disposition exists to replace. That is stated in ADR-0055 and
+  was then not upheld. Now pinned by a posture-lint step that counts one
+  `insert("disposition"` per `insert("code"` - not a proof, but it fails on
+  exactly the mistake that was made.
+
+- **[mcp]** `remediation` is carried on failure envelopes. `docs/ERRORS.md` §3
+  said outright that it "belongs to the `{ ok: true, ... }` envelope", so the one
+  field naming the fix was present when a call succeeded with a blocked leg and
+  absent when the call actually failed. It comes from the same
+  `remediation::for_denial` the blocked leg and the CLI `= help:` block use, and
+  is omitted when there is no named fix rather than emitted empty.
+
 - **[fetch]** When OpenAlex named a repository copy that could not be followed, the
   run said `no OA PDF available` - a different claim from what OpenAlex actually
   reported (#547).

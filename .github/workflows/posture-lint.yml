@@ -313,6 +313,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
 
+      - name: Every hand-built error object carries a disposition (#506)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `error_object` builds most failure envelopes, but five are assembled
+          # field-by-field with `insert("code", ...)` because they also attach a
+          # `denial_context`. The first pass at #506 converted the former and
+          # missed the latter -- including the two most common failures an agent
+          # sees -- so `disposition` shipped present on some failures and absent
+          # on others, which is worse than absent everywhere.
+          #
+          # One `insert("disposition"` per `insert("code"`. Not a proof, but it
+          # fails on exactly the mistake that was made.
+          f=crates/doiget-mcp/src/lib.rs
+          codes="$(grep -c 'insert("code"' "$f")"
+          disps="$(grep -c 'insert("disposition"' "$f")"
+          if [ "$codes" != "$disps" ]; then
+            echo "::error::posture-lint: $codes hand-built error objects but $disps dispositions in $f - a failure envelope is missing error.disposition (#506)"
+            grep -n 'insert("code"' "$f"
+            exit 1
+          fi
+
       - name: Host adjudication uses `permits`, never `matches` (#533)
         shell: bash
         run: |
