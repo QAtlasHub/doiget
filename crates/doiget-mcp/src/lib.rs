@@ -2123,7 +2123,13 @@ impl Server {
             // failed with, so the provenance log could not answer "what did this
             // session tell the caller about this ref?" -- which is the question
             // repeat suppression has to ask before it can suppress anything.
-            let session_err = outcome.as_ref().err().map(|e| ErrorCode::from(e).as_wire());
+            // `GraphError`, not `FetchError` -- it has no `From<&_> for
+            // ErrorCode`, and this site is behind `citation`, so an oa-only
+            // build never compiled it. Same mapping the response arm uses.
+            let session_err = outcome
+                .as_ref()
+                .err()
+                .map(|e| graph_error_code(e).as_wire());
             let _ = ctx.log.append(RowInput {
                 event: LogEvent::SessionEnd,
                 result: if session_ok {
@@ -3193,6 +3199,23 @@ fn entry_info_to_json(entry: &EntryInfo) -> Value {
 /// per-ref context). This shape-symmetry with the success envelopes
 /// (which always carry `"ref"`) means consumers can pattern-match
 /// uniformly across `ok:true` / `ok:false` envelopes.
+/// The closed-set code a `GraphError` is reported as (#507).
+///
+/// Extracted from the inline `match` in `doiget_expand_citation_graph`'s
+/// response arm so the SessionEnd bookend and the caller-facing envelope
+/// cannot say different things about the same error.
+#[cfg(feature = "citation")]
+fn graph_error_code(e: &doiget_core::citation_graph::GraphError) -> ErrorCode {
+    use doiget_core::citation_graph::GraphError;
+    match e {
+        GraphError::CapabilityDenied => ErrorCode::CapabilityDenied,
+        GraphError::SeedNotIndexed => ErrorCode::NoOaAvailable,
+        GraphError::Log(_) => ErrorCode::LogError,
+        GraphError::Source(_) => ErrorCode::NetworkError,
+        _ => ErrorCode::InternalError,
+    }
+}
+
 /// The `error` object every failure envelope carries (#506).
 ///
 /// One builder rather than ten literals, because the point of `disposition`
