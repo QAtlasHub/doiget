@@ -252,7 +252,7 @@ impl Server {
                        OUTPUTS: { ok: true, ref, source, license?, oa_url, oa_status, metadata } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, error }.\n\
                        COSTS: 1-2 s metadata round-trip (or 0 when dry_run; roughly doubled when include_oa_location).\n\
                        SIDE EFFECTS: Appends a 'metadata-only' provenance row (unless dry_run). Writes the metadata TOML to the store. Never fetches PDF.\n\
-                       LIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed. oa_url is null unless include_oa_location is set: Crossref alone cannot supply one, because its link[] entries are scoped to a licensed programme (Similarity Check / TDM / syndication) rather than being general-purpose. A null oa_url is therefore NOT evidence that the work is closed. With include_oa_location set, oa_status says which answer you got: closed means the lookup completed and found no OA location, null means the lookup did not complete.",
+                       LIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed. Crossref alone cannot supply an oa_url, because its link[] entries are scoped to a licensed programme (Similarity Check / TDM / syndication) rather than being general-purpose. A null oa_url is therefore NOT evidence that the work is closed. oa_url is null on the default path whenever Crossref answered, which is nearly every DOI. It can be non-null WITHOUT the flag in one case: Crossref failed and Unpaywall answered instead, and then source is unpaywall rather than crossref - so source tells you which happened. With include_oa_location set, oa_status says which answer you got: closed means the lookup completed and found no OA location, null means the lookup did not complete.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -445,7 +445,7 @@ impl Server {
                        OUTPUTS: { ok: true, ref, source, resolver_profile, license?, oa_url, oa_status, metadata, schema_version } OR { ok:false, ref, error }.\n\
                        COSTS: 1-2 s metadata round-trip (roughly doubled when include_oa_location).\n\
                        SIDE EFFECTS: Appends one provenance row per consulted resolver. NEVER writes a metadata TOML to the store. NEVER fetches PDF.\n\
-                       LIMITS: Subject to the same rate cap as metadata_only (5/sec). The OA URL is reported but never followed. oa_url is null unless include_oa_location is set: Crossref alone cannot supply one, because its link[] entries are scoped to a licensed programme (Similarity Check / TDM / syndication) rather than being general-purpose. A null oa_url is therefore NOT evidence that the work is closed. With include_oa_location set, oa_status says which answer you got: closed means the lookup completed and found no OA location, null means the lookup did not complete. dry_run is not supported; use metadata_only with dry_run for a preview.",
+                       LIMITS: Subject to the same rate cap as metadata_only (5/sec). The OA URL is reported but never followed. Crossref alone cannot supply an oa_url, because its link[] entries are scoped to a licensed programme (Similarity Check / TDM / syndication) rather than being general-purpose. A null oa_url is therefore NOT evidence that the work is closed. oa_url is null on the default path whenever Crossref answered, which is nearly every DOI. It can be non-null WITHOUT the flag in one case: Crossref failed and Unpaywall answered instead, and then source is unpaywall rather than crossref - so source tells you which happened. With include_oa_location set, oa_status says which answer you got: closed means the lookup completed and found no OA location, null means the lookup did not complete. dry_run is not supported; use metadata_only with dry_run for a preview.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -659,11 +659,31 @@ impl Server {
         let outcome = core_fetch_paper(&ref_, &self.profile, &ctx, &store, &store_root).await;
 
         let session_ok = outcome.is_ok();
+        // #507, second surface. `core_fetch_paper` returns `Ok` with a FAILED
+        // leg when an OA URL was found and refused, so `outcome.err()` is
+        // `None` and the row would say the call succeeded with no error code
+        // -- for the one outcome an agent is most likely to retry. The CLI
+        // sibling special-cases exactly this (`commands/fetch.rs`); the MCP
+        // path did not, so the same fix landed on one surface and not the
+        // other. Found by review of this change.
+        let blocked_code = match outcome.as_ref() {
+            Ok(o) => match &o.pdf_leg {
+                doiget_core::orchestrator::PdfLegStatus::Blocked { code, .. } => {
+                    Some(code.as_wire())
+                }
+                _ => None,
+            },
+            Err(_) => None,
+        };
         // #507: the bookend recorded THAT the call failed and not WHAT it
         // failed with, so the provenance log could not answer "what did this
         // session tell the caller about this ref?" -- which is the question
         // repeat suppression has to ask before it can suppress anything.
-        let session_err = outcome.as_ref().err().map(|e| ErrorCode::from(e).as_wire());
+        let session_err = outcome
+            .as_ref()
+            .err()
+            .map(|e| ErrorCode::from(e).as_wire())
+            .or(blocked_code);
         let _ = ctx.log.append(RowInput {
             event: LogEvent::SessionEnd,
             result: if session_ok {
@@ -2599,12 +2619,19 @@ pub struct MetadataOnlyInput {
     /// Consult Unpaywall for a real OA location, filling `oa_url`,
     /// `oa_status` and `license`. Costs one extra metadata round-trip.
     ///
-    /// Defaults to `false`, and when it is `false` `oa_url` is ALWAYS
-    /// `null`: the default path is Crossref-only, and Crossref's `link[]`
-    /// is a programme-scoped channel (Similarity Check, TDM, syndication),
-    /// never a general-purpose OA URL (#517). Before #539 the field was
-    /// advertised without that caveat, so an agent could read a permanent
-    /// `null` as "this work has no OA location".
+    /// Defaults to `false`. On the default path `oa_url` is `null` whenever
+    /// Crossref answered -- which is nearly every DOI -- because Crossref's
+    /// `link[]` is a programme-scoped channel (Similarity Check, TDM,
+    /// syndication), never a general-purpose OA URL (#517). Before #539 the
+    /// field was advertised without that caveat, so an agent could read a
+    /// permanent `null` as "this work has no OA location".
+    ///
+    /// It is NOT unconditionally null without the flag, and an earlier
+    /// version of this doc said it was. `metadata_only_doi` keeps a
+    /// pre-existing fallback: when Crossref FAILS, Unpaywall is consulted
+    /// regardless of this flag, and `oa_url` / `oa_status` come from that
+    /// record. `source` distinguishes the two -- `crossref` means the
+    /// default path answered, `unpaywall` means the fallback did.
     ///
     /// Set it and `oa_status` tells you which answer you got: `"closed"`
     /// means the lookup completed and there is no OA location, while
@@ -2637,12 +2664,19 @@ pub struct ResolvePaperInput {
     /// Consult Unpaywall for a real OA location, filling `oa_url`,
     /// `oa_status` and `license`. Costs one extra metadata round-trip.
     ///
-    /// Defaults to `false`, and when it is `false` `oa_url` is ALWAYS
-    /// `null`: the default path is Crossref-only, and Crossref's `link[]`
-    /// is a programme-scoped channel (Similarity Check, TDM, syndication),
-    /// never a general-purpose OA URL (#517). Before #539 the field was
-    /// advertised without that caveat, so an agent could read a permanent
-    /// `null` as "this work has no OA location".
+    /// Defaults to `false`. On the default path `oa_url` is `null` whenever
+    /// Crossref answered -- which is nearly every DOI -- because Crossref's
+    /// `link[]` is a programme-scoped channel (Similarity Check, TDM,
+    /// syndication), never a general-purpose OA URL (#517). Before #539 the
+    /// field was advertised without that caveat, so an agent could read a
+    /// permanent `null` as "this work has no OA location".
+    ///
+    /// It is NOT unconditionally null without the flag, and an earlier
+    /// version of this doc said it was. `metadata_only_doi` keeps a
+    /// pre-existing fallback: when Crossref FAILS, Unpaywall is consulted
+    /// regardless of this flag, and `oa_url` / `oa_status` come from that
+    /// record. `source` distinguishes the two -- `crossref` means the
+    /// default path answered, `unpaywall` means the fallback did.
     ///
     /// Set it and `oa_status` tells you which answer you got: `"closed"`
     /// means the lookup completed and there is no OA location, while
@@ -3488,16 +3522,13 @@ fn fetch_paper_error_envelope(ref_str: Option<&str>, code: ErrorCode, message: &
 /// Build the `{ok:false, error:{code, message, denial_context?}}`
 /// envelope for orchestrator failures in `doiget_fetch_paper`.
 fn fetch_paper_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value {
-    let code: ErrorCode = match err {
-        FetchError::NotEligible { .. } => ErrorCode::CapabilityDenied,
-        FetchError::NoOaAvailable => ErrorCode::NoOaAvailable,
-        FetchError::Http(_) => ErrorCode::NetworkError,
-        FetchError::Log(_) => ErrorCode::LogError,
-        FetchError::InvalidRef(_) => ErrorCode::InvalidRef,
-        FetchError::SourceSchema { .. } => ErrorCode::InternalError,
-        FetchError::TooManyRefs { .. } => ErrorCode::InvalidRef,
-        _ => ErrorCode::InternalError,
-    };
+    // Delegate, do not re-implement. This was a hand-rolled copy of
+    // `From<&FetchError> for ErrorCode` ending in `_ => InternalError`, so
+    // every variant it had not enumerated -- including `NotFound`, which a
+    // mistyped DOI produces on the shipped build -- was reported to the caller
+    // as an internal error. The canonical mapping is exhaustive and is what
+    // the rest of this file already calls.
+    let code: ErrorCode = ErrorCode::from(err);
     let denial: Option<DenialContext> = err.into();
     let mut error_obj = serde_json::Map::new();
     error_obj.insert("code".into(), json!(code));

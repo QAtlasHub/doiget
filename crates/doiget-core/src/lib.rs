@@ -1043,8 +1043,16 @@ impl Confidence {
     /// compares against 0.999 rather than 1.0 because the score is a division:
     /// asking for bit-exact equality would band an all-tokens match as
     /// `Probable` on a rounding accident.
+    /// A score outside `0.0..=1.0`, or `NaN`, is not a token-overlap ratio
+    /// and gets the lowest band rather than a confident-looking answer. The
+    /// only caller today guards with `MIN_CITATION_SCORE`, but that constant
+    /// is private to `crossref.rs` and invisible from this signature -- and
+    /// this is a public function on a semver-strict crate.
     #[must_use]
     pub fn from_score(score: f64) -> Self {
+        if !score.is_finite() || !(0.0..=1.0).contains(&score) {
+            return Self::Weak;
+        }
         if score >= 0.999 {
             Self::Exact
         } else if score >= 0.8 {

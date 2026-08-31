@@ -73,6 +73,91 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
 
   Pairs with the disposition: `retry_after` says retry, and this says how long
   the server asked you to wait first.
+- **[test]** A registry of which PDF route each e2e test asserts, because
+  measurement showed almost none of them did (#462).
+
+  Four "unreachable source" bugs shipped with green unit tests - #413, #442,
+  #454, #458 - and they share one shape: a source was implemented, gated,
+  allowlisted and unit-tested, and was never reached. The unit test drove the
+  `Source` impl directly and the production entry point was never in the
+  picture. #454's own guard carried a doc comment describing the failure it
+  could not catch.
+
+  Measured before writing anything: of the five `PdfLegStatus` routes, exactly
+  **one** (`blocked`) was asserted anywhere in the e2e suites. `tdm_fetched` had
+  none - which is how #458, "the Tier-3 chain is skipped whenever Crossref
+  answers", could ship.
+
+  `route_coverage_e2e.rs` records, per route, either the test that asserts it or
+  a stated reason it does not. Three checks keep that honest:
+
+  - a claim of coverage must name a test that **exists and contains the route
+    string**, so it cannot outlive the assertion it names. This caught a wrong
+    test name on its first run;
+  - a gap must carry a reason, because an unexplained gap is indistinguishable
+    from an oversight;
+  - the registry is compared against the `PdfLegStatus` variants in
+    `doiget-core`, so a new route cannot be added without deciding how it is
+    covered - the step all four bugs skipped.
+
+  Coverage went from **1 of 5** to **4 of 5**. `fetched`, `no_oa_url` and
+  `preprint_fallback` gained assertions; the known-gap count is asserted, so
+  closing one is a visible edit rather than a silent improvement.
+
+  `preprint_fallback` is worth naming: the existing blocked-leg test asserted
+  `suggested_arxiv_id`, which is the SUGGESTION. The #325 fallback actually
+  running is a different route one field away in the same envelope, and the
+  only thing separating them in the harness was an unset `DOIGET_ARXIV_BASE`.
+
+- **[test]** Writing the fifth route's test found a defect, and it is left as a
+  failing reproduction rather than muted (#462, #454).
+
+  `tdm_fetched` is reachable only through `tdm-aps` - it is the sole Tier-3
+  source that implements `fetch_content`; Elsevier, Springer and IEEE inherit
+  the default `Ok(None)` and are metadata-only. Driven over MCP with the grant
+  set, the chain **does** fire, and then:
+
+  ```
+  "detail": "network error: no allowlist registered for source tdm-aps"
+  ```
+
+  That is `HttpError::UnknownSource` - the source key is not in the client's map
+  at all - even though `tier_3_allowlists()` is purely `#[cfg]`-gated and the
+  MCP server extends its allowlists with it. #454's shape ("Tier-3 allowlists
+  never registered in the client"), reachable again.
+
+  The test is `#[ignore]`d with the error in its doc comment, so it is a
+  reproduction someone can run rather than a gap someone has to rediscover.
+
+- **[cli]** The found-nothing path now orders the sources it did not consult -
+  and says which part of that order is a finding and which is not (#505 part 3).
+
+  The issue is emphatic about the risk, and it governs the whole design: *"a
+  ranking that is wrong is worse than no ranking, because it makes people stop
+  early."*
+
+  ```
+    = note: of the sources not consulted:
+        1. openalex     lists every location a work has -- a lookup, not a guess
+        then, in NO particular order: doaj  europe-pmc  hal  openaire
+        last: core      the broadest index outside Unpaywall, so never the first try
+  ```
+
+  Two positions have a real signal. `openalex` is categorically different from
+  everything else in the list: it *lists* a work's locations, so with it enabled
+  the answer is "this repository has it", not "might". `core` is last on its own
+  module's documented grounds - broadest means least discriminating.
+
+  **The middle is returned unordered, deliberately.** The issue proposes ranking
+  it on venue, author affiliation and funder; none of those reach this point -
+  `FetchPaperOutcome` carries title, authors and year, and the DOI-prefix map is
+  Tier-3-only (ADR-0041) and absent from an `oa-only` build entirely. Rendering
+  an invented order would put a guess in the shape of a finding, which is the
+  one thing this must not do, so the output says so instead.
+
+  It is an ordering of the **full** list, never a shortlist: a source dropped
+  from the list is a source the reader will not try, and there is a test that
+  every unconsulted source appears somewhere.
 
 - **[dist]** Homebrew. `#247` promised a tap in 2026-06 and was closed as
   completed; measured against 0.8.12 it was one of the rows that did not exist
@@ -226,6 +311,43 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   #505 stays open for it.
 
 ### Fixed
+
+- **[review]** A six-agent review of the 0.8.13 promotion found eleven defects,
+  and most of them were the same class the release is about: **a statement that
+  was accurate about the mechanism and wrong about the world.** Fixed here.
+
+  - `oa_url` was documented as "always null unless `include_oa_location` is
+    set". **False.** The pre-existing Crossref-failure fallback fills it from
+    Unpaywall regardless of the flag. `source` distinguishes the two.
+  - `AttemptOutcome::NotOpenAccess` could assert the **opposite** of what
+    OpenAlex reported: a location with `is_oa: true` and no `pdf_url` was
+    labelled "not open access" on the machine-readable token, with the
+    contradicting evidence buried in prose. Now only when nothing was flagged
+    open.
+  - The "line to paste" rendered every widening variable as `VAR=1`, producing
+    `DOIGET_KEY_APS=1` - an API key that can never be valid.
+  - `docs/ERRORS.md` claimed `disposition` is **ALWAYS** present. Four tools
+    (`resolve_citation`, `batch_resolve_citations`, `tag`, `annotate`) put a
+    bare string in `error`. The claim now names its real scope.
+  - #507's bookend fix landed on the CLI and not on `doiget_fetch_paper`, so
+    the MCP path logged a blocked PDF leg as a clean, error-free success.
+  - `fetch_paper_fetch_error_envelope` hand-rolled a copy of
+    `From<&FetchError> for ErrorCode` ending in `_ => InternalError`, so a
+    mistyped DOI reported `INTERNAL_ERROR` instead of `NOT_FOUND`. It
+    delegates now.
+  - The #462 route registry's own self-check could be satisfied without the
+    claim being true, and had **no concept of `#[ignore]`** - a covering test
+    CI never runs would have counted. It now reads the named function's body
+    and refuses a skipped test. The guard had the bug it was built to catch.
+  - `Confidence::from_score` accepted any `f64` and answered confidently;
+    `europepmc`'s `NotRetrievable` carried `source_key: "europepmc"` against a
+    `Source::name()` of `"europe-pmc"`; `blocked_trace_lines` lost its doc
+    comment to a function inserted above it; ADR-0055 listed as "not in scope"
+    something the same cycle shipped; user-facing strings carried runs of
+    joined-line whitespace.
+
+  Also: `disposition` was inserted at six envelope sites and asserted at two -
+  deleting one insert failed no test. The batch site now asserts it.
 
 - **[mcp]** `error.disposition` was **missing from five failure envelopes**,
   including the two most common failures an agent sees. The change that

@@ -91,10 +91,12 @@ pub struct MetadataOnlyOutcome {
 ///
 /// # Dispatch
 ///
-/// - `Ref::Doi(_)` → Crossref first (bibliographic metadata + OA URL
-///   via `message.link[]`). If Crossref returns a usable payload the
-///   call returns immediately; Unpaywall is consulted only as a fallback
-///   when Crossref fails. The Unpaywall fallback surfaces a license
+/// - `Ref::Doi(_)` → Crossref first, for bibliographic metadata. Crossref's
+///   `message.link[]` does NOT supply an OA URL -- every entry is
+///   programme-scoped (ADR-0052, #517) -- so `oa_url` stays `None` on this
+///   path. Unpaywall is consulted as a fallback when Crossref fails, and
+///   additionally when [`MetadataOnlyOptions::include_oa_location`] is set
+///   (#539). The Unpaywall fallback surfaces a license
 ///   string and may overwrite `oa_url` with the `best_oa_location`
 ///   channel.
 /// - `Ref::Arxiv(_)` → [`ArxivSource::fetch_metadata_only`]: ONLY the
@@ -1876,7 +1878,7 @@ async fn fetch_paper_doi(
 
 /// Which OA content URL an optional source reported, if any (#445).
 ///
-/// Only the three sources that publish a direct document URL contribute.
+/// Only the four sources that publish a direct document URL contribute.
 /// OpenAIRE's `urls[]` and DataCite's `url` point at a DOI resolver or a
 /// landing page, not a file — handing those to the OA chain would spend a
 /// request to arrive at a page the chain cannot read, and report a
@@ -1890,7 +1892,7 @@ async fn fetch_paper_doi(
 /// hand back no URL. The others surface a single document URL or nothing, and
 /// "nothing" is already what the trace says.
 #[cfg(feature = "metadata")]
-fn describe_optional_source_locations(source: &str, meta: &Value) -> Option<String> {
+fn describe_optional_source_locations(source: &str, meta: &Value) -> Option<(usize, String)> {
     match source {
         "openalex" => crate::sources::openalex::describe_locations(meta),
         _ => None,
@@ -1993,9 +1995,18 @@ async fn try_optional_source_oa_fallback(
         // -- so a run whose OpenAlex record pointed straight at an
         // institutional repository reported `no OA PDF available` and gave the
         // reader nothing to act on.
-        if let Some(detail) = describe_optional_source_locations(name, &meta) {
-            if let Some(row) = attempts.iter_mut().find(|a| a.source == name) {
-                row.outcome = AttemptOutcome::NotOpenAccess { detail };
+        // Only when OpenAlex flagged NOTHING as open. A location with
+        // `is_oa: true` and no `pdf_url` is a real deposit we cannot follow --
+        // labelling that `NotOpenAccess` would assert the OPPOSITE of what the
+        // source said, on the machine-readable `consulted_not_open_access`
+        // token, with the contradicting evidence buried in prose. That is the
+        // #538 defect pointing the other way, and it is worse than saying
+        // nothing: found by review of this very change.
+        if let Some((oa, detail)) = describe_optional_source_locations(name, &meta) {
+            if oa == 0 {
+                if let Some(row) = attempts.iter_mut().find(|a| a.source == name) {
+                    row.outcome = AttemptOutcome::NotOpenAccess { detail };
+                }
             }
         }
         tracing::debug!(
