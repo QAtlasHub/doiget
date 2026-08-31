@@ -82,10 +82,34 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
     `doiget-core`, so a new route cannot be added without deciding how it is
     covered - the step all four bugs skipped.
 
-  `fetched` gained its first assertion here; `no_oa_url`, `preprint_fallback`
-  and `tdm_fetched` are recorded as gaps with reasons rather than left absent.
-  The known-gap count is asserted, so closing one is a visible edit rather than
-  a silent improvement.
+  Coverage went from **1 of 5** to **4 of 5**. `fetched`, `no_oa_url` and
+  `preprint_fallback` gained assertions; the known-gap count is asserted, so
+  closing one is a visible edit rather than a silent improvement.
+
+  `preprint_fallback` is worth naming: the existing blocked-leg test asserted
+  `suggested_arxiv_id`, which is the SUGGESTION. The #325 fallback actually
+  running is a different route one field away in the same envelope, and the
+  only thing separating them in the harness was an unset `DOIGET_ARXIV_BASE`.
+
+- **[test]** Writing the fifth route's test found a defect, and it is left as a
+  failing reproduction rather than muted (#462, #454).
+
+  `tdm_fetched` is reachable only through `tdm-aps` - it is the sole Tier-3
+  source that implements `fetch_content`; Elsevier, Springer and IEEE inherit
+  the default `Ok(None)` and are metadata-only. Driven over MCP with the grant
+  set, the chain **does** fire, and then:
+
+  ```
+  "detail": "network error: no allowlist registered for source tdm-aps"
+  ```
+
+  That is `HttpError::UnknownSource` - the source key is not in the client's map
+  at all - even though `tier_3_allowlists()` is purely `#[cfg]`-gated and the
+  MCP server extends its allowlists with it. #454's shape ("Tier-3 allowlists
+  never registered in the client"), reachable again.
+
+  The test is `#[ignore]`d with the error in its doc comment, so it is a
+  reproduction someone can run rather than a gap someone has to rediscover.
 
 - **[cli]** The found-nothing path now orders the sources it did not consult -
   and says which part of that order is a finding and which is not (#505 part 3).

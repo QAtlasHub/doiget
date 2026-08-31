@@ -61,10 +61,9 @@ const ROUTES: &[(&str, Coverage)] = &[
     ),
     (
         "no_oa_url",
-        Coverage::Gap {
-            why: "no e2e drives a DOI that resolves with no OA location anywhere; \
-                  the CLI-side found-nothing trace (#505) exercises the reporting \
-                  but not the route",
+        Coverage::By {
+            file: "fetch_paper_e2e.rs",
+            test_fn: "fetch_paper_doi_with_no_oa_anywhere_reports_the_no_oa_url_route",
         },
     ),
     (
@@ -76,18 +75,15 @@ const ROUTES: &[(&str, Coverage)] = &[
     ),
     (
         "preprint_fallback",
-        Coverage::Gap {
-            why: "the #325 automatic fallback. The existing blocked-leg test asserts \
-                  `suggested_arxiv_id`, which is the SUGGESTION, not the fallback \
-                  having run -- two different routes one letter apart in the envelope",
+        Coverage::By {
+            file: "fetch_paper_e2e.rs",
+            test_fn: "fetch_paper_doi_falls_back_to_the_arxiv_preprint",
         },
     ),
     (
         "tdm_fetched",
         Coverage::Gap {
-            why: "needs a tdm-* feature build plus credentials, so it cannot run in \
-                  the oa-only job. This is the route #458 broke, and it had no \
-                  assertion anywhere, which is why #458 shipped",
+            why: "`fetch_paper_doi_served_by_the_publisher_reports_the_tdm_fetched_route`                   is written and #[ignore]d because it FAILS: the chain fires, and the                   client answers `no allowlist registered for source tdm-aps`. Only                   tdm-aps implements `fetch_content` at all, so that is the whole                   route. #454's shape, reachable again",
         },
     ),
 ];
@@ -222,7 +218,7 @@ fn every_route_is_either_covered_or_has_a_stated_reason() {
     // might read into a number that has to be updated when it changes.
     assert_eq!(
         uncovered.len(),
-        3,
+        1,
         "known gaps changed: {uncovered:?}. If a route just gained an assertion,          move it from `Gap` to `By` and drop this count by one -- the point is          that closing a gap is a visible edit, not a silent improvement."
     );
 }
