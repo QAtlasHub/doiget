@@ -216,6 +216,29 @@ is the binding spec and full runbook. Summary:
   to the fixed commit (the pipeline runs the workflow/scripts *as of the
   tagged tree*). Do not reintroduce a perpetual "release PR".
 
+### Homebrew: one step after a stable release
+
+`Formula/doiget.rb` pins the release binaries by `sha256`, and those checksums
+do not exist until the release has published its assets. So the formula lags
+the tag by one commit, on purpose, and closing that gap is a maintainer step:
+
+```sh
+scripts/update-homebrew-formula.sh 0.8.12      # reads the release's .sha256 assets
+bash scripts/update-homebrew-formula.test.sh   # the same check CI runs
+git commit -s Formula/doiget.rb -m "chore(homebrew): formula for 0.8.12"
+```
+
+Only for **stable** releases. Beta tags are not published to the tap.
+
+It is not automated, and that is a decision rather than an omission: committing
+the formula back from the release workflow needs a token with write access to a
+protected branch, and that token is exactly what
+[#426](https://github.com/QAtlasHub/doiget/issues/426) says is broken. Building
+the tap's correctness on a known-broken token would be worse than a documented
+step. The generator plus `update-homebrew-formula.test.sh` mean the step cannot
+be done *wrong* -- a hand-edit, a bad checksum, or a `v`-prefixed version all
+fail CI -- only forgotten, which `brew info doiget` makes visible.
+
 ### npm: the one-time bootstrap
 
 The `publish to npm` job authenticates over OIDC and holds no `NPM_TOKEN`.
