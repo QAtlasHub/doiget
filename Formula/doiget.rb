@@ -9,7 +9,7 @@
 class Doiget < Formula
   desc "Open Access paper fetcher with an MCP server"
   homepage "https://github.com/QAtlasHub/doiget"
-  version "0.8.12"
+  version "0.8.13"
   license "MIT"
 
   # The published binaries are the release assets themselves, not archives, so
@@ -17,19 +17,19 @@ class Doiget < Formula
   # which is why there are no dependencies to declare.
   on_macos do
     on_arm do
-      url "https://github.com/QAtlasHub/doiget/releases/download/v0.8.12/doiget-macos-aarch64"
-      sha256 "8aa163dba6c34527ae4ce819835aa138779fdad5041236830ae8833ad18b51cf"
+      url "https://github.com/QAtlasHub/doiget/releases/download/v0.8.13/doiget-macos-aarch64"
+      sha256 "7daa6b22fabd726d6e707887375da1eab750c53ef63554523c7403b5badb34fc"
     end
     on_intel do
-      url "https://github.com/QAtlasHub/doiget/releases/download/v0.8.12/doiget-macos-x86_64"
-      sha256 "caabe258798c9b10f53d3f4238e233e8daa3060596b05bed740e591224f10c5f"
+      url "https://github.com/QAtlasHub/doiget/releases/download/v0.8.13/doiget-macos-x86_64"
+      sha256 "17c7e3d733b446ab7186794020b0692dae0886cc5edaad455565924e602d4c1c"
     end
   end
 
   on_linux do
     on_intel do
-      url "https://github.com/QAtlasHub/doiget/releases/download/v0.8.12/doiget-linux-x86_64"
-      sha256 "e22c603447b1a2bc9b7c8cf9616085e789334541c6611e368e69aa2333fa61a5"
+      url "https://github.com/QAtlasHub/doiget/releases/download/v0.8.13/doiget-linux-x86_64"
+      sha256 "4e6a4d09c6bf4056cb02f64bfeb6e2c71340b80646e6f3afeef4b39557806680"
     end
   end
 
