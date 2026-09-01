@@ -258,3 +258,32 @@ async fn paper_text_unconverted_paper_maps_to_text_unavailable() -> anyhow::Resu
     drop(td);
     Ok(())
 }
+
+/// The sibling tool got the same re-code and had no test of its own, so the
+/// two could have drifted the moment one was edited -- which is the failure
+/// this release is about.
+#[tokio::test]
+#[serial_test::serial]
+async fn paper_tex_source_doi_is_terminal_not_a_config_problem() -> anyhow::Result<()> {
+    let env = EnvGuard::new(ENV_KEYS);
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_paper_tex_source").with_arguments(args))
+        .await?;
+    let s = result.structured_content.as_ref().expect("structured");
+
+    assert_eq!(s["ok"], serde_json::json!(false), "envelope: {s:?}");
+    assert_eq!(s["error"]["code"], serde_json::json!("NOT_IMPLEMENTED"));
+    assert_eq!(s["error"]["disposition"], serde_json::json!("terminal"));
+    assert_eq!(s["ref"], serde_json::json!("10.1234/example"));
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    Ok(())
+}

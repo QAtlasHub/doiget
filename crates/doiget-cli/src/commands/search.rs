@@ -380,6 +380,52 @@ mod tests {
         assert_eq!(v["results"][0]["abstract"], "abs");
     }
 
+    /// #534 on THIS surface. The fix landed on the MCP tool first, so
+    /// `doiget search --mode json` went on emitting the exact envelope the
+    /// issue was filed about -- `ok: true`, `total_results: 0`, nothing to
+    /// tell a script that the query, not the literature, was the problem.
+    ///
+    /// Driven through the real `external_envelope`, the function `--mode json`
+    /// prints.
+    #[test]
+    fn a_long_query_that_matched_nothing_carries_the_hint() {
+        let results = PaperSearchResults {
+            results: vec![],
+            total_results: Some(0),
+        };
+        let q = "lithium refractoriness after discontinuation kindling sensitization course of illness Post";
+        let v = external_envelope(q, &results);
+        assert_eq!(v["ok"], true, "still a success envelope: {v}");
+        assert_eq!(v["count"], 0);
+        let hint = v["hint"].as_str().unwrap_or_default();
+        assert!(hint.contains("10 terms"), "names the count: {hint:?}");
+        assert!(hint.contains("3-5"), "says what to do instead: {hint:?}");
+    }
+
+    /// A short query matching nothing may genuinely mean nothing is indexed,
+    /// and a hint on every empty result would train readers to skip it.
+    #[test]
+    fn a_short_query_that_matched_nothing_is_left_alone() {
+        let results = PaperSearchResults {
+            results: vec![],
+            total_results: Some(0),
+        };
+        let v = external_envelope("depersonalization derealization", &results);
+        assert!(v.get("hint").is_none(), "no hint on a short query: {v}");
+    }
+
+    /// And a query that DID match carries no hint, however long it is.
+    #[test]
+    fn a_long_query_with_results_carries_no_hint() {
+        let results = PaperSearchResults {
+            results: vec![hit()],
+            total_results: Some(1),
+        };
+        let q = "a b c d e f g h i j k l";
+        let v = external_envelope(q, &results);
+        assert!(v.get("hint").is_none(), "results present: {v}");
+    }
+
     #[test]
     fn sort_arg_lowers_to_core() {
         // Relevance is the only sort (#290); `cited` / `recent` were removed.
