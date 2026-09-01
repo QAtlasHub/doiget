@@ -309,10 +309,24 @@ jobs:
         # makes forgetting it red.
         run: |
           set -euo pipefail
-          formula=$(grep -oE '^  version "[^"]+"' Formula/doiget.rb | grep -oE '[0-9][^"]*')
-          plugin=$(grep -oE '"version": *"[^"]+"' .claude-plugin/plugin.json | grep -oE '[0-9][^"]*')
-          market=$(grep -oE '"version": *"[^"]+"' .claude-plugin/marketplace.json | grep -oE '[0-9][^"]*')
-          pinned=$(grep -oE '"doiget-cli@[^"]+"' .mcp.json | grep -oE '[0-9][^"]*')
+          # `|| true` on each is load-bearing. Under `set -euo pipefail` a bare
+          # assignment takes the exit status of its command substitution, so a
+          # `grep` that matches nothing -- somebody deletes the `@version` pin from
+          # .mcp.json, or reformats a manifest -- kills the step HERE, before the
+          # `::error::` written to explain it. It failed closed, which is right, and
+          # said nothing, which is the defect this whole job exists to catch. Found
+          # by review of this change; the same shape was fixed one file over in
+          # npm/doiget-cli/test/stage-npm.test.sh.
+          formula=$(grep -oE '^  version "[^"]+"' Formula/doiget.rb | grep -oE '[0-9][^"]*' || true)
+          plugin=$(grep -oE '"version": *"[^"]+"' .claude-plugin/plugin.json | grep -oE '[0-9][^"]*' || true)
+          market=$(grep -oE '"version": *"[^"]+"' .claude-plugin/marketplace.json | grep -oE '[0-9][^"]*' || true)
+          pinned=$(grep -oE '"doiget-cli@[^"]+"' .mcp.json | grep -oE '[0-9][^"]*' || true)
+          for pair in "Formula/doiget.rb:$formula" ".claude-plugin/plugin.json:$plugin" ".claude-plugin/marketplace.json:$market" ".mcp.json:$pinned"; do
+            if [ -z "${pair#*:}" ]; then
+              echo "::error::posture-lint release-sync: no version found in ${pair%%:*} -- the file was reformatted, or .mcp.json lost its doiget-cli@<version> pin"
+              exit 1
+            fi
+          done
           echo "formula=$formula plugin=$plugin marketplace=$market .mcp.json=$pinned"
           for v in "$plugin" "$market" "$pinned"; do
             if [ "$v" != "$formula" ]; then
@@ -320,9 +334,13 @@ jobs:
               exit 1
             fi
           done
-          # An unpublished pin would send every plugin user to a 404.
+          # An unpublished pin would send every plugin user to a 404. Any `-`
+          # suffix is a prerelease per SemVer; the first version of this listed
+          # spellings (`*-beta.*|*-rc.*`) and let `0.9.0-alpha.2` straight
+          # through, which is the enumerate-the-known-cases mistake this
+          # release is otherwise about.
           case "$pinned" in
-            *-beta.*|*-rc.*)
+            *-*)
               echo "::error::posture-lint release-sync: .mcp.json pins a prerelease ($pinned); the plugin must point at a published stable"
               exit 1
               ;;
