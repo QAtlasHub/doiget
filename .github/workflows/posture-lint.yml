@@ -395,8 +395,12 @@ jobs:
           # One `insert("disposition"` per `insert("code"`. Not a proof, but it
           # fails on exactly the mistake that was made.
           f=crates/doiget-mcp/src/lib.rs
-          codes="$(grep -c 'insert("code"' "$f")"
-          disps="$(grep -c 'insert("disposition"' "$f")"
+          # `|| true`: `grep -c` exits 1 on a zero count, and under
+          # `set -euo pipefail` that kills the step at the assignment, before
+          # the `::error::` written below to explain it. Same guard as the
+          # release-sync step and `capture()`.
+          codes="$(grep -c 'insert("code"' "$f" || true)"
+          disps="$(grep -c 'insert("disposition"' "$f" || true)"
           if [ "$codes" != "$disps" ]; then
             echo "::error::posture-lint: $codes hand-built error objects but $disps dispositions in $f - a failure envelope is missing error.disposition (#506)"
             grep -n 'insert("code"' "$f"

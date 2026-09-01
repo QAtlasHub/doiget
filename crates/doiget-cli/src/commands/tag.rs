@@ -122,7 +122,7 @@ pub fn run(
     }
 
     store
-        .write(&safekey, &metadata, None)
+        .write_user_authored(&safekey, &metadata, None)
         .with_context(|| format!("failed to write updated metadata for {ref_str}"))?;
 
     Ok(())
@@ -174,7 +174,7 @@ pub fn run_annotate(ref_str: String, text: Option<String>, clear: bool) -> Resul
     }
 
     store
-        .write(&safekey, &metadata, None)
+        .write_user_authored(&safekey, &metadata, None)
         .with_context(|| format!("failed to write updated metadata for {ref_str}"))?;
 
     Ok(())

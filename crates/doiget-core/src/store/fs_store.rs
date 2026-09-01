@@ -37,7 +37,7 @@ use fs2::FileExt;
 use tracing::warn;
 
 use super::metadata::{DoigetExtension, Metadata, LICENSE_UNDETERMINED};
-use super::{EntryInfo, Store, StoreError};
+use super::{EntryInfo, Store, StoreError, UserFields};
 use crate::{Safekey, SCHEMA_VERSION};
 
 /// Subdirectory under `<root>` that holds metadata TOML files and their
@@ -203,56 +203,16 @@ impl Store for FsStore {
     }
 
     fn write(&self, key: &Safekey, m: &Metadata, pdf: Option<&Utf8Path>) -> Result<(), StoreError> {
-        let meta_path = self.metadata_path(key)?;
-        let lock_path = self.lock_path(key)?;
-        let lock_file = open_or_create_lock_file(&lock_path)?;
-        acquire_lock(&lock_file, &lock_path, LockMode::Exclusive)?;
+        self.write_with_impl(key, m, pdf, UserFields::Preserve)
+    }
 
-        // Re-read existing TOML (if any) so we can apply the §6 merge rule:
-        // never overwrite a reserved top-level field previously written by
-        // another tool. We DO let the new value win for the [doiget] table
-        // (doiget owns it per §6) and for `other` (preserve unknown tables
-        // on update; new contents replace prior contents).
-        let merged = if meta_path.exists() {
-            let raw = std::fs::read_to_string(meta_path.as_std_path())?;
-            let existing: Metadata = toml::from_str(&raw)?;
-            check_schema_version_for_write(&existing.schema_version)?;
-            merge_metadata(existing, m.clone())
-        } else {
-            m.clone()
-        };
-
-        // Serialize → normalize per §7. The normalizer enforces alphabetical
-        // key order within tables and a trailing `\n`.
-        let normalized = normalize_toml(&merged)?;
-
-        // Issue #122 — crash-consistent ordering: the PDF is written
-        // BEFORE the metadata that references it. A crash between the
-        // two atomic renames then leaves either the previous
-        // consistent entry or no metadata at all — NEVER metadata
-        // whose `pdf_path` points at a `.pdf` that does not exist
-        // yet. (The reverse order could publish a dangling pointer.)
-        // Worst case under the new order is an orphan `<safekey>.pdf`
-        // with stale/absent metadata, which list/search ignore (they
-        // key off metadata) and a re-fetch overwrites — strictly
-        // safer than a torn pointer. There is still no cross-file
-        // transaction; this ordering is the bounded MVP guarantee
-        // (documented in STORE.md §5).
-        if let Some(pdf_src) = pdf {
-            let pdf_dst = self.pdf_path(key)?;
-            let mut bytes = Vec::new();
-            File::open(pdf_src.as_std_path())?.read_to_end(&mut bytes)?;
-            // Same atomic dance as the metadata, byte-by-byte.
-            atomic_write(&pdf_dst, &bytes)?;
-        }
-
-        // Atomic write per §5: tmp → fsync → rename → fsync parent.
-        // Done LAST so the metadata only becomes visible once its PDF
-        // (if any) is already durably on disk.
-        atomic_write(&meta_path, normalized.as_bytes())?;
-
-        let _ = <File as FileExt>::unlock(&lock_file);
-        Ok(())
+    fn write_user_authored(
+        &self,
+        key: &Safekey,
+        m: &Metadata,
+        pdf: Option<&Utf8Path>,
+    ) -> Result<(), StoreError> {
+        self.write_with_impl(key, m, pdf, UserFields::Authored)
     }
 
     fn list_recent(&self, limit: usize) -> Result<Vec<EntryInfo>, StoreError> {
@@ -298,6 +258,67 @@ impl Store for FsStore {
             }
         }
         Ok(hits)
+    }
+}
+
+impl FsStore {
+    fn write_with_impl(
+        &self,
+        key: &Safekey,
+        m: &Metadata,
+        pdf: Option<&Utf8Path>,
+        user_fields: UserFields,
+    ) -> Result<(), StoreError> {
+        let meta_path = self.metadata_path(key)?;
+        let lock_path = self.lock_path(key)?;
+        let lock_file = open_or_create_lock_file(&lock_path)?;
+        acquire_lock(&lock_file, &lock_path, LockMode::Exclusive)?;
+
+        // Re-read existing TOML (if any) so we can apply the §6 merge rule:
+        // never overwrite a reserved top-level field previously written by
+        // another tool. We DO let the new value win for the [doiget] table
+        // (doiget owns it per §6) and for `other` (preserve unknown tables
+        // on update; new contents replace prior contents).
+        let merged = if meta_path.exists() {
+            let raw = std::fs::read_to_string(meta_path.as_std_path())?;
+            let existing: Metadata = toml::from_str(&raw)?;
+            check_schema_version_for_write(&existing.schema_version)?;
+            merge_metadata(existing, m.clone(), user_fields)
+        } else {
+            m.clone()
+        };
+
+        // Serialize → normalize per §7. The normalizer enforces alphabetical
+        // key order within tables and a trailing `\n`.
+        let normalized = normalize_toml(&merged)?;
+
+        // Issue #122 — crash-consistent ordering: the PDF is written
+        // BEFORE the metadata that references it. A crash between the
+        // two atomic renames then leaves either the previous
+        // consistent entry or no metadata at all — NEVER metadata
+        // whose `pdf_path` points at a `.pdf` that does not exist
+        // yet. (The reverse order could publish a dangling pointer.)
+        // Worst case under the new order is an orphan `<safekey>.pdf`
+        // with stale/absent metadata, which list/search ignore (they
+        // key off metadata) and a re-fetch overwrites — strictly
+        // safer than a torn pointer. There is still no cross-file
+        // transaction; this ordering is the bounded MVP guarantee
+        // (documented in STORE.md §5).
+        if let Some(pdf_src) = pdf {
+            let pdf_dst = self.pdf_path(key)?;
+            let mut bytes = Vec::new();
+            File::open(pdf_src.as_std_path())?.read_to_end(&mut bytes)?;
+            // Same atomic dance as the metadata, byte-by-byte.
+            atomic_write(&pdf_dst, &bytes)?;
+        }
+
+        // Atomic write per §5: tmp → fsync → rename → fsync parent.
+        // Done LAST so the metadata only becomes visible once its PDF
+        // (if any) is already durably on disk.
+        atomic_write(&meta_path, normalized.as_bytes())?;
+
+        let _ = <File as FileExt>::unlock(&lock_file);
+        Ok(())
     }
 }
 
@@ -451,7 +472,7 @@ fn parse_schema_version(s: &str) -> Result<(u32, u32), StoreError> {
 /// in `existing` not present in `incoming` are kept; otherwise `incoming`
 /// wins (callers usually leave `other` empty on a re-fetch, so existing
 /// fields survive intact).
-fn merge_metadata(existing: Metadata, incoming: Metadata) -> Metadata {
+fn merge_metadata(existing: Metadata, incoming: Metadata, user_fields: UserFields) -> Metadata {
     let mut out = incoming.clone();
 
     // schema_version: never downgrade. The §6 exception explicitly allows a
@@ -550,6 +571,23 @@ fn merge_metadata(existing: Metadata, incoming: Metadata) -> Metadata {
             }
             if incoming_d.license == LICENSE_UNDETERMINED {
                 incoming_d.license = existing_d.license;
+            }
+            // `tags` / `collections` / `annotation` are USER-AUTHORED. A
+            // fetch never writes them -- all three orchestrator construction
+            // sites hard-code `Vec::new()` / `None` -- so letting the
+            // incoming side win meant `doiget tag X --add priority` followed
+            // by any `doiget fetch X` silently discarded the tag. Same defect
+            // ADR-0056 closed for `oa_status`/`license` two lines up, on the
+            // fields where the loss is the user's own data rather than a
+            // re-derivable reading.
+            //
+            // `UserFields::Authored` is how `doiget tag` / `doiget annotate`
+            // say they mean it, including meaning an EMPTY list: without that
+            // distinction, removing the last tag would be a silent no-op.
+            if matches!(user_fields, UserFields::Preserve) {
+                incoming_d.tags = existing_d.tags;
+                incoming_d.collections = existing_d.collections;
+                incoming_d.annotation = existing_d.annotation;
             }
         }
         // Incoming carries no [doiget] at all: keep the existing fetch record
@@ -908,7 +946,7 @@ mod tests {
         d.oa_status = None;
         d.license = LICENSE_UNDETERMINED.to_string();
 
-        let out = merge_metadata(existing, incoming);
+        let out = merge_metadata(existing, incoming, UserFields::Preserve);
         let d = out.doiget.expect("[doiget] survives");
         assert_eq!(d.oa_status.as_deref(), Some("gold"));
         assert_eq!(d.license, "CC-BY-4.0");
@@ -931,10 +969,63 @@ mod tests {
         d.oa_status = Some("closed".to_string());
         d.license = "CC-BY-NC-4.0".to_string();
 
-        let out = merge_metadata(existing, incoming);
+        let out = merge_metadata(existing, incoming, UserFields::Preserve);
         let d = out.doiget.expect("[doiget] survives");
         assert_eq!(d.oa_status.as_deref(), Some("closed"));
         assert_eq!(d.license, "CC-BY-NC-4.0");
+    }
+
+    /// A tag the user added must survive a re-fetch.
+    ///
+    /// Every `DoigetExtension` the orchestrator builds hard-codes
+    /// `tags: Vec::new()`, so before `UserFields::Preserve` the incoming
+    /// empty list won and `doiget tag X --add priority` followed by any
+    /// `doiget fetch X` discarded the tag with no warning, no log row and no
+    /// exit-code effect. ADR-0056 closed exactly this for `oa_status` and
+    /// `license` two fields over.
+    #[test]
+    fn a_fetch_does_not_discard_the_user_tags_it_never_authored() {
+        let mut existing = sample_metadata();
+        let d = existing.doiget.as_mut().expect("doiget table");
+        d.tags = vec!["priority".to_string()];
+        d.collections = vec!["to-read".to_string()];
+        d.annotation = Some("check the appendix".to_string());
+
+        // What a re-fetch hands to the store.
+        let incoming = sample_metadata();
+        assert!(
+            incoming
+                .doiget
+                .as_ref()
+                .is_some_and(|d| d.tags.is_empty() && d.annotation.is_none()),
+            "the fixture must model a fetch, which authors none of these"
+        );
+
+        let out = merge_metadata(existing, incoming, UserFields::Preserve);
+        let d = out.doiget.expect("doiget table");
+        assert_eq!(d.tags, vec!["priority".to_string()], "tag survived");
+        assert_eq!(d.collections, vec!["to-read".to_string()]);
+        assert_eq!(d.annotation.as_deref(), Some("check the appendix"));
+    }
+
+    /// ...and `doiget tag --remove` of the last tag still empties it.
+    ///
+    /// This is why the policy is a parameter rather than "preserve when the
+    /// incoming value is empty": for an authored write the empty list IS the
+    /// intent, and collapsing the two would make removal a silent no-op --
+    /// trading one silent data problem for another.
+    #[test]
+    fn an_authored_write_can_empty_the_user_fields() {
+        let mut existing = sample_metadata();
+        let d = existing.doiget.as_mut().expect("doiget table");
+        d.tags = vec!["priority".to_string()];
+        d.annotation = Some("old note".to_string());
+
+        let incoming = sample_metadata(); // what `tag --remove` writes back
+        let out = merge_metadata(existing, incoming, UserFields::Authored);
+        let d = out.doiget.expect("doiget table");
+        assert!(d.tags.is_empty(), "removal is honoured: {:?}", d.tags);
+        assert_eq!(d.annotation, None, "clear is honoured");
     }
 
     #[test]
@@ -945,7 +1036,7 @@ mod tests {
         existing.arxiv_categories = vec!["cond-mat.str-el".to_string()];
         let mut incoming = sample_metadata();
         incoming.arxiv_categories = vec![]; // re-write without categories
-        let merged = merge_metadata(existing, incoming);
+        let merged = merge_metadata(existing, incoming, UserFields::Preserve);
         assert_eq!(merged.arxiv_categories, vec!["cond-mat.str-el".to_string()]);
     }
 

@@ -2538,7 +2538,7 @@ impl Server {
         let tags = ext.tags.clone();
         let collections = ext.collections.clone();
 
-        match store.write(&safekey, &metadata, None) {
+        match store.write_user_authored(&safekey, &metadata, None) {
             Ok(()) => Ok(CallToolResult::structured(json!({
                 "ok": true,
                 "ref": input.ref_,
@@ -2686,7 +2686,7 @@ impl Server {
 
         let annotation = ext.annotation.clone();
 
-        match store.write(&safekey, &metadata, None) {
+        match store.write_user_authored(&safekey, &metadata, None) {
             Ok(()) => Ok(CallToolResult::structured(json!({
                 "ok": true,
                 "ref": input.ref_,

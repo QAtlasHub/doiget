@@ -805,7 +805,33 @@ jobs:
           # Reading the MAP cannot drift the same way. It lists platform
           # packages only, so the wrapper is excluded by construction rather
           # than by a name test somebody has to remember to update.
-          for pkg in $(grep -oE '^doiget-[a-z0-9-]+:' scripts/stage-npm.sh | tr -d ':' | sort -u); do
+          #
+          # The empty case is guarded, and that is not defensive noise. The
+          # pipeline ends in `sort -u`, which exits 0 on empty input, so
+          # `set -euo pipefail` gives NOTHING here: a grep that matches
+          # nothing (a reformat of the MAP block, a delimiter change) yields
+          # an empty word list, the loop runs zero times, and the step falls
+          # through to publish the wrapper alone -- green, with every platform
+          # binary silently missing. `npm install doiget-cli` would then
+          # succeed while its optionalDependencies fail to resolve.
+          #
+          # The `doiget-*` glob this replaced failed LOUDLY on no-match (the
+          # unexpanded pattern reached `npm publish` as a path that does not
+          # exist). Trading that for silence in the step that performs the
+          # irreversible publish is the wrong direction. posture-lint's
+          # `capture()` already guards the identical grep for the identical
+          # reason; it was applied to the check and not to the publish.
+          pkgs="$(grep -oE '^doiget-[a-z0-9-]+:' scripts/stage-npm.sh | tr -d ':' | sort -u || true)"
+          if [ -z "$pkgs" ]; then
+            echo "::error::release: no platform packages found in scripts/stage-npm.sh -- refusing to publish the wrapper alone"
+            exit 1
+          fi
+          count=$(echo "$pkgs" | wc -l | tr -d " ")
+          if [ "$count" -ne 4 ]; then
+            echo "::error::release: expected 4 platform packages, found $count: $(echo $pkgs)"
+            exit 1
+          fi
+          for pkg in $pkgs; do
             npm publish "./npm-stage/$pkg" --provenance --access public --tag "$DIST_TAG"
           done
           npm publish ./npm-stage/doiget-cli --provenance --access public --tag "$DIST_TAG"
