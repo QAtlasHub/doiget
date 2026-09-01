@@ -793,7 +793,45 @@ jobs:
           # `EALLOWGIT: Refusing to fetch "github:npm-stage/doiget-darwin-arm64"`
           # and the job died before reaching the registry at all. A path spec
           # has to look like a path.
-          for p in ./npm-stage/doiget-*; do
-            npm publish "$p" --provenance --access public --tag "$DIST_TAG"
+          # The platform list comes from `stage-npm.sh`'s MAP, not from a
+          # `doiget-*` glob. The glob used to be safe because the wrapper was
+          # named `doiget`; renaming it to `doiget-cli` made the glob match it
+          # too, so v0.8.12 published the wrapper inside the loop AND again on
+          # the line below -- `npm error You cannot publish over the previously
+          # published versions: 0.8.12`, after everything had in fact shipped.
+          # It also sorted first, so the wrapper went out ahead of the packages
+          # it pins: exactly the window the paragraph above warns about.
+          #
+          # Reading the MAP cannot drift the same way. It lists platform
+          # packages only, so the wrapper is excluded by construction rather
+          # than by a name test somebody has to remember to update.
+          #
+          # The empty case is guarded, and that is not defensive noise. The
+          # pipeline ends in `sort -u`, which exits 0 on empty input, so
+          # `set -euo pipefail` gives NOTHING here: a grep that matches
+          # nothing (a reformat of the MAP block, a delimiter change) yields
+          # an empty word list, the loop runs zero times, and the step falls
+          # through to publish the wrapper alone -- green, with every platform
+          # binary silently missing. `npm install doiget-cli` would then
+          # succeed while its optionalDependencies fail to resolve.
+          #
+          # The `doiget-*` glob this replaced failed LOUDLY on no-match (the
+          # unexpanded pattern reached `npm publish` as a path that does not
+          # exist). Trading that for silence in the step that performs the
+          # irreversible publish is the wrong direction. posture-lint's
+          # `capture()` already guards the identical grep for the identical
+          # reason; it was applied to the check and not to the publish.
+          pkgs="$(grep -oE '^doiget-[a-z0-9-]+:' scripts/stage-npm.sh | tr -d ':' | sort -u || true)"
+          if [ -z "$pkgs" ]; then
+            echo "::error::release: no platform packages found in scripts/stage-npm.sh -- refusing to publish the wrapper alone"
+            exit 1
+          fi
+          count=$(echo "$pkgs" | wc -l | tr -d " ")
+          if [ "$count" -ne 4 ]; then
+            echo "::error::release: expected 4 platform packages, found $count: $(echo $pkgs)"
+            exit 1
+          fi
+          for pkg in $pkgs; do
+            npm publish "./npm-stage/$pkg" --provenance --access public --tag "$DIST_TAG"
           done
           npm publish ./npm-stage/doiget-cli --provenance --access public --tag "$DIST_TAG"

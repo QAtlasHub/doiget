@@ -173,9 +173,10 @@ impl Source for OpenAireSource {
         })?;
 
         if !is_open_access(record) {
-            return Err(FetchError::SourceSchema {
-                hint: format!(
-                    "openaire record is not open access (bestAccessRight.code = {})",
+            return Err(FetchError::NotRetrievable {
+                source_key: "openaire".to_string(),
+                detail: format!(
+                    "record is not open access (bestAccessRight.code = {})",
                     access_right_code(record).unwrap_or("absent")
                 ),
             });
@@ -426,9 +427,18 @@ mod tests {
             .fetch(&ref_, &profile(true), &ctx)
             .await
             .expect_err("restricted records must not be returned");
+        // #538: the CATEGORY, not "some schema error". `SourceSchema`
+        // collapses to INTERNAL_ERROR at the boundary, which said the source
+        // broke; a refusal is `NoOaAvailable`, which says the work is not
+        // free here.
         assert!(
-            matches!(err, FetchError::SourceSchema { .. }),
-            "got {err:?}"
+            matches!(err, FetchError::NotRetrievable { .. }),
+            "an access refusal is its own variant, not a schema failure: {err:?}"
+        );
+        assert_eq!(
+            crate::ErrorCode::from(&err),
+            crate::ErrorCode::NoOaAvailable,
+            "and it must not surface as an internal error: {err:?}"
         );
     }
 

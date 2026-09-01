@@ -186,9 +186,12 @@ impl Source for EuropePmcSource {
         // one line before the code written to find them. The flags stay
         // in the refusal because they are what a reader checks next.
         if open_access_pdf_url(record).is_none() {
-            return Err(FetchError::SourceSchema {
-                hint: format!(
-                    "europepmc record advertises no retrievable PDF: no \
+            return Err(FetchError::NotRetrievable {
+                // Must match `Source::name()`, which is hyphenated; this said
+                // "europepmc" and only ever surfaced in a message string.
+                source_key: "europe-pmc".to_string(),
+                detail: format!(
+                    "no \
                      fullTextUrlList entry has documentStyle = pdf with \
                      availabilityCode F or OA (isOpenAccess = {}, inEPMC = {})",
                     flag(record, "isOpenAccess").unwrap_or("absent"),
@@ -489,19 +492,32 @@ mod tests {
             .await
             .expect_err("a non-OA record must be refused, not returned");
         let msg = err.to_string();
+        // #538: the CATEGORY, not "some schema error". `SourceSchema`
+        // collapses to INTERNAL_ERROR at the boundary, which said the source
+        // broke; a refusal is `NoOaAvailable`, which says the work is not
+        // free here.
         assert!(
-            matches!(err, FetchError::SourceSchema { .. }),
-            "got {err:?}"
+            matches!(err, FetchError::NotRetrievable { .. }),
+            "an access refusal is its own variant, not a schema failure: {err:?}"
+        );
+        assert_eq!(
+            crate::ErrorCode::from(&err),
+            crate::ErrorCode::NoOaAvailable,
+            "and it must not surface as an internal error: {err:?}"
         );
         assert!(
             msg.contains("isOpenAccess = N") && msg.contains("inEPMC = Y"),
             "the refusal must say WHY, naming both flags; got: {msg}"
         );
+        // #503's point survives, but it is no longer asserted through the
+        // wording. That the refusal is about RETRIEVABILITY rather than
+        // subset membership is now carried by the variant -- checked above --
+        // and by the criterion the detail names. Asserting the old phrase
+        // "no retrievable PDF" would rebuild in the test exactly the
+        // prose-coupling #538 removed from the classifier.
         assert!(
-            msg.contains("no retrievable PDF"),
-            "the refusal must be about retrievability, not subset membership \
-             — the two are distinguishable and #503 was the case where they \
-             differ; got: {msg}"
+            msg.contains("documentStyle = pdf") && msg.contains("availabilityCode"),
+            "the refusal must name the criterion it applied, which is              per-entry retrievability and not the isOpenAccess subset;              got: {msg}"
         );
     }
 

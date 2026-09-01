@@ -23,7 +23,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::orchestrator::MetadataOnlyOutcome;
+use crate::orchestrator::{MetadataOnlyOptions, MetadataOnlyOutcome};
 use crate::{Ref, RESOLVER_CACHE_TTL_DAYS};
 
 /// Current cache-entry schema version (CACHE.md §2).
@@ -45,10 +45,55 @@ struct CacheEntry {
 /// The on-disk path for a ref's cache entry:
 /// `<cache_root>/resolver/<safekey>.toml`.
 #[must_use]
-pub fn cache_file(cache_root: &Utf8Path, ref_: &Ref) -> Utf8PathBuf {
-    cache_root
-        .join("resolver")
-        .join(format!("{}.toml", ref_.safekey().as_str()))
+// `pub(crate)`, not `pub`. Nothing outside `doiget-core` calls this module --
+// the orchestrator is the only consumer -- and it is absent from
+// `docs/PUBLIC_API.md`, so every one of these was an accidental semver
+// commitment, including the on-disk cache layout they encode. This cycle
+// added the `_with_options` half and doubled that surface.
+//
+// `#[cfg(test)]` on the remaining plain wrappers is not tidying: making them
+// `pub(crate)` is what revealed that production calls none of them. They
+// default the options for this module's own tests and nothing else, and `pub`
+// had been keeping the dead-code lint quiet about it. Two of the original
+// five, `read` and `write`, turned out to have no caller anywhere -- not even
+// a test -- and are gone.
+#[cfg(test)]
+pub(crate) fn cache_file(cache_root: &Utf8Path, ref_: &Ref) -> Utf8PathBuf {
+    cache_file_with_options(cache_root, ref_, MetadataOnlyOptions::default())
+}
+
+/// [`cache_file`], keyed by the options as well as the ref.
+///
+/// A default resolve and an `include_oa_location` resolve ask different
+/// questions of the network and get different answers, so they cannot share
+/// an entry. Serving a default entry to an opt-in caller would answer with
+/// `oa_url: None` -- indistinguishable from "Unpaywall was asked and this
+/// work has no OA location", which is the one thing the caller paid a
+/// request to find out.
+///
+/// The other direction is just as wrong: reading the opt-in entry and
+/// re-fetching whenever `oa_url` is `None` would re-fetch forever for
+/// exactly the closed-access works one asks about repeatedly.
+///
+/// So: two entries, separated by a SUBDIRECTORY rather than a filename
+/// suffix. A `<safekey>.oa.toml` suffix would collide -- [`Ref::safekey`]
+/// keeps `.` (it is in the allowed set), so the DOI `10.1234/foo.oa`
+/// resolved by default and the DOI `10.1234/foo` resolved with the flag
+/// would both want `doi_10.1234_foo.oa.toml`. A safekey can never contain a
+/// path separator (`/` is replaced with `_`), so a subdirectory cannot.
+#[must_use]
+pub(crate) fn cache_file_with_options(
+    cache_root: &Utf8Path,
+    ref_: &Ref,
+    opts: MetadataOnlyOptions,
+) -> Utf8PathBuf {
+    let dir = cache_root.join("resolver");
+    let dir = if opts.include_oa_location {
+        dir.join("oa")
+    } else {
+        dir
+    };
+    dir.join(format!("{}.toml", ref_.safekey().as_str()))
 }
 
 /// Read a cached outcome for `ref_` if present and still within its TTL.
@@ -57,12 +102,25 @@ pub fn cache_file(cache_root: &Utf8Path, ref_: &Ref) -> Utf8PathBuf {
 /// expired, or a `response` blob that no longer deserializes. `now` is
 /// injected so tests can pin expiry without touching the clock.
 #[must_use]
-pub fn read_at(
+#[cfg(test)]
+pub(crate) fn read_at(
     cache_root: &Utf8Path,
     ref_: &Ref,
     now: DateTime<Utc>,
 ) -> Option<MetadataOnlyOutcome> {
-    let path = cache_file(cache_root, ref_);
+    read_at_with_options(cache_root, ref_, now, MetadataOnlyOptions::default())
+}
+
+/// [`read_at`], reading the entry keyed by `opts`. See
+/// [`cache_file_with_options`] for why the options are part of the key.
+#[must_use]
+pub(crate) fn read_at_with_options(
+    cache_root: &Utf8Path,
+    ref_: &Ref,
+    now: DateTime<Utc>,
+    opts: MetadataOnlyOptions,
+) -> Option<MetadataOnlyOutcome> {
+    let path = cache_file_with_options(cache_root, ref_, opts);
     let text = std::fs::read_to_string(&path).ok()?;
     let entry: CacheEntry = toml::from_str(&text).ok()?;
     let fetched: DateTime<Utc> = DateTime::parse_from_rfc3339(&entry.fetched_at)
@@ -75,20 +133,42 @@ pub fn read_at(
     serde_json::from_str(&entry.response).ok()
 }
 
-/// Read using the current wall clock. See [`read_at`].
+/// [`read`], reading the entry keyed by `opts`.
 #[must_use]
-pub fn read(cache_root: &Utf8Path, ref_: &Ref) -> Option<MetadataOnlyOutcome> {
-    read_at(cache_root, ref_, Utc::now())
+pub(crate) fn read_with_options(
+    cache_root: &Utf8Path,
+    ref_: &Ref,
+    opts: MetadataOnlyOptions,
+) -> Option<MetadataOnlyOutcome> {
+    read_at_with_options(cache_root, ref_, Utc::now(), opts)
 }
 
 /// Write `outcome` to the cache for `ref_`. Best-effort: returns `false`
 /// (after a `tracing::debug!`) on any I/O or serialization failure rather
 /// than propagating, since a cache write must never fail a resolve.
-pub fn write_at(
+#[cfg(test)]
+pub(crate) fn write_at(
     cache_root: &Utf8Path,
     ref_: &Ref,
     outcome: &MetadataOnlyOutcome,
     now: DateTime<Utc>,
+) -> bool {
+    write_at_with_options(
+        cache_root,
+        ref_,
+        outcome,
+        now,
+        MetadataOnlyOptions::default(),
+    )
+}
+
+/// [`write_at`], writing the entry keyed by `opts`.
+pub(crate) fn write_at_with_options(
+    cache_root: &Utf8Path,
+    ref_: &Ref,
+    outcome: &MetadataOnlyOutcome,
+    now: DateTime<Utc>,
+    opts: MetadataOnlyOptions,
 ) -> bool {
     let response = match serde_json::to_string(outcome) {
         Ok(s) => s,
@@ -111,23 +191,33 @@ pub fn write_at(
             return false;
         }
     };
-    let path = cache_file(cache_root, ref_);
+    let path = cache_file_with_options(cache_root, ref_, opts);
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
             tracing::debug!(error = %e, dir = %parent, "resolver cache: mkdir failed; skipping write");
             return false;
         }
     }
-    if let Err(e) = std::fs::write(&path, toml_text) {
+    // tmp + rename, not a plain write. A reader racing a plain write sees a
+    // half-written file, `toml::from_str` fails, and the entry degrades to a
+    // miss -- safe, per this module's best-effort contract, but it is a
+    // re-fetch nobody asked for and a `debug!` line that looks like
+    // corruption. The store next door already had the helper.
+    if let Err(e) = crate::store::atomic_write(&path, toml_text.as_bytes()) {
         tracing::debug!(error = %e, path = %path, "resolver cache: write failed");
         return false;
     }
     true
 }
 
-/// Write using the current wall clock. See [`write_at`].
-pub fn write(cache_root: &Utf8Path, ref_: &Ref, outcome: &MetadataOnlyOutcome) -> bool {
-    write_at(cache_root, ref_, outcome, Utc::now())
+/// [`write()`], writing the entry keyed by `opts`.
+pub(crate) fn write_with_options(
+    cache_root: &Utf8Path,
+    ref_: &Ref,
+    outcome: &MetadataOnlyOutcome,
+    opts: MetadataOnlyOptions,
+) -> bool {
+    write_at_with_options(cache_root, ref_, outcome, Utc::now(), opts)
 }
 
 #[cfg(test)]
@@ -157,6 +247,64 @@ mod tests {
         let got = read_at(root, &r, now).expect("cache hit");
         assert_eq!(got.source, "crossref");
         assert_eq!(got.metadata["DOI"], "10.1234/x");
+    }
+
+    /// #539: the options are part of the key, not just the request.
+    ///
+    /// A default resolve caches `oa_url: None` because it never asked. Serving
+    /// that entry to a caller who DID ask would answer the one question it
+    /// paid a round-trip for, with a value that means something else.
+    #[test]
+    fn an_opt_in_read_does_not_hit_the_default_entry() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let r = Ref::parse("10.1234/x").unwrap();
+        let now = Utc::now();
+        let with_oa = MetadataOnlyOptions::default().with_oa_location(true);
+
+        assert!(write_at(root, &r, &outcome(), now));
+        assert!(
+            read_at_with_options(root, &r, now, with_oa).is_none(),
+            "the default entry must not satisfy an opt-in read"
+        );
+        // ... and the converse, so a warm opt-in cache does not start
+        // answering default calls with a field they did not ask for.
+        let dir2 = tempfile::TempDir::new().unwrap();
+        let root2 = Utf8Path::from_path(dir2.path()).unwrap();
+        assert!(write_at_with_options(root2, &r, &outcome(), now, with_oa));
+        assert!(read_at(root2, &r, now).is_none());
+        assert!(read_at_with_options(root2, &r, now, with_oa).is_some());
+    }
+
+    /// The first version of this used a `<safekey>.oa.toml` SUFFIX, which
+    /// collides: [`Ref::safekey`] keeps `.` (it is in the allowed character
+    /// set), so the DOI `10.1234/foo.oa` resolved by default and the DOI
+    /// `10.1234/foo` resolved with the flag both wanted
+    /// `doi_10.1234_foo.oa.toml` -- one silently serving the other's answer.
+    /// A subdirectory cannot collide, because a safekey can never contain a
+    /// path separator.
+    #[test]
+    fn a_dot_oa_doi_cannot_collide_with_an_opt_in_entry() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let plain = Ref::parse("10.1234/foo").unwrap();
+        let dotted = Ref::parse("10.1234/foo.oa").unwrap();
+
+        // Guard the premise: if safekey ever starts escaping `.`, this test
+        // is no longer testing what it says it is.
+        assert!(
+            dotted.safekey().as_str().ends_with(".oa"),
+            "premise: safekey keeps '.', so a '.oa' suffix is reachable"
+        );
+
+        assert_ne!(
+            cache_file_with_options(root, &dotted, MetadataOnlyOptions::default()),
+            cache_file_with_options(
+                root,
+                &plain,
+                MetadataOnlyOptions::default().with_oa_location(true)
+            ),
+        );
     }
 
     #[test]

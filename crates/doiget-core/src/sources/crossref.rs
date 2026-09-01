@@ -179,12 +179,19 @@ impl CrossrefSource {
                 .filter(|s| !s.is_empty())
                 .collect();
 
-            let matched = query_tokens
+            // Collected, not counted: the tokens ARE the evidence, and #536
+            // is a report about a caller being handed a number with no way to
+            // tell an identity from a coincidence. In that case the matches
+            // were `quality`, `life`, `bipolar`, `2010` -- not the author, not
+            // the journal, which is the whole story and was not in the
+            // envelope.
+            let matched: Vec<String> = query_tokens
                 .iter()
                 .filter(|q| candidate_tokens.contains(*q))
-                .count();
+                .cloned()
+                .collect();
 
-            let score = matched as f64 / query_tokens.len() as f64;
+            let score = matched.len() as f64 / query_tokens.len() as f64;
 
             if score >= MIN_CITATION_SCORE {
                 let first_author = fields.authors.first().cloned().unwrap_or_default();
@@ -194,6 +201,8 @@ impl CrossrefSource {
                     author: first_author,
                     year: fields.year,
                     score,
+                    confidence: crate::Confidence::from_score(score),
+                    matched,
                     source: "crossref".to_string(),
                 });
             }
@@ -581,6 +590,82 @@ mod tests {
         assert_eq!(cand.author, "Onsager, Lars");
         assert_eq!(cand.year, Some(1944));
         assert_eq!(cand.score, 1.0);
+        // #536: an identity and a coincidence used to arrive in the same
+        // shape. Every query token was found, so this is the top band.
+        assert_eq!(cand.confidence, crate::Confidence::Exact);
+        let mut got = cand.matched.clone();
+        got.sort();
+        assert_eq!(
+            got,
+            vec!["1944".to_string(), "onsager".to_string()],
+            "the evidence behind the score, not just the score"
+        );
+    }
+
+    /// #536: the reported near-miss and the reported identity, banded.
+    ///
+    /// A citation for a paper in *Psychiatria Danubina* came back as a
+    /// different 2010 paper, in a different journal, by a different author, at
+    /// `score: 0.5` -- `quality`, `life`, `bipolar` and `2010` cleared the
+    /// floor -- in the SAME SHAPE as a `score: 1.0` identity. 0.5 is the floor
+    /// (`MIN_CITATION_SCORE`), so the worst candidate the tool can emit still
+    /// looks like a positive number.
+    #[test]
+    fn the_floor_bands_as_weak_and_a_full_match_bands_as_exact() {
+        use crate::Confidence;
+        assert_eq!(
+            Confidence::from_score(MIN_CITATION_SCORE),
+            Confidence::Weak,
+            "the worst candidate the tool can emit must not read as a match"
+        );
+        assert_eq!(Confidence::from_score(1.0), Confidence::Exact);
+
+        // Four tokens in five is the `probable` boundary; below it, `weak`.
+        assert_eq!(Confidence::from_score(0.8), Confidence::Probable);
+        assert_eq!(Confidence::from_score(0.79), Confidence::Weak);
+
+        // `Exact` compares against 0.999, not 1.0: the score is a division,
+        // and banding an all-tokens match as `Probable` on a rounding
+        // accident would be the same defect in miniature.
+        assert_eq!(Confidence::from_score(7.0 / 7.0), Confidence::Exact);
+        assert_eq!(Confidence::from_score(0.9999), Confidence::Exact);
+    }
+
+    /// A value that is not a token-overlap ratio gets the lowest band, not a
+    /// confident-looking one. `from_score` is public on a semver-strict crate
+    /// and its only caller's floor (`MIN_CITATION_SCORE`) is private to this
+    /// file, so the guard has to live in the function, not in the caller.
+    #[test]
+    fn a_score_outside_the_ratio_range_is_never_confident() {
+        use crate::Confidence;
+        for bad in [-5.0, 1.5, 50.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                Confidence::from_score(bad),
+                Confidence::Weak,
+                "{bad} is not a ratio and must not band as a match"
+            );
+        }
+    }
+
+    /// The bands must stay ordered with the score they band, or the enum says
+    /// something the number contradicts.
+    #[test]
+    fn confidence_is_monotonic_in_the_score() {
+        use crate::Confidence;
+        let rank = |c| match c {
+            Confidence::Weak => 0,
+            Confidence::Probable => 1,
+            // No wildcard: `#[non_exhaustive]` binds DOWNSTREAM crates, not
+            // this one, so a new band has to be ranked here before it compiles.
+            Confidence::Exact => 2,
+        };
+        let mut prev = 0;
+        for i in 50..=100 {
+            let r = rank(Confidence::from_score(f64::from(i) / 100.0));
+            assert!(r >= prev, "score {i}/100 banded below a lower score");
+            prev = r;
+        }
+        assert_eq!(prev, 2, "the top of the range must reach Exact");
     }
 
     #[tokio::test]

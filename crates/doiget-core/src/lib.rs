@@ -705,7 +705,11 @@ pub enum ErrorCode {
     /// message lists the candidate matches. Wire form: `"AMBIGUOUS"`.
     /// Raised by `doiget search`'s name-filter resolution (ADR-0031 D5).
     Ambiguous,
-    /// Filesystem write failed.
+    /// The local store could not serve the request: a filesystem write
+    /// failed, or a mutating tool was asked to change an entry that has not
+    /// been fetched. Deliberately not [`Self::NotFound`] in the second case --
+    /// that code says a metadata source reported the id does not exist, and a
+    /// caller acting on it would treat a perfectly good reference as dead.
     StoreError,
     /// Provenance log write failed; the fetch was aborted.
     LogError,
@@ -740,6 +744,98 @@ pub enum ErrorCode {
     /// fetch succeeded). The actionable branch is "fetch the PDF instead",
     /// not "fix the identifier". Wire form: `"TEXT_UNAVAILABLE"`.
     TextUnavailable,
+}
+
+/// What a caller should DO about a failure, as opposed to what happened.
+///
+/// `docs/ERRORS.md` §2 has carried per-code retry guidance since Phase 0 and
+/// it is good guidance — but it is a markdown table, and the agent making the
+/// retry decision never reads it. Its only signal was the NAME of the code,
+/// and several names point the wrong way: `NO_OA_AVAILABLE` is the most common
+/// failure there is, and "no OA available" invites an unbounded retry loop for
+/// something that will not change until the configuration does (#506).
+///
+/// Three states, not two. "Retryable / not retryable" cannot express the case
+/// that matters most here — the answer will not change *by itself*, but a
+/// named one-line change makes it change. Facing that, an agent should neither
+/// loop nor give up silently; it should surface the specific change to a human.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Disposition {
+    /// The answer will not change. Do not retry, and do not wait for it.
+    ///
+    /// Includes failures a caller can act on by issuing a DIFFERENT request
+    /// (`INVALID_REF`, `AMBIGUOUS`, `TEXT_UNAVAILABLE`): this call is settled,
+    /// which is what the disposition is about.
+    Terminal,
+    /// The answer may change on its own. Retry, with backoff.
+    RetryAfter,
+    /// The answer will not change by itself, but a named change makes it.
+    /// Surface it; do not loop.
+    NeedsConfig,
+}
+
+impl Disposition {
+    /// The wire token, allocation-free.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Terminal => "terminal",
+            Self::RetryAfter => "retry_after",
+            Self::NeedsConfig => "needs_config",
+        }
+    }
+}
+
+impl ErrorCode {
+    /// What a caller should do about this code — see [`Disposition`].
+    ///
+    /// This is the single source of truth. `docs/ERRORS.md` §2 carries a
+    /// Disposition column, and `errors_md_disposition_column_matches_the_code`
+    /// parses that table and asserts it against this function for every
+    /// variant, so the document and the wire cannot drift (#506; the drift
+    /// pattern is #493).
+    ///
+    /// An exhaustive `match` with no wildcard: a new code must decide.
+    #[must_use]
+    pub const fn disposition(self) -> Disposition {
+        match self {
+            // Settled. The same call will return the same thing.
+            Self::InvalidRef
+            | Self::NotFound
+            | Self::InternalError
+            // ERRORS.md is explicit: "do not retry".
+            | Self::NotImplemented
+            // A different request may work (narrow the name / fetch the PDF
+            // instead), but THIS one is answered.
+            | Self::Ambiguous
+            | Self::TextUnavailable => Disposition::Terminal,
+
+            // May change on its own.
+            Self::RateLimited
+            | Self::NetworkError
+            | Self::FetchTimeout
+            | Self::LockTimeout => Disposition::RetryAfter,
+
+            // Will not change by itself; a named change makes it.
+            //
+            // `NoOaAvailable` sits here rather than in `RetryAfter` on
+            // purpose: it is the most common failure, and ERRORS.md's "Try
+            // later, or enable opt-in source" reads to a machine as the
+            // former when it is nearly always the latter.
+            //
+            // `StoreError` / `LogError` are disk and permission problems. A
+            // machine cannot name the fix, but it must not loop on it either,
+            // and "surface this to a human" is exactly what this disposition
+            // means.
+            Self::NoOaAvailable
+            | Self::CapabilityDenied
+            | Self::SchemaTooNew
+            | Self::StoreError
+            | Self::LogError => Disposition::NeedsConfig,
+        }
+    }
 }
 
 impl ErrorCode {
@@ -906,8 +1002,84 @@ pub struct DenialContext {
 // ResolvedCandidate / ResolveResult (Issue #242)
 // ---------------------------------------------------------------------------
 
+/// How much of the query a candidate actually matched, as something an
+/// agent can branch on (#536).
+///
+/// `score` alone is not judgement material. For it to work as a gate, the
+/// consumer has to already know that the scorer is token overlap rather than
+/// semantic similarity, that 0.5 is the FLOOR so the worst candidate the tool
+/// will ever emit still looks like a positive number, and that for a citation
+/// string carrying author + title + journal + volume + year, 0.5 means most of
+/// it did not match. None of that is in the envelope, and an agent consuming a
+/// ranked list takes the head of it.
+///
+/// The reported case: a citation for a paper in *Psychiatria Danubina* came
+/// back as a different 2010 paper in a different journal by a different author
+/// at `score: 0.5` — `quality`, `life`, `bipolar` and `2010` were enough to
+/// clear the floor — in the same shape as a `score: 1.0` identity.
+///
+/// # These are bands over token overlap, not a semantic verdict
+///
+/// [`Self::Exact`] means every token in the query was found somewhere in the
+/// candidate record. That is a strong signal and it is still not proof: a
+/// short query can match the wrong paper completely. The bands make the
+/// difference between "identity" and "coincidence" legible; they do not
+/// remove the need to verify before citing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Confidence {
+    /// Every query token matched. Verify before citing, but this is an
+    /// identity rather than an overlap.
+    Exact,
+    /// At least four query tokens in five matched.
+    Probable,
+    /// Cleared the 0.5 floor and no more. For a known-item lookup this is a
+    /// NEGATIVE result wearing a positive number.
+    Weak,
+}
+
+impl Confidence {
+    /// Band a token-overlap score.
+    ///
+    /// The floor is 0.5 (`MIN_CITATION_SCORE`), so the range actually in play
+    /// is 0.5..=1.0 and the split at 0.8 asks for four tokens in five. `Exact`
+    /// compares against 0.999 rather than 1.0 because the score is a division:
+    /// asking for bit-exact equality would band an all-tokens match as
+    /// `Probable` on a rounding accident.
+    /// A score outside `0.0..=1.0`, or `NaN`, is not a token-overlap ratio
+    /// and gets the lowest band rather than a confident-looking answer. The
+    /// only caller today guards with `MIN_CITATION_SCORE`, but that constant
+    /// is private to `crossref.rs` and invisible from this signature -- and
+    /// this is a public function on a semver-strict crate.
+    #[must_use]
+    pub fn from_score(score: f64) -> Self {
+        if !score.is_finite() || !(0.0..=1.0).contains(&score) {
+            return Self::Weak;
+        }
+        if score >= 0.999 {
+            Self::Exact
+        } else if score >= 0.8 {
+            Self::Probable
+        } else {
+            Self::Weak
+        }
+    }
+
+    /// The wire token, allocation-free.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Probable => "probable",
+            Self::Weak => "weak",
+        }
+    }
+}
+
 /// A candidate paper resolved from a bibliographic citation string.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ResolvedCandidate {
     /// Resolved DOI.
     pub doi: String,
@@ -918,7 +1090,20 @@ pub struct ResolvedCandidate {
     /// Publication year, if resolved.
     pub year: Option<i32>,
     /// Token similarity overlap score in `0.0..=1.0`.
+    ///
+    /// Thresholded at `0.5`, so this is never below the floor — which is
+    /// exactly why it reads as a positive number even at its worst. Branch on
+    /// [`Self::confidence`] instead (#536).
     pub score: f64,
+    /// [`Self::score`] banded into something an agent can branch on without
+    /// knowing anything about the scorer (#536).
+    pub confidence: Confidence,
+    /// The query tokens that were found in this candidate's record.
+    ///
+    /// The evidence behind the score, so a reader can see *what* matched: in
+    /// the #536 case it was `quality`, `life`, `bipolar`, `2010` — none of
+    /// them the author or the journal, which is the whole story.
+    pub matched: Vec<String>,
     /// Resolving metadata source (e.g. `"crossref"`).
     pub source: String,
 }
@@ -2107,6 +2292,74 @@ agreed = true
                 input
             );
         }
+    }
+
+    /// #506: `docs/ERRORS.md` §2 and [`ErrorCode::disposition`] are the same
+    /// claim written twice, so this asserts they say the same thing.
+    ///
+    /// The issue asked for exactly this ("the ERRORS.md §2 table either
+    /// generated from it or asserted against it in a test — otherwise the doc
+    /// and the wire drift, which is the #493 pattern"). Generating the table
+    /// would have cost the per-code prose, which is the useful part; asserting
+    /// it keeps both.
+    ///
+    /// Reads the shipped document rather than a fixture copy, so a doc edit
+    /// that contradicts the code fails here and not in someone's agent.
+    #[test]
+    fn errors_md_disposition_column_matches_the_code() {
+        // Resolves relative to this file; three levels up is the workspace
+        // root (same reasoning as `safekey_matches_reference_vectors`).
+        let doc = include_str!("../../../docs/ERRORS.md");
+
+        let mut checked = 0usize;
+        for line in doc.lines() {
+            // `| \`CODE\` | meaning | \`disposition\` | recoverable |`
+            let Some(rest) = line.strip_prefix("| `") else {
+                continue;
+            };
+            let Some((code_str, tail)) = rest.split_once("` | ") else {
+                continue;
+            };
+            let cols: Vec<&str> = tail.split(" | ").collect();
+            if cols.len() < 3 {
+                continue;
+            }
+            let documented = cols[1].trim().trim_matches('`');
+
+            let code = match code_str {
+                "INVALID_REF" => ErrorCode::InvalidRef,
+                "NO_OA_AVAILABLE" => ErrorCode::NoOaAvailable,
+                "RATE_LIMITED" => ErrorCode::RateLimited,
+                "NETWORK_ERROR" => ErrorCode::NetworkError,
+                "NOT_FOUND" => ErrorCode::NotFound,
+                "AMBIGUOUS" => ErrorCode::Ambiguous,
+                "STORE_ERROR" => ErrorCode::StoreError,
+                "LOG_ERROR" => ErrorCode::LogError,
+                "CAPABILITY_DENIED" => ErrorCode::CapabilityDenied,
+                "FETCH_TIMEOUT" => ErrorCode::FetchTimeout,
+                "SCHEMA_TOO_NEW" => ErrorCode::SchemaTooNew,
+                "LOCK_TIMEOUT" => ErrorCode::LockTimeout,
+                "INTERNAL_ERROR" => ErrorCode::InternalError,
+                "NOT_IMPLEMENTED" => ErrorCode::NotImplemented,
+                "TEXT_UNAVAILABLE" => ErrorCode::TextUnavailable,
+                // Not a §2 row (e.g. the §6 mapping tables).
+                _ => continue,
+            };
+            assert_eq!(
+                documented,
+                code.disposition().as_wire(),
+                "docs/ERRORS.md §2 says {code_str} is `{documented}`, the code says                  `{}` — one of the two is wrong and an agent reads the second",
+                code.disposition().as_wire()
+            );
+            checked += 1;
+        }
+
+        // The guard the assertion above cannot be: a parser that silently
+        // matches nothing would pass every time. §2 has one row per code.
+        assert_eq!(
+            checked, 15,
+            "expected every ErrorCode to have a §2 row with a Disposition              column; parsed {checked}. Either a code was added without              documenting it, or the table's shape changed and this parser              stopped seeing it."
+        );
     }
 
     #[test]

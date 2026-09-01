@@ -8,7 +8,853 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `doiget-core` is the only crate with strict semver guarantees during the 0.x line; CLI
 flag changes and `doiget-mcp` tool spec changes will be called out explicitly here.
 
-## [Unreleased]
+## [0.8.13] - 2026-09-01
+
+### Fixed
+
+- **[mcp] (breaking)** `doiget_batch_fetch` and `doiget_batch_from_bibliography`
+  reported a **refused paper as `INTERNAL_ERROR` and a 404 as `NETWORK_ERROR`**
+  (#538, review of #580).
+
+  `fetch_paper_fetch_error_envelope` shed a hand-rolled copy of
+  `From<&FetchError> for ErrorCode` this cycle -- the one ending in
+  `_ => InternalError`. Two verbatim copies of that match stayed behind in
+  `build_bibliography_envelope` and `batch_fetch_success_envelope`, one screen
+  below the fix. So the headline of this release, "an access refusal is not an
+  internal error", held on `doiget_fetch_paper` and on no other fetch surface:
+  `NotFound`, `Ambiguous` and the brand-new `NotRetrievable` all fell through
+  the wildcard, and every `Http` status collapsed to `NETWORK_ERROR`.
+
+  The last one is the damaging one. `disposition` is derived from the code, so
+  a 404 on a batch entry arrived as `retry_after` -- an agent told to keep
+  retrying a DOI that will never resolve, which is the exact failure
+  [ADR-0055](docs/DECISIONS/0055-error-disposition.md) exists to prevent. Both
+  sites call `ErrorCode::from(err)` now, and a test drives the real envelope
+  builders rather than a re-implementation of them.
+
+- **[cli] (breaking)** `doiget batch` reported a PMID-only bibliography entry as
+  `INVALID_REF` (#500).
+
+  The reporting half of #500 landed on `doiget verify` and the MCP bibliography
+  tool and not here. The verdict the parser reached was flattened into a
+  placeholder string (`<unsupported-PMID:...>`) and handed back to `Ref::parse`,
+  which has exactly one thing to say. So a PubMed-exported `.bib` record with a
+  valid `pmid` field was still reported as malformed -- the one claim #500
+  exists to stop doiget making -- and the message described the placeholder
+  rather than the entry. The verdict travels as a value now
+  (`BatchEntry::Rejected`), so it cannot be flattened, and the comment claiming
+  the two arms made "different claims" is no longer false.
+
+- **[cli/mcp] (breaking)** `GraphError::Source` mapped to `NETWORK_ERROR` on the
+  MCP surface and to the wrapped `FetchError` code on the CLI.
+
+  An OpenAlex 404 during citation-graph expansion was `NOT_FOUND` (terminal) on
+  `doiget graph` and `NETWORK_ERROR` (`retry_after`) on
+  `doiget_expand_citation_graph`. The CLI doc comment said the two "cannot say
+  different things about the same error". `From<&GraphError> for ErrorCode` now
+  lives beside the enum in `doiget-core`, and all three call sites -- the third
+  was an inline copy that did not even call the helper directly above it -- go
+  through it.
+
+- **[core]** A 404/410/451 carrying a `Retry-After` header was classified
+  `NETWORK_ERROR` (follow-up to #506).
+
+  Adding `retry_after_ms` to `HttpError::HttpStatus` also added
+  `retry_after_ms: None` to the arm that maps authoritative absences, narrowing
+  it without comment or test. The header says how long to wait *if* you retry;
+  it does not make a 404 provisional.
+
+- **[cli/mcp] (breaking)** The arXiv-only text tools answered a DOI with
+  `NO_OA_AVAILABLE`, whose disposition is `needs_config`.
+
+  There is no config knob: they are arXiv-only and DOI-to-arXiv linking is not
+  built. `NOT_IMPLEMENTED` is terminal and is what `verify` and
+  `batch_from_bibliography` already give the same situation for PMIDs -- valid
+  input, absent support.
+
+  All five surfaces, not two: `doiget_paper_text` and `doiget_paper_tex_source`
+  over MCP, and `doiget text` / `doiget source` / `doiget tex-source` on the
+  CLI. The first pass changed the MCP pair only, which would have left one
+  binary answering the same question two ways -- and left the tools' own
+  advertised `description` strings, their input-schema field docs and
+  `docs/MCP_TOOLS.md` naming a code they no longer return.
+
+- **[mcp] (breaking)** `doiget_resolve_citation`, `doiget_batch_resolve_citations`,
+  `doiget_tag` and `doiget_annotate` put a **bare string** in `error`, so a
+  caller had no `code` to branch on and no `disposition` to decide a retry from.
+  All thirteen sites build `error_object` now.
+
+  Section 3 of `docs/ERRORS.md` named `every_bare_string_error_site_is_a_known_one`
+  as the guard that kept that set from growing. **The guard did not exist.** The
+  document was accurate about the four tools and wrong about the mechanism
+  keeping the list honest -- a claim resting on code nobody had written, which
+  is the defect class that document defines. It exists now, the set it pins is
+  empty, and a second test fails if the document and the list ever disagree.
+
+- **[core]** `doiget config doctor --network` still adjudicated hosts with
+  `matches` rather than `permits` (#533).
+
+  The `permits` doc comment said "the four adjudication sites ... all route
+  through here so they cannot disagree". This was a fifth, and the one whose job
+  is explaining allowlist refusals: the moment a resolver host entered its probe
+  list, the command that diagnoses #533 would have reproduced it.
+
+- **[core] (breaking)** CSL-JSON entries identified only by a PMID or PMCID
+  reported "entry has no DOI / arXiv id" (#500), and came out as `INVALID_REF`.
+  The BibTeX parser learned the distinction; this format did not, and it is the
+  one a Zotero user is most likely to export. Marked breaking for the same
+  reason as the `doiget batch` bullet above: the wire code changes to
+  `NOT_IMPLEMENTED` on `verify`, `batch` and the MCP bibliography tool for this
+  input shape.
+
+- **[cli]** `doiget search --mode json` emitted `{"ok": true, "total_results": 0}`
+  with no hint for an over-long query (#534). The fix landed on the MCP tool
+  only, so this surface went on emitting the exact envelope the issue was filed
+  about. `zero_result_hint` moved to `doiget-core`; both surfaces call it, and
+  human mode gets a `= note:` on stderr.
+
+- **[mcp]** `doiget_fetch_paper`, `doiget_batch_fetch` and
+  `doiget_batch_from_bibliography` logged `SessionEnd` as `result: "ok"` for a
+  blocked PDF leg (#507) -- on the single-ref tool, beside a non-null
+  `error_code`, so the row contradicted itself.
+
+  The clean-success rule of the CLI was ported to the MCP surface in the
+  `error_code` half only, and then only to the single-ref tool: the two batch
+  tools went on calling `.all(|r| r.outcome.is_ok())` a success for a batch
+  where every entry was refused. That is the outcome the repeat suppression of
+  #507 has to be able to see. `FetchPaperOutcome::is_clean_success` is the
+  single boundary for all four call sites now, including the identity-line
+  check in the CLI that had hand-rolled it a fourth time.
+
+### Changed
+
+- **[test]** The Tier-3 TDM-fetched route is asserted end to end and no longer
+  `#[ignore]`d (#462).
+
+  It was shipped as a failing reproduction, diagnosed as
+  "`tier_3_allowlists()` is `#[cfg]`-gated and the MCP server does extend its
+  allowlists with it, so the two disagree somewhere between construction and
+  use" -- the shape of #454, reachable again -- and raised as something to
+  decide before cutting this release.
+
+  That diagnosis was wrong, in the subject matter of this very release:
+  accurate about the code, false about the world. Both client builders have two
+  branches. The production branch does extend with `tier_3_allowlists()` and was
+  correct throughout. The test-override branch -- taken whenever any
+  `DOIGET_*_BASE` is set, which every wiremock test does -- built its allowlist
+  from a fixed table of Tier-1/2 keys with no Tier-3 entry, so no e2e on either
+  surface could reach the route. The defect was in the harness. Registering the
+  Tier-3 keys there is what the test now proves by passing, and
+  `route_coverage_e2e` has no remaining `Gap`.
+
+  What survives from that diagnosis, and is still true: `fetch_content` is
+  implemented by APS alone, so three of the four Tier-3 sources cannot reach the
+  route the tier exists for. Read it as APS coverage, not Tier-3 coverage.
+
+- **[docs]** `Formula/doiget.rb` and `scripts/update-homebrew-formula.sh` said
+  the release workflow regenerates the formula "so this file cannot describe a
+  release that does not exist". No workflow calls the generator, and
+  `CONTRIBUTING.md` -- added in the same release -- says outright that it is not
+  automated. The headers describe the real process now.
+
+- **[ci]** The Homebrew posture check said it "fails on a hand-edit, a bad
+  checksum, or a tag/version confusion". It re-reads the version and the
+  checksums from the file under test, so a well-formed checksum carrying the
+  wrong value, and a version that is simply stale, both pass. The step now says
+  what it checks and what it does not.
+
+- **[ci]** New `release-tracking files name one version` posture check.
+  `Formula/doiget.rb`, `.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json` and `.mcp.json` all record the last
+  published stable, nothing held them together, and that is how `.claude-plugin`
+  sat at 0.8.11 while 0.8.12 was shipping. Forgetting one of the four is red;
+  pinning a prerelease is red.
+
+- **[plugin]** `.mcp.json` pins `doiget-cli@0.8.12` instead of resolving the npm
+  `latest` tag on every server start. The unpinned form also meant that opening
+  this repository in Claude Code ran the *published release* rather than the
+  working tree -- editing `crates/doiget-mcp` and testing the build from last
+  month. `just mcp-dev` registers this checkout as a local-scoped server
+  instead, and `CONTRIBUTING.md` says so rather than leaving `.mcp.json` to be
+  edited.
+
+- **[cli]** `verify` and `batch` wrote wire codes as string literals
+  (`"INVALID_REF"`, `"NOT_IMPLEMENTED"`) next to a doc comment rejecting exactly
+  that. They come from `ErrorCode::as_wire` now.
+
+- **[test]** The `#[ignore]` detector in `route_coverage_e2e` matched any text
+  containing `#[ignore` in the block above a test, so a doc comment *discussing*
+  an ignored test made it report that test as skipped. It reads attribute lines.
+
+- **[docs]** In `crates/doiget-mcp/src/lib.rs`, the doc comment for
+  `store_root_env_is_usable` had drifted onto `zero_result_hint`.
+
+- **[scripts]** `scripts/*.sh` are executable, and `CONTRIBUTING.md` no longer
+  documents a command that fails on a fresh Linux or macOS clone.
+
+- **[test]** In `npm/doiget-cli/test/stage-npm.test.sh`, a `grep` matching
+  nothing killed the script under `set -e` *before* the `check no` written to
+  report that case, so the diagnostic was unreachable in the one situation it
+  exists for.
+
+### Fixed (accumulated on `next` since 0.8.12)
+
+- **[store]** A default `metadata_only` re-write **downgraded a known
+  `oa_status` and `license` to their not-determined markers**, and said nothing
+  (#583).
+
+  `docs/STORE.md` §6 does let a re-fetch rewrite the `[doiget]` table, but the
+  permission is conditional: *"This is intentional, not silent: ... the operator
+  always learns the entry was downgraded and why."* Since #539, `metadata_only`
+  only runs the OA lookup when `include_oa_location` is set, so the ordinary call
+  shape produces `oa_status: None` and `license: "unknown"` — and those won,
+  with no `note:`, no `pdf.status` and no log row. The condition the permission
+  rests on was not met.
+
+  Both values are markers, not readings: `oa_status` is "omitted when not
+  determined" and `license` falls back to `"unknown"`. A paper that genuinely
+  stops being open access reports `Some("closed")`; a license that changes
+  reports the new string. So a call that carries the marker did not look, and
+  preferring the stored value is not a guess about which is newer.
+  `merge_metadata` now keeps the stored value in exactly that case, and
+  `"unknown"` has a name (`LICENSE_UNDETERMINED`) so the check does not hang off
+  a bare literal. [ADR-0056](docs/DECISIONS/0056-not-determined-is-not-an-answer.md),
+  and `docs/STORE.md` §6's note is amended to scope its claim to determinations.
+
+  The issue as filed said `oa_url` was overwritten with null. It is not —
+  `merge_opt!(url)` already protected it, which a probe confirmed before any of
+  this was written. Only the two `[doiget]` fields were affected, and the fix is
+  a merge rule rather than the store partition the issue proposed.
+
+### Changed
+
+- **[ci]** One test was taking ten minutes and being run five times. The five
+  `test` jobs each run the whole workspace suite, and 95% of that suite's time was
+  a single test: `batch_above_window_size_fetches_every_ref`, 627 s out of 663 s,
+  with the next-slowest at 36 s.
+
+  It is not waste. The test fetches `MCP_BATCH_MAX_SIZE + 2` arXiv refs;
+  `SOURCE_RATE_OVERRIDES` puts 3 s between arXiv requests because arXiv's Terms of
+  Use do, and one attempt issues two requests — the Atom feed then the PDF, both
+  paced since #493. So 102 x 2 x 3 s = 612 s, against 609 s measured. The rate
+  limit is a legal safeguard (`RateLimits`' fields are `pub(crate)` precisely so
+  tests cannot weaken it), and it stays exactly as it is.
+
+  What was wasteful was paying it five times, on three operating systems and two
+  feature sets, for a dispatch-loop property that varies with neither. The test is
+  now `#[ignore]`d and a `test (slow)` job runs it once via `--ignored` — exactly
+  one ignored test exists workspace-wide, so the split drops nothing and duplicates
+  nothing. The broad suite went from 627 s to 18 s locally; the slow job runs in
+  parallel rather than lengthening any of the others.
+
+  The test's own comment claimed "~20 s". That was true when it was written
+  (2026-06-16, 200 ms x 102); `2cc32ab` on 2026-08-25 gave arXiv its published 3 s
+  interval and made it 15x slower, and the only symptom was CI minutes. Corrected
+  in place with the arithmetic.
+
+  Not attempted: `tokio::time::pause()`. `http.rs` already records why — wiremock
+  serves over real localhost IO, and paused time auto-advances past reqwest's
+  timeout.
+
+- **[dist]** The Claude Code plugin runs `npx -y doiget-cli serve` instead of a bare
+  `doiget serve`, so installing it **needs nothing installed beforehand** — npm
+  fetches the wrapper and the one matching platform binary on first run. Until now
+  the plugin only worked for people who had already installed doiget some other
+  way, which is why it was kept as a self-hosted marketplace rather than submitted
+  to the Anthropic plugin directory: a listing whose first run fails for everyone
+  without the binary on PATH is worse than no listing. That objection is gone, so
+  the directory submission is now viable (#513).
+
+  Verified by launching it: `npx -y doiget-cli serve` from the real registry
+  answers `initialize` as `doiget 0.8.12` and lists 22 tools, with pure JSON-RPC on
+  stdout and zero bytes on stderr.
+
+- **[deps]** dependency bumps merged from Dependabot: `flate2` 1.1.9 -> 1.1.10,
+  `uuid` 1.25.0 -> 1.26.0 (#578), `quick-xml` 0.41.0 -> 0.42.0 (#579), and the
+  `github/codeql-action`, `taiki-e/install-action` and `crate-ci/typos` CI
+  actions (#581). `cargo-vet` `safe-to-deploy` exemptions updated to match.
+
+  `quick-xml` 0.42 is not a drop-in bump: the reader is UTF-8 throughout, so
+  `QName::as_ref()` and `Attribute::key` yield `&str` rather than `&[u8]` and
+  `BytesText::decode()` is gone. Both XML parsers were migrated -- `local_name`
+  takes and returns `&str`, XML-name comparisons lost their `b` prefixes, and
+  decode-then-unescape collapsed to `quick_xml::escape::unescape`. Behaviour is
+  unchanged; the existing parser tests cover the touched paths.
+
+  `flate2` 1.1.10 changes its own dependency set: with `rust_backend` it now
+  pulls `zlib-rs` 0.6.7, a dependency this tree did not have before. It is
+  exempted at `safe-to-deploy` like every other unaudited crate here, which is a
+  statement about process, not about anyone having read it.
+
+### Added
+
+- **[mcp]** `error.retry_after_ms` - the server's own `Retry-After`, on the
+  failure envelope (#506).
+
+  I had deferred this on the grounds that no honest number survives to the
+  boundary: `Retry-After` is parsed by `parse_retry_after`, and the retries are
+  exhausted by the time an error surfaces. That was too pessimistic and worth
+  correcting. The header was read **only on the retry path**; the terminal
+  `return` discarded it. The response that *ends* the attempt carries its own
+  `Retry-After`, and that is exactly the one a caller should wait.
+
+  `HttpError::HttpStatus` carries it now, and the envelope surfaces it - but
+  **only when the server sent one**. It is never backfilled from doiget's
+  internal `backoff_delay`: that is a guess about the server, and a guess
+  wearing the name of a server-supplied value is the defect `disposition` and
+  this field exist to remove. Absent means absent.
+
+  Pairs with the disposition: `retry_after` says retry, and this says how long
+  the server asked you to wait first.
+- **[test]** A registry of which PDF route each e2e test asserts, because
+  measurement showed almost none of them did (#462).
+
+  Four "unreachable source" bugs shipped with green unit tests - #413, #442,
+  #454, #458 - and they share one shape: a source was implemented, gated,
+  allowlisted and unit-tested, and was never reached. The unit test drove the
+  `Source` impl directly and the production entry point was never in the
+  picture. #454's own guard carried a doc comment describing the failure it
+  could not catch.
+
+  Measured before writing anything: of the five `PdfLegStatus` routes, exactly
+  **one** (`blocked`) was asserted anywhere in the e2e suites. `tdm_fetched` had
+  none - which is how #458, "the Tier-3 chain is skipped whenever Crossref
+  answers", could ship.
+
+  `route_coverage_e2e.rs` records, per route, either the test that asserts it or
+  a stated reason it does not. Three checks keep that honest:
+
+  - a claim of coverage must name a test that **exists and contains the route
+    string**, so it cannot outlive the assertion it names. This caught a wrong
+    test name on its first run;
+  - a gap must carry a reason, because an unexplained gap is indistinguishable
+    from an oversight;
+  - the registry is compared against the `PdfLegStatus` variants in
+    `doiget-core`, so a new route cannot be added without deciding how it is
+    covered - the step all four bugs skipped.
+
+  Coverage went from **1 of 5** to **4 of 5**. `fetched`, `no_oa_url` and
+  `preprint_fallback` gained assertions; the known-gap count is asserted, so
+  closing one is a visible edit rather than a silent improvement.
+
+  `preprint_fallback` is worth naming: the existing blocked-leg test asserted
+  `suggested_arxiv_id`, which is the SUGGESTION. The #325 fallback actually
+  running is a different route one field away in the same envelope, and the
+  only thing separating them in the harness was an unset `DOIGET_ARXIV_BASE`.
+
+- **[test]** Writing the fifth route's test found a defect, and it is left as a
+  failing reproduction rather than muted (#462, #454).
+
+  `tdm_fetched` is reachable only through `tdm-aps` - it is the sole Tier-3
+  source that implements `fetch_content`; Elsevier, Springer and IEEE inherit
+  the default `Ok(None)` and are metadata-only. Driven over MCP with the grant
+  set, the chain **does** fire, and then:
+
+  ```
+  "detail": "network error: no allowlist registered for source tdm-aps"
+  ```
+
+  That is `HttpError::UnknownSource` - the source key is not in the client's map
+  at all - even though `tier_3_allowlists()` is purely `#[cfg]`-gated and the
+  MCP server extends its allowlists with it. #454's shape ("Tier-3 allowlists
+  never registered in the client"), reachable again.
+
+  The test is `#[ignore]`d with the error in its doc comment, so it is a
+  reproduction someone can run rather than a gap someone has to rediscover.
+
+- **[cli]** The found-nothing path now orders the sources it did not consult -
+  and says which part of that order is a finding and which is not (#505 part 3).
+
+  The issue is emphatic about the risk, and it governs the whole design: *"a
+  ranking that is wrong is worse than no ranking, because it makes people stop
+  early."*
+
+  ```
+    = note: of the sources not consulted:
+        1. openalex     lists every location a work has -- a lookup, not a guess
+        then, in NO particular order: doaj  europe-pmc  hal  openaire
+        last: core      the broadest index outside Unpaywall, so never the first try
+  ```
+
+  Two positions have a real signal. `openalex` is categorically different from
+  everything else in the list: it *lists* a work's locations, so with it enabled
+  the answer is "this repository has it", not "might". `core` is last on its own
+  module's documented grounds - broadest means least discriminating.
+
+  **The middle is returned unordered, deliberately.** The issue proposes ranking
+  it on venue, author affiliation and funder; none of those reach this point -
+  `FetchPaperOutcome` carries title, authors and year, and the DOI-prefix map is
+  Tier-3-only (ADR-0041) and absent from an `oa-only` build entirely. Rendering
+  an invented order would put a guess in the shape of a finding, which is the
+  one thing this must not do, so the output says so instead.
+
+  It is an ordering of the **full** list, never a shortlist: a source dropped
+  from the list is a source the reader will not try, and there is a test that
+  every unconsulted source appears somewhere.
+
+- **[dist]** Homebrew. `#247` promised a tap in 2026-06 and was closed as
+  completed; measured against 0.8.12 it was one of the rows that did not exist
+  (#501).
+
+  ```sh
+  brew tap QAtlasHub/doiget https://github.com/QAtlasHub/doiget
+  brew install doiget
+  ```
+
+  The tap lives in this repository rather than a separate `homebrew-doiget`,
+  which is why the tap line carries an explicit URL; a dedicated tap repo would
+  shorten it and the formula would move across unchanged.
+
+  `Formula/doiget.rb` installs the same signed release binary the GitHub Release
+  publishes, pinned by the `sha256` from that release's own `.sha256` asset -
+  the file the shell installer verifies against, so the two channels cannot
+  disagree about what they installed.
+
+  The formula is **generated**, never hand-edited, by
+  `scripts/update-homebrew-formula.sh`, and CI fails if the committed file is
+  not what the generator produces. #247 was closed while four fifths of it had
+  not shipped, so this channel is asserted rather than trusted: the tests refuse
+  a bad or truncated checksum, catch a `v`-prefixed version that would install
+  but compare wrong, and catch a hand-edit.
+
+  Updating it after a stable release is a documented maintainer step rather than
+  an automated one, because the checksums do not exist until the release has
+  published and committing them back needs a token with write access to a
+  protected branch - which is what #426 says is broken. The step cannot be done
+  wrong, only forgotten.
+
+### Changed
+
+- **[docs]** The README channel table stopped guessing. Nix said "whether it
+  exposes an installable package rather than a dev shell is unverified"; it does
+  (`flake.nix` has `packages.default` and `packages.doiget`, not only a dev
+  shell), and the row now says that the outputs exist while `nix profile
+  install` has not been exercised - which is what is actually known.
+
+  **Docker is recorded as not planned**, with the reason. #501 ranked it second
+  on the grounds that a container is "the only architecture the Tier-3 features
+  can legally be used in". That premise does not survive ADR-0002, which decides
+  the default published binary contains no TDM source code at all - an image
+  built from it would ship `oa-only,citation` like every other prebuilt channel.
+  What remains is "a shape enterprises can pin and scan", and doiget is a single
+  statically-linked binary, so a container solves no dependency problem that the
+  existing checksum and cosign bundle do not already address.
+
+- **[mcp]** Citation candidates now carry `confidence` and `matched`, so an
+  agent can tell an identity from a coincidence. A 0.5 near-miss and a 1.0 exact
+  match arrived in the same shape, and nothing in the envelope said which was
+  which (#536).
+
+  The reported case: a citation for a paper in *Psychiatria Danubina* came back
+  as a different 2010 paper, in a different journal, by a different author, at
+  `score: 0.5` - `quality`, `life`, `bipolar`, `2010` were enough to clear the
+  bar. Same structure as the `score: 1.0` identity returned minutes earlier.
+
+  A bare float is not judgement material. To use it as a gate the consumer has
+  to already know that the scorer is token overlap rather than semantic
+  similarity, and that **0.5 is the floor** - so the worst candidate the tool
+  can ever emit still looks like a positive number.
+
+  | `confidence` | meaning |
+  |---|---|
+  | `exact` | every query token was found |
+  | `probable` | at least four query tokens in five |
+  | `weak` | cleared the floor and no more - a near-miss, not a match |
+
+  `matched` lists which of the query's tokens were found. In the reported case
+  that is the whole story: not the author, not the journal.
+
+  This is the half of #372 that was never specified. #372's remedy - return the
+  top candidate with its score rather than an empty list, so the calling agent
+  can judge - is in place and correct; what the agent judges *with* was missing.
+  Both citation tool descriptions now say to branch on `confidence`, not
+  `score`.
+
+  **`doiget-core` API:** `ResolvedCandidate` gains two fields and becomes
+  `#[non_exhaustive]`, matching `MetadataOnlyOutcome` and `AttemptOutcome`, so
+  the next field is not another break.
+- **[mcp]** Every failure envelope now carries `error.disposition`, so the retry
+  decision stops being a markdown table the agent never reads. `docs/ERRORS.md`
+  §2 has had good per-code guidance since Phase 0; none of it reached the wire
+  (`grep -riE 'retryable|transient|retry' crates/doiget-mcp` returned nothing in
+  the tool descriptions), so an agent's only signal was the **name** of the code
+  - and several names point the wrong way (#506).
+
+  Three states, because two cannot express the one that matters:
+
+  | value | meaning |
+  |---|---|
+  | `terminal` | the answer will not change. Do not retry. |
+  | `retry_after` | it may change on its own. Retry with backoff. |
+  | `needs_config` | it will not change by itself, but a named change makes it. |
+
+  `NO_OA_AVAILABLE` is `needs_config`. It is the most common failure there is,
+  and both its name and its old row ("Try later, or enable opt-in source") read
+  to a machine as *wait* when it is nearly always *configure* - an invitation to
+  loop forever over something that will not change.
+
+  Derived in one place (`ErrorCode::disposition`, an exhaustive match with no
+  wildcard) and built in one place (`error_object`), because a field present on
+  some failures and absent on others teaches the reader to go back to guessing.
+  `docs/ERRORS.md` §2 gains a Disposition column, and a test parses the shipped
+  document and asserts every row against the function - so the doc and the wire
+  cannot drift. The test also asserts it parsed exactly 15 rows, since a parser
+  that silently matches nothing passes every time.
+
+  The contract is stated in the MCP server `instructions`, which every client
+  receives on `initialize`, so an agent that has never opened `ERRORS.md` still
+  meets it. See ADR-0055.
+
+  Three parts of #506 are **not** here and it stays open for them:
+  `error.retry_after_ms` (the `Retry-After` is consumed inside the retry loop
+  and no honest number survives to the boundary - a plausible default would be
+  indistinguishable from a measured one), `remediation` on `ok:false`, and
+  `rate_limit_budget` on live responses.
+
+- **[cli]** The found-nothing fetch now reports what it consulted. Previously
+  `fetched ... (metadata-only: no OA PDF available)` was byte-identical whether
+  the optional sources were on and had nothing or off and never asked - and it
+  exits 0, so unlike the blocked path there was no `error[...]` block for the
+  #413 trace to hang on. It is the one outcome that reads as a *result*, which is
+  where the silence misleads most: with the default profile that sentence means
+  only "three of eleven sources had nothing" (#505).
+
+  It now prints the same attempt trace the blocked and NOT_FOUND paths already
+  print, plus the command that widens the search - the line to paste, not prose
+  about it:
+
+  ```
+    = suggest: to widen the search:
+        DOIGET_ENABLE_HAL=1 DOIGET_ENABLE_CORE=1 doiget fetch 10.1137/0117004
+  ```
+
+  The variables come from the `Disabled` rows themselves rather than a second
+  registry, so the advice cannot claim a source was skipped when it was
+  consulted, or name a switch the chain does not read.
+
+  A switch that is **already set** is reported as a build problem instead:
+  `resolve_metadata_flag` returns false when the variable is set but the Cargo
+  feature was not compiled in, so the source still reports `Disabled` naming a
+  variable the user set an hour ago. Telling them to set it again would be the
+  same species of unhelpful as the bare `no OA PDF available`.
+
+  Part 3 of #505 - ranking which source is most likely to hold the paper - is
+  deliberately not here. The issue makes the case that a wrong ranking is worse
+  than none because it makes people stop early, and that deserves its own change.
+  #505 stays open for it.
+
+### Fixed
+
+- **[review]** A six-agent review of the 0.8.13 promotion found eleven defects,
+  and most of them were the same class the release is about: **a statement that
+  was accurate about the mechanism and wrong about the world.** Fixed here.
+
+  - `oa_url` was documented as "always null unless `include_oa_location` is
+    set". **False.** The pre-existing Crossref-failure fallback fills it from
+    Unpaywall regardless of the flag. `source` distinguishes the two.
+  - `AttemptOutcome::NotOpenAccess` could assert the **opposite** of what
+    OpenAlex reported: a location with `is_oa: true` and no `pdf_url` was
+    labelled "not open access" on the machine-readable token, with the
+    contradicting evidence buried in prose. Now only when nothing was flagged
+    open.
+  - The "line to paste" rendered every widening variable as `VAR=1`, producing
+    `DOIGET_KEY_APS=1` - an API key that can never be valid.
+  - `docs/ERRORS.md` claimed `disposition` is **ALWAYS** present. Four tools
+    (`resolve_citation`, `batch_resolve_citations`, `tag`, `annotate`) put a
+    bare string in `error`. The claim now names its real scope.
+  - #507's bookend fix landed on the CLI and not on `doiget_fetch_paper`, so
+    the MCP path logged a blocked PDF leg as a clean, error-free success.
+  - `fetch_paper_fetch_error_envelope` hand-rolled a copy of
+    `From<&FetchError> for ErrorCode` ending in `_ => InternalError`, so a
+    mistyped DOI reported `INTERNAL_ERROR` instead of `NOT_FOUND`. It
+    delegates now.
+  - The #462 route registry's own self-check could be satisfied without the
+    claim being true, and had **no concept of `#[ignore]`** - a covering test
+    CI never runs would have counted. It now reads the named function's body
+    and refuses a skipped test. The guard had the bug it was built to catch.
+  - `Confidence::from_score` accepted any `f64` and answered confidently;
+    `europepmc`'s `NotRetrievable` carried `source_key: "europepmc"` against a
+    `Source::name()` of `"europe-pmc"`; `blocked_trace_lines` lost its doc
+    comment to a function inserted above it; ADR-0055 listed as "not in scope"
+    something the same cycle shipped; user-facing strings carried runs of
+    joined-line whitespace.
+
+  Also: `disposition` was inserted at six envelope sites and asserted at two -
+  deleting one insert failed no test. The batch site now asserts it.
+
+- **[bib]** A PubMed-exported bibliography entry was reported as having **no
+  identifier**. It has a PMID (#500).
+
+  `entry has no DOI / arXiv id` is accurate about what the parser did and wrong
+  about the entry. A user reading it goes and edits a `.bib` that was fine; the
+  missing piece is on doiget's side. An existing test pinned exactly that claim,
+  with the comment "the entry has no resolvable identifier" - about an entry
+  carrying `eprinttype = {pubmed}`.
+
+  Both PubMed shapes are now named: the `pmid = {...}` field that PubMed's own
+  BibTeX export writes, and the BibLaTeX `eprint` + `eprinttype = {pubmed}` pair
+  that `arxiv_eligible` already refused, correctly and until now silently.
+  `pmcid` too.
+
+  It surfaces as **`NOT_IMPLEMENTED`, not `INVALID_REF`** - the input is valid
+  and the support is absent, and the two carry opposite advice ("wait for a
+  release" versus "correct your input"). Its disposition is `terminal`
+  accordingly (ADR-0055).
+
+  An entry with genuinely no identifier still reports `NoIdentifier`, and a DOI
+  alongside a PMID still wins: the check runs only after every supported
+  identifier has been tried, so it cannot divert an entry doiget could have
+  resolved.
+
+  This is the reporting half of #500. `Ref::Pmid` itself is blocked on something
+  the issue did not anticipate - see below.
+
+  The sentence the user reads lives in one place now
+  (`refs::unsupported_identifier_claim`). It had been hand-copied to the CLI
+  `verify` row and the MCP `batch_from_bibliography` envelope, and both copies
+  had been wrapped across source lines and re-joined with the indentation still
+  in them - shipping `which doiget                cannot resolve yet` to a
+  reader. Nothing asserted the text, so nothing failed. `#[error]` already
+  carried the same claim; the copies existed only to drop the `entry_key`
+  prefix, which each site puts in a field of its own.
+
+  Three more of the same, pre-existing and found while looking: two `= note:`
+  lines in `fetch fetch`'s widening advice and the `config.toml could not be
+  read` warning in `commands/mod.rs`. A workspace-wide lint for the pattern was
+  written and abandoned - it flags `config doctor`'s aligned two-column output
+  and test assertion messages at every space threshold from four to ten, and a
+  lint that cries wolf is a lint that gets deleted. Removing the duplication is
+  the durable half.
+
+
+- **[mcp]** `error.disposition` was **missing from five failure envelopes**,
+  including the two most common failures an agent sees. The change that
+  introduced it converted the envelopes built by `error_object` and missed the
+  ones assembled field-by-field, which are exactly the ones that also attach a
+  `denial_context` (#506).
+
+  A field present on some failures and absent on others is worse than no field:
+  it teaches the reader to fall back to guessing from the code's name, which is
+  the habit the disposition exists to replace. That is stated in ADR-0055 and
+  was then not upheld. Now pinned by a posture-lint step that counts one
+  `insert("disposition"` per `insert("code"` - not a proof, but it fails on
+  exactly the mistake that was made.
+
+- **[mcp]** `remediation` is carried on failure envelopes. `docs/ERRORS.md` §3
+  said outright that it "belongs to the `{ ok: true, ... }` envelope", so the one
+  field naming the fix was present when a call succeeded with a blocked leg and
+  absent when the call actually failed. It comes from the same
+  `remediation::for_denial` the blocked leg and the CLI `= help:` block use, and
+  is omitted when there is no named fix rather than emitted empty.
+- **[provenance]** A `session_end` row recorded **that** a call failed and not
+  **what** it failed with: every one carried `error_code: null`, including the
+  rows that carry a `ref`. So the log could not answer "what did this session
+  tell the caller about this ref?" - only "something went wrong" (#507).
+
+  That is a gap in the audit trail on its own terms. It is also what blocks the
+  repeat suppression #507 asks for: the rule is "do not re-fetch a prior
+  `terminal` or `needs_config` answer", and a disposition (ADR-0055) cannot be
+  recovered from a row with no code. Measured before building anything - the
+  only per-`ref` `fetch`/`err` rows carry `NETWORK_ERROR`, whose disposition is
+  correctly `retry_after`, so a suppression guard written against today's log
+  fires on nothing at all.
+
+  The bookend now records the code the caller was given. For `doiget fetch`
+  that is deliberately **not** always the `Result`'s: a blocked PDF leg is `Ok`
+  with a failed leg and an unclean session, and it is the outcome an agent is
+  most likely to retry, so the leg's closed-set code is recorded rather than
+  `null`. `doiget graph` gains an exhaustive `GraphError` -> `ErrorCode`
+  mapping placed next to the `map_err` that renders it, so the row and the
+  message cannot disagree. A batch bookend spans many refs and still records
+  `null`, because there is no single code; the per-ref rows carry those.
+
+  `docs/PROVENANCE_LOG.md` §3 gains the `error_code` row it never had, and
+  states the layering explicitly: a failed `fetch` leg records the **transport**
+  mechanism (`NETWORK_ERROR` for a policy block, per `ERRORS.md` §6.1) while
+  `session_end` records the code the caller saw, after reclassification. The two
+  rows for one blocked fetch legitimately differ, and each is true about its own
+  layer.
+
+- **[fetch]** When OpenAlex named a repository copy that could not be followed, the
+  run said `no OA PDF available` - a different claim from what OpenAlex actually
+  reported (#547).
+
+  `10.1109/tsp.2023.3269664` has two OpenAlex locations, and the second **is** the
+  Strathprints institutional deposit. It has no `pdf_url`, `is_oa` is `false`, and
+  its `landing_page_url` is an author-listing page (`/view/author/70486.html`)
+  rather than an item, so `open_access_pdf_url` correctly returns nothing. The
+  fact that a repository had been NAMED then reached only a `tracing::debug!`.
+
+  The attempt row now carries what the source said: how many locations, how many
+  flagged OA, how many had a PDF URL, and the repository's name. "openalex named
+  2 location(s) (IEEE Transactions on Signal Processing; Strathprints: The
+  University of Strathclyde): 0 flagged open access, 0 with a PDF URL" points the
+  reader at the repository. "no OA PDF available" points them at giving up.
+
+  Diagnostics only - no new request, no change to what is fetched. The report's
+  second suggestion, following a repository platform's own search when its URL is
+  not an item, is a real capability change and belongs with #474; #547 stays open
+  for it.
+
+- **[core]** An access refusal was classified by reading an error message back.
+  A source saying "I found it and cannot give it to you" returned
+  `FetchError::SourceSchema` with an explanatory hint, and the orchestrator
+  decided what the trace row said by substring-matching that hint for
+  `not open access` / `openAccess` / `no retrievable PDF`. Match and the row
+  read *"found, not open access"*; miss and it read *"failed"* - which tells an
+  operator the source broke rather than that the paper is not free there (#538).
+
+  It had already fired. #503 reworded Europe PMC's refusal for good reasons, the
+  hint fell out of the predicate, and every Europe PMC refusal silently became
+  `Failed`. Nothing in the source said the wording was load-bearing, and `hal`
+  matched on `openAccess` - a JSON **field name**, not prose anyone chose.
+
+  Sources now return `FetchError::NotRetrievable { source_key, detail }` and the
+  classifier matches the variant. `is_access_refusal` is gone. The compiler
+  found a second exhaustive match the substring approach had no way to flag.
+
+  It collapses to the **existing** `NO_OA_AVAILABLE` rather than adding a wire
+  code: "found it, no free copy" is what that already means, so the closed set
+  in `docs/ERRORS.md` §3 does not widen. Its §2 description does - it said
+  "Tier 1 sources reported no OA URL" and now also covers an optional source
+  holding the record with nothing retrievable. See ADR-0054.
+
+  Side effect worth naming: `SourceSchema` collapses to `INTERNAL_ERROR`, so
+  until now a paper simply not being free at one repository could be reported as
+  a bug in doiget. It no longer is.
+
+- **[fetch]** A gold-OA, cc-by paper was refused at `doi.org`, one hop before the
+  publisher whose host was already on the allowlist. Unpaywall reports
+  `best_oa_location.url` for `10.1002/pcn5.205` as literally
+  `https://doi.org/10.1002/pcn5.205`, with no `url_for_pdf` - the normal shape for
+  publisher-hosted gold OA - so the first host doiget touched on the fetch leg was
+  the DOI resolver, and it was adjudicated as though it were where the bytes come
+  from (#533).
+
+  The remediation the denial emitted was worse than the refusal: it advised adding
+  `doi.org` to `[[network.additional_hosts]]`. That does not widen the trusted
+  surface toward one publisher. It removes the bound entirely, because every DOI in
+  existence resolves through it, and an agent following the advice would get its
+  PDF while silently losing the invariant the allowlist exists to hold (ADR-0027).
+
+  A closed set of resolver hosts - `doi.org`, `dx.doi.org`, `hdl.handle.net`, each
+  measured issuing a single 302 straight to the publisher - is now **transparent**:
+  followed, but never allowlisted, never named as remediation, never counted as the
+  source of the content. Matching is exact, not the usual suffix-glob, because
+  `*.doi.org` would sweep in `www.doi.org` (the DOI Foundation's website, not a
+  resolver) and `evil-doi.org` is what an attacker registers. The host that actually
+  serves the response is adjudicated exactly as before. See ADR-0053.
+
+  This does **not** manufacture access. `10.1002/pcn5.205` now reaches Wiley and
+  meets Wiley's own cookie wall; it fails honestly at the publisher instead of
+  dishonestly at the addressing layer.
+
+  There were **five** gates asking this question and only one had ever been walked
+  end to end - #462's point exactly. They now share one predicate,
+  `SourceAllowlist::permits`, and a posture-lint step fails any gate that calls
+  `matches` on a host variable, so a sixth cannot be added without the fifth's
+  lesson.
+- **[mcp]** `oa_url` was documented as an OA URL "for the caller to act on
+  separately" and was, in practice, `null` for every DOI. The DOI path is
+  Crossref-first on the rationale that Crossref's `message.link[]` supplied an
+  OA URL without a second request - but #517 measured twelve live `link[]`
+  entries and eight captured fixtures and found **not one** general-purpose
+  entry: every one was scoped to a licensed programme (Similarity Check, TDM,
+  syndication). The extractor refuses all of them, correctly, which left the
+  field permanently empty while its documentation told agents to act on it. An
+  agent reading `oa_url: null` had no way to tell it from "this work has no free
+  copy" (#539).
+
+  A caller that wants a real OA location now passes `include_oa_location: true`
+  to `doiget_metadata_only` or `doiget_resolve_paper`, which consults Unpaywall.
+  It is off by default: the default path stays one round-trip, and nobody pays
+  for a location they will not use. No guarantee is weakened - Unpaywall is a
+  metadata source, and the URL is still reported and never followed.
+
+  With the flag set, `oa_status` says which answer you got: `"closed"` means the
+  lookup completed and there is no OA location; `null` means the lookup did not
+  complete. A failed Unpaywall call therefore leaves **both** fields null rather
+  than inventing a status, because asserting `"closed"` on the strength of a 500
+  would recreate the exact ambiguity being fixed. The Crossref metadata is still
+  returned; an optional extra failing does not sink the resolve. This mirrors
+  the `oa_status` + `pdf.status` pairing `doiget_fetch_paper` already uses.
+
+  The resolver cache keys on the options as well as the ref, so a default entry
+  is never served to a caller that asked for the location. The key is a
+  subdirectory rather than a `.oa` filename suffix: `Ref::safekey` keeps `.`, so
+  a suffix would make the DOI `10.1234/foo.oa` and the opt-in entry for
+  `10.1234/foo` collide on one file. That collision was written, then caught by
+  the test that now guards it.
+
+  `doiget-core` gains `MetadataOnlyOptions` and `*_with_options` variants of
+  `metadata_only`, `resolve_only` and `metadata_only_to_store`; the existing
+  three delegate with defaults, so nothing downstream breaks.
+
+- **[mcp]** `doiget_paper_search` returning nothing now says whether that is about
+  the query or about the literature. OpenAlex free-text matching degrades sharply
+  past roughly eight terms and returns **nothing** rather than a partial match; a
+  human reading `0 results` shortens the query and retries, but an agent reading
+  `ok: true` with an empty array reads it as a fact about the world and stops. In
+  the session behind #534 that happened eleven times in a row, and a known 1992
+  *Am J Psychiatry* paper was written off as unavailable — until an unrelated
+  three-term query surfaced it immediately.
+
+  A zero-result search is a **success** envelope, so #506's error-disposition work
+  does not reach it and #505's is scoped to the CLI. The envelope now carries a
+  `hint` naming the submitted term count and what to retry with, at the exact point
+  an agent would otherwise conclude absence. Short queries get no hint: a two-term
+  search really may mean the work is not indexed, and hinting on every empty result
+  would train readers to skip it. The tool description says the same thing, so the
+  advice survives an agent that reads schemas but not envelopes (#534).
+- **[docs]** Four tools shipped in every release with no entry in `MCP_TOOLS.md`:
+  `doiget_batch_from_bibliography`, `doiget_paper_tex_source`, `doiget_tag` and
+  `doiget_annotate`. That document is what an integrator reads to decide what the
+  server can do, and `docs/INTEGRATION/*.md` points at it, so a tool absent from it
+  is discoverable only by calling `tools/list` and reading JSON Schemas — the work
+  the document exists to save. Two of the four arrived with the tags work (#294) and
+  one with the TeX source work: the tool landed, the reference page did not (#553).
+- **[ci]** `posture-lint` now compares the tool table against the router in **both**
+  directions. Nothing did, and it had drifted both ways at once: four tools with no
+  row (#553) and one row with no tool (#552, the citation graph absent from every
+  release binary). Neither is visible from inside the other file. rmcp derives a
+  tool's name from its `#[tool]` method name, so the method list is the router's own
+  truth; the table rows are the document's. Mutation-checked in both directions —
+  deleting a row and inventing one each fail the check with the right message.
+
+- **[dist]** `.claude-plugin/plugin.json` and `marketplace.json` said **0.8.11**
+  while the repository was two releases ahead. Nothing stamps them — no script, no
+  workflow references either file — so they drift silently, and `/plugin
+  marketplace add` reads the default branch, meaning users saw the stale number.
+  Set to 0.8.12, the last released version (#513).
+- **[docs]** Two more references the `doiget` → `doiget-cli` rename left behind:
+  `README.md`'s plugin paragraph promised `npx -y doiget serve`, and the 0.8.11
+  release notes lead with two npm commands that were never valid — the wrapper is
+  not called `doiget`, and that release's npm publish failed outright, so nothing
+  was on the registry to install. The 0.8.11 entry is annotated rather than
+  rewritten (#511).
+
+- **[ci]** The npm publish job published the wrapper **twice** and failed on the
+  second attempt: `npm error You cannot publish over the previously published
+  versions: 0.8.12`. The loop globbed `./npm-stage/doiget-*`, which was safe while
+  the wrapper was named `doiget` and stopped being safe the moment it was renamed
+  to `doiget-cli` — that name starts with `doiget-` too. So the wrapper went out
+  inside the loop and again on the explicit line after it. It also sorts before
+  `doiget-darwin-*`, so it published ahead of the packages its
+  `optionalDependencies` pin: the exact window the comment above that loop warns
+  about.
+
+  Everything had already shipped by then, which is the worst shape a failure can
+  take — a red job on a complete release. The 0.8.12 npm packages are correct and
+  live; only the job's exit status was wrong.
+
+  The loop now reads the platform list from `stage-npm.sh`'s MAP, which lists
+  platform packages only, so the wrapper is excluded by construction rather than by
+  a name test somebody has to remember. `stage-npm.test.sh` bans the glob outright
+  and asserts no package is published twice; mutation-checked in both directions.
+
+  Worth recording: the identical trap was spotted in `posture-lint`'s
+  `find -name 'doiget-*'` and excluded there, in the very PR that did the rename
+  (#549). One of the two `doiget-*` patterns got the fix (#511).
 
 ## [0.8.12] - 2026-08-27
 
@@ -222,6 +1068,12 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   supply-chain shape a reviewer is trained to reject. Published by the release
   workflow over npm Trusted Publishing (OIDC, no long-lived token), after verifying
   each binary against the release's own `.sha256` (#511).
+
+  **Neither command in this entry was ever valid.** The npm publish failed on this
+  release (see the `[ci]` entry below), so nothing was on the registry; and the
+  wrapper is `doiget-cli`, not `doiget` — npm refuses the bare name as too similar
+  to the unrelated `giget`. The channel first went live at 0.8.12. Left in place
+  rather than rewritten, with this note, because the failure is the point.
 - **[dist]** **Claude Code plugin.** `/plugin marketplace add QAtlasHub/doiget` then
   `/plugin install doiget@doiget`. Self-hosted, so it needs approval from nobody;
   both manifests pass `claude plugin validate` (#513).

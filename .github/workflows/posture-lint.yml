@@ -119,6 +119,45 @@ jobs:
           fi
           echo "LICENSE OK: verbatim SPDX MIT, no trailing prose, ends at SOFTWARE., LF."
 
+      - name: MCP_TOOLS.md lists exactly the tools the router exposes (#553)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `MCP_TOOLS.md` is what an integrator reads to decide what the server
+          # can do, and `docs/INTEGRATION/*.md` points at it. Nothing checked it
+          # against the router, and it had drifted in BOTH directions at once:
+          # four tools shipped with no entry (#553), and one had an entry while
+          # not shipping at all (#552). Neither is visible from inside the other
+          # file.
+          #
+          # rmcp derives a tool's name from its `#[tool]` method name, so the
+          # method list is the router's own truth. Compared against the table
+          # rows, which are the document's.
+          fns="$(grep -oE '^[[:space:]]+(pub )?async fn doiget_[a-z_0-9]+' \
+                 crates/doiget-mcp/src/lib.rs \
+                 | grep -oE 'doiget_[a-z_0-9]+' | sort -u)"
+          rows="$(grep -oE '^\| .doiget_[a-z_0-9]+.' docs/MCP_TOOLS.md \
+                  | grep -oE 'doiget_[a-z_0-9]+' | sort -u)"
+          if [ -z "$fns" ] || [ -z "$rows" ]; then
+            echo "::error::posture-lint mcp-tools: read no tools from the router or no rows from MCP_TOOLS.md — one of the two patterns has stopped matching (#553)"
+            exit 1
+          fi
+          missing="$(comm -23 <(printf '%s\n' "$fns") <(printf '%s\n' "$rows"))"
+          extra="$(comm -13 <(printf '%s\n' "$fns") <(printf '%s\n' "$rows"))"
+          fail=0
+          if [ -n "$missing" ]; then
+            echo "::error::posture-lint mcp-tools: these tools ship but have no row in docs/MCP_TOOLS.md (#553)"
+            printf '  %s\n' $missing
+            fail=1
+          fi
+          if [ -n "$extra" ]; then
+            echo "::error::posture-lint mcp-tools: docs/MCP_TOOLS.md documents these, but the router has no such tool (#552)"
+            printf '  %s\n' $extra
+            fail=1
+          fi
+          [ "$fail" -eq 0 ]
+          echo "MCP_TOOLS.md and the router agree on $(printf '%s\n' "$fns" | wc -l | tr -d ' ') tools"
+
       - name: doiget-cli forwards every doiget-mcp feature (#373 / #516)
         shell: bash
         run: |
@@ -244,6 +283,82 @@ jobs:
         shell: bash
         run: bash npm/doiget-cli/test/release-checksums.test.sh
 
+      - name: Homebrew formula is generator output (#501)
+        shell: bash
+        # `Formula/doiget.rb` is generated from a release's published `.sha256`
+        # assets. #247 was closed as completed while four fifths of it had not
+        # shipped, so the formula is asserted rather than trusted.
+        #
+        # What this fails on: a hand-edit, a MALFORMED checksum, a `v`-prefixed
+        # version. What it CANNOT fail on, because it re-reads the version and
+        # the checksums from the very file under test: a well-formed checksum
+        # carrying the wrong value, or a version that is simply stale. It said
+        # it caught "a bad checksum" and it does not -- nothing here reaches the
+        # published `.sha256` assets, offline being the point. The stale-version
+        # half is covered by the release-sync check below; a wrong-value
+        # checksum is caught by `brew install` and by nothing before it.
+        run: bash scripts/update-homebrew-formula.test.sh
+
+      - name: release-tracking files name one version (#501, #511)
+        shell: bash
+        # Four files record "the last published stable", and a stable release
+        # bumps all four in one maintainer step. Nothing used to hold them
+        # together, which is how `.claude-plugin/*` sat at 0.8.11 while 0.8.12
+        # was the shipped release.
+        #
+        # What this CANNOT catch, stated so the check does not repeat the
+        # overclaim it exists to fix: forgetting the step ENTIRELY leaves all
+        # four at the previous release, mutually consistent, and green.
+        # Nothing in the repository knows which version is currently published.
+        # What it does catch is bumping some and not others, and pinning a
+        # version that was never released -- CHANGELOG.md is the only
+        # independent source of truth available offline.
+        run: |
+          set -euo pipefail
+          # `|| true` on each is load-bearing. Under `set -euo pipefail` a bare
+          # assignment takes the exit status of its command substitution, so a
+          # `grep` that matches nothing -- somebody deletes the `@version` pin from
+          # .mcp.json, or reformats a manifest -- kills the step HERE, before the
+          # `::error::` written to explain it. It failed closed, which is right, and
+          # said nothing, which is the defect this whole job exists to catch. Found
+          # by review of this change; the same shape was fixed one file over in
+          # npm/doiget-cli/test/stage-npm.test.sh.
+          formula=$(grep -oE '^  version "[^"]+"' Formula/doiget.rb | grep -oE '[0-9][^"]*' || true)
+          plugin=$(grep -oE '"version": *"[^"]+"' .claude-plugin/plugin.json | grep -oE '[0-9][^"]*' || true)
+          market=$(grep -oE '"version": *"[^"]+"' .claude-plugin/marketplace.json | grep -oE '[0-9][^"]*' || true)
+          pinned=$(grep -oE '"doiget-cli@[^"]+"' .mcp.json | grep -oE '[0-9][^"]*' || true)
+          for pair in "Formula/doiget.rb:$formula" ".claude-plugin/plugin.json:$plugin" ".claude-plugin/marketplace.json:$market" ".mcp.json:$pinned"; do
+            if [ -z "${pair#*:}" ]; then
+              echo "::error::posture-lint release-sync: no version found in ${pair%%:*} -- the file was reformatted, or .mcp.json lost its doiget-cli@<version> pin"
+              exit 1
+            fi
+          done
+          echo "formula=$formula plugin=$plugin marketplace=$market .mcp.json=$pinned"
+          for v in "$plugin" "$market" "$pinned"; do
+            if [ "$v" != "$formula" ]; then
+              echo "::error::posture-lint release-sync: release-tracking files disagree. Bump Formula/doiget.rb, .claude-plugin/plugin.json, .claude-plugin/marketplace.json and .mcp.json together (CONTRIBUTING.md, 'one step after a stable release')"
+              exit 1
+            fi
+          done
+          # An unpublished pin would send every plugin user to a 404. Any `-`
+          # suffix is a prerelease per SemVer; the first version of this listed
+          # spellings (`*-beta.*|*-rc.*`) and let `0.9.0-alpha.2` straight
+          # through, which is the enumerate-the-known-cases mistake this
+          # release is otherwise about.
+          case "$pinned" in
+            *-*)
+              echo "::error::posture-lint release-sync: .mcp.json pins a prerelease ($pinned); the plugin must point at a published stable"
+              exit 1
+              ;;
+          esac
+          # The one independent check available without a network: a version
+          # these files claim to track must have a released CHANGELOG section.
+          if ! grep -qE "^## \[$formula\]" CHANGELOG.md; then
+            echo "::error::posture-lint release-sync: the tracking files name $formula, which has no '## [$formula]' section in CHANGELOG.md -- they point at a version that was never released"
+            exit 1
+          fi
+          echo "release-tracking files agree on $formula, and CHANGELOG.md has its section"
+
       - name: npm packaging tests (#511)
         shell: bash
         # The name-list greps above cannot catch a wrong binary name, a
@@ -265,6 +380,57 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+
+      - name: Every hand-built error object carries a disposition (#506)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `error_object` builds most failure envelopes, but five are assembled
+          # field-by-field with `insert("code", ...)` because they also attach a
+          # `denial_context`. The first pass at #506 converted the former and
+          # missed the latter -- including the two most common failures an agent
+          # sees -- so `disposition` shipped present on some failures and absent
+          # on others, which is worse than absent everywhere.
+          #
+          # One `insert("disposition"` per `insert("code"`. Not a proof, but it
+          # fails on exactly the mistake that was made.
+          f=crates/doiget-mcp/src/lib.rs
+          # `|| true`: `grep -c` exits 1 on a zero count, and under
+          # `set -euo pipefail` that kills the step at the assignment, before
+          # the `::error::` written below to explain it. Same guard as the
+          # release-sync step and `capture()`.
+          codes="$(grep -c 'insert("code"' "$f" || true)"
+          disps="$(grep -c 'insert("disposition"' "$f" || true)"
+          if [ "$codes" != "$disps" ]; then
+            echo "::error::posture-lint: $codes hand-built error objects but $disps dispositions in $f - a failure envelope is missing error.disposition (#506)"
+            grep -n 'insert("code"' "$f"
+            exit 1
+          fi
+
+      - name: Host adjudication uses `permits`, never `matches` (#533)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `SourceAllowlist::matches` answers "is this host on the list".
+          # `SourceAllowlist::permits` answers "may we go here", which is what
+          # every gate is actually asking -- and it is the one that treats a
+          # DOI resolver as addressing rather than as a content host.
+          #
+          # #533 was a gate that asked the first question and acted on the
+          # answer: a gold-OA cc-by paper was refused at `doi.org`, one hop
+          # before the publisher whose host was already allowlisted. There
+          # were FIVE such gates and only one of them was ever walked end to
+          # end, which is #462's point exactly ("every 'unreachable source'
+          # bug passed its unit tests").
+          #
+          # The discriminator: adjudication passes a host VARIABLE
+          # (`.matches(&host)`); list-membership assertions in tests pass a
+          # LITERAL (`.matches("doaj.org")`). So a `.matches(&` anywhere is a
+          # gate that should be a `permits`.
+          if grep -rn --include='*.rs' '\.matches(&' crates/ ; then
+            echo "::error::posture-lint: host adjudication must call permits(), not matches() - see http::is_transparent_resolver (#533)"
+            exit 1
+          fi
 
       - name: No outbound-network APIs in unit / integration tests
         shell: bash

@@ -17,7 +17,7 @@ speaks **stdio only** ([ADR-0001](DECISIONS/), [`SCOPE.md`](SCOPE.md) §non-goal
 | `doiget_info` | Retrieve a store entry's metadata. |
 | `doiget_search_local` | Search store metadata (title / authors / venue). |
 | `doiget_paper_search` | External literature discovery over OpenAlex (`/works?search=`); abstract-bearing candidates for triage. Tier-1 OA metadata, always-on; **never fetches a PDF** (ADR-0031). |
-| `doiget_paper_text` | Extract an **arXiv** paper's full text from ar5iv as sectioned plain text (`ref`, optional `max_chars`). Tier-1 OA, always-on; **never opens the PDF blob** (ADR-0032). A DOI → `NO_OA_AVAILABLE`. |
+| `doiget_paper_text` | Extract an **arXiv** paper's full text from ar5iv as sectioned plain text (`ref`, optional `max_chars`). Tier-1 OA, always-on; **never opens the PDF blob** (ADR-0032). A DOI → `NOT_IMPLEMENTED` (terminal: the tool is arXiv-only and DOI→arXiv linking is #281 item 5, not a config knob). |
 | `doiget_link` | Resolve a **DOI** to its arXiv preprint + identity cluster (`{ doi, arxiv, openalex_id, title }`) over OpenAlex, for reading or dedup (#281 item 5). Tier-1 OA, always-on; **never fetches a PDF**. arXiv → DOI is a follow-up; a non-DOI ref → `INVALID_REF`. |
 | `doiget_list_recent` | Last N fetched entries. |
 | `doiget_paper_pdf_path` | Return the local path of a cached PDF. **Does not read, parse, or transmit content.** |
@@ -33,6 +33,10 @@ Additional tools:
 | `doiget_csl_export` | CSL JSON for one or many entries. |
 | `doiget_resolve_citation` | Resolve a free-form bibliographic citation string to ranked DOI candidates. |
 | `doiget_batch_resolve_citations` | Batch resolve bibliographic citation strings to ranked DOI candidates. |
+| `doiget_batch_from_bibliography` | Fetch every OA-resolvable entry in a Zotero / Mendeley CSL-JSON export. |
+| `doiget_paper_tex_source` | Fetch an **arXiv** paper's raw LaTeX source. More reliable than `doiget_paper_text` for papers ar5iv has not processed through LaTeXML. A DOI is not a valid input. |
+| `doiget_tag` | Add or remove tags and collection membership on a stored entry, for local knowledge-base organisation (#294). |
+| `doiget_annotate` | Attach or clear a freeform note on a stored entry (#294). |
 
 ## 2. Naming and convention
 
@@ -279,10 +283,50 @@ metadata. It **MUST NOT** trigger a publisher-side PDF fetch, even when the
 metadata source returns an OA URL. The OA URL, when known, is surfaced in the
 response as `oa_url` (string) for the caller to act on separately.
 
+### `oa_url` is opt-in (#539)
+
+On the default path `oa_url` is `null` whenever Crossref answered -- which is
+nearly every DOI -- and callers MUST NOT read that as "this work has no OA
+location".
+
+It is **not** unconditionally null without the flag. `metadata_only_doi` keeps a
+pre-existing fallback: when Crossref *fails*, Unpaywall is consulted regardless
+of `include_oa_location`, and `oa_url` / `oa_status` come from that record.
+`source` tells the two apart -- `crossref` means the default path answered,
+`unpaywall` means the fallback did.
+
+The DOI path is Crossref-first, on the rationale that Crossref's
+`message.link[]` supplied an OA URL without a second request. It does not:
+measured across twelve live entries and eight captured fixtures, every one
+carried an `intended-application` scoping it to a licensed programme
+(Similarity Check, TDM, syndication) rather than being general-purpose, and
+following one outside that programme would be taking a licensed route
+without the licence. So the extractor refuses all of them, correctly, and the
+field it was meant to fill stays empty (ADR-0052, #517).
+
+A caller that wants a real OA location passes `include_oa_location: true`,
+which consults Unpaywall. That costs one extra metadata round-trip; it does
+NOT weaken any guarantee above, because Unpaywall is a metadata source and
+the URL is still reported and never followed.
+
+With the flag set, the `oa_status`/`oa_url` pair says which answer you got:
+
+| `oa_status` | `oa_url` | meaning |
+|---|---|---|
+| `"closed"` | `null` | the lookup completed; this work has no OA location |
+| `"gold"`, `"green"`, `"hybrid"`, `"bronze"` | string | the lookup completed; here it is |
+| `null` | `null` | the lookup did not complete |
+
+A failed Unpaywall call is NOT an error: the Crossref metadata the caller also
+asked for is still returned, and the null `oa_status` is what distinguishes
+"could not find out" from a completed lookup reporting `"closed"`. This
+mirrors the `oa_status` + `pdf.status` pairing already used by
+`doiget_fetch_paper` (§4).
+
 ```jsonc
 {
   "name": "doiget_metadata_only",
-  "description": "WHEN TO USE: User wants metadata for a DOI / arXiv id without paying for or being noticed by a PDF download.\nINPUTS: ref (DOI or arXiv id), dry_run (optional bool).\nOUTPUTS: { ok: true, ref, source, license?, oa_url:string|null, metadata } or { ok:false, error }.\nCOSTS: 1-2 s metadata round-trip. No publisher fetch.\nSIDE EFFECTS: Appends a provenance row tagged 'metadata-only' (unless dry_run). Writes the metadata TOML to the store.\nLIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed.",
+  "description": "WHEN TO USE: User wants metadata for a DOI / arXiv id without paying for or being noticed by a PDF download.\nINPUTS: ref (DOI or arXiv id), dry_run (optional bool), include_oa_location (optional bool).\nOUTPUTS: { ok: true, ref, source, license?, oa_url:string|null, oa_status:string|null, metadata } or { ok:false, error }.\nCOSTS: 1-2 s metadata round-trip (roughly doubled when include_oa_location). No publisher fetch.\nSIDE EFFECTS: Appends a provenance row tagged 'metadata-only' (unless dry_run). Writes the metadata TOML to the store.\nLIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed. oa_url is null unless include_oa_location is set.",
   "inputSchema": {
     "type": "object",
     "required": ["ref"],
@@ -293,7 +337,8 @@ response as `oa_url` (string) for the caller to act on separately.
         "maxLength": 256,
         "pattern": "^(10\\.\\d{4,9}/[A-Za-z0-9._/()-]+|arXiv:\\d{4}\\.\\d{4,5}|\\d{4}\\.\\d{4,5})$"
       },
-      "dry_run": { "type": "boolean", "default": false }
+      "dry_run": { "type": "boolean", "default": false },
+      "include_oa_location": { "type": "boolean", "default": false }
     },
     "additionalProperties": false
   }
@@ -312,7 +357,12 @@ type MetadataOnlyResult =
       // Currently equal to `source` verbatim.
       resolver_profile: string,
       license: string,
+      // Null whenever Crossref answered and `include_oa_location` was not set;
+      // see above for the Crossref-failure case, which fills it either way. A
+      // null here is NOT evidence that the work has no OA location.
       oa_url: string | null,
+      // gold / green / hybrid / bronze / closed, or null when not determined.
+      oa_status: string | null,
       metadata: object,
       schema_version: string,
     }
@@ -332,3 +382,28 @@ failure.
 `doiget_batch_resolve_citations` batch-resolves multiple citation strings (up to 50).
 
 Both tools calculate token-based overlap similarity scores, filter out results with a score < 0.5, and sort candidates by score descending. No local store writes or provenance logs are created.
+
+### Branch on `confidence`, not `score` (#536)
+
+Each candidate carries `confidence` and `matched` alongside `score`.
+
+`score` alone is not enough to judge with. It is **token overlap against your
+query string**, not semantic similarity, and 0.5 is the **floor** — so the
+worst candidate these tools can emit still looks like a positive number. A
+citation naming an author, a title, a journal, a volume and a year that comes
+back at 0.5 means most of it did not match, which for a known-item lookup is a
+negative result.
+
+| `confidence` | meaning |
+|---|---|
+| `exact` | every query token was found in the candidate's record |
+| `probable` | at least four query tokens in five |
+| `weak` | cleared the 0.5 floor and no more — a near-miss, not a match |
+
+`matched` lists which of your tokens were found, which is how you see whether
+the author and the journal were among them. In the case that produced #536 they
+were `quality`, `life`, `bipolar`, `2010` — and the returned paper was by a
+different author in a different journal.
+
+These are bands over token overlap, not a semantic verdict: `exact` is a strong
+signal and still not proof, so verify with `doiget_resolve_paper` before citing.

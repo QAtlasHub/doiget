@@ -165,6 +165,16 @@ async fn doiget_resolve_paper_invalid_ref_returns_invalid_ref_envelope() -> anyh
             .unwrap_or(false),
         "INVALID_REF message must mention 'invalid ref'; got: {structured:?}"
     );
+    // #506: the retry decision an agent has to make was encoded in a markdown
+    // table it never reads, so its only signal was the code's NAME. Asserted
+    // through the real tool rather than on the helper, because "the envelope
+    // carries it" is the claim -- a helper that is right and unreached would
+    // pass a unit test and change nothing.
+    assert_eq!(
+        structured["error"]["disposition"],
+        serde_json::json!("terminal"),
+        "a malformed ref will not become well-formed by waiting: {structured:?}"
+    );
 
     client.cancel().await?;
     server_handle.await??;
@@ -351,6 +361,363 @@ async fn doiget_resolve_paper_doi_crossref_happy_path_returns_metadata_envelope(
 
     client.cancel().await?;
     server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 3b. #539 — the OA location is opt-in, and its absence is legible
+// ---------------------------------------------------------------------------
+
+/// A REALISTIC Crossref response. `SAMPLE_CROSSREF_RESPONSE` above carries
+/// `intended-application: "unspecified"`, which the #517 measurement found in
+/// **zero** of twelve live `link[]` entries and zero of eight captured
+/// fixtures -- it exercises the accept arm of the gate, but it is not what
+/// Crossref actually returns. This one is: a Similarity Check link, correctly
+/// refused, leaving `oa_url` null. That is the #539 condition.
+const REALISTIC_CROSSREF_RESPONSE: &str = r#"{"status":"ok","message":{"title":["Example Paper"],"link":[{"URL":"https://publisher.example.org/similarity/10.1234/example.pdf","content-type":"application/pdf","intended-application":"similarity-checking"}]}}"#;
+
+const SAMPLE_UNPAYWALL_RESPONSE: &str = r#"{"doi":"10.1234/example","is_oa":true,"oa_status":"gold","best_oa_location":{"url_for_pdf":"https://repository.example.org/free.pdf","url":"https://repository.example.org/landing","license":"cc-by"}}"#;
+
+/// Default: one request, and `oa_url` is null because Crossref alone cannot
+/// supply one. The Unpaywall mock is mounted with `.expect(0)`, so if the
+/// default path ever starts paying for a second round-trip this test fails on
+/// `MockServer` drop rather than silently doubling everyone's cost.
+#[tokio::test]
+#[serial_test::serial]
+async fn resolve_paper_does_not_consult_unpaywall_by_default() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let crossref = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works/10.1234/example"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(REALISTIC_CROSSREF_RESPONSE))
+        .mount(&crossref)
+        .await;
+
+    let unpaywall = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_UNPAYWALL_RESPONSE))
+        .expect(0)
+        .mount(&unpaywall)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let log_path = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .join("mcp-resolve-default.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_CROSSREF_BASE", &crossref.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", unpaywall.uri()));
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_CONTACT_EMAIL", "test@example.org");
+    env.set(
+        "DOIGET_STORE_ROOT",
+        td.path().to_str().expect("utf-8 tempdir"),
+    );
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_resolve_paper").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_resolve_paper uses CallToolResult::structured");
+
+    assert_eq!(structured["ok"], serde_json::json!(true), "{structured:?}");
+    assert_eq!(
+        structured["oa_url"],
+        serde_json::Value::Null,
+        "a similarity-checking link is not an OA URL (#517): {structured:?}"
+    );
+    assert_eq!(
+        structured["oa_status"],
+        serde_json::Value::Null,
+        "nothing was consulted, so nothing is known: {structured:?}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    // Verifies the `.expect(0)`.
+    drop(unpaywall);
+    drop(td);
+    Ok(())
+}
+
+/// Opt in and the field is filled from Unpaywall's `best_oa_location` -- the
+/// URL, the status, and the license, which the Crossref-only path also leaves
+/// null.
+#[tokio::test]
+#[serial_test::serial]
+async fn resolve_paper_with_include_oa_location_returns_a_real_oa_url() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let crossref = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works/10.1234/example"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(REALISTIC_CROSSREF_RESPONSE))
+        .mount(&crossref)
+        .await;
+
+    let unpaywall = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SAMPLE_UNPAYWALL_RESPONSE))
+        .mount(&unpaywall)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let log_path = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .join("mcp-resolve-opt-in.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_CROSSREF_BASE", &crossref.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", unpaywall.uri()));
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_CONTACT_EMAIL", "test@example.org");
+    env.set(
+        "DOIGET_STORE_ROOT",
+        td.path().to_str().expect("utf-8 tempdir"),
+    );
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+    args.insert("include_oa_location".to_string(), serde_json::json!(true));
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_resolve_paper").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_resolve_paper uses CallToolResult::structured");
+
+    assert_eq!(structured["ok"], serde_json::json!(true), "{structured:?}");
+    assert_eq!(
+        structured["oa_url"],
+        serde_json::json!("https://repository.example.org/free.pdf"),
+        "{structured:?}"
+    );
+    assert_eq!(structured["oa_status"], serde_json::json!("gold"));
+    assert_eq!(structured["license"], serde_json::json!("cc-by"));
+    // The record is still Crossref's; the lookup adds fields, it does not
+    // change whose metadata this is.
+    assert_eq!(structured["source"], serde_json::json!("crossref"));
+    assert_eq!(
+        structured["metadata"]["title"],
+        serde_json::json!(["Example Paper"])
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+/// The case #539 is really about. A caller that paid for a lookup must be
+/// able to tell "this work has no OA location" from "I could not find out".
+/// Unpaywall is down here, so BOTH fields stay null -- and a null `oa_status`
+/// is precisely what says the lookup did not complete, because a lookup that
+/// completes on a closed work reports `oa_status: "closed"`.
+///
+/// The call still succeeds: the Crossref metadata the caller also asked for
+/// is good, and failing the whole resolve over an optional extra would be a
+/// worse answer than an honest partial one.
+#[tokio::test]
+#[serial_test::serial]
+async fn resolve_paper_leaves_oa_status_null_when_the_lookup_fails() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let crossref = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works/10.1234/example"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(REALISTIC_CROSSREF_RESPONSE))
+        .mount(&crossref)
+        .await;
+
+    let unpaywall = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500))
+        // Without this the test would also pass against a build that ignored
+        // `include_oa_location` and never called Unpaywall at all: "both
+        // fields null" is what that produces too.
+        //
+        // A RANGE, not `== 1`: a 5xx is retried by the transport (measured:
+        // four attempts), and the retry policy is not this feature's contract
+        // to freeze.
+        .expect(1..)
+        .mount(&unpaywall)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let log_path = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .join("mcp-resolve-degraded.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_CROSSREF_BASE", &crossref.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", unpaywall.uri()));
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_CONTACT_EMAIL", "test@example.org");
+    env.set(
+        "DOIGET_STORE_ROOT",
+        td.path().to_str().expect("utf-8 tempdir"),
+    );
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+    args.insert("include_oa_location".to_string(), serde_json::json!(true));
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_resolve_paper").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_resolve_paper uses CallToolResult::structured");
+
+    assert_eq!(
+        structured["ok"],
+        serde_json::json!(true),
+        "an optional extra failing must not sink the resolve: {structured:?}"
+    );
+    assert_eq!(
+        structured["metadata"]["title"],
+        serde_json::json!(["Example Paper"]),
+        "the metadata the caller also asked for is still there: {structured:?}"
+    );
+    assert_eq!(structured["oa_url"], serde_json::Value::Null);
+    assert_eq!(
+        structured["oa_status"],
+        serde_json::Value::Null,
+        "a null oa_status is the signal that the lookup did not complete; \
+         inventing 'closed' here would assert the work is paywalled on the \
+         strength of a 500: {structured:?}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    // Verifies the `.expect(1)`.
+    drop(unpaywall);
+    drop(td);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 3c. #507 — the bookend records WHAT the call failed with
+// ---------------------------------------------------------------------------
+
+/// #507: the provenance log could say a call failed but not what it failed
+/// with, because every `SessionEnd` row carried `error_code: None`.
+///
+/// That is a gap in the audit trail on its own terms -- the log cannot answer
+/// "what did this session tell the caller about this ref?" -- and it is also
+/// what blocks the repeat suppression #507 asks for: the rule is "do not
+/// re-fetch a prior `terminal` or `needs_config` answer", and a disposition
+/// cannot be recovered from a row with no code.
+#[tokio::test]
+#[serial_test::serial]
+async fn a_failed_call_records_its_terminal_code_on_the_bookend() -> anyhow::Result<()> {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // Crossref and Unpaywall both answer 404, so the DOI resolves nowhere and
+    // the call ends as NOT_FOUND.
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&upstream)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let log_path = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .join("mcp-bookend.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_CROSSREF_BASE", &upstream.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", upstream.uri()));
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_CONTACT_EMAIL", "test@example.org");
+    env.set(
+        "DOIGET_STORE_ROOT",
+        td.path().to_str().expect("utf-8 tempdir"),
+    );
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/absent"));
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_resolve_paper").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_resolve_paper uses CallToolResult::structured");
+    assert_eq!(
+        structured["ok"],
+        serde_json::json!(false),
+        "premise: the call fails: {structured:?}"
+    );
+    let reported = structured["error"]["code"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+
+    client.cancel().await?;
+    server_handle.await??;
+
+    let raw = std::fs::read_to_string(&log_path).expect("read the provenance log");
+    let bookend = raw
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find(|r| r["event"] == "session_end")
+        .expect("a SessionEnd row was written");
+
+    assert_eq!(
+        bookend["result"],
+        serde_json::json!("err"),
+        "row: {bookend}"
+    );
+    assert_eq!(
+        bookend["error_code"].as_str().unwrap_or_default(),
+        reported,
+        "the row must record the code the CALLER was given, not null: {bookend}"
+    );
+    assert_eq!(bookend["ref"], serde_json::json!("10.1234/absent"));
+
+    // #506: this envelope is assembled field-by-field rather than through
+    // `error_object`, so the first pass at the disposition missed it -- and it
+    // is the shape an agent sees for the most ordinary failure there is.
+    // NOT_FOUND is terminal: an id does not become correct by waiting.
+    assert_eq!(
+        structured["error"]["disposition"],
+        serde_json::json!("terminal"),
+        "the hand-built failure envelope must carry it too: {structured:?}"
+    );
+
     drop(env);
     drop(td);
     Ok(())

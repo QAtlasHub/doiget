@@ -52,7 +52,14 @@ pub async fn run(
             // No full-text HTML source for a bare DOI in PR4; DOI→arXiv
             // linking is #281 item 5 (ADR-0032 D5). Report honestly rather
             // than silently failing.
-            let code = ErrorCode::NoOaAvailable;
+            // `NOT_IMPLEMENTED`, not `NO_OA_AVAILABLE`. The latter carries
+            // disposition `needs_config` -- "a named change makes it" -- and
+            // there is no knob: this command is arXiv-only and DOI-to-arXiv
+            // linking is not built (#281 item 5). Kept identical to the MCP
+            // sibling; changing one surface and not the other is the defect
+            // this release is about, and the first pass at this fix did
+            // exactly that.
+            let code = ErrorCode::NotImplemented;
             print_err(format_args!(
                 "error[{}]: no full-text source for a DOI — if an arXiv preprint exists, \
                  pass its id (e.g. `doiget text arxiv:2401.12345`)",

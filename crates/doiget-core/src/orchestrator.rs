@@ -91,10 +91,12 @@ pub struct MetadataOnlyOutcome {
 ///
 /// # Dispatch
 ///
-/// - `Ref::Doi(_)` → Crossref first (bibliographic metadata + OA URL
-///   via `message.link[]`). If Crossref returns a usable payload the
-///   call returns immediately; Unpaywall is consulted only as a fallback
-///   when Crossref fails. The Unpaywall fallback surfaces a license
+/// - `Ref::Doi(_)` → Crossref first, for bibliographic metadata. Crossref's
+///   `message.link[]` does NOT supply an OA URL -- every entry is
+///   programme-scoped (ADR-0052, #517) -- so `oa_url` stays `None` on this
+///   path. Unpaywall is consulted as a fallback when Crossref fails, and
+///   additionally when [`MetadataOnlyOptions::include_oa_location`] is set
+///   (#539). The Unpaywall fallback surfaces a license
 ///   string and may overwrite `oa_url` with the `best_oa_location`
 ///   channel.
 /// - `Ref::Arxiv(_)` → [`ArxivSource::fetch_metadata_only`]: ONLY the
@@ -142,6 +144,79 @@ pub async fn metadata_only(
     profile: &CapabilityProfile,
     ctx: &FetchContext,
 ) -> Result<MetadataOnlyOutcome, FetchError> {
+    metadata_only_with_options(ref_, profile, ctx, MetadataOnlyOptions::default()).await
+}
+
+/// What a metadata-only resolve may spend beyond its single round-trip.
+///
+/// One knob, and it exists because #517 removed the reason there was none.
+/// The DOI path is Crossref-first, and its rationale was that Crossref's
+/// `message.link[]` supplied an OA URL for free. Measurement showed every
+/// entry is programme-scoped, so `extract_crossref_publisher_url`
+/// correctly returns `None` for every DOI -- leaving `oa_url` permanently
+/// null while `docs/MCP_TOOLS.md` s11 told callers to act on it (#539).
+///
+/// Crossref-first is still the right default: it resolves nearly every DOI
+/// in one request. What was wrong was promising a field it cannot fill. So
+/// the caller says whether it wants the second request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MetadataOnlyOptions {
+    /// Consult Unpaywall for a real OA location, filling `oa_url`,
+    /// `oa_status` and `license` from its record.
+    ///
+    /// Costs one extra request against Unpaywall. Unpaywall is a metadata
+    /// source, so this does not weaken the "never fetches a PDF, never
+    /// touches a publisher" guarantee: the URL is still reported and never
+    /// followed.
+    ///
+    /// Off by default. A caller that wants metadata should not pay for a
+    /// location it will not use.
+    ///
+    /// # Reading the result
+    ///
+    /// With this set, the `oa_status`/`oa_url` pair says which of three
+    /// things happened:
+    ///
+    /// | `oa_status` | `oa_url` | meaning |
+    /// |---|---|---|
+    /// | `"closed"` | `None` | asked; this work has no OA location |
+    /// | `"gold"`, `"green"`, ... | `Some` | asked; here it is |
+    /// | `None` | `None` | the lookup did not complete |
+    ///
+    /// The third row is why a failed Unpaywall call leaves *both* fields
+    /// `None` rather than filling in a plausible-looking `oa_status`: a
+    /// caller that paid for a lookup has to be able to tell "no OA location
+    /// exists" from "I could not find out", and that distinction is the
+    /// whole of #539.
+    pub include_oa_location: bool,
+}
+
+impl MetadataOnlyOptions {
+    /// Ask for the OA location (or not).
+    ///
+    /// A builder rather than a struct literal because the struct is
+    /// `#[non_exhaustive]`: a future option must not be a breaking change
+    /// for `doiget-mcp`, `doiget-cli`, or anyone else downstream.
+    #[must_use]
+    pub const fn with_oa_location(mut self, include: bool) -> Self {
+        self.include_oa_location = include;
+        self
+    }
+}
+
+/// [`metadata_only`], with the caller choosing what it is willing to spend.
+///
+/// # Errors
+///
+/// As [`metadata_only`]. A failure of the *optional* OA-location lookup is
+/// not an error here: see [`MetadataOnlyOptions`].
+pub async fn metadata_only_with_options(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    opts: MetadataOnlyOptions,
+) -> Result<MetadataOnlyOutcome, FetchError> {
     // Resolver cache (docs/CACHE.md): on a hit within TTL, return the
     // cached outcome without touching the network — this is what lets
     // `doiget verify` avoid upstream rate limits across repeated runs.
@@ -158,14 +233,18 @@ pub async fn metadata_only(
         ctx.cache_root.as_deref()
     };
 
+    // Keyed by the options, not just the ref: an entry written by a default
+    // resolve carries `oa_url: None`, and handing that to a caller that asked
+    // for the location would answer a question it did not ask. See
+    // `resolver_cache::cache_file_with_options`.
     if let Some(root) = cache_root {
-        if let Some(cached) = crate::resolver_cache::read(root, ref_) {
+        if let Some(cached) = crate::resolver_cache::read_with_options(root, ref_, opts) {
             return Ok(cached);
         }
     }
 
     let outcome = match ref_ {
-        Ref::Doi(doi) => metadata_only_doi(doi, ref_, profile, ctx).await?,
+        Ref::Doi(doi) => metadata_only_doi(doi, ref_, profile, ctx, opts).await?,
         Ref::Arxiv(id) => {
             let arxiv = arxiv_source_from_env();
             let metadata = arxiv.fetch_metadata_only(id, ctx).await?;
@@ -185,7 +264,7 @@ pub async fn metadata_only(
 
     // Best-effort cache write (never fails the resolve).
     if let Some(root) = cache_root {
-        crate::resolver_cache::write(root, ref_, &outcome);
+        crate::resolver_cache::write_with_options(root, ref_, &outcome, opts);
     }
     Ok(outcome)
 }
@@ -249,13 +328,27 @@ pub async fn resolve_only(
     profile: &CapabilityProfile,
     ctx: &FetchContext,
 ) -> Result<MetadataOnlyOutcome, FetchError> {
-    // Delegating to the PURE `metadata_only` is the contract-correct
-    // implementation, not a placeholder: `metadata_only` never writes
+    resolve_only_with_options(ref_, profile, ctx, MetadataOnlyOptions::default()).await
+}
+
+/// [`resolve_only`], with the caller choosing what it is willing to spend.
+///
+/// # Errors
+///
+/// As [`resolve_only`].
+pub async fn resolve_only_with_options(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    opts: MetadataOnlyOptions,
+) -> Result<MetadataOnlyOutcome, FetchError> {
+    // Delegating to the PURE `metadata_only_with_options` is the
+    // contract-correct implementation, not a placeholder: it never writes
     // to the store (the persisting path is the separate
     // `metadata_only_to_store`, which this function does not call), so
     // `resolve_only`'s "no store mutation" guarantee holds structurally
     // and cannot regress (#139).
-    metadata_only(ref_, profile, ctx).await
+    metadata_only_with_options(ref_, profile, ctx, opts).await
 }
 
 /// Resolve a [`Ref`] to metadata **and persist the metadata TOML to the
@@ -290,7 +383,24 @@ pub async fn metadata_only_to_store(
     ctx: &FetchContext,
     store: &dyn Store,
 ) -> Result<MetadataOnlyOutcome, FetchError> {
-    let outcome = metadata_only(ref_, profile, ctx).await?;
+    metadata_only_to_store_with_options(ref_, profile, ctx, store, MetadataOnlyOptions::default())
+        .await
+}
+
+/// [`metadata_only_to_store`], with the caller choosing what it is willing
+/// to spend.
+///
+/// # Errors
+///
+/// As [`metadata_only_to_store`].
+pub async fn metadata_only_to_store_with_options(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    store: &dyn Store,
+    opts: MetadataOnlyOptions,
+) -> Result<MetadataOnlyOutcome, FetchError> {
+    let outcome = metadata_only_with_options(ref_, profile, ctx, opts).await?;
     let safekey = ref_.safekey();
     let metadata = build_metadata_only_metadata(ref_, &outcome);
     // `pdf_src = None` => writes `<root>/.metadata/<safekey>.toml` and
@@ -688,37 +798,81 @@ fn unpaywall_source_from_env(contact: &str) -> UnpaywallSource {
     UnpaywallSource::new(contact.to_string())
 }
 
-/// DOI branch — Crossref first, with Unpaywall as a fallback when
-/// Crossref fails. Crossref's `message.link[]` array (when present)
-/// supplies the OA URL hint without making a publisher request.
+/// DOI branch: Crossref first, with Unpaywall as a fallback when Crossref
+/// fails, and as an *addition* when the caller asked for an OA location.
+///
+/// This doc used to say Crossref's `message.link[]` "supplies the OA URL
+/// hint without making a publisher request". It does not, and #517 is why:
+/// measured across twelve live `link[]` entries and eight captured
+/// fixtures, every one was programme-scoped, so
+/// [`extract_crossref_publisher_url`] correctly refuses all of them.
+/// Crossref-first is still the right default -- one request resolves nearly
+/// every DOI -- but the free OA hint that sentence promised never existed
+/// (#539).
 async fn metadata_only_doi(
     _doi: &Doi,
     ref_: &Ref,
     profile: &CapabilityProfile,
     ctx: &FetchContext,
+    opts: MetadataOnlyOptions,
 ) -> Result<MetadataOnlyOutcome, FetchError> {
     let contact = resolve_contact_email();
     let crossref = crossref_source_from_env(&contact);
     match crossref.fetch(ref_, profile, ctx).await {
         Ok(res) => {
             let metadata = res.metadata_json.unwrap_or(Value::Null);
-            let oa_url = extract_crossref_publisher_url(&metadata);
-            // Pure resolver — no store write here (see `metadata_only`
+            // `None` for every DOI in practice -- see the fn doc and #517.
+            // Kept because it is the gate that stops a Similarity Check URL
+            // being handed out under the name `oa_url`.
+            let mut oa_url = extract_crossref_publisher_url(&metadata);
+            // Crossref reports neither an OA status nor a license; both
+            // channels are Unpaywall's. They stay `None` unless the caller
+            // asked us to go and look.
+            let mut oa_status = None;
+            let mut license = None;
+
+            if opts.include_oa_location {
+                let unpaywall = unpaywall_source_from_env(&contact);
+                match unpaywall.fetch(ref_, profile, ctx).await {
+                    Ok(uw) => {
+                        let uw_metadata = uw.metadata_json.unwrap_or(Value::Null);
+                        oa_url = extract_unpaywall_oa_url(&uw_metadata);
+                        oa_status = extract_unpaywall_oa_status(&uw_metadata);
+                        license = if uw.license == "unknown" {
+                            None
+                        } else {
+                            Some(uw.license)
+                        };
+                    }
+                    Err(e) => {
+                        // Deliberately NOT an error, and deliberately
+                        // leaving `oa_status` as `None`. The caller still
+                        // gets the Crossref metadata it also asked for, and
+                        // a null `oa_status` is what distinguishes "could
+                        // not find out" from a completed lookup reporting
+                        // `"closed"`. Inventing a status here would
+                        // recreate the exact ambiguity this option exists
+                        // to remove (#539).
+                        tracing::debug!(
+                            error = %e,
+                            "metadata_only: OA location lookup failed; leaving oa_status null to say so"
+                        );
+                    }
+                }
+            }
+
+            // `metadata` stays Crossref's and `source` says so: the OA
+            // lookup adds three fields, it does not change whose record
+            // this is.
+            //
+            // Pure resolver -- no store write here (see `metadata_only`
             // doc); persistence is `metadata_only_to_store`'s job.
             Ok(MetadataOnlyOutcome {
                 source: crossref.name().to_string(),
                 resolver_profile: crossref.name().to_string(),
-                // Crossref does not surface a license directly; the
-                // license channel for DOI metadata is Unpaywall's
-                // `best_oa_location.license`. Leave `None` here; the
-                // agent can call `unpaywall` (or a follow-up slice's
-                // chained orchestrator) if it needs a license string.
-                license: None,
+                license,
                 oa_url,
-                // Crossref does not report OA status; "not determined".
-                // (The metadata path is Crossref-first and only consults
-                // Unpaywall on a Crossref failure — see the fallback arm.)
-                oa_status: None,
+                oa_status,
                 metadata,
             })
         }
@@ -1011,6 +1165,21 @@ pub struct FetchPaperOutcome {
 }
 
 impl FetchPaperOutcome {
+    /// `true` when this outcome is a success with nothing withheld.
+    ///
+    /// A `Blocked` PDF leg is an `Ok` outcome whose payload was refused, so
+    /// `Result::is_ok` alone calls it a clean success. Both front ends need
+    /// the same boundary and had drifted: the CLI special-cased `Blocked`
+    /// for its exit code and its `SessionEnd` row, the MCP server only for
+    /// the row's `error_code`, so `doiget_fetch_paper` logged
+    /// `result: "ok"` beside a non-null code -- a self-contradictory row for
+    /// the one outcome an agent is most likely to retry, and the outcome
+    /// #507's repeat suppression has to be able to see.
+    #[must_use]
+    pub fn is_clean_success(&self) -> bool {
+        !matches!(self.pdf_leg, PdfLegStatus::Blocked { .. })
+    }
+
     /// Test-only constructor for downstream crates (`doiget-cli`,
     /// `doiget-mcp`) that need to drive classification / rendering
     /// logic without running the full orchestrator. Produces a
@@ -1724,12 +1893,27 @@ async fn fetch_paper_doi(
 
 /// Which OA content URL an optional source reported, if any (#445).
 ///
-/// Only the three sources that publish a direct document URL contribute.
+/// Only the four sources that publish a direct document URL contribute.
 /// OpenAIRE's `urls[]` and DataCite's `url` point at a DOI resolver or a
 /// landing page, not a file — handing those to the OA chain would spend a
 /// request to arrive at a page the chain cannot read, and report a
 /// confusing failure. A source that contributes nothing is not a silent
 /// gap: it still appears in the attempt trace with its own outcome.
+/// What a source said about where the work lives, when it named somewhere
+/// but nothing followable (#547).
+///
+/// Only OpenAlex today: it is the source that reports EVERY location rather
+/// than a best one, so it is the one that can name a repository copy and still
+/// hand back no URL. The others surface a single document URL or nothing, and
+/// "nothing" is already what the trace says.
+#[cfg(feature = "metadata")]
+fn describe_optional_source_locations(source: &str, meta: &Value) -> Option<(usize, String)> {
+    match source {
+        "openalex" => crate::sources::openalex::describe_locations(meta),
+        _ => None,
+    }
+}
+
 #[cfg(feature = "metadata")]
 fn optional_source_oa_url<'a>(source: &str, meta: &'a Value) -> Option<&'a str> {
     match source {
@@ -1820,6 +2004,26 @@ async fn try_optional_source_oa_fallback(
         }
     };
     let Some(raw) = optional_source_oa_url(name, &meta) else {
+        // #547: the source ANSWERED and named somewhere the work lives; what
+        // it named was just not followable. That is a different fact from
+        // "nobody has a copy", and it used to reach only a `tracing::debug!`
+        // -- so a run whose OpenAlex record pointed straight at an
+        // institutional repository reported `no OA PDF available` and gave the
+        // reader nothing to act on.
+        // Only when OpenAlex flagged NOTHING as open. A location with
+        // `is_oa: true` and no `pdf_url` is a real deposit we cannot follow --
+        // labelling that `NotOpenAccess` would assert the OPPOSITE of what the
+        // source said, on the machine-readable `consulted_not_open_access`
+        // token, with the contradicting evidence buried in prose. That is the
+        // #538 defect pointing the other way, and it is worse than saying
+        // nothing: found by review of this very change.
+        if let Some((oa, detail)) = describe_optional_source_locations(name, &meta) {
+            if oa == 0 {
+                if let Some(row) = attempts.iter_mut().find(|a| a.source == name) {
+                    row.outcome = AttemptOutcome::NotOpenAccess { detail };
+                }
+            }
+        }
         tracing::debug!(
             source = name,
             doi = %doi.as_str(),
@@ -2290,7 +2494,10 @@ async fn try_fetch_oa_pdf(
             .host_str()
             .map(|h| h.to_ascii_lowercase())
             .unwrap_or_default();
-        if !allowlist.matches(&host) {
+        // `permits`, not `matches`: a DOI resolver is addressing, not a
+        // content host, and Unpaywall routinely reports `doi.org` AS the OA
+        // location (#533). See `http::is_transparent_resolver`.
+        if !allowlist.permits(&host) {
             let e = HttpError::RedirectDenied {
                 source_key: SOURCE.to_string(),
                 host: host.clone(),
@@ -2690,6 +2897,22 @@ pub struct BatchResultEntry {
 pub struct BatchOutcome {
     /// One entry per supplied ref, in input order.
     pub results: Vec<BatchResultEntry>,
+}
+
+impl BatchOutcome {
+    /// Test-only constructor for downstream crates, mirroring
+    /// [`FetchPaperOutcome::for_test_synthetic`].
+    ///
+    /// `BatchOutcome` is `#[non_exhaustive]`, so `doiget-mcp` cannot build one
+    /// to drive its envelope builders -- which is part of why the two batch
+    /// tools' error mapping went untested long enough to drift (#538).
+    ///
+    /// `#[doc(hidden)]`: not a stable public API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn for_test_synthetic(results: Vec<BatchResultEntry>) -> Self {
+        Self { results }
+    }
 }
 
 /// Iterate over `refs` through [`fetch_paper`], collecting one
@@ -4025,6 +4248,48 @@ mod tests {
         assert!(extract_metadata_authors(&json!({"x": 1})).is_empty());
         assert!(extract_metadata_authors(&json!({"authors": []})).is_empty());
     }
+    /// #505: the widening advice is derived from the trace, not from a
+    /// second registry, so it cannot claim a source was skipped when it was
+    /// consulted -- or name a variable the chain does not actually read.
+    #[test]
+    fn widening_env_is_deduped_and_in_chain_order() {
+        let attempts = vec![
+            SourceAttempt::new("crossref", AttemptOutcome::NoRecord),
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_HAL"],
+                },
+            ),
+            SourceAttempt::new(
+                "tdm-aps",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_KEY_APS", "DOIGET_AGREE_TDM_APS"],
+                },
+            ),
+            // A second source behind the same switch must not repeat it.
+            SourceAttempt::new(
+                "hal-again",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_HAL"],
+                },
+            ),
+        ];
+        assert_eq!(
+            widening_env(&attempts),
+            vec![
+                "DOIGET_ENABLE_HAL",
+                "DOIGET_KEY_APS",
+                "DOIGET_AGREE_TDM_APS"
+            ],
+            "chain order, de-duplicated, and a consulted source contributes nothing"
+        );
+        // Nothing skipped means nothing to suggest.
+        assert!(
+            widening_env(&[SourceAttempt::new("crossref", AttemptOutcome::NoRecord)]).is_empty()
+        );
+        assert!(widening_env(&[]).is_empty());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4297,6 +4562,29 @@ pub fn render_attempts(attempts: &[SourceAttempt]) -> String {
         .join("\n")
 }
 
+/// Every environment variable the trace says would widen this search, in
+/// first-seen order and de-duplicated.
+///
+/// Built from the `Disabled` rows rather than from a separate registry, so
+/// it cannot drift from what the run actually skipped: a source that was
+/// consulted contributes nothing, and a source that was skipped contributes
+/// exactly the variables its own row already names.
+///
+/// Order is the chain's order, which is the order a user should set them in
+/// (`required_env` documents the same for the multi-variable Tier-3 case).
+#[must_use]
+pub fn widening_env(attempts: &[SourceAttempt]) -> Vec<&'static str> {
+    let mut seen = Vec::new();
+    for a in attempts {
+        for var in a.outcome.required_env().unwrap_or_default() {
+            if !seen.contains(var) {
+                seen.push(*var);
+            }
+        }
+    }
+    seen
+}
+
 /// True when no source in the trace was actually reached.
 ///
 /// Distinguishes "this DOI is genuinely not findable" from "nothing was
@@ -4321,15 +4609,15 @@ pub fn nothing_was_consulted(attempts: &[SourceAttempt]) -> bool {
 fn classify_attempt(e: &FetchError) -> AttemptOutcome {
     match e {
         FetchError::NotFound { .. } => AttemptOutcome::NoRecord,
-        // Sources signal "found it, cannot give it to you" through
-        // SourceSchema with an explicit hint (OpenAIRE access rights,
-        // Europe PMC isOpenAccess, HAL openAccess_bool). The hint is
-        // carried verbatim so the reason survives into the message.
-        FetchError::SourceSchema { hint } if is_access_refusal(hint) => {
-            AttemptOutcome::NotOpenAccess {
-                detail: hint.clone(),
-            }
-        }
+        // A source saying "found it, cannot give it to you" says so in the
+        // type now (#538). This used to be `SourceSchema` plus a substring
+        // search over the hint, which meant the phrasing of an error message
+        // decided how the row rendered -- and #503 reworded one and silently
+        // turned every Europe PMC refusal into `Failed`. The detail is still
+        // carried verbatim, because the reason is for a reader, not a match.
+        FetchError::NotRetrievable { detail, .. } => AttemptOutcome::NotOpenAccess {
+            detail: detail.clone(),
+        },
         // A policy refusal before the untyped fallback (#470). The
         // conversion already exists and yields exactly the reason /
         // attempted / expected / hop_index that `remediation::for_denial`
@@ -4525,38 +4813,6 @@ mod attempt_denial_tests {
             "row: {row}"
         );
     }
-}
-
-/// Whether a `SourceSchema` hint describes an access refusal rather than a
-/// malformed response.
-///
-/// The coupling is prose: a source says why it refused in free text and
-/// this reads the text back. That is fragile, and #503 is the proof — it
-/// reworded Europe PMC's refusal from "not open access" to "advertises no
-/// retrievable PDF" and the row silently reclassified from
-/// `NotOpenAccess` to `Failed`, which reads to an operator as "the source
-/// broke" rather than "the source has it and cannot give it to us".
-///
-/// It is caught rather than prevented: `an_access_refusal_is_recorded_
-/// distinctly_from_a_miss` drives the real chain, so any source whose
-/// wording drifts out of this predicate fails there. A typed refusal on
-/// `FetchError` would prevent it instead, at the cost of widening the
-/// closed error set in `docs/ERRORS.md` §3.
-#[cfg(any(
-    feature = "metadata",
-    feature = "tdm-elsevier",
-    feature = "tdm-aps",
-    feature = "tdm-springer",
-    feature = "tdm-ieee"
-))]
-fn is_access_refusal(hint: &str) -> bool {
-    hint.contains("not open access")
-        || hint.contains("openAccess")
-        // #503: Europe PMC refuses on "nothing retrievable is
-        // advertised", which is a strictly narrower claim than "outside
-        // the OA subset" and is still an access refusal, not a schema
-        // failure.
-        || hint.contains("no retrievable PDF")
 }
 
 /// Run the optional resolution chain and record one [`SourceAttempt`] per
@@ -5265,8 +5521,10 @@ mod chain_tests {
     ///
     /// This record carries no `fullTextUrlList` at all, so after #503 it is
     /// refused for the narrower reason and must still classify as
-    /// `NotOpenAccess` — see `is_access_refusal`, whose coupling to the
-    /// wording this test is the only thing guarding.
+    /// `NotOpenAccess`. Until #538 this test was the only thing guarding
+    /// that, because classification read the wording back out of the hint;
+    /// the refusal is a `FetchError::NotRetrievable` now, so the compiler
+    /// guards it and this asserts the behaviour rather than the phrasing.
     #[tokio::test]
     #[serial_test::serial]
     async fn an_access_refusal_is_recorded_distinctly_from_a_miss() {

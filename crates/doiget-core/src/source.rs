@@ -136,6 +136,35 @@ pub enum FetchError {
     /// source receives a borrowed string from upstream and re-validates).
     #[error("invalid ref: {0}")]
     InvalidRef(#[from] RefParseError),
+    /// A source found the record and **cannot supply a copy** — an access
+    /// refusal, not a failure.
+    ///
+    /// The distinction is the whole point: "the source has it and cannot
+    /// give it to us" and "the source broke" lead an operator to different
+    /// conclusions, and only the second is a bug to chase.
+    ///
+    /// This exists as a variant because it used to be a *substring search*.
+    /// A refusal was [`Self::SourceSchema`] with an explanatory hint, and
+    /// `orchestrator::is_access_refusal` read the hint back looking for
+    /// "not open access" / "openAccess" / "no retrievable PDF". #503
+    /// reworded Europe PMC's refusal for good reasons, the hint fell out of
+    /// that list, and every Europe PMC refusal silently became
+    /// `AttemptOutcome::Failed`. Nothing in the source said the wording was
+    /// load-bearing, and `hal` matched on `openAccess` — a JSON *field
+    /// name*, not prose anyone chose (#538).
+    ///
+    /// Collapses to [`crate::ErrorCode::NoOaAvailable`], which is an
+    /// EXISTING wire code: "found it, no free copy" is exactly what that
+    /// means, so the closed set in `docs/ERRORS.md` §3 does not widen. See
+    /// ADR-0054.
+    #[error("{source_key} has the record but no retrievable copy: {detail}")]
+    NotRetrievable {
+        /// Which source refused.
+        source_key: String,
+        /// Why, in the source's own terms — the flags or codes a reader
+        /// checks next. Displayed, never parsed: that is the point.
+        detail: String,
+    },
     /// Source-side schema mismatch (unexpected JSON shape, missing
     /// required field). Surfaces to [`crate::ErrorCode::InternalError`]
     /// at the public boundary.
@@ -231,9 +260,43 @@ impl From<&FetchError> for crate::ErrorCode {
             FetchError::Http(HttpError::HttpStatus {
                 status: 401 | 403, ..
             }) => crate::ErrorCode::CapabilityDenied,
-            FetchError::Http(_) => crate::ErrorCode::NetworkError,
+            // Exhaustive over `HttpError`, not `Http(_)`. The wildcard sent
+            // six deterministic outcomes to `NETWORK_ERROR`, whose disposition
+            // is `retry_after` -- so an agent was told to back off and retry an
+            // allowlist refusal, an http:// downgrade, a size cap, a
+            // wrong content type, an unregistered source key and a malformed
+            // header, none of which a retry can change. That is the defect
+            // ADR-0055 exists to remove, in the mapping every surface routes
+            // through. The `DenialContext` impl 100 lines down already matches
+            // all eight variants; this one opted out of the same protection.
+            FetchError::Http(e) => match e {
+                // Policy decisions. Settled until the configuration changes,
+                // which is what `needs_config` means -- and each of these
+                // carries a `DenialContext` naming the fix.
+                HttpError::RedirectDenied { .. } | HttpError::InsecureRedirect { .. } => {
+                    crate::ErrorCode::CapabilityDenied
+                }
+                // The response arrived and was not what was asked for.
+                // Re-requesting returns the same bytes.
+                HttpError::OversizedBody { .. } | HttpError::NotAPdf { .. } => {
+                    crate::ErrorCode::NoOaAvailable
+                }
+                // The caller asked for a source the client was never given.
+                // A build/wiring fault, not the network (#454, #462).
+                HttpError::UnknownSource { .. } | HttpError::InvalidHeader { .. } => {
+                    crate::ErrorCode::InternalError
+                }
+                // Genuinely transient: transport failures, and the statuses
+                // the arms above did not claim.
+                HttpError::Network(_) | HttpError::HttpStatus { .. } => {
+                    crate::ErrorCode::NetworkError
+                }
+            },
             FetchError::Log(_) => crate::ErrorCode::LogError,
             FetchError::InvalidRef(_) => crate::ErrorCode::InvalidRef,
+            // An access refusal is not an internal error. Before #538 it
+            // was reported as one, because it travelled as `SourceSchema`.
+            FetchError::NotRetrievable { .. } => crate::ErrorCode::NoOaAvailable,
             FetchError::SourceSchema { .. } => crate::ErrorCode::InternalError,
             // Slice 2: a too-large batch is a request-shape failure, so
             // collapse to `INVALID_REF` (closest closed-set fit). The
@@ -260,6 +323,23 @@ impl From<&FetchError> for crate::ErrorCode {
 /// still needs for `error.message` and the `From<FetchError> for
 /// ErrorCode` collapse above. The `Http` arm delegates to the
 /// `From<&HttpError> for Option<DenialContext>` impl in [`crate::http`].
+/// The server's own `Retry-After` for this failure, in milliseconds (#506).
+///
+/// `None` when the server sent no header, which is most failures. Deliberately
+/// NOT backfilled from doiget's internal backoff: that is a guess about the
+/// server, and a guess wearing the name of a server-supplied value is exactly
+/// the defect `error.disposition` and this field exist to remove.
+///
+/// Pairs with [`crate::Disposition::RetryAfter`] -- the disposition says
+/// "retry", and this says how long the server asked you to wait before you do.
+#[must_use]
+pub fn retry_after_ms(e: &FetchError) -> Option<u64> {
+    match e {
+        FetchError::Http(HttpError::HttpStatus { retry_after_ms, .. }) => *retry_after_ms,
+        _ => None,
+    }
+}
+
 impl From<&FetchError> for Option<crate::DenialContext> {
     fn from(e: &FetchError) -> Self {
         use crate::{DenialContext, DenialReason};
@@ -282,6 +362,12 @@ impl From<&FetchError> for Option<crate::DenialContext> {
             // `TooManyRefs` is a request-shape failure, not a denial —
             // adding it to the None arm keeps the mapping table consistent.)
             FetchError::NoOaAvailable
+            // #538: a source refusing because the work is not open there is
+            // NOT a denial in the ADR-0023 sense. Nothing was withheld by
+            // policy, so there is no capability to grant and no allowlist to
+            // widen -- a `DenialContext` would send a reader after a
+            // configuration change that does not exist.
+            | FetchError::NotRetrievable { .. }
             | FetchError::NotFound { .. }
             | FetchError::Ambiguous { .. }
             | FetchError::Log(_)
@@ -481,6 +567,60 @@ mod tests {
         assert!(res.metadata_json.is_none());
     }
 
+    /// A deterministic HTTP outcome must not be advertised as retriable.
+    ///
+    /// `FetchError::Http(_) => NetworkError` was a wildcard over all eight
+    /// `HttpError` variants, and `NetworkError`'s disposition is
+    /// `retry_after`. Six of them cannot change on a retry, so the mapping
+    /// every surface routes through was telling agents to back off and try
+    /// again on an allowlist refusal, a size cap and an unregistered source
+    /// key -- the exact advice ADR-0055 exists to stop giving.
+    #[test]
+    fn a_deterministic_http_failure_is_not_advertised_as_retriable() {
+        let cases: Vec<(HttpError, crate::Disposition)> = vec![
+            (
+                HttpError::RedirectDenied {
+                    source_key: "oa-publisher".into(),
+                    host: "evil.example.com".into(),
+                    expected_hosts: vec!["*.wiley.com".to_string()],
+                },
+                crate::Disposition::NeedsConfig,
+            ),
+            (
+                HttpError::UnknownSource {
+                    source_key: "tdm-aps".into(),
+                },
+                crate::Disposition::Terminal,
+            ),
+        ];
+        for (he, want) in cases {
+            let code: ErrorCode = FetchError::Http(he).into();
+            assert_ne!(
+                code,
+                ErrorCode::NetworkError,
+                "a policy/wiring outcome is not a network error: {code:?}"
+            );
+            assert_eq!(
+                code.disposition(),
+                want,
+                "and its disposition must not say retry_after: {code:?}"
+            );
+        }
+    }
+
+    /// The transient ones keep saying retry, so the fix did not overshoot.
+    #[test]
+    fn a_transient_http_failure_still_says_retry() {
+        let code: ErrorCode = FetchError::Http(HttpError::HttpStatus {
+            status: 503,
+            retry_after_ms: None,
+            url: "https://api.crossref.org/works/10.5555/x".into(),
+        })
+        .into();
+        assert_eq!(code, ErrorCode::NetworkError);
+        assert_eq!(code.disposition(), crate::Disposition::RetryAfter);
+    }
+
     #[test]
     fn fetch_error_collapses_to_error_code() {
         // Mirrors `docs/PUBLIC_API.md` §4 / PR #55 boundary collapse.
@@ -494,17 +634,27 @@ mod tests {
         let e: ErrorCode = FetchError::NoOaAvailable.into();
         assert_eq!(e, ErrorCode::NoOaAvailable);
 
+        // `UnknownSource` is "the caller asked HttpClient to fetch for a
+        // source it was never given" -- a wiring fault. This asserted
+        // `NetworkError` because the mapping used to be `Http(_) =>
+        // NetworkError`, i.e. it pinned the wildcard rather than a decision:
+        // retrying cannot register a missing source, and `NetworkError`'s
+        // `retry_after` disposition told an agent to try anyway. It is the
+        // error #462's TDM reproduction actually hit, and calling it a network
+        // problem is part of why it read as one.
         let e: ErrorCode = FetchError::Http(HttpError::UnknownSource {
             source_key: "mock".into(),
         })
         .into();
-        assert_eq!(e, ErrorCode::NetworkError);
+        assert_eq!(e, ErrorCode::InternalError);
+        assert_eq!(e.disposition(), crate::Disposition::Terminal);
 
         // 404 / 410 / 451 from a metadata source are authoritative "id does
         // not exist" → NotFound (network-independent), NOT NetworkError.
         for status in [404u16, 410, 451] {
             let e: ErrorCode = FetchError::Http(HttpError::HttpStatus {
                 status,
+                retry_after_ms: None,
                 url: "https://api.crossref.org/works/10.5555/absent".into(),
             })
             .into();
@@ -512,6 +662,31 @@ mod tests {
                 e,
                 ErrorCode::NotFound,
                 "status {status} should map to NotFound"
+            );
+        }
+        // ...and a `Retry-After` on that response does not change it. #506
+        // added `retry_after_ms` to this variant, and the arm above briefly
+        // matched `retry_after_ms: None`, which silently sent a 404 carrying
+        // the header to `NETWORK_ERROR` -- disposition `retry_after` -- so an
+        // agent was told to retry a DOI that will never resolve. The header
+        // says how long to wait IF you retry; it does not make an
+        // authoritative absence provisional.
+        for status in [404u16, 410, 451] {
+            let e: ErrorCode = FetchError::Http(HttpError::HttpStatus {
+                status,
+                retry_after_ms: Some(30_000),
+                url: "https://api.crossref.org/works/10.5555/absent".into(),
+            })
+            .into();
+            assert_eq!(
+                e,
+                ErrorCode::NotFound,
+                "status {status} with Retry-After is still NotFound"
+            );
+            assert_eq!(
+                e.disposition(),
+                crate::Disposition::Terminal,
+                "and stays terminal, so nothing tells the agent to retry it"
             );
         }
         // A non-HTTP authoritative absence (e.g. arXiv's empty Atom feed)
@@ -525,6 +700,7 @@ mod tests {
         // `doiget verify` tolerates it rather than failing a live id.
         let e: ErrorCode = FetchError::Http(HttpError::HttpStatus {
             status: 503,
+            retry_after_ms: None,
             url: "https://api.crossref.org/works/10.5555/down".into(),
         })
         .into();

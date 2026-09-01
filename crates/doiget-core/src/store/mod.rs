@@ -25,6 +25,10 @@ pub mod metadata;
 pub mod render;
 
 pub use fs_store::FsStore;
+
+/// Crash-consistent write (tmp + fsync + rename), shared with the resolver
+/// cache so both write the same way. See `docs/STORE.md` §5.
+pub(crate) use fs_store::atomic_write;
 pub use metadata::{DoigetExtension, Metadata};
 pub use render::{to_bibtex, to_csl_array};
 
@@ -137,6 +141,27 @@ pub enum StoreError {
     },
 }
 
+/// Who is authoritative for the user-authored `[doiget]` fields
+/// (`tags`, `collections`, `annotation`) on a write.
+///
+/// A fetch never authors them: every `DoigetExtension` the orchestrator
+/// builds hard-codes `Vec::new()` / `None`. Letting that win silently
+/// discarded a user's tags on any re-fetch, which is the loss ADR-0056
+/// closed for `oa_status` / `license` and left open here.
+///
+/// The distinction has to be explicit rather than "is the incoming value
+/// empty", because `doiget tag --remove` and `doiget annotate --clear`
+/// legitimately mean the empty value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UserFields {
+    /// The caller did not author them; keep whatever is on disk. Fetches.
+    Preserve,
+    /// The caller means exactly what it wrote, empty included. `doiget tag`,
+    /// `doiget annotate`, and their MCP equivalents.
+    Authored,
+}
+
 /// Filesystem-shaped metadata store, semver-locked per `docs/PUBLIC_API.md`
 /// §2.
 ///
@@ -163,7 +188,20 @@ pub trait Store: Send + Sync {
     /// `<root>/<safekey>.pdf` via the same atomic-rename dance as the
     /// metadata file. The caller is responsible for emitting the
     /// `event=store_write` provenance row (see `docs/PROVENANCE_LOG.md` §3).
+    /// Write a fetch result. User-authored `[doiget]` fields already on disk
+    /// are preserved ([`UserFields::Preserve`]) -- a fetch does not author
+    /// them, and silently dropping them is data loss.
     fn write(&self, key: &Safekey, m: &Metadata, pdf: Option<&Utf8Path>) -> Result<(), StoreError>;
+
+    /// Write on behalf of a caller that DID author the user fields, so an
+    /// empty `tags` / `collections` or a `None` annotation means exactly that
+    /// ([`UserFields::Authored`]). `doiget tag` / `doiget annotate` only.
+    fn write_user_authored(
+        &self,
+        key: &Safekey,
+        m: &Metadata,
+        pdf: Option<&Utf8Path>,
+    ) -> Result<(), StoreError>;
 
     /// Return up to `limit` entries, most-recent first by `[doiget].fetched_at`.
     fn list_recent(&self, limit: usize) -> Result<Vec<EntryInfo>, StoreError>;

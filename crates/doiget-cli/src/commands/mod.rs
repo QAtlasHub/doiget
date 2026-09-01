@@ -231,7 +231,7 @@ fn store_root_from_config() -> Option<Utf8PathBuf> {
             tracing::warn!(
                 path = %path,
                 error = %e,
-                "config.toml could not be read; [store] root ignored and the default store                  root used instead. Run `doiget config doctor` to see which root is in effect."
+                "config.toml could not be read; [store] root ignored and the default store root used instead. Run `doiget config doctor` to see which root is in effect."
             );
             return None;
         }

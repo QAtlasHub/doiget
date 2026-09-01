@@ -78,6 +78,127 @@ const SAMPLE_SEARCH: &str = r#"{
     ]
 }"#;
 
+/// #534: an over-long query that matches nothing must not read as "this work
+/// is not indexed". OpenAlex free-text matching degrades sharply past roughly
+/// eight terms and returns nothing rather than a partial match, so the
+/// envelope has to say which of the two happened -- an agent reading
+/// `ok: true` with an empty array cannot tell, and in the session behind #534
+/// it concluded absence eleven times and abandoned a paper a shorter query
+/// then found immediately.
+#[tokio::test]
+#[serial_test::serial]
+async fn an_over_long_zero_result_query_carries_a_hint() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{ "meta": { "count": 0 }, "results": [] }"#),
+        )
+        .mount(&server)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let log_path = camino::Utf8Path::from_path(td.path())
+        .expect("utf-8 tempdir")
+        .join("mcp-search-zero.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_OPENALEX_BASE", &server.uri());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    // The exact query from the report: ten terms, zero results, real paper.
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "query".to_string(),
+        serde_json::json!(
+            "lithium refractoriness after discontinuation kindling sensitization course of illness Post"
+        ),
+    );
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_paper_search").with_arguments(args))
+        .await?;
+    let s = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_paper_search uses CallToolResult::structured");
+
+    assert_eq!(s["ok"], serde_json::json!(true), "still a success: {s:?}");
+    assert_eq!(s["count"], serde_json::json!(0));
+    let hint = s["hint"].as_str().unwrap_or_default();
+    assert!(
+        hint.contains("10 terms"),
+        "the hint names the term count so the reader can act on it: {s:?}"
+    );
+    assert!(
+        hint.contains("3-5"),
+        "the hint says what to do instead, not only what went wrong: {s:?}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+/// The counterpart: a short query with no results gets no hint. A two-term
+/// search really may mean the work is not indexed, and a hint on every empty
+/// result would teach readers to skip it.
+#[tokio::test]
+#[serial_test::serial]
+async fn a_short_zero_result_query_carries_no_hint() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{ "meta": { "count": 0 }, "results": [] }"#),
+        )
+        .mount(&server)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let log_path = camino::Utf8Path::from_path(td.path())
+        .expect("utf-8 tempdir")
+        .join("mcp-search-short.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_OPENALEX_BASE", &server.uri());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "query".to_string(),
+        serde_json::json!("nonexistent gibberish"),
+    );
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_paper_search").with_arguments(args))
+        .await?;
+    let s = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_paper_search uses CallToolResult::structured");
+
+    assert_eq!(s["count"], serde_json::json!(0));
+    assert!(
+        s.get("hint").is_none() || s["hint"].is_null(),
+        "a short query gets no hint: {s:?}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
 #[tokio::test]
 #[serial_test::serial]
 async fn paper_search_returns_external_envelope() -> anyhow::Result<()> {

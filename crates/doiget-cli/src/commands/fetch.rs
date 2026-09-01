@@ -233,6 +233,14 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
     // mirroring `DOIGET_ARXIV_BASE`.
     let ar5iv_base = std::env::var("DOIGET_AR5IV_BASE").ok();
 
+    #[cfg(feature = "tdm-aps")]
+    let tdm_aps = std::env::var("DOIGET_APS_BASE").ok();
+    #[cfg(feature = "tdm-elsevier")]
+    let tdm_elsevier = std::env::var("DOIGET_ELSEVIER_BASE").ok();
+    #[cfg(feature = "tdm-springer")]
+    let tdm_springer = std::env::var("DOIGET_SPRINGER_BASE").ok();
+    #[cfg(feature = "tdm-ieee")]
+    let tdm_ieee = std::env::var("DOIGET_IEEE_BASE").ok();
     if arxiv.is_none()
         && crossref.is_none()
         && unpaywall.is_none()
@@ -345,8 +353,25 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
 
     // Test-base mode: build a relaxed client per overridden source.
     let mut owned: Vec<(String, String)> = Vec::new();
+    // Tier-3 test bases, mirroring the MCP builder. Without these a wiremock
+    // e2e cannot reach the TDM-fetched route on this surface either: the
+    // override branch's table held only Tier-1/2 keys, so `tdm-aps` was absent
+    // from the client's map and the attempt died as `no allowlist registered
+    // for source tdm-aps` -- a harness gap that read like #454 coming back.
+    //
+    // Deliberately NOT part of the production-branch test above: setting only
+    // `DOIGET_APS_BASE` to replay a recorded fixture must not silently switch
+    // the process to the allow-http test client.
     for (source, base) in [
         ("arxiv", arxiv.as_deref()),
+        #[cfg(feature = "tdm-aps")]
+        ("tdm-aps", tdm_aps.as_deref()),
+        #[cfg(feature = "tdm-elsevier")]
+        ("tdm-elsevier", tdm_elsevier.as_deref()),
+        #[cfg(feature = "tdm-springer")]
+        ("tdm-springer", tdm_springer.as_deref()),
+        #[cfg(feature = "tdm-ieee")]
+        ("tdm-ieee", tdm_ieee.as_deref()),
         ("crossref", crossref.as_deref()),
         ("unpaywall", unpaywall.as_deref()),
         ("oa-publisher", oa_publisher.as_deref()),
@@ -520,7 +545,15 @@ impl FetchHarness {
     /// argument; pass `None` for batch sessions. The result is best-effort —
     /// if this append fails, the caller already has the underlying fetch
     /// error (if any) and we don't override it.
-    pub(crate) fn log_session_end(&self, ok: bool, ref_input: Option<&str>) {
+    /// `error_code` is the terminal code the caller was given, and it is what
+    /// makes the row answer "what did this session tell the user about this
+    /// ref?" rather than only "something went wrong" (#507).
+    pub(crate) fn log_session_end(
+        &self,
+        ok: bool,
+        ref_input: Option<&str>,
+        error_code: Option<&str>,
+    ) {
         let result = if ok { LogResult::Ok } else { LogResult::Err };
         let _ = self.log.append(RowInput {
             event: LogEvent::SessionEnd,
@@ -528,7 +561,7 @@ impl FetchHarness {
             capability: Capability::Oa,
             ref_: ref_input,
             source: None,
-            error_code: None,
+            error_code,
             size_bytes: None,
             license: None,
             store_path: None,
@@ -571,7 +604,9 @@ impl FetchHarness {
 /// Pulled out so both `run_with_options` and `commands::batch` agree on
 /// the failure boundary.
 pub(crate) fn outcome_is_clean_success(outcome: &FetchPaperOutcome) -> bool {
-    !matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. })
+    // The rule lives in `doiget-core` now, because the MCP surface needs the
+    // same boundary and had only half of it.
+    outcome.is_clean_success()
 }
 
 /// CLI-only one-line success message on stderr (ADR-0001 stdio
@@ -596,6 +631,15 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
                 "fetched {} (metadata-only: no OA PDF available) -> {}",
                 label, outcome.path
             ));
+            // #505: this is the ONLY outcome that reads as a result rather
+            // than an error, which is why it had no trace -- there was no
+            // `error[...]` block to hang one on. It is also the one where the
+            // absence misleads most: the line above is byte-identical whether
+            // the optional sources were on and had nothing, or off and never
+            // asked.
+            for line in not_found_trace_lines(ref_, &outcome.attempts) {
+                print_err(format_args!("{line}"));
+            }
         }
         // Issue #325: publisher PDF was blocked, arXiv preprint auto-fetched.
         PdfLegStatus::PreprintFallback { arxiv_id, .. } => {
@@ -663,7 +707,7 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
     // paper landed without a second `doiget info` call. Skipped for the
     // Blocked fail-closed arm (it rendered an `error[CODE]:` line above, not
     // a success).
-    if !matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. }) {
+    if outcome.is_clean_success() {
         emit_identity_line(outcome);
     }
 }
@@ -767,7 +811,19 @@ pub async fn run_with_options(
         Ok(o) => outcome_is_clean_success(o),
         Err(_) => false,
     };
-    harness.log_session_end(session_ok, Some(ref_.as_input_str()));
+    // #507: the code the USER was given, which for this command is not
+    // always the `Result`'s. A blocked PDF leg is `Ok` with a failed leg and
+    // an unclean session, and the leg carries the closed-set code -- recording
+    // `None` there would log the one outcome an agent is most likely to retry
+    // as having no reason at all.
+    let session_err = match &result {
+        Err(e) => Some(doiget_core::ErrorCode::from(e).as_wire()),
+        Ok(o) => match &o.pdf_leg {
+            PdfLegStatus::Blocked { code, .. } => Some(code.as_wire()),
+            _ => None,
+        },
+    };
+    harness.log_session_end(session_ok, Some(ref_.as_input_str()), session_err);
 
     // Step 6: render the user-facing surface and map to `CliExit`.
     // The Blocked-PDF reclassification logic that used to live inside
@@ -1248,6 +1304,155 @@ fn render_blocked_error(
     for line in blocked_trace_lines(&outcome.attempts, message) {
         print_err(format_args!("{line}"));
     }
+}
+
+/// The diagnostics for a found-nothing fetch (#505).
+///
+/// `no OA PDF available` means only "the sources that ran had nothing". With
+/// the default profile that is three of eleven, and the sentence does not say
+/// so -- #413 built the trace for exactly this distinction ("we asked and it
+/// had nothing" versus "we never asked") and this was the path it never
+/// reached.
+///
+/// Three blocks: what ran, what did not, and the line to paste.
+/// Order the sources that were NOT consulted, for the found-nothing path
+/// (#505 part 3).
+///
+/// The issue is explicit about the risk, and it governs this whole function:
+///
+/// > a ranking that is wrong is worse than no ranking, because it makes people
+/// > stop early. So it must be an *ordering* of the full list, never a
+/// > shortlist, and it must name the signal it ranked on.
+///
+/// Two positions have a real signal and the middle does not, so only two are
+/// ranked:
+///
+/// * **`openalex` first.** It is categorically different from the rest: it
+///   *lists* every location a work has, so with it enabled the answer is "this
+///   repository has it", not "this repository might". Item 1 is a lookup; the
+///   others are guesses, and the issue is emphatic that presenting both in one
+///   list without saying which is which is the failure mode it is about.
+/// * **`core` last.** Not a guess either -- its own module doc calls it "the
+///   broadest single OA index outside Unpaywall and therefore the LAST fallback
+///   in the chain". Broadest means least discriminating, so it is never the
+///   first thing to try and never absent from the list.
+///
+/// **Everything between them is returned unordered, deliberately.** The issue
+/// proposes ranking the middle on venue, author affiliation and funder, and
+/// none of those reach this point: `FetchPaperOutcome` carries `title`,
+/// `authors` and `year`, and the DOI prefix map is Tier-3-only (ADR-0041,
+/// publisher TDM scoping) and absent from an `oa-only` build entirely. Putting
+/// them in an order anyway would render a guess in the shape of a finding,
+/// which is the one thing this must not do.
+fn rank_unconsulted(
+    attempts: &[SourceAttempt],
+) -> (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>) {
+    let mut first = Vec::new();
+    let mut middle = Vec::new();
+    let mut last = Vec::new();
+    for a in attempts {
+        if a.outcome.required_env().is_none() {
+            continue;
+        }
+        match a.source {
+            "openalex" => first.push(a.source),
+            "core" => last.push(a.source),
+            other => middle.push(other),
+        }
+    }
+    middle.sort_unstable();
+    (first, middle, last)
+}
+
+fn not_found_trace_lines(ref_: &Ref, attempts: &[SourceAttempt]) -> Vec<String> {
+    let mut out = Vec::new();
+    if attempts.is_empty() {
+        return out;
+    }
+
+    out.push("  = note: no OA copy found. sources this run:".to_string());
+    out.extend(
+        doiget_core::orchestrator::render_attempts(attempts)
+            .lines()
+            .map(|l| format!("  {l}")),
+    );
+
+    // Split the widening advice by whether it can actually be acted on.
+    //
+    // `resolve_metadata_flag` returns false when the variable IS set but the
+    // Cargo feature was not compiled in -- it warns through `tracing` and
+    // moves on, so the source reports `Disabled` naming a variable the user
+    // has already set. Printing "set DOIGET_ENABLE_X" at someone who set it
+    // an hour ago is the same species of unhelpful as the bare
+    // `no OA PDF available` this issue is about, so say which case it is.
+    let (unset, already_set): (Vec<_>, Vec<_>) = doiget_core::orchestrator::widening_env(attempts)
+        .into_iter()
+        .partition(|v| std::env::var_os(v).is_none());
+
+    if !unset.is_empty() {
+        // `widening_env` returns Tier-2 switches AND Tier-3 credential pairs.
+        // Rendering every one as `VAR=1` produced `DOIGET_KEY_APS=1` -- an API
+        // key that can never be valid, in a line whose whole purpose is to be
+        // pasted. A flag is a flag; a key is a key.
+        let assignments = unset
+            .iter()
+            .map(|v| {
+                if v.starts_with("DOIGET_KEY_") {
+                    format!("{v}=<your-api-key>")
+                } else {
+                    format!("{v}=1")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let target = match ref_ {
+            Ref::Arxiv(id) => id.as_str().to_string(),
+            Ref::Doi(doi) => doi.as_str().to_string(),
+        };
+        out.push("  = suggest: to widen the search:".to_string());
+        out.push(format!("      {assignments} doiget fetch {target}"));
+    }
+
+    if !already_set.is_empty() {
+        out.push(format!(
+            "  = note: {} already set, but the source is still off -- this binary was built without the Cargo feature that provides it. Widening needs a differently-built binary, not another variable.",
+            already_set.join(", ")
+        ));
+    }
+
+    // #505 part 3. Ordered only where there is something to order on; see
+    // `rank_unconsulted`.
+    let (first, middle, last) = rank_unconsulted(attempts);
+    if !first.is_empty() || !middle.is_empty() || !last.is_empty() {
+        out.push("  = note: of the sources not consulted:".to_string());
+        for s in &first {
+            out.push(format!(
+                "      1. {s:<12} lists every location a work has -- a lookup, not a guess"
+            ));
+        }
+        if !middle.is_empty() {
+            out.push(format!(
+                "      then, in NO particular order: {}",
+                middle.join("  ")
+            ));
+        }
+        for s in &last {
+            out.push(format!(
+                "      last: {s:<9} the broadest index outside Unpaywall, so never the first try"
+            ));
+        }
+        // Naming the signal is half of what the ranking is for. Saying "the
+        // middle has none" is the honest form of that, and it stops the list
+        // reading as an ordering it is not.
+        if !middle.is_empty() {
+            out.push(
+                "  = note: the middle is unordered because nothing in this run distinguishes those sources -- venue, affiliation and funder would, and none of them reach here. An invented order would read as information."
+                    .to_string(),
+            );
+        }
+    }
+
+    out
 }
 
 /// The `= note:`/`= suggest:` block appended to a blocked PDF leg (#445).
@@ -2225,6 +2430,211 @@ host = "*.uj.edu.pl"
 
     /// The half of #445 that the #413 trace already answered for
     /// `NotFound`: *did anything else have it?*
+    /// #505: the found-nothing path is the one outcome that reads as a
+    /// result, so its silence is the most misleading. `no OA PDF available`
+    /// is byte-identical whether the optional sources were on and had
+    /// nothing or off and never asked.
+    #[test]
+    fn a_found_nothing_fetch_says_what_it_consulted_and_what_it_did_not() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let ref_ = Ref::parse("10.1137/0117004").expect("valid doi");
+        let attempts = vec![
+            SourceAttempt::new("unpaywall", AttemptOutcome::NoRecord),
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_HAL"],
+                },
+            ),
+        ];
+        let joined = not_found_trace_lines(&ref_, &attempts).join(
+            "
+",
+        );
+
+        assert!(
+            joined.contains("unpaywall") && joined.contains("no record"),
+            "what ran, and what it said:
+{joined}"
+        );
+        assert!(
+            joined.contains("DOIGET_ENABLE_HAL"),
+            "a source never asked must still name its switch:
+{joined}"
+        );
+        // The line to paste, not prose about it.
+        assert!(
+            joined.contains("DOIGET_ENABLE_HAL=1 doiget fetch 10.1137/0117004"),
+            "the widening command must be runnable as printed:
+{joined}"
+        );
+    }
+
+    /// #505 part 3, and the property the issue cares about most: the ranking
+    /// is an ORDERING OF THE FULL LIST, never a shortlist.
+    ///
+    /// > a ranking that is wrong is worse than no ranking, because it makes
+    /// > people stop early.
+    ///
+    /// A source that is dropped from the list is a source the reader will not
+    /// try, so every unconsulted source must appear somewhere.
+    #[test]
+    fn the_ranking_lists_every_unconsulted_source_and_drops_none() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let disabled = |name: &'static str, env: &'static [&'static str]| {
+            SourceAttempt::new(name, AttemptOutcome::Disabled { env })
+        };
+        let attempts = vec![
+            SourceAttempt::new("crossref", AttemptOutcome::NoRecord),
+            disabled("core", &["DOIGET_ENABLE_CORE"]),
+            disabled("openalex", &["DOIGET_ENABLE_OPENALEX"]),
+            disabled("hal", &["DOIGET_ENABLE_HAL"]),
+            disabled("europe-pmc", &["DOIGET_ENABLE_EUROPE_PMC"]),
+        ];
+
+        let (first, middle, last) = rank_unconsulted(&attempts);
+        let mut all: Vec<&str> = first
+            .iter()
+            .chain(middle.iter())
+            .chain(last.iter())
+            .copied()
+            .collect();
+        all.sort_unstable();
+        assert_eq!(
+            all,
+            vec!["core", "europe-pmc", "hal", "openalex"],
+            "every source that was not consulted must appear, and only those"
+        );
+
+        // A consulted source contributes nothing: it already answered.
+        assert!(!all.contains(&"crossref"));
+
+        // The two positions that HAVE a signal.
+        assert_eq!(first, vec!["openalex"], "the lookup goes first");
+        assert_eq!(last, vec!["core"], "the broadest index goes last");
+        assert_eq!(middle, vec!["europe-pmc", "hal"]);
+    }
+
+    /// The rendered form must mark item 1 as categorically different and must
+    /// say the middle is unordered. Presenting a lookup and a guess in one
+    /// list without saying which is which is the failure mode #505 is about.
+    #[test]
+    fn the_rendered_ranking_says_which_part_is_a_guess() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let ref_ = Ref::parse("10.1137/0117004").expect("valid doi");
+        let attempts = vec![
+            SourceAttempt::new("crossref", AttemptOutcome::NoRecord),
+            SourceAttempt::new(
+                "openalex",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_OPENALEX"],
+                },
+            ),
+            SourceAttempt::new(
+                "hal",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_HAL"],
+                },
+            ),
+            SourceAttempt::new(
+                "core",
+                AttemptOutcome::Disabled {
+                    env: &["DOIGET_ENABLE_CORE"],
+                },
+            ),
+        ];
+        let joined = not_found_trace_lines(&ref_, &attempts).join(
+            "
+",
+        );
+
+        assert!(
+            joined.contains("a lookup, not a guess"),
+            "item 1 must be marked as categorically different:
+{joined}"
+        );
+        assert!(
+            joined.contains("NO particular order"),
+            "the middle must not read as an ordering:
+{joined}"
+        );
+        assert!(
+            joined.contains("An invented order would read as information"),
+            "and it must say WHY there is no order, which is the named signal:
+{joined}"
+        );
+        assert!(
+            joined.contains("never the first try"),
+            "core's position must carry its own reason:
+{joined}"
+        );
+    }
+
+    /// Nothing to rank when nothing was skipped, and the common path gains no
+    /// noise from a feature about the uncommon one.
+    #[test]
+    fn a_run_that_skipped_nothing_gets_no_ranking() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let ref_ = Ref::parse("10.1137/0117004").expect("valid doi");
+        let attempts = vec![SourceAttempt::new("crossref", AttemptOutcome::NoRecord)];
+        let joined = not_found_trace_lines(&ref_, &attempts).join(
+            "
+",
+        );
+        assert!(
+            !joined.contains("not consulted:"),
+            "no skipped sources means no ranking block:
+{joined}"
+        );
+    }
+
+    /// No trace at all when there is nothing to say. An empty attempt list
+    /// means the chain never recorded anything, and inventing a block for it
+    /// would be noise on the one path users see most.
+    #[test]
+    fn no_attempts_means_no_found_nothing_trace() {
+        let ref_ = Ref::parse("10.1137/0117004").expect("valid doi");
+        assert!(not_found_trace_lines(&ref_, &[]).is_empty());
+    }
+
+    /// The advice has to be actionable to be worth printing.
+    ///
+    /// `resolve_metadata_flag` returns false when the variable is SET but the
+    /// Cargo feature was not compiled in, so the source still reports
+    /// `Disabled` naming a variable the user already set. Telling them to set
+    /// it again is the same species of unhelpful as the bare
+    /// `no OA PDF available` this issue is about.
+    #[test]
+    #[serial]
+    fn an_already_set_switch_is_reported_as_a_build_problem_not_a_config_one() {
+        use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};
+        let _guard = EnvGuard::save("DOIGET_ENABLE_HAL");
+        std::env::set_var("DOIGET_ENABLE_HAL", "1");
+
+        let ref_ = Ref::parse("10.1137/0117004").expect("valid doi");
+        let attempts = vec![SourceAttempt::new(
+            "hal",
+            AttemptOutcome::Disabled {
+                env: &["DOIGET_ENABLE_HAL"],
+            },
+        )];
+        let joined = not_found_trace_lines(&ref_, &attempts).join(
+            "
+",
+        );
+
+        assert!(
+            !joined.contains("doiget fetch 10.1137/0117004"),
+            "must NOT tell them to set what they have already set:
+{joined}"
+        );
+        assert!(
+            joined.contains("built without"),
+            "must name the real blocker, which is the build:
+{joined}"
+        );
+    }
+
     #[test]
     fn a_blocked_leg_reports_which_other_sources_were_consulted() {
         use doiget_core::orchestrator::{AttemptOutcome, SourceAttempt};

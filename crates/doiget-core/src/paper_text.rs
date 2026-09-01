@@ -303,19 +303,19 @@ fn apply_max_chars(full: PaperText, max_chars: Option<usize>) -> PaperText {
 /// Local element names whose entire subtree is skipped (text discarded).
 /// `math` is in this set, but its `alttext` is captured before the subtree
 /// is skipped (see [`extract_alttext`]).
-fn is_skip_element(local: &[u8]) -> bool {
-    matches!(local, b"script" | b"style" | b"math")
+fn is_skip_element(local: &str) -> bool {
+    matches!(local, "script" | "style" | "math")
 }
 
 /// Heading level (1..=6) for an `h1`–`h6` local name, else `None`.
-fn heading_level(local: &[u8]) -> Option<u8> {
+fn heading_level(local: &str) -> Option<u8> {
     match local {
-        b"h1" => Some(1),
-        b"h2" => Some(2),
-        b"h3" => Some(3),
-        b"h4" => Some(4),
-        b"h5" => Some(5),
-        b"h6" => Some(6),
+        "h1" => Some(1),
+        "h2" => Some(2),
+        "h3" => Some(3),
+        "h4" => Some(4),
+        "h5" => Some(5),
+        "h6" => Some(6),
         _ => None,
     }
 }
@@ -323,7 +323,7 @@ fn heading_level(local: &[u8]) -> Option<u8> {
 /// Extract a `<math alttext="...">` LaTeX source, if present.
 fn extract_alttext(e: &quick_xml::events::BytesStart<'_>) -> Option<String> {
     for attr in e.attributes().flatten() {
-        if attr.key.as_ref() == b"alttext" {
+        if attr.key.as_ref() == "alttext" {
             if let Ok(v) = attr.normalized_value(quick_xml::XmlVersion::Explicit1_0) {
                 let s = v.into_owned();
                 if !s.trim().is_empty() {
@@ -388,7 +388,7 @@ fn parse_ar5iv(html: &[u8]) -> Result<(Option<String>, Vec<TextSection>), FetchE
                 let name = e.name();
                 let local = local_name(name.as_ref());
                 if is_skip_element(local) {
-                    if skip == 0 && local == b"math" {
+                    if skip == 0 && local == "math" {
                         if let Some(alt) = extract_alttext(&e) {
                             let frag = format!("\\({alt}\\) ");
                             push_target(
@@ -407,7 +407,7 @@ fn parse_ar5iv(html: &[u8]) -> Result<(Option<String>, Vec<TextSection>), FetchE
                     flush_section(&mut sections, &mut cur_heading, &mut cur_text);
                     in_heading = level;
                     heading_buf.clear();
-                } else if local == b"title" && title.is_none() {
+                } else if local == "title" && title.is_none() {
                     in_title = true;
                     title_buf.clear();
                 }
@@ -418,7 +418,7 @@ fn parse_ar5iv(html: &[u8]) -> Result<(Option<String>, Vec<TextSection>), FetchE
                 let local = local_name(name.as_ref());
                 // A self-closing `<math .../>` contributes its alttext but
                 // has no subtree to skip.
-                if skip == 0 && local == b"math" {
+                if skip == 0 && local == "math" {
                     if let Some(alt) = extract_alttext(&e) {
                         let frag = format!("\\({alt}\\) ");
                         push_target(
@@ -434,11 +434,7 @@ fn parse_ar5iv(html: &[u8]) -> Result<(Option<String>, Vec<TextSection>), FetchE
                 buf.clear();
             }
             Ok(Event::Text(t)) => {
-                match t.decode().ok().and_then(|raw| {
-                    quick_xml::escape::unescape(&raw)
-                        .ok()
-                        .map(|c| c.into_owned())
-                }) {
+                match quick_xml::escape::unescape(&t).ok().map(|c| c.into_owned()) {
                     Some(s) => {
                         if !s.is_empty() && skip == 0 {
                             let mut frag = s;
@@ -482,7 +478,7 @@ fn parse_ar5iv(html: &[u8]) -> Result<(Option<String>, Vec<TextSection>), FetchE
                     in_heading = 0;
                     // The body of the new section starts fresh.
                     cur_text.clear();
-                } else if local == b"title" && in_title {
+                } else if local == "title" && in_title {
                     in_title = false;
                     let t = normalize(&title_buf);
                     if !t.is_empty() {
@@ -551,10 +547,10 @@ fn flush_section(
     cur_text.clear();
 }
 
-/// Strip an XML namespace prefix, returning the local-part bytes
-/// (`b"xhtml:p"` -> `b"p"`). Mirrors the arXiv Atom parser's helper.
-fn local_name(qname: &[u8]) -> &[u8] {
-    match qname.iter().rposition(|&b| b == b':') {
+/// Strip an XML namespace prefix, returning the local part
+/// (`"xhtml:p"` -> `"p"`). Mirrors the arXiv Atom parser's helper.
+fn local_name(qname: &str) -> &str {
+    match qname.rfind(':') {
         Some(idx) => &qname[idx + 1..],
         None => qname,
     }

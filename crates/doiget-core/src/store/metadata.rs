@@ -97,6 +97,14 @@ pub struct Metadata {
     pub other: std::collections::BTreeMap<String, toml::Value>,
 }
 
+/// The value `[doiget].license` carries when no license was determined.
+///
+/// It is a marker for "the lookup did not produce one", not a reading. A
+/// resolver that genuinely reports a license writes that license; nothing
+/// reports `"unknown"` as news. `merge_metadata` relies on that to tell an
+/// absent answer from a new one.
+pub const LICENSE_UNDETERMINED: &str = "unknown";
+
 /// doiget-specific extension table (`[doiget]`).
 ///
 /// Per `docs/STORE.md` §6, doiget owns this table outright and may

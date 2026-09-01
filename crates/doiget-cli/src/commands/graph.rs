@@ -36,6 +36,24 @@ use doiget_core::{ErrorCode, Ref};
 use super::fetch::{cli_exit_code, CliExit, FetchHarness};
 use super::output::print_err;
 
+/// The closed-set code a `GraphError` is reported as (#507).
+///
+/// The `map_err` below already decides this per variant, but it does so while
+/// building a user-facing message and an exit code, so the value is not
+/// available to the provenance bookend that runs first.
+///
+/// This used to hold its own exhaustive match, above a claim that "the two
+/// cannot say different things about the same error". Two is the wrong count:
+/// the MCP surface held a third copy, which flattened `Source(_)` to
+/// `NETWORK_ERROR`, so an OpenAlex 404 was terminal here and retriable there.
+/// The mapping lives beside the enum in `doiget-core` now.
+fn graph_error_code(e: &GraphError) -> ErrorCode {
+    // The mapping lives in `doiget_core::citation_graph`, next to the enum, so
+    // this surface and the MCP one cannot drift apart again -- they did, on
+    // `Source(_)`, which the MCP copy flattened to `NETWORK_ERROR`.
+    ErrorCode::from(e)
+}
+
 /// Run the `graph` subcommand against the live source set.
 ///
 /// `input` is the user-supplied ref string (DOI only — arXiv ids are
@@ -121,7 +139,13 @@ pub async fn run(
 
     let outcome = expand(&doi, caps, &source, &harness.profile, &ctx).await;
     let session_ok = outcome.is_ok();
-    harness.log_session_end(session_ok, Some(&input));
+    // `GraphError` has its own mapping to the closed set, applied just
+    // below; the bookend records the same code the caller is given (#507).
+    let session_err = outcome
+        .as_ref()
+        .err()
+        .map(|e| graph_error_code(e).as_wire());
+    harness.log_session_end(session_ok, Some(&input), session_err);
 
     let graph = outcome.map_err(|e| match e {
         GraphError::CapabilityDenied => {

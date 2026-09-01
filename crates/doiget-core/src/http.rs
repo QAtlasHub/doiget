@@ -173,6 +173,94 @@ impl SourceAllowlist {
             .iter()
             .any(|pat| host_matches_pattern(&host_lc, pat))
     }
+
+    /// Returns `true` if a request to `host` may proceed under this
+    /// allowlist: either it is on the list, or it is a transparent DOI
+    /// resolver ([`is_transparent_resolver`]).
+    ///
+    /// **This, not [`matches`](Self::matches), is what an adjudication site
+    /// calls.** `matches` answers "is this host on the list", which is a
+    /// question about the list; `permits` answers "may we go here", which is
+    /// the question every gate is actually asking. Keeping them separate
+    /// means the resolver set is not silently reported as part of any
+    /// source's `expected_hosts`.
+    ///
+    /// The five adjudication sites -- the pre-fetch OA-URL check in
+    /// `orchestrator`, the two redirect-policy closures, `probe`, and the
+    /// pre-check `doiget config doctor --network` runs before calling
+    /// `probe` -- all route through here so they cannot disagree. #533 was
+    /// found because only one of them was ever walked end to end, and the
+    /// doctor's was missed on the first pass at this very doc comment: it
+    /// said "four" while still calling `matches`, which would have had the
+    /// command that explains allowlist refusals reproduce #533 the moment a
+    /// resolver host entered its probe list.
+    #[must_use]
+    pub fn permits(&self, host: &str) -> bool {
+        is_transparent_resolver(host) || self.matches(host)
+    }
+}
+
+/// Hosts that are addressing, not hosting.
+///
+/// `doi.org` is the indirection layer every DOI passes through, and
+/// Unpaywall routinely reports it AS the OA location: for the gold cc-by
+/// paper in #533, `best_oa_location.url` is literally
+/// `https://doi.org/10.1002/pcn5.205` with no `url_for_pdf`. Adjudicating
+/// that hop as if it were a content host had two consequences, both wrong:
+///
+///   * the chain was refused at the FIRST hop, before it ever reached the
+///     publisher -- whose host, `*.wiley.com`, was already on the list; and
+///   * the denial's remediation told the user to allowlist `doi.org`, which
+///     does not widen the trusted surface toward one publisher. It removes
+///     the bound entirely, because every DOI in existence resolves through
+///     it. An agent following that advice would get the PDF and silently
+///     lose the invariant the allowlist exists to hold (ADR-0027).
+///
+/// These hosts are therefore FOLLOWED but never allowlisted, never named as
+/// remediation, and never counted as the source of the content. The host
+/// that actually serves the bytes is adjudicated exactly as before, so this
+/// is transparent to the invariant rather than an exception to it.
+///
+/// One edge the sentence above does not cover: a chain that TERMINATES at a
+/// resolver -- a `200` straight from `doi.org` rather than the `302` it
+/// exists to send -- is served by a host `permits` allowed and `matches`
+/// would not. The bound still holds in practice because these three hosts are
+/// operated by the DOI Foundation and CNRI and do not serve article bytes,
+/// which is why the set is closed and exact; but the invariant is "the
+/// resolver is trusted to redirect", not "only allowlisted hosts ever send
+/// bytes".
+///
+/// # Why a closed set and not "the terminal host"
+///
+/// #533's first suggestion was to adjudicate only the final host of a
+/// chain. That is a bigger change than it looks: it would let a chain
+/// traverse ANY host so long as it ended somewhere allowed, and every hop
+/// still sees the request. A named, closed set of resolvers keeps the bound.
+///
+/// # Why exact hosts and no wildcards
+///
+/// `*.doi.org` would sweep in `www.doi.org`, which is the DOI Foundation's
+/// website, not a resolver -- and any other subdomain the Foundation ever
+/// stands up. Each entry here is a host measured to 302 straight to the
+/// publisher (2026-08-30, `10.1002/pcn5.205`):
+///
+/// | host | what it is |
+/// |---|---|
+/// | `doi.org` | the canonical DOI resolver |
+/// | `dx.doi.org` | its long-standing alias, still in live metadata |
+/// | `hdl.handle.net` | the Handle System resolver `doi.org` proxies |
+const TRANSPARENT_RESOLVER_HOSTS: &[&str] = &["doi.org", "dx.doi.org", "hdl.handle.net"];
+
+/// Whether `host` is a DOI resolver rather than a content host (#533).
+///
+/// Exact match against `TRANSPARENT_RESOLVER_HOSTS`, deliberately without
+/// wildcard support: `evil-doi.org`, `doi.org.evil.test` and `www.doi.org`
+/// are all NOT resolvers, and the first two are what an attacker would
+/// register.
+#[must_use]
+pub fn is_transparent_resolver(host: &str) -> bool {
+    let host_lc = host.to_ascii_lowercase();
+    TRANSPARENT_RESOLVER_HOSTS.contains(&host_lc.as_str())
 }
 
 /// Returns `true` if `host` (already lowercased) matches `pattern` per
@@ -610,6 +698,22 @@ pub enum HttpError {
         status: u16,
         /// The URL that produced the status.
         url: String,
+        /// The server's own `Retry-After`, in milliseconds, when it sent one
+        /// on the response that ended the attempt (#506).
+        ///
+        /// `parse_retry_after` already read this header, but only on the
+        /// retry path -- the terminal `return` discarded it, so by the time
+        /// the error reached a caller the number was gone and
+        /// `error.retry_after_ms` looked impossible to fill honestly. It is
+        /// not: the LAST response carries its own `Retry-After`, and that is
+        /// the one the caller should wait.
+        ///
+        /// `None` when the server sent no header. Deliberately not
+        /// substituted with `backoff_delay` -- doiget's internal backoff is a
+        /// guess about the server, and handing a caller a guess wearing the
+        /// name of a server-supplied value is the defect this field exists to
+        /// avoid.
+        retry_after_ms: Option<u64>,
     },
     /// No allowlist entry exists for this source. The caller asked
     /// [`HttpClient`] to fetch on behalf of a source that wasn't passed to
@@ -955,7 +1059,7 @@ impl HttpClient {
             .ok_or_else(|| HttpError::UnknownSource {
                 source_key: source.to_string(),
             })?;
-        if !allow.matches(&host) {
+        if !allow.permits(&host) {
             return Err(HttpError::RedirectDenied {
                 source_key: source.to_string(),
                 host,
@@ -1073,6 +1177,10 @@ impl HttpClient {
                 }
                 return Err(HttpError::HttpStatus {
                     status: code,
+                    // Read from the response that ENDED the attempt, so it is
+                    // the server's number rather than ours (#506).
+                    retry_after_ms: parse_retry_after(response.headers())
+                        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
                     // Issue #146: Springer Nature authenticates via an
                     // `api_key` URL query parameter, and IEEE via
                     // `apikey` (#430) — neither documents a header
@@ -1271,7 +1379,7 @@ fn build_client_allow_http(allowlist: SourceAllowlist) -> Result<Client, reqwest
                 });
             }
         };
-        if !allowlist_for_closure.matches(&host) {
+        if !allowlist_for_closure.permits(&host) {
             return attempt.error(HttpError::RedirectDenied {
                 source_key: allowlist_for_closure.source.clone(),
                 host,
@@ -1467,7 +1575,7 @@ fn build_client(allowlist: SourceAllowlist, ua: &str) -> Result<Client, reqwest:
                 });
             }
         };
-        if !allowlist_for_closure.matches(&host) {
+        if !allowlist_for_closure.permits(&host) {
             return attempt.error(HttpError::RedirectDenied {
                 source_key: allowlist_for_closure.source.clone(),
                 host,
@@ -1647,6 +1755,93 @@ mod tests {
     /// wildcard does not match an apex, and the redirect that motivated
     /// #405 (10.1109/access.2024.3495502, IEEE Access gold OA) targeted the
     /// bare apex.
+    /// #533, reproduced against the REAL allowlist rather than a fixture.
+    ///
+    /// Harada & Kato 2024 is gold OA, cc-by, and Unpaywall's
+    /// `best_oa_location.url` for it is literally `https://doi.org/10.1002/
+    /// pcn5.205` with no `url_for_pdf` (verified against the live API,
+    /// 2026-08-30). The chain was refused at that first hop -- while
+    /// `*.wiley.com`, where it lands, was already on the list.
+    #[test]
+    fn a_doi_resolver_hop_is_permitted_without_being_allowlisted() {
+        let lists = oa_publisher_allowlist();
+        let oa = lists
+            .iter()
+            .find(|a| a.source == "oa-publisher")
+            .expect("oa-publisher entry");
+
+        // The two questions stay distinct: a resolver is permitted, but it is
+        // NOT on the list and must never be reported as if it were.
+        assert!(oa.permits("doi.org"), "the hop the report was refused at");
+        assert!(
+            !oa.matches("doi.org"),
+            "a resolver must not be ON the allowlist -- `expected_hosts` is \
+             shown to the user as what to trust, and doi.org is every DOI"
+        );
+        assert!(
+            !oa.redirect_hosts.iter().any(|h| h.contains("doi.org")),
+            "and it must not leak into the expected-host list: {:?}",
+            oa.redirect_hosts
+        );
+
+        // The host the chain actually lands on was trusted all along. This is
+        // what makes the refusal a layer error rather than a missing entry.
+        assert!(
+            oa.permits("onlinelibrary.wiley.com"),
+            "the publisher was already covered by *.wiley.com: {:?}",
+            oa.redirect_hosts
+        );
+
+        // And the gate still gates.
+        assert!(!oa.permits("evil.example.com"));
+    }
+
+    /// Exact hosts, no wildcards. `*.doi.org` would sweep in `www.doi.org`,
+    /// which is the DOI Foundation's website and not a resolver, plus
+    /// whatever else is ever stood up there; and the impostor hosts below are
+    /// precisely what an attacker registers.
+    #[test]
+    fn resolver_impostor_hosts_are_not_transparent() {
+        for host in [
+            "doi.org",
+            "dx.doi.org",
+            "hdl.handle.net",
+            "DOI.ORG",
+            "Dx.Doi.Org",
+        ] {
+            assert!(is_transparent_resolver(host), "{host} is a resolver");
+        }
+        for host in [
+            "www.doi.org",
+            "doi.org.evil.test",
+            "evil-doi.org",
+            "notdoi.org",
+            "a.doi.org",
+            "handle.net",
+            "",
+        ] {
+            assert!(!is_transparent_resolver(host), "{host} is NOT a resolver");
+        }
+    }
+
+    /// Transparency is a property of the resolver, not of one source: a
+    /// resolver hop is addressing wherever it appears.
+    #[test]
+    fn every_tier_1_source_treats_a_resolver_hop_as_addressing() {
+        for a in tier_1_allowlist() {
+            assert!(
+                a.permits("doi.org"),
+                "source {} refuses the addressing layer",
+                a.source
+            );
+            assert!(
+                !a.matches("doi.org"),
+                "source {} lists a resolver as a content host",
+                a.source
+            );
+        }
+    }
+
     #[test]
     fn doaj_is_on_the_default_oa_publisher_allowlist() {
         let lists = oa_publisher_allowlist();
@@ -2323,7 +2518,10 @@ mod tests {
                     });
                 }
             };
-            if !allowlist_for_closure.matches(&h) {
+            // `permits`, mirroring production: this closure is a local copy
+            // of `build_client`'s policy, and a copy that adjudicates
+            // differently tests something that does not ship (#533).
+            if !allowlist_for_closure.permits(&h) {
                 return attempt.error(HttpError::RedirectDenied {
                     source_key: allowlist_for_closure.source.clone(),
                     host: h,
@@ -2447,6 +2645,7 @@ mod tests {
         // map to None per ADR-0023 §4.
         let e = HttpError::HttpStatus {
             status: 503,
+            retry_after_ms: None,
             url: "https://api.crossref.org/works/x".to_string(),
         };
         let dc: Option<DenialContext> = (&e).into();
@@ -2556,6 +2755,73 @@ mod tests {
             .await
             .expect("429+Retry-After then 200 must succeed");
         assert_eq!(&body[..], b"ok");
+    }
+
+    /// #506: the server's own `Retry-After` survives to the caller.
+    ///
+    /// `parse_retry_after` already read this header, but only on the RETRY
+    /// path -- the terminal `return` discarded it, so by the time the error
+    /// reached a caller the number was gone and `error.retry_after_ms` looked
+    /// impossible to fill honestly. It is not: the response that ends the
+    /// attempt carries its own header, and that is the one to wait.
+    #[tokio::test]
+    async fn a_terminal_429_carries_the_servers_retry_after() {
+        let server = MockServer::start().await;
+        // 429 on every attempt, so the retries are exhausted and the error is
+        // the terminal one -- the case that used to lose the header.
+        Mock::given(method("GET"))
+            .and(path("/p"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "7"))
+            .mount(&server)
+            .await;
+
+        let client = build_test_client_for_http("crossref", &host_of(&server));
+        let url: Url = format!("{}/p", server.uri()).parse().unwrap();
+        let err = client
+            .fetch_bytes("crossref", url)
+            .await
+            .expect_err("every attempt 429s");
+
+        match err {
+            HttpError::HttpStatus {
+                status,
+                retry_after_ms,
+                ..
+            } => {
+                assert_eq!(status, 429);
+                assert_eq!(
+                    retry_after_ms,
+                    Some(7_000),
+                    "the SERVER's number, in ms, not our backoff"
+                );
+            }
+            other => panic!("expected HttpStatus, got {other:?}"),
+        }
+    }
+
+    /// No header, no number. Backfilling from `backoff_delay` would hand the
+    /// caller a guess about the server wearing the name of a value the server
+    /// supplied -- the defect this field exists to avoid.
+    #[tokio::test]
+    async fn a_terminal_429_without_the_header_carries_no_number() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/p"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+
+        let client = build_test_client_for_http("crossref", &host_of(&server));
+        let url: Url = format!("{}/p", server.uri()).parse().unwrap();
+        let err = client
+            .fetch_bytes("crossref", url)
+            .await
+            .expect_err("every attempt 429s");
+
+        match err {
+            HttpError::HttpStatus { retry_after_ms, .. } => assert_eq!(retry_after_ms, None),
+            other => panic!("expected HttpStatus, got {other:?}"),
+        }
     }
 
     #[tokio::test]

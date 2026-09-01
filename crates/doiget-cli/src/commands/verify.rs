@@ -40,6 +40,7 @@ use doiget_core::orchestrator::resolve_only;
 use doiget_core::refs::{parse_input, Format, ParseError};
 use doiget_core::verify_config::{self, OnMissingId};
 use doiget_core::CapabilityProfile;
+use doiget_core::ErrorCode;
 
 use super::fetch::CliExit;
 use super::output::OutputMode;
@@ -264,7 +265,28 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                     "ref": raw,
                     "status": VerifyStatus::Illegal.as_wire(),
                     "entry_key": entry_key,
-                    "error": { "code": "INVALID_REF", "message": source.to_string() },
+                    "error": { "code": ErrorCode::InvalidRef.as_wire(), "message": source.to_string() },
+                }),
+            ),
+            // #500: still unverifiable, but for a reason the reader can act on
+            // -- and the action is not "fix the bibliography".
+            Err(ParseError::UnsupportedIdentifier {
+                kind,
+                value,
+                entry_key,
+            }) => (
+                VerifyStatus::Unverifiable,
+                serde_json::json!({
+                    "ok": false,
+                    "ref": serde_json::Value::Null,
+                    "status": VerifyStatus::Unverifiable.as_wire(),
+                    "entry_key": entry_key,
+                    "error": {
+                        "code": ErrorCode::NotImplemented.as_wire(),
+                        "message": doiget_core::refs::unsupported_identifier_claim(
+                            kind, &value,
+                        ),
+                    },
                 }),
             ),
             Err(ParseError::NoIdentifier { entry_key }) => (
@@ -274,7 +296,7 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                     "ref": serde_json::Value::Null,
                     "status": VerifyStatus::Unverifiable.as_wire(),
                     "entry_key": entry_key,
-                    "error": { "code": "INVALID_REF", "message": "entry has no DOI / arXiv id" },
+                    "error": { "code": ErrorCode::InvalidRef.as_wire(), "message": "entry has no DOI / arXiv id" },
                 }),
             ),
             Err(ParseError::Decode { format, message }) => (
@@ -283,7 +305,7 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                     "ok": false,
                     "status": VerifyStatus::Illegal.as_wire(),
                     "error": {
-                        "code": "INVALID_REF",
+                        "code": ErrorCode::InvalidRef.as_wire(),
                         "message": format!("input did not parse as {format}: {message}"),
                     },
                 }),
