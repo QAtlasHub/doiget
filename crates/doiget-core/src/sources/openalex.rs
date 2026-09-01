@@ -270,7 +270,10 @@ pub fn open_access_pdf_url(record: &serde_json::Value) -> Option<&str> {
 /// the reader at the repository. "no OA PDF available" points them at giving
 /// up. Returns `None` when there is nothing to say.
 #[must_use]
-pub fn describe_locations(record: &serde_json::Value) -> Option<(usize, String)> {
+// `pub(crate)`, not `pub`: one caller, `orchestrator::describe_optional_source_locations`,
+// and the signature takes a raw `&serde_json::Value` -- publishing it would put
+// OpenAlex's wire shape under this crate's semver guarantee for no consumer.
+pub(crate) fn describe_locations(record: &serde_json::Value) -> Option<(usize, String)> {
     let locations = record
         .get("locations")
         .and_then(serde_json::Value::as_array)?;
