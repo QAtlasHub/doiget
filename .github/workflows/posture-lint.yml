@@ -304,9 +304,15 @@ jobs:
         # Four files record "the last published stable", and a stable release
         # bumps all four in one maintainer step. Nothing used to hold them
         # together, which is how `.claude-plugin/*` sat at 0.8.11 while 0.8.12
-        # was the shipped release. Forgetting the step is the only way the
-        # Homebrew formula or the plugin's pinned server can go stale, so this
-        # makes forgetting it red.
+        # was the shipped release.
+        #
+        # What this CANNOT catch, stated so the check does not repeat the
+        # overclaim it exists to fix: forgetting the step ENTIRELY leaves all
+        # four at the previous release, mutually consistent, and green.
+        # Nothing in the repository knows which version is currently published.
+        # What it does catch is bumping some and not others, and pinning a
+        # version that was never released -- CHANGELOG.md is the only
+        # independent source of truth available offline.
         run: |
           set -euo pipefail
           # `|| true` on each is load-bearing. Under `set -euo pipefail` a bare
@@ -345,7 +351,13 @@ jobs:
               exit 1
               ;;
           esac
-          echo "release-tracking files agree on $formula"
+          # The one independent check available without a network: a version
+          # these files claim to track must have a released CHANGELOG section.
+          if ! grep -qE "^## \[$formula\]" CHANGELOG.md; then
+            echo "::error::posture-lint release-sync: the tracking files name $formula, which has no '## [$formula]' section in CHANGELOG.md -- they point at a version that was never released"
+            exit 1
+          fi
+          echo "release-tracking files agree on $formula, and CHANGELOG.md has its section"
 
       - name: npm packaging tests (#511)
         shell: bash

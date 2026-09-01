@@ -615,6 +615,25 @@ mod tests {
         }
     }
 
+    /// PMCID is the other half of the check and was written without a test.
+    /// Both the direct field and the Zotero `note` form.
+    #[test]
+    fn a_csl_entry_identified_only_by_a_pmcid_is_read_as_pmcid() {
+        for doc in [
+            r#"[{"id":"S","type":"article-journal","PMCID":"PMC1234567"}]"#,
+            r#"[{"id":"S","type":"article-journal","pmcid":"PMC1234567"}]"#,
+            r#"[{"id":"S","type":"article-journal","note":"PMCID: PMC1234567"}]"#,
+        ] {
+            match &parse_csl_json(doc)[0] {
+                Err(ParseError::UnsupportedIdentifier { kind, value, .. }) => {
+                    assert_eq!(*kind, "PMCID", "for {doc}");
+                    assert_eq!(value, "PMC1234567", "for {doc}");
+                }
+                other => panic!("expected UnsupportedIdentifier for {doc}, got {other:?}"),
+            }
+        }
+    }
+
     /// A numeric PMID must not be coerced into anything, and a DOI alongside
     /// one still wins: the check runs only after every supported identifier
     /// has been tried.

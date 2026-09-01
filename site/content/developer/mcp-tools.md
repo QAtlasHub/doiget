@@ -23,7 +23,7 @@ speaks **stdio only** ([ADR-0001](DECISIONS/), [`SCOPE.md`](SCOPE.md) §non-goal
 | `doiget_info` | Retrieve a store entry's metadata. |
 | `doiget_search_local` | Search store metadata (title / authors / venue). |
 | `doiget_paper_search` | External literature discovery over OpenAlex (`/works?search=`); abstract-bearing candidates for triage. Tier-1 OA metadata, always-on; **never fetches a PDF** (ADR-0031). |
-| `doiget_paper_text` | Extract an **arXiv** paper's full text from ar5iv as sectioned plain text (`ref`, optional `max_chars`). Tier-1 OA, always-on; **never opens the PDF blob** (ADR-0032). A DOI → `NO_OA_AVAILABLE`. |
+| `doiget_paper_text` | Extract an **arXiv** paper's full text from ar5iv as sectioned plain text (`ref`, optional `max_chars`). Tier-1 OA, always-on; **never opens the PDF blob** (ADR-0032). A DOI → `NOT_IMPLEMENTED` (terminal: the tool is arXiv-only and DOI→arXiv linking is #281 item 5, not a config knob). |
 | `doiget_link` | Resolve a **DOI** to its arXiv preprint + identity cluster (`{ doi, arxiv, openalex_id, title }`) over OpenAlex, for reading or dedup (#281 item 5). Tier-1 OA, always-on; **never fetches a PDF**. arXiv → DOI is a follow-up; a non-DOI ref → `INVALID_REF`. |
 | `doiget_list_recent` | Last N fetched entries. |
 | `doiget_paper_pdf_path` | Return the local path of a cached PDF. **Does not read, parse, or transmit content.** |

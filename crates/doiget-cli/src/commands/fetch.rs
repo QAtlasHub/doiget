@@ -707,7 +707,7 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
     // paper landed without a second `doiget info` call. Skipped for the
     // Blocked fail-closed arm (it rendered an `error[CODE]:` line above, not
     // a success).
-    if !matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. }) {
+    if outcome.is_clean_success() {
         emit_identity_line(outcome);
     }
 }

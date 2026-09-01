@@ -41,15 +41,21 @@ test-slow:
 # project-scoped `.mcp.json`, so this shadows it for you alone and leaves the
 # file (and everyone else's) unchanged.
 #
+# The name MUST match `.mcp.json`'s (`doiget`). Local scope only shadows a
+# project-scoped server of the SAME name -- registering `doiget-dev` alongside
+# it leaves BOTH connected, so the release-pinned tools stay callable and the
+# problem this recipe exists for is not solved. Verified by review.
+#
 # `just mcp-dev-off` removes it again.
 mcp-dev:
     cargo build --no-default-features --features oa-only -p doiget-cli
-    claude mcp remove doiget-dev --scope local || true
-    claude mcp add doiget-dev --scope local -- cargo run --quiet --no-default-features --features oa-only -p doiget-cli -- serve
+    claude mcp remove doiget --scope local || true
+    claude mcp add doiget --scope local -- cargo run --quiet --no-default-features --features oa-only -p doiget-cli -- serve
 
-# Drop the local-scoped dev server registered by `just mcp-dev`.
+# Drop the local-scoped dev server registered by `just mcp-dev`; the
+# project-scoped `.mcp.json` entry becomes visible again.
 mcp-dev-off:
-    claude mcp remove doiget-dev --scope local
+    claude mcp remove doiget --scope local
 
 # Mirrors CI `msrv` job (build of the published surface).
 build:

@@ -224,14 +224,20 @@ and `.mcp.json` pins the npm version the plugin runs. So they lag the tag by
 one commit, on purpose, and closing that gap is a single maintainer step:
 
 ```sh
-bash scripts/update-homebrew-formula.sh 0.8.13   # reads the release's .sha256 assets
-# then set 0.8.13 in all three of:
-#   .claude-plugin/plugin.json        "version"
-#   .claude-plugin/marketplace.json   "version"
-#   .mcp.json                         args: doiget-cli@0.8.13
-bash scripts/update-homebrew-formula.test.sh     # the same check CI runs
-git commit -s -m "chore(release): tracking files for 0.8.13" -- Formula/doiget.rb .claude-plugin .mcp.json
+V=0.8.13   # the version that was just published
+
+bash scripts/update-homebrew-formula.sh "$V"   # reads that release's .sha256 assets
+sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$V\"/" .claude-plugin/plugin.json .claude-plugin/marketplace.json
+sed -i "s/doiget-cli@[^\"]*/doiget-cli@$V/" .mcp.json
+
+bash scripts/update-homebrew-formula.test.sh   # the same check CI runs
+git commit -s -m "chore(release): tracking files for $V" -- Formula/doiget.rb .claude-plugin .mcp.json
 ```
+
+All four edits are commands on purpose. The first version of this block gave
+three of them as `#` comments between two real commands, so copy-pasting it
+bumped the formula, silently skipped the other three, and produced a commit
+whose message said all four had been done.
 
 Only for **stable** releases. Beta tags are not published to the tap, and the
 plugin must never pin a prerelease -- posture-lint fails on both.
@@ -259,12 +265,16 @@ What CI does enforce, so the step cannot be done *wrong* or half-done:
 release. Opening this repo in Claude Code therefore runs *the release*, not
 your checkout -- you can edit `crates/doiget-mcp` and be testing the version
 you shipped last month. Do not edit `.mcp.json` to work around that; a
-local-scoped server takes precedence over the project-scoped file:
+local-scoped server of the **same name** shadows the project-scoped one:
 
 ```sh
-just mcp-dev        # registers this checkout's build as `doiget-dev`
-just mcp-dev-off    # removes it again
+just mcp-dev        # registers this checkout's build, as `doiget`
+just mcp-dev-off    # removes it; `.mcp.json`'s pinned entry reappears
 ```
+
+The name matters. `claude mcp add doiget-dev --scope local` leaves BOTH servers
+connected, so the release-pinned tools stay callable and nothing is shadowed --
+which is how the first version of this section was written.
 
 ### npm: the one-time bootstrap
 

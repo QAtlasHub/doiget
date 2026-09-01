@@ -17,24 +17,52 @@
 
 use camino::Utf8PathBuf;
 
-/// Tools still permitted to answer with a bare string in `error`.
-///
-/// EMPTY, deliberately. An entry here is a promise to a caller that it cannot
-/// branch on the failure, so adding one needs a reason in `docs/ERRORS.md`
-/// §3 rather than a line here.
-const KNOWN_BARE_STRING_TOOLS: &[&str] = &[];
-
 fn router_src() -> Utf8PathBuf {
     Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs")
 }
 
-/// The accepted right-hand sides for an `"error":` key.
+/// Every place the router names an `error` field, in BOTH forms it uses.
+///
+/// Two forms exist, and the first version of this file knew about one:
+///
+/// ```text
+/// json!({ ..., "error": <value> })          // matched
+/// map.insert("error".into(), <value>)       // INVISIBLE
+/// ```
+///
+/// `fetch_paper_error_envelope` uses the second, and it backs the
+/// `INVALID_REF` / `STORE_ERROR` / `LOG_ERROR` / `INTERNAL_ERROR` arms of
+/// `doiget_fetch_paper` -- among the most reachable failures in the crate.
+/// So the guard whose docstring called the exempt set EMPTY could not see the
+/// busiest envelope builder in the file. Found by review.
+fn error_field_value(line: &str) -> Option<&str> {
+    for key in [
+        "\"error\":",
+        "insert(\"error\".into(),",
+        "insert(\"error\".to_string(),",
+    ] {
+        if let Some((_, rest)) = line.split_once(key) {
+            return Some(rest);
+        }
+    }
+    None
+}
+
+/// The accepted right-hand sides for an `error` field.
 ///
 /// `error_object(..)` is the builder; `error_obj` is the `serde_json::Map`
-/// the five hand-assembled envelopes fill in and insert. Both are objects.
+/// the hand-assembled envelopes fill in and insert. Both are objects.
 fn is_structured(value: &str) -> bool {
     let v = value.trim_start();
-    v.starts_with("error_object(") || v.starts_with("error_obj")
+    if v.starts_with("error_object(") {
+        return true;
+    }
+    // Exact identifier, not a prefix. `v.starts_with("error_obj")` also
+    // accepted `error_obj_msg`, so a bare-string regression could be waved
+    // through by naming the local variable carefully -- the guard defeated by
+    // spelling, which is the failure it exists to prevent.
+    v.strip_prefix("error_obj")
+        .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
 }
 
 #[test]
@@ -48,7 +76,7 @@ fn every_bare_string_error_site_is_a_known_one() {
         if trimmed.starts_with("//") {
             continue;
         }
-        let Some(rest) = trimmed.split_once("\"error\":").map(|(_, r)| r) else {
+        let Some(rest) = error_field_value(trimmed) else {
             continue;
         };
         // A key with its value on the next line is written `"error":` alone;
@@ -63,36 +91,32 @@ fn every_bare_string_error_site_is_a_known_one() {
         }
     }
 
-    assert!(
-        bare.is_empty() || !KNOWN_BARE_STRING_TOOLS.is_empty(),
-        "an `ok:false` envelope answers with a bare string instead of \
-         `error_object(..)`, so the caller has no `code` to branch on and no \
-         `disposition` to decide a retry from (ADR-0055). Either build the \
-         object, or add the tool to KNOWN_BARE_STRING_TOOLS with a reason in \
-         docs/ERRORS.md §3:\n  {}",
-        bare.join("\n  ")
-    );
+    // One assertion, not two. The first version kept a
+    // `KNOWN_BARE_STRING_TOOLS` exemption list and told a failing
+    // contributor to add their tool to it -- advice that could not work,
+    // because the second assertion checked `bare.is_empty()`
+    // unconditionally and never consulted the list. An escape hatch that
+    // does not open is worse than none: it sends the next person down a
+    // path ending in rewriting the test anyway.
     assert!(
         bare.is_empty(),
-        "docs/ERRORS.md §3 says this set can shrink but not grow; these are \
-         not in KNOWN_BARE_STRING_TOOLS:\n  {}",
-        bare.join("\n  ")
+        "an ok:false envelope answers with a bare string instead of error_object(..), so the caller has no code to branch on and no disposition to decide a retry from (ADR-0055). Build the object; if a tool genuinely cannot, say so in docs/ERRORS.md and change this test deliberately:
+  {}",
+        bare.join("
+  ")
     );
 }
 
-/// The exemption list is a liability, not a feature: if it is empty the
-/// document must not still be telling readers four tools are exempt.
+/// The document must not still tell readers that four tools are exempt when
+/// none are. This is the half of the original pairing that was doing real
+/// work -- a doc describing a state the code left behind is the historical
+/// defect -- and it needs no exemption list to detect it.
 #[test]
-fn the_exemption_list_and_the_document_agree() {
+fn the_document_does_not_claim_exemptions_that_no_longer_exist() {
     let errors_md = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/ERRORS.md");
     let doc = std::fs::read_to_string(&errors_md).expect("docs/ERRORS.md is readable");
-    let doc_claims_exemptions = doc.contains("do not yet emit that object at all");
-    assert_eq!(
-        doc_claims_exemptions,
-        !KNOWN_BARE_STRING_TOOLS.is_empty(),
-        "docs/ERRORS.md §3 and KNOWN_BARE_STRING_TOOLS disagree about whether \
-         any tool still answers with a bare string (doc says {doc_claims_exemptions}, \
-         list has {} entries)",
-        KNOWN_BARE_STRING_TOOLS.len()
+    assert!(
+        !doc.contains("do not yet emit that object at all"),
+        "docs/ERRORS.md section 3 still says some tools answer with a bare string in error, but every_bare_string_error_site_is_a_known_one finds none. Update the document, or this guard is vouching for prose nobody checked."
     );
 }

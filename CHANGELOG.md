@@ -64,13 +64,20 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   it without comment or test. The header says how long to wait *if* you retry;
   it does not make a 404 provisional.
 
-- **[mcp] (breaking)** `doiget_paper_text` and `doiget_paper_tex_source` answered
-  a DOI with `NO_OA_AVAILABLE`, whose disposition is `needs_config`.
+- **[cli/mcp] (breaking)** The arXiv-only text tools answered a DOI with
+  `NO_OA_AVAILABLE`, whose disposition is `needs_config`.
 
-  There is no config knob: the tools are arXiv-only and DOI-to-arXiv linking is
-  not built. `NOT_IMPLEMENTED` is terminal and is what `verify` and
+  There is no config knob: they are arXiv-only and DOI-to-arXiv linking is not
+  built. `NOT_IMPLEMENTED` is terminal and is what `verify` and
   `batch_from_bibliography` already give the same situation for PMIDs -- valid
   input, absent support.
+
+  All five surfaces, not two: `doiget_paper_text` and `doiget_paper_tex_source`
+  over MCP, and `doiget text` / `doiget source` / `doiget tex-source` on the
+  CLI. The first pass changed the MCP pair only, which would have left one
+  binary answering the same question two ways -- and left the tools' own
+  advertised `description` strings, their input-schema field docs and
+  `docs/MCP_TOOLS.md` naming a code they no longer return.
 
 - **[mcp] (breaking)** `doiget_resolve_citation`, `doiget_batch_resolve_citations`,
   `doiget_tag` and `doiget_annotate` put a **bare string** in `error`, so a
@@ -92,9 +99,13 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   is explaining allowlist refusals: the moment a resolver host entered its probe
   list, the command that diagnoses #533 would have reproduced it.
 
-- **[core]** CSL-JSON entries identified only by a PMID or PMCID reported "entry
-  has no DOI / arXiv id" (#500). The BibTeX parser learned the distinction; this
-  format did not, and it is the one a Zotero user is most likely to export.
+- **[core] (breaking)** CSL-JSON entries identified only by a PMID or PMCID
+  reported "entry has no DOI / arXiv id" (#500), and came out as `INVALID_REF`.
+  The BibTeX parser learned the distinction; this format did not, and it is the
+  one a Zotero user is most likely to export. Marked breaking for the same
+  reason as the `doiget batch` bullet above: the wire code changes to
+  `NOT_IMPLEMENTED` on `verify`, `batch` and the MCP bibliography tool for this
+  input shape.
 
 - **[cli]** `doiget search --mode json` emitted `{"ok": true, "total_results": 0}`
   with no hint for an over-long query (#534). The fix landed on the MCP tool
@@ -102,12 +113,18 @@ flag changes and `doiget-mcp` tool spec changes will be called out explicitly he
   about. `zero_result_hint` moved to `doiget-core`; both surfaces call it, and
   human mode gets a `= note:` on stderr.
 
-- **[mcp]** `doiget_fetch_paper` logged `SessionEnd` as `result: "ok"` beside a
-  non-null `error_code` for a blocked PDF leg (#507). The clean-success rule of
-  the CLI was ported to the MCP surface in the `error_code` half only, so the
-  row contradicted itself for the one outcome the repeat suppression of #507 has
-  to be able to see. `FetchPaperOutcome::is_clean_success` is the single
-  boundary now.
+- **[mcp]** `doiget_fetch_paper`, `doiget_batch_fetch` and
+  `doiget_batch_from_bibliography` logged `SessionEnd` as `result: "ok"` for a
+  blocked PDF leg (#507) -- on the single-ref tool, beside a non-null
+  `error_code`, so the row contradicted itself.
+
+  The clean-success rule of the CLI was ported to the MCP surface in the
+  `error_code` half only, and then only to the single-ref tool: the two batch
+  tools went on calling `.all(|r| r.outcome.is_ok())` a success for a batch
+  where every entry was refused. That is the outcome the repeat suppression of
+  #507 has to be able to see. `FetchPaperOutcome::is_clean_success` is the
+  single boundary for all four call sites now, including the identity-line
+  check in the CLI that had hand-rolled it a fourth time.
 
 ### Changed
 

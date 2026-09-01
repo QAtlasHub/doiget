@@ -846,10 +846,19 @@ impl Server {
         let batch_outcome =
             core_batch_fetch(&parsed, &self.profile, &ctx, &store, &store_root).await;
 
-        let session_ok = batch_outcome
-            .as_ref()
-            .map(|b| b.results.iter().all(|r| r.outcome.is_ok()))
-            .unwrap_or(false);
+        // #507, third and fourth surfaces. `.is_ok()` on a `BatchResultEntry`
+        // calls a Blocked PDF leg a success, exactly as the single-ref tool
+        // did before this release fixed it -- and the first pass at that fix
+        // stopped at `doiget_fetch_paper`, leaving the two batch tools writing
+        // `result: ok` for a call where every entry was refused. One boundary,
+        // `FetchPaperOutcome::is_clean_success`, for all four.
+        let session_ok = batch_outcome.as_ref().is_ok_and(|b| {
+            b.results.iter().all(|r| {
+                r.outcome
+                    .as_ref()
+                    .is_ok_and(FetchPaperOutcome::is_clean_success)
+            })
+        });
 
         let _ = ctx.log.append(RowInput {
             event: LogEvent::SessionEnd,
@@ -1126,11 +1135,14 @@ impl Server {
         let entry_keys: Vec<Option<String>> = to_fetch.iter().map(|(_, k)| k.clone()).collect();
         let batch_outcome = core_batch_fetch(&refs, &self.profile, &ctx, &store, &store_root).await;
 
-        let session_ok = batch_outcome
-            .as_ref()
-            .map(|b| b.results.iter().all(|r| r.outcome.is_ok()))
-            .unwrap_or(false)
-            && parse_errors.is_empty();
+        // Same boundary as the sibling batch tool above (#507).
+        let session_ok = batch_outcome.as_ref().is_ok_and(|b| {
+            b.results.iter().all(|r| {
+                r.outcome
+                    .as_ref()
+                    .is_ok_and(FetchPaperOutcome::is_clean_success)
+            })
+        }) && parse_errors.is_empty();
 
         let _ = ctx.log.append(RowInput {
             event: LogEvent::SessionEnd,
@@ -1500,7 +1512,7 @@ impl Server {
     /// #281 "read" step; ADR-0032). Fetches the ar5iv LaTeXML-XHTML
     /// rendering of an **arXiv** paper and returns it as sectioned plain
     /// text. The PDF blob is never opened (ADR-0032 D1). Tier-1 OA,
-    /// always-on. A bare DOI returns `NO_OA_AVAILABLE` (DOI→arXiv linking
+    /// always-on. A bare DOI returns `NOT_IMPLEMENTED` (DOI→arXiv linking
     /// is #281 item 5).
     #[tool(
         description = "WHEN TO USE: Read a paper's full text (arXiv only) without an external pdf-to-text tool — the 'read' step after discovery/fetch.\n\
@@ -1508,7 +1520,7 @@ impl Server {
                        OUTPUTS: { ok: true, arxiv_id, source: \"ar5iv\", title, sections: [{ heading, text }], char_count, truncated, retrieved_from } OR { ok:false, error }.\n\
                        COSTS: 1 ar5iv HTTP request (HTML), then parse; large papers can be sizeable — use max_chars to bound.\n\
                        SIDE EFFECTS: Emits an OA provenance row. NEVER opens the PDF blob; NEVER writes the store.\n\
-                       LIMITS: arXiv only (a DOI → NO_OA_AVAILABLE; pass the arXiv id). A paper not converted by ar5iv → NOT_FOUND. Best-effort extraction (truncation flagged on `truncated`).",
+                       LIMITS: arXiv only (a DOI → NOT_IMPLEMENTED; pass the arXiv id). A paper not converted by ar5iv → NOT_FOUND. Best-effort extraction (truncation flagged on `truncated`).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1521,7 +1533,7 @@ impl Server {
         Parameters(input): Parameters<PaperTextInput>,
     ) -> Result<CallToolResult, ErrorData> {
         // Validate the ref. A DOI has no full-text source in this slice;
-        // report NO_OA_AVAILABLE rather than silently failing (ADR-0032 D5).
+        // report the absence rather than silently failing (ADR-0032 D5).
         let id = match doiget_core::Ref::parse(&input.ref_) {
             Ok(doiget_core::Ref::Arxiv(a)) => a,
             Ok(doiget_core::Ref::Doi(_)) => {
@@ -1638,7 +1650,7 @@ impl Server {
                        OUTPUTS: { ok: true, arxiv_id, main_file, tex_source, char_count, truncated, retrieved_from } OR { ok:false, error }.\n\
                        COSTS: 1 arXiv source API request (gzip'd tar download); large papers can be sizeable — use max_chars to bound.\n\
                        SIDE EFFECTS: Emits an OA provenance row. NEVER writes the store; NEVER opens a PDF blob.\n\
-                       LIMITS: arXiv only (a DOI → NO_OA_AVAILABLE; pass the arXiv id). PDF-only submissions → TEXT_UNAVAILABLE.",
+                       LIMITS: arXiv only (a DOI → NOT_IMPLEMENTED; pass the arXiv id). PDF-only submissions → TEXT_UNAVAILABLE.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2459,8 +2471,24 @@ impl Server {
             Ok(None) => {
                 return Ok(CallToolResult::structured(json!({
                     "ok": false,
+                    // NOT `NOT_FOUND`. docs/ERRORS.md defines that as "a
+                    // metadata source authoritatively reported the id does not
+                    // exist ... doiget verify treats it as a definite dead
+                    // reference", so an agent reading it would conclude the DOI
+                    // is retracted or mistyped when the truth is that nobody has
+                    // fetched it yet. `doiget_info` / `doiget_paper_pdf_path` /
+                    // `doiget_search_local` all decline to call a store miss
+                    // NOT_FOUND for exactly this reason; they answer ok:true with
+                    // a null payload. These two mutate an entry, so they cannot,
+                    // but they must not make the stronger claim either.
+                    //
+                    // `STORE_ERROR` is the closest fit in the closed set and its
+                    // disposition -- `needs_config`, "will not change by itself;
+                    // a named change makes it" -- is exactly right: the entry
+                    // appears when you fetch it, which the message says. The code
+                    // is approximate and the closed set has a real gap here.
                     "error": error_object(
-                        ErrorCode::NotFound,
+                        ErrorCode::StoreError,
                         format!("no store entry for {}; fetch the paper first", input.ref_),
                     ),
                 })));
@@ -2479,8 +2507,11 @@ impl Server {
             None => {
                 return Ok(CallToolResult::structured(json!({
                     "ok": false,
+                    // Same reasoning as the store-miss arm above: the entry
+                    // exists and is incomplete, which is not "the id does not
+                    // exist".
                     "error": error_object(
-                        ErrorCode::NotFound,
+                        ErrorCode::StoreError,
                         format!("entry {} has no [doiget] table; fetch it first", input.ref_),
                     ),
                 })));
@@ -2583,8 +2614,24 @@ impl Server {
             Ok(None) => {
                 return Ok(CallToolResult::structured(json!({
                     "ok": false,
+                    // NOT `NOT_FOUND`. docs/ERRORS.md defines that as "a
+                    // metadata source authoritatively reported the id does not
+                    // exist ... doiget verify treats it as a definite dead
+                    // reference", so an agent reading it would conclude the DOI
+                    // is retracted or mistyped when the truth is that nobody has
+                    // fetched it yet. `doiget_info` / `doiget_paper_pdf_path` /
+                    // `doiget_search_local` all decline to call a store miss
+                    // NOT_FOUND for exactly this reason; they answer ok:true with
+                    // a null payload. These two mutate an entry, so they cannot,
+                    // but they must not make the stronger claim either.
+                    //
+                    // `STORE_ERROR` is the closest fit in the closed set and its
+                    // disposition -- `needs_config`, "will not change by itself;
+                    // a named change makes it" -- is exactly right: the entry
+                    // appears when you fetch it, which the message says. The code
+                    // is approximate and the closed set has a real gap here.
                     "error": error_object(
-                        ErrorCode::NotFound,
+                        ErrorCode::StoreError,
                         format!("no store entry for {}; fetch the paper first", input.ref_),
                     ),
                 })));
@@ -2603,8 +2650,11 @@ impl Server {
             None => {
                 return Ok(CallToolResult::structured(json!({
                     "ok": false,
+                    // Same reasoning as the store-miss arm above: the entry
+                    // exists and is incomplete, which is not "the id does not
+                    // exist".
                     "error": error_object(
-                        ErrorCode::NotFound,
+                        ErrorCode::StoreError,
                         format!("entry {} has no [doiget] table; fetch it first", input.ref_),
                     ),
                 })));
@@ -2861,7 +2911,7 @@ pub struct PaperSearchInput {
 #[schemars(deny_unknown_fields)]
 pub struct PaperTextInput {
     /// arXiv id (e.g. "arxiv:2401.12345"), validated via `Ref::parse`. A
-    /// bare DOI returns `NO_OA_AVAILABLE` (pass the arXiv id;
+    /// bare DOI returns `NOT_IMPLEMENTED` (pass the arXiv id;
     /// DOI→arXiv linking is #281 item 5).
     #[serde(rename = "ref")]
     #[schemars(rename = "ref")]
@@ -2878,7 +2928,7 @@ pub struct PaperTextInput {
 #[schemars(deny_unknown_fields)]
 pub struct PaperTexSourceInput {
     /// arXiv id (e.g. "arxiv:2401.12345"), validated via `Ref::parse`. A
-    /// bare DOI returns `NO_OA_AVAILABLE` (pass the arXiv id).
+    /// bare DOI returns `NOT_IMPLEMENTED` (pass the arXiv id).
     #[serde(rename = "ref")]
     #[schemars(rename = "ref")]
     pub ref_: String,
@@ -4292,6 +4342,15 @@ impl ServerHandler for Server {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Whether a `DOIGET_STORE_ROOT` value is usable as a path: non-empty and not
+/// an unexpanded `${...}` placeholder. A Desktop-Extension config left blank
+/// passes the literal `${user_config.store_root}`, which must never become a
+/// filesystem path (it produced `os error 5` access-denied). See #369.
+fn store_root_env_is_usable(value: &str) -> bool {
+    let v = value.trim();
+    !v.is_empty() && !v.contains("${")
+}
+
 /// Resolve the on-disk store root using the same precedence the CLI
 /// applies (`docs/CONFIG.md` §4):
 ///
@@ -4309,15 +4368,6 @@ impl ServerHandler for Server {
 /// `doiget-cli -> doiget-mcp` wiring established by this PR and pull
 /// `clap` etc. into the MCP crate. Lifting this helper into `doiget-core`
 /// is a viable Phase-3 follow-up but is out of scope for this foundation.
-/// Whether a `DOIGET_STORE_ROOT` value is usable as a path: non-empty and not
-/// an unexpanded `${...}` placeholder. A Desktop-Extension config left blank
-/// passes the literal `${user_config.store_root}`, which must never become a
-/// filesystem path (it produced `os error 5` access-denied). See #369.
-fn store_root_env_is_usable(value: &str) -> bool {
-    let v = value.trim();
-    !v.is_empty() && !v.contains("${")
-}
-
 fn resolve_store_root() -> Option<Utf8PathBuf> {
     if let Ok(s) = std::env::var("DOIGET_STORE_ROOT") {
         if store_root_env_is_usable(&s) {
@@ -4526,6 +4576,22 @@ mod tests {
                     retry_after_ms: None,
                 }),
                 "NOT_FOUND",
+                "terminal",
+            ),
+            // The replaced comment names three variants the wildcard swallowed;
+            // the first pass at this test drove one of them.
+            (
+                FetchError::NotFound {
+                    hint: "no Crossref record".into(),
+                },
+                "NOT_FOUND",
+                "terminal",
+            ),
+            (
+                FetchError::Ambiguous {
+                    hint: "3 authors matched".into(),
+                },
+                "AMBIGUOUS",
                 "terminal",
             ),
         ];
