@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Command","OutputColor","ProvenanceAction"],"fn":["apply_global_overrides","flag_input_from","forced_implicit_for","main","parse_utf8_path","run_dispatch"],"struct":["Cli"]};

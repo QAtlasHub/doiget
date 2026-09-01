@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Safekey algorithm &middot; doiget</title>
+  <meta name="description" content="Map any DOI or arXiv id to a deterministic, cross-platform, bit-identical filesystem-safe">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/safekey/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Safekey algorithm · doiget">
+  <meta property="og:description" content="Map any DOI or arXiv id to a deterministic, cross-platform, bit-identical filesystem-safe">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/safekey/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Safekey algorithm · doiget">
+  <meta name="twitter:description" content="Map any DOI or arXiv id to a deterministic, cross-platform, bit-identical filesystem-safe">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Safekey algorithm</h1>
+    <p class="lede">Map any DOI or arXiv id to a deterministic, cross-platform, bit-identical filesystem-safe</p>
+  </header>
+
+  <h1 id="safekey-algorithm">safekey algorithm</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE (shared spec).</strong> Binding for both doiget and BiblioFetch.jl.
+Any change requires a coordinated ADR and an update to the reference test vectors at
+<code>tests/fixtures/safekey/vectors.json</code>.</p>
+</blockquote>
+<h2 id="1-goal">1. Goal</h2>
+<p>Map any DOI or arXiv id to a deterministic, cross-platform, bit-identical filesystem-safe
+key. The same input must produce the same <code>safekey</code> output on Linux, macOS, and Windows,
+and across both Rust and Julia implementations.</p>
+<h2 id="2-constraints">2. Constraints</h2>
+<ul>
+<li>Path-safe: no <code>/</code>, <code>\</code>, <code>..</code>, <code>:</code>, control chars, or other characters problematic on any
+major filesystem.</li>
+<li>Bounded length: ≤ 200 characters (filesystem limits).</li>
+<li>Collision-resistant: two distinct refs must produce two distinct safekeys with high
+probability (cryptographic, not just statistical).</li>
+<li>Visually traceable: a human reading a safekey should be able to recognize the original
+ref class (DOI vs arXiv) and significant prefix.</li>
+<li>Deterministic: no clock, no random, no host-dependent state.</li>
+</ul>
+<h2 id="3-algorithm-normative">3. Algorithm (NORMATIVE)</h2>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">safekey</span><span>(</span><span style="color:#ff8f40;">ref_</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Ref) </span><span style="color:#61676ccc;">-&gt;</span><span> Safekey {
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// Step 0: normalize. `Doi::as_str()` and `ArxivId::as_str()` return the
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// identifier WITHOUT a `doi:` / `arxiv:` URI scheme prefix — `Ref::parse`
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// is responsible for stripping those at construction time. The vectors
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// in §5 (&quot;doi:...&quot; / &quot;arxiv:...&quot; in the input column) document the
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// user-facing input form; by the time we reach `safekey`, the scheme
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// has already been removed. The single `doi_` / `arxiv_` prefix is
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// added here, exactly once, in step 0.
+</span><span>    </span><span style="color:#fa6e32;">let</span><span> raw </span><span style="color:#ed9366;">= </span><span style="color:#fa6e32;">match</span><span> ref_ {
+</span><span>        Ref</span><span style="color:#ed9366;">::</span><span>Doi(d)   </span><span style="color:#ed9366;">=&gt; </span><span style="color:#f07171;">format!</span><span>(</span><span style="color:#86b300;">&quot;doi_</span><span style="color:#ff8f40;">{}</span><span style="color:#86b300;">&quot;</span><span style="color:#61676ccc;">,</span><span>   d</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">as_str</span><span>())</span><span style="color:#61676ccc;">,
+</span><span>        Ref</span><span style="color:#ed9366;">::</span><span>Arxiv(a) </span><span style="color:#ed9366;">=&gt; </span><span style="color:#f07171;">format!</span><span>(</span><span style="color:#86b300;">&quot;arxiv_</span><span style="color:#ff8f40;">{}</span><span style="color:#86b300;">&quot;</span><span style="color:#61676ccc;">,</span><span> a</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">as_str</span><span>())</span><span style="color:#61676ccc;">,
+</span><span>    }</span><span style="color:#61676ccc;">;
+</span><span>
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// Step 1: replace unsafe chars with &#39;_&#39;
+</span><span>    </span><span style="color:#fa6e32;">let</span><span> escaped</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">String </span><span style="color:#ed9366;">=</span><span> raw</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">chars</span><span>()</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">map</span><span>(|</span><span style="color:#ff8f40;">c</span><span>| </span><span style="color:#fa6e32;">match</span><span> c {
+</span><span>        </span><span style="color:#86b300;">&#39;A&#39;</span><span style="color:#ed9366;">..=</span><span style="color:#86b300;">&#39;Z&#39; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&#39;a&#39;</span><span style="color:#ed9366;">..=</span><span style="color:#86b300;">&#39;z&#39; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&#39;0&#39;</span><span style="color:#ed9366;">..=</span><span style="color:#86b300;">&#39;9&#39; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&#39;.&#39; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&#39;-&#39; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&#39;_&#39; </span><span style="color:#ed9366;">=&gt;</span><span> c</span><span style="color:#61676ccc;">,
+</span><span>        </span><span style="color:#ed9366;">_ =&gt; </span><span style="color:#86b300;">&#39;_&#39;</span><span style="color:#61676ccc;">,
+</span><span>    })</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">collect</span><span>()</span><span style="color:#61676ccc;">;
+</span><span>
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// Step 2: collapse consecutive &#39;_&#39; runs to a single &#39;_&#39;
+</span><span>    </span><span style="color:#fa6e32;">let</span><span> collapsed </span><span style="color:#ed9366;">= </span><span style="color:#f07171;">collapse_underscores</span><span>(</span><span style="color:#ed9366;">&amp;</span><span>escaped)</span><span style="color:#61676ccc;">;
+</span><span>
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// Step 3: trim leading/trailing &#39;_&#39;
+</span><span>    </span><span style="color:#fa6e32;">let</span><span> trimmed </span><span style="color:#ed9366;">=</span><span> collapsed</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">trim_matches</span><span>(</span><span style="color:#86b300;">&#39;_&#39;</span><span>)</span><span style="color:#61676ccc;">;
+</span><span>
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// Step 4: length-bound. If &gt; 192 chars, take prefix(192) + &#39;_&#39; + 8-hex SHA256
+</span><span>    </span><span style="color:#fa6e32;">if</span><span> trimmed</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">len</span><span>() </span><span style="color:#ed9366;">&gt; </span><span style="color:#ff8f40;">192 </span><span>{
+</span><span>        </span><span style="color:#fa6e32;">let</span><span> hash </span><span style="color:#ed9366;">= </span><span>hex</span><span style="color:#ed9366;">::</span><span>encode(</span><span style="color:#ed9366;">&amp;</span><span>sha2</span><span style="color:#ed9366;">::</span><span>Sha256</span><span style="color:#ed9366;">::</span><span>digest(raw</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">as_bytes</span><span>())[</span><span style="color:#ed9366;">..</span><span style="color:#ff8f40;">4</span><span>])</span><span style="color:#61676ccc;">;
+</span><span>        </span><span style="color:#f07171;">format!</span><span>(</span><span style="color:#86b300;">&quot;</span><span style="color:#ff8f40;">{}</span><span style="color:#86b300;">_</span><span style="color:#ff8f40;">{}</span><span style="color:#86b300;">&quot;</span><span style="color:#61676ccc;">, </span><span style="color:#ed9366;">&amp;</span><span>trimmed[</span><span style="color:#ed9366;">..</span><span style="color:#ff8f40;">192</span><span>]</span><span style="color:#61676ccc;">,</span><span> hash)
+</span><span>    } </span><span style="color:#fa6e32;">else </span><span>{
+</span><span>        trimmed</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">to_string</span><span>()
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">collapse_underscores</span><span>(</span><span style="color:#ff8f40;">s</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span>) </span><span style="color:#61676ccc;">-&gt;</span><span> String {
+</span><span>    </span><span style="color:#fa6e32;">let mut</span><span> out </span><span style="color:#ed9366;">= </span><span style="font-style:italic;color:#55b4d4;">String</span><span style="color:#ed9366;">::</span><span>with_capacity(s</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">len</span><span>())</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">let mut</span><span> last_was_underscore </span><span style="color:#ed9366;">= </span><span style="color:#ff8f40;">false</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">for</span><span> c </span><span style="color:#ed9366;">in</span><span> s</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">chars</span><span>() {
+</span><span>        </span><span style="color:#fa6e32;">if</span><span> c </span><span style="color:#ed9366;">== </span><span style="color:#86b300;">&#39;_&#39; </span><span>{
+</span><span>            </span><span style="color:#fa6e32;">if </span><span style="color:#ed9366;">!</span><span>last_was_underscore { out</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">push</span><span>(</span><span style="color:#86b300;">&#39;_&#39;</span><span>)</span><span style="color:#61676ccc;">; </span><span>}
+</span><span>            last_was_underscore </span><span style="color:#ed9366;">= </span><span style="color:#ff8f40;">true</span><span style="color:#61676ccc;">;
+</span><span>        } </span><span style="color:#fa6e32;">else </span><span>{
+</span><span>            out</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">push</span><span>(c)</span><span style="color:#61676ccc;">;
+</span><span>            last_was_underscore </span><span style="color:#ed9366;">= </span><span style="color:#ff8f40;">false</span><span style="color:#61676ccc;">;
+</span><span>        }
+</span><span>    }
+</span><span>    out
+</span><span>}
+</span></code></pre>
+<h2 id="4-equivalent-julia-reference">4. Equivalent Julia reference</h2>
+<pre data-lang="julia" style="background-color:#fafafa;color:#61676c;" class="language-julia "><code class="language-julia" data-lang="julia"><span style="color:#fa6e32;">const</span><span> SAFE_CHAR_RE </span><span style="color:#ed9366;">= </span><span style="color:#fa6e32;">r</span><span style="color:#86b300;">&quot;</span><span style="color:#ff8f40;">[A-Za-z0-9._</span><span style="color:#4cbf99;">\-</span><span style="color:#ff8f40;">]</span><span style="color:#86b300;">&quot;
+</span><span>
+</span><span style="color:#fa6e32;">function </span><span style="color:#f29718;">safekey</span><span>(ref::AbstractString)</span><span style="color:#ed9366;">::</span><span style="font-style:italic;color:#55b4d4;">String
+</span><span>    raw </span><span style="color:#ed9366;">=</span><span> startswith(ref, </span><span style="color:#86b300;">&quot;10.&quot;</span><span>) </span><span style="color:#ed9366;">? </span><span style="color:#86b300;">&quot;doi_</span><span style="color:#ed9366;">$</span><span>ref</span><span style="color:#86b300;">&quot; </span><span style="color:#ed9366;">: </span><span style="color:#86b300;">&quot;arxiv_</span><span style="color:#ed9366;">$</span><span>ref</span><span style="color:#86b300;">&quot;
+</span><span>    escaped </span><span style="color:#ed9366;">=</span><span> replace(raw, </span><span style="color:#fa6e32;">r</span><span style="color:#86b300;">&quot;</span><span style="color:#ff8f40;">[</span><span style="color:#ed9366;">^</span><span style="color:#ff8f40;">A-Za-z0-9._</span><span style="color:#4cbf99;">\-</span><span style="color:#ff8f40;">]</span><span style="color:#86b300;">&quot; </span><span style="color:#ed9366;">=&gt; </span><span style="color:#86b300;">&quot;_&quot;</span><span>)
+</span><span>    collapsed </span><span style="color:#ed9366;">=</span><span> replace(escaped, </span><span style="color:#fa6e32;">r</span><span style="color:#86b300;">&quot;_</span><span style="color:#ed9366;">+</span><span style="color:#86b300;">&quot; </span><span style="color:#ed9366;">=&gt; </span><span style="color:#86b300;">&quot;_&quot;</span><span>)
+</span><span>    trimmed </span><span style="color:#ed9366;">=</span><span> strip(collapsed, </span><span style="color:#86b300;">&#39;_&#39;</span><span>)
+</span><span>    </span><span style="color:#fa6e32;">if</span><span> length(trimmed) </span><span style="color:#ed9366;">&gt; </span><span style="color:#ff8f40;">192
+</span><span>        h </span><span style="color:#ed9366;">=</span><span> bytes</span><span style="color:#ff8f40;">2</span><span>hex(SHA.sha</span><span style="color:#ff8f40;">256</span><span>(codeunits(raw))[</span><span style="color:#ff8f40;">1</span><span style="color:#ed9366;">:</span><span style="color:#ff8f40;">4</span><span>])
+</span><span>        </span><span style="color:#fa6e32;">return</span><span> string(trimmed[</span><span style="color:#ff8f40;">1</span><span style="color:#ed9366;">:</span><span style="color:#ff8f40;">192</span><span>], </span><span style="color:#86b300;">&quot;_&quot;</span><span>, h)
+</span><span>    </span><span style="color:#fa6e32;">end
+</span><span>    </span><span style="color:#fa6e32;">return</span><span> String(trimmed)
+</span><span style="color:#fa6e32;">end
+</span></code></pre>
+<p>The two implementations MUST produce bit-identical output for every entry in the
+reference vector set.</p>
+<h3 id="3-1-filename-derivation-inputs-normative">3.1 Filename derivation inputs (NORMATIVE)</h3>
+<p>The safekey is derived <strong>solely from the canonical <code>Ref</code> string</strong> (a validated
+DOI or arXiv id, both already path-traversal-checked at parse time). doiget
+MUST NOT use any of the following as filename input:</p>
+<ul>
+<li>HTTP <code>Content-Disposition</code> header (<code>filename=...</code> or <code>filename*=...</code>).</li>
+<li>Redirect URL path or any URL component returned by the network.</li>
+<li>Server-suggested filename (any header carrying a string the publisher
+proposes as a download name).</li>
+<li>Any byte stream from the network.</li>
+</ul>
+<p>This guarantees that an attacker controlling a redirect target or a response
+header cannot influence the on-disk path. The derivation is a pure function
+of <code>Ref</code>, computed before the first network byte is sent.</p>
+<p>This rule is the spec-side counterpart to the audit-trail
+<code>canonical_digest</code> introduced by <a href="https://codes.sota-shimozono.com/doiget/developer/safekey/DECISIONS/0021-canonical-tuple-identity.md">ADR-0021</a>:
+the on-disk identity stays keyed on <code>Ref</code> (so BiblioFetch.jl round-trip
+keeps working — see §7), while the <em>audit</em> identity gains the resolver
+profile.</p>
+<h2 id="5-reference-test-vectors-sample">5. Reference test vectors (sample)</h2>
+<p>Full set: <code>tests/fixtures/safekey/vectors.json</code> (100 entries, NORMATIVE).</p>
+<p>Selected:</p>
+<table><thead><tr><th>Input ref</th><th>safekey output</th></tr></thead><tbody>
+<tr><td><code>doi:10.1234/example</code></td><td><code>doi_10.1234_example</code></td></tr>
+<tr><td><code>doi:10.1103/PhysRevLett.130.200601</code></td><td><code>doi_10.1103_PhysRevLett.130.200601</code></td></tr>
+<tr><td><code>doi:10.1016/S0370-1573(98)00122-3</code></td><td><code>doi_10.1016_S0370-1573_98_00122-3</code></td></tr>
+<tr><td><code>doi:10.1234/foo bar</code></td><td><code>doi_10.1234_foo_bar</code></td></tr>
+<tr><td><code>doi:10.1234/foo  bar</code></td><td><code>doi_10.1234_foo_bar</code> (consecutive <code>_</code> collapsed)</td></tr>
+<tr><td><code>doi:10.1234/_leading</code></td><td><code>doi_10.1234_leading</code> (trim leading <code>_</code>)</td></tr>
+<tr><td><code>arxiv:2401.12345</code></td><td><code>arxiv_2401.12345</code></td></tr>
+<tr><td><code>arxiv:2401.12345v2</code></td><td><code>arxiv_2401.12345v2</code></td></tr>
+<tr><td><code>arxiv:cond-mat/9501001</code></td><td><code>arxiv_cond-mat_9501001</code></td></tr>
+</tbody></table>
+<p>For very long refs (e.g. 250-char DOI suffix from a malformed source), the safekey is
+truncated at 192 chars and an 8-hex SHA-256 prefix of the original is appended:</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>doi:10.1234/aaaaa...aaaaa(220 chars)  →  doi_10.1234_aaaaa...aaaaa(192 chars)_DEADBEEF
+</span></code></pre>
+<h2 id="6-property-tests">6. Property tests</h2>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#f07171;">proptest! </span><span>{
+</span><span>    </span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">test</span><span>]
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">safekey_is_path_safe</span><span>(ref_ in arb_ref()) {
+</span><span>        </span><span style="color:#fa6e32;">let</span><span> key </span><span style="color:#ed9366;">= </span><span style="color:#f07171;">safekey</span><span>(</span><span style="color:#ed9366;">&amp;</span><span>ref_)</span><span style="color:#61676ccc;">;
+</span><span>        </span><span style="color:#f07171;">prop_assert!</span><span>(</span><span style="color:#ed9366;">!</span><span>key</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">contains</span><span>(</span><span style="color:#86b300;">&quot;..&quot;</span><span>))</span><span style="color:#61676ccc;">;
+</span><span>        </span><span style="color:#f07171;">prop_assert!</span><span>(</span><span style="color:#ed9366;">!</span><span>key</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">contains</span><span>(</span><span style="color:#86b300;">&#39;/&#39;</span><span>))</span><span style="color:#61676ccc;">;
+</span><span>        </span><span style="color:#f07171;">prop_assert!</span><span>(</span><span style="color:#ed9366;">!</span><span>key</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">contains</span><span>(</span><span style="color:#86b300;">&#39;</span><span style="color:#4cbf99;">\\</span><span style="color:#86b300;">&#39;</span><span>))</span><span style="color:#61676ccc;">;
+</span><span>        </span><span style="color:#f07171;">prop_assert!</span><span>(key</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">chars</span><span>()</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">all</span><span>(|</span><span style="color:#ff8f40;">c</span><span>|
+</span><span>            c</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">is_ascii_alphanumeric</span><span>() </span><span style="color:#ed9366;">||</span><span> c </span><span style="color:#ed9366;">== </span><span style="color:#86b300;">&#39;.&#39; </span><span style="color:#ed9366;">||</span><span> c </span><span style="color:#ed9366;">== </span><span style="color:#86b300;">&#39;-&#39; </span><span style="color:#ed9366;">||</span><span> c </span><span style="color:#ed9366;">== </span><span style="color:#86b300;">&#39;_&#39;
+</span><span>        ))</span><span style="color:#61676ccc;">;
+</span><span>        </span><span style="color:#f07171;">prop_assert!</span><span>(</span><span style="color:#ed9366;">!</span><span>key</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">starts_with</span><span>(</span><span style="color:#86b300;">&#39;_&#39;</span><span>))</span><span style="color:#61676ccc;">;
+</span><span>        </span><span style="color:#f07171;">prop_assert!</span><span>(</span><span style="color:#ed9366;">!</span><span>key</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">ends_with</span><span>(</span><span style="color:#86b300;">&#39;_&#39;</span><span>))</span><span style="color:#61676ccc;">;
+</span><span>        </span><span style="color:#f07171;">prop_assert!</span><span>(key</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">len</span><span>() </span><span style="color:#ed9366;">&lt;= </span><span style="color:#ff8f40;">201</span><span>)</span><span style="color:#61676ccc;">;    </span><span style="font-style:italic;color:#abb0b6;">// 192 + &#39;_&#39; + 8
+</span><span>    }
+</span><span>
+</span><span>    </span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">test</span><span>]
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">safekey_is_deterministic</span><span>(ref_ in arb_ref()) {
+</span><span>        </span><span style="color:#f07171;">prop_assert_eq!</span><span>(</span><span style="color:#f07171;">safekey</span><span>(</span><span style="color:#ed9366;">&amp;</span><span>ref_)</span><span style="color:#61676ccc;">, </span><span style="color:#f07171;">safekey</span><span>(</span><span style="color:#ed9366;">&amp;</span><span>ref_))</span><span style="color:#61676ccc;">;
+</span><span>    }
+</span><span>
+</span><span>    </span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">test</span><span>]
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">safekey_distinct_refs_distinct_keys</span><span>(r1 in arb_ref(), r2 in arb_ref()) {
+</span><span>        </span><span style="color:#f07171;">prop_assume!</span><span>(r1</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">canonical</span><span>() </span><span style="color:#ed9366;">!=</span><span> r2</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">canonical</span><span>())</span><span style="color:#61676ccc;">;
+</span><span>        </span><span style="color:#f07171;">prop_assert_ne!</span><span>(</span><span style="color:#f07171;">safekey</span><span>(</span><span style="color:#ed9366;">&amp;</span><span>r1)</span><span style="color:#61676ccc;">, </span><span style="color:#f07171;">safekey</span><span>(</span><span style="color:#ed9366;">&amp;</span><span>r2))</span><span style="color:#61676ccc;">;
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<h2 id="7-backwards-compatibility-note">7. Backwards compatibility note</h2>
+<p>Older BiblioFetch.jl versions used a slightly different algorithm (the H2 issue). When
+this NORMATIVE spec is adopted, BiblioFetch.jl will publish a migration tool that
+re-keys existing entries to the new spec. doiget will only ever read or write entries
+produced by the spec defined in this document.</p>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/developer&#x2F;safekey.md">
+      site/content/developer&#x2F;safekey.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

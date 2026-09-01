@@ -1,0 +1,49 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Resolve a `Ref` to metadata WITHOUT triggering a publisher PDF fetch."><title>metadata_only in doiget_core::orchestrator - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="doiget_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">metadata_only</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../doiget_core/index.html">doiget_<wbr>core</a><span class="version">0.8.13</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">metadata_<wbr>only</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#dispatch" title="Dispatch">Dispatch</a></li><li><a href="#side-effects" title="Side effects">Side effects</a></li><li><a href="#errors" title="Errors">Errors</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In doiget_<wbr>core::<wbr>orchestrator</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">doiget_core</a>::<wbr><a href="index.html">orchestrator</a></div><h1>Function <span class="fn">metadata_<wbr>only</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/doiget_core/orchestrator.rs.html#142-148">Source</a> </span></div><pre class="rust item-decl"><code>pub async fn metadata_only(
+    ref_: &amp;<a class="enum" href="../enum.Ref.html" title="enum doiget_core::Ref">Ref</a>,
+    profile: &amp;<a class="struct" href="../struct.CapabilityProfile.html" title="struct doiget_core::CapabilityProfile">CapabilityProfile</a>,
+    ctx: &amp;<a class="struct" href="../source/struct.FetchContext.html" title="struct doiget_core::source::FetchContext">FetchContext</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.98.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="struct.MetadataOnlyOutcome.html" title="struct doiget_core::orchestrator::MetadataOnlyOutcome">MetadataOnlyOutcome</a>, <a class="enum" href="../source/enum.FetchError.html" title="enum doiget_core::source::FetchError">FetchError</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Resolve a <a href="../enum.Ref.html" title="enum doiget_core::Ref"><code>Ref</code></a> to metadata WITHOUT triggering a publisher PDF
+fetch.</p>
+<p>Binding spec: <code>docs/MCP_TOOLS.md</code> §11 (NORMATIVE — this function
+MUST NOT call <a href="../http/struct.HttpClient.html#method.fetch_pdf" title="method doiget_core::http::HttpClient::fetch_pdf"><code>crate::http::HttpClient::fetch_pdf</code></a> under any code
+path). The posture-lint workflow greps for that pattern; the test
+suite additionally exercises the DOI and arXiv branches end-to-end
+against wiremock to assert the OA URL is reported, not followed.</p>
+<h2 id="dispatch"><a class="doc-anchor" href="#dispatch">§</a>Dispatch</h2>
+<ul>
+<li><code>Ref::Doi(_)</code> → Crossref first, for bibliographic metadata. Crossref’s
+<code>message.link[]</code> does NOT supply an OA URL – every entry is
+programme-scoped (ADR-0052, #517) – so <code>oa_url</code> stays <code>None</code> on this
+path. Unpaywall is consulted as a fallback when Crossref fails, and
+additionally when <a href="struct.MetadataOnlyOptions.html#structfield.include_oa_location" title="field doiget_core::orchestrator::MetadataOnlyOptions::include_oa_location"><code>MetadataOnlyOptions::include_oa_location</code></a> is set
+(#539). The Unpaywall fallback surfaces a license
+string and may overwrite <code>oa_url</code> with the <code>best_oa_location</code>
+channel.</li>
+<li><code>Ref::Arxiv(_)</code> → <a href="../sources/arxiv/struct.ArxivSource.html#method.fetch_metadata_only" title="method doiget_core::sources::arxiv::ArxivSource::fetch_metadata_only"><code>ArxivSource::fetch_metadata_only</code></a>: ONLY the
+Atom feed (<code>https://export.arxiv.org/api/query?id_list=&lt;id&gt;</code>) is
+consulted; the PDF endpoint is NOT touched. <code>license</code> is set to
+the platform-wide <code>"arxiv-default"</code> token, <code>oa_url</code> is <code>None</code>
+(the arXiv abstract page is not a PDF URL).</li>
+</ul>
+<h2 id="side-effects"><a class="doc-anchor" href="#side-effects">§</a>Side effects</h2>
+<p>Each consulted source appends ONE <code>LogEvent::Fetch</code> row to
+<code>ctx.log</code> (arXiv emits its row under <code>Capability::Metadata</code>; the
+DOI sources emit under <code>Capability::Oa</code> — they pre-date this
+distinction and a follow-up slice may unify them). The orchestrator
+itself does NOT bracket the call with <code>SessionStart</code> / <code>SessionEnd</code>
+rows — that is the MCP server’s responsibility (it owns the
+per-tool-call session boundary).</p>
+<p>This function is the <strong>pure resolver</strong>: it consults the source(s)
+and emits provenance rows, but it does NOT write to the store.
+The <code>docs/MCP_TOOLS.md</code> §11 store-write SIDE EFFECT is provided by
+<a href="fn.metadata_only_to_store.html" title="fn doiget_core::orchestrator::metadata_only_to_store"><code>metadata_only_to_store</code></a>, which wraps this and persists the
+metadata TOML to <code>&lt;root&gt;/.metadata/&lt;safekey&gt;.toml</code>. Keeping the
+store-write in a <em>separate</em> entry point is exactly what lets
+<a href="fn.resolve_only.html" title="fn doiget_core::orchestrator::resolve_only"><code>resolve_only</code></a> safely delegate here — its contract forbids any
+store write, and a pure <code>metadata_only</code> can never regress that
+invariant (#139).</p>
+<h2 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h2>
+<p>Returns <a href="../source/enum.FetchError.html" title="enum doiget_core::source::FetchError"><code>FetchError</code></a> from the underlying <a href="../source/trait.Source.html" title="trait doiget_core::source::Source"><code>Source</code></a> dispatch. The
+MCP boundary converts these to the closed <a href="../enum.ErrorCode.html" title="enum doiget_core::ErrorCode"><code>crate::ErrorCode</code></a> set
+via the existing <code>From&lt;FetchError&gt; for ErrorCode</code> impl.</p>
+</div></details></section></div></main></body></html>

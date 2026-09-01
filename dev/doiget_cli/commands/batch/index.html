@@ -1,0 +1,37 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="`doiget batch &#60;path&#62;` — multi-ref orchestrator."><title>doiget_cli::commands::batch - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="doiget_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module batch</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../doiget_cli/index.html">doiget_<wbr>cli</a><span class="version">0.8.13</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module batch</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#failure-semantics" title="Failure semantics">Failure semantics</a></li></ul><h3><a href="#functions">Module Items</a></h3><ul class="block"><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In doiget_<wbr>cli::<wbr>commands</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">doiget_cli</a>::<wbr><a href="../index.html">commands</a></div><h1>Module <span>batch</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/doiget_cli/commands/batch.rs.html#1-1338">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p><code>doiget batch &lt;path&gt;</code> — multi-ref orchestrator.</p>
+<p>Reads refs from a newline-separated text file, dispatches up to
+<a href="../../../doiget_core/constant.MAX_CONCURRENT_FETCHES.html" title="constant doiget_core::MAX_CONCURRENT_FETCHES"><code>doiget_core::MAX_CONCURRENT_FETCHES</code></a> in flight (the shared
+<a href="../../../doiget_core/rate_limiter/struct.RateLimiter.html" title="struct doiget_core::rate_limiter::RateLimiter"><code>RateLimiter</code></a> enforces the
+5-per-second + 200 ms-per-source backoff invariants), and writes one
+shared provenance log file (<code>docs/PROVENANCE_LOG.md</code> §3).</p>
+<p>Spec:</p>
+<ul>
+<li><code>docs/PHASES.md</code> §4 success criterion: “<code>doiget batch &lt;refs.txt&gt;</code> honors
+the rate cap and writes a hash-chained provenance log.”</li>
+<li><code>crates/doiget-core/src/lib.rs</code> constants
+<a href="../../../doiget_core/constant.MCP_BATCH_MAX_SIZE.html" title="constant doiget_core::MCP_BATCH_MAX_SIZE"><code>doiget_core::MCP_BATCH_MAX_SIZE</code></a> and
+<a href="../../../doiget_core/constant.MAX_CONCURRENT_FETCHES.html" title="constant doiget_core::MAX_CONCURRENT_FETCHES"><code>doiget_core::MAX_CONCURRENT_FETCHES</code></a>.</li>
+</ul>
+<h3 id="failure-semantics"><a class="doc-anchor" href="#failure-semantics">§</a>Failure semantics</h3>
+<ul>
+<li>A file-read error (or a whole-input parse failure: <code>Decode</code> /
+<code>UnsupportedFormat</code>) aborts the batch BEFORE any fetch. There is no
+size cap: any number of refs is accepted and processed in bounded
+windows of <a href="../../../doiget_core/constant.MCP_BATCH_MAX_SIZE.html" title="constant doiget_core::MCP_BATCH_MAX_SIZE"><code>doiget_core::MCP_BATCH_MAX_SIZE</code></a> (issue #304).</li>
+<li>A single <code>Ref::parse</code> failure is non-fatal: the orchestrator emits a
+<code>Resolve</code> row with <code>result=err</code> and continues with the remaining refs.</li>
+<li>A single fetch failure is also non-fatal: per-task errors are recorded
+by the <code>Source</code> impls (<code>Fetch</code> / <code>StoreWrite</code> rows) and counted by the
+batch.</li>
+<li>Exit code: <code>Ok(())</code> only when <strong>every</strong> parse + fetch succeeded; any
+parse-error or per-ref-fetch-error returns <code>Err(...)</code> so the binary
+surfaces a non-zero exit.</li>
+<li>After the one-line count summary, a per-ref <strong>failure digest</strong>
+(<code>&lt;ref&gt; -&gt; &lt;ERROR_CODE&gt;</code>) is written to stderr (issue #222) so a
+human / agent sees which refs failed and why without grepping the
+JSONL provenance log. stdout stays clean (the <code>--mode json</code> JSON-Lines
+is the machine channel).</li>
+<li>The bookend rows are always emitted: one <code>SessionStart</code> at the top, one
+<code>SessionEnd</code> at the bottom, regardless of per-ref outcome.</li>
+</ul>
+</div></details><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.run_with_options.html" title="fn doiget_cli::commands::batch::run_with_options">run_<wbr>with_<wbr>options</a></dt><dd>Run the <code>doiget batch &lt;path&gt;</code> subcommand.</dd></dl></section></div></main></body></html>

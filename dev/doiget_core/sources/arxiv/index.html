@@ -1,0 +1,41 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="arXiv source — arXiv id → PDF + Atom-feed metadata."><title>doiget_core::sources::arxiv - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="doiget_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module arxiv</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../doiget_core/index.html">doiget_<wbr>core</a><span class="version">0.8.13</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module arxiv</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#fetch-flow-full" title="Fetch flow (full)">Fetch flow (full)</a></li><li><a href="#metadata-only-path" title="Metadata-only path">Metadata-only path</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In doiget_<wbr>core::<wbr>sources</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">doiget_core</a>::<wbr><a href="../index.html">sources</a></div><h1>Module <span>arxiv</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/doiget_core/sources/arxiv.rs.html#1-1215">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>arXiv source — arXiv id → PDF + Atom-feed metadata.</p>
+<p>Spec: <code>docs/SOURCES.md</code> §4 arXiv. No auth. The API’s Terms of Use cap
+requests at <strong>one every three seconds, single connection</strong> — stricter
+than the global 5/sec + 200 ms backoff, which this comment previously
+claimed “comfortably respects” it. It did not: that was 15x the rate and
+5x the concurrency (#493, ADR-0045).</p>
+<p>The limit now comes from <a href="../../constant.SOURCE_RATE_OVERRIDES.html" title="constant doiget_core::SOURCE_RATE_OVERRIDES"><code>crate::SOURCE_RATE_OVERRIDES</code></a>, and because
+it caps REQUESTS rather than attempts, the PDF leg below calls
+<a href="../../rate_limiter/struct.RateLimiter.html#method.pace" title="method doiget_core::rate_limiter::RateLimiter::pace"><code>crate::rate_limiter::RateLimiter::pace</code></a> — one attempt issues two
+requests, and only the first was paced by the permit.</p>
+<h2 id="fetch-flow-full"><a class="doc-anchor" href="#fetch-flow-full">§</a>Fetch flow (full)</h2>
+<ol>
+<li><code>can_serve</code> returns <code>true</code> only for <code>Ref::Arxiv(_)</code>; <code>Ref::Doi(_)</code> is
+rejected up front.</li>
+<li><code>fetch</code> acquires a permit from the shared <code>RateLimiter</code>, then
+best-effort fetches the Atom feed (<code>&lt;base&gt;/api/query?id_list=&lt;id&gt;</code>)
+and parses it into a JSON metadata object via the private
+<code>parse_atom_feed</code> helper. Atom failures degrade gracefully
+(<code>metadata_json = None</code> + <code>tracing::warn!</code>) — the existing 1.0
+PDF-leg semantics are preserved.</li>
+<li>The PDF URL <code>&lt;base&gt;/pdf/&lt;id&gt;.pdf</code> is fetched via
+<a href="../../http/struct.HttpClient.html#method.fetch_pdf" title="method doiget_core::http::HttpClient::fetch_pdf"><code>crate::http::HttpClient::fetch_pdf</code></a> which enforces the magic-byte
+(<code>%PDF-</code>) check per <code>docs/SECURITY.md</code> §1.2.</li>
+<li>ONE <code>LogEvent::Fetch</code> row is appended for the PDF leg. The Atom leg
+does NOT emit its own row — the source-level audit unit is
+“one fetch attempt = one row” and the Atom call is a supporting
+leg of the same attempt.</li>
+</ol>
+<h2 id="metadata-only-path"><a class="doc-anchor" href="#metadata-only-path">§</a>Metadata-only path</h2>
+<p><a href="struct.ArxivSource.html#method.fetch_metadata_only" title="method doiget_core::sources::arxiv::ArxivSource::fetch_metadata_only"><code>ArxivSource::fetch_metadata_only</code></a> performs ONLY the Atom feed fetch
+and is the entry point for the <code>metadata_only</code> orchestrator
+(<code>crate::orchestrator::metadata_only</code>). It MUST NOT call
+<a href="../../http/struct.HttpClient.html#method.fetch_pdf" title="method doiget_core::http::HttpClient::fetch_pdf"><code>crate::http::HttpClient::fetch_pdf</code></a> — doing so would violate the
+<code>doiget_metadata_only</code> contract (<code>docs/MCP_TOOLS.md</code> §11). It emits
+one <code>LogEvent::Fetch</code> row under <code>Capability::Metadata</code> so the audit
+trail distinguishes metadata-only fetches from full fetches without
+breaking the schema (the <code>capability</code> field is the structured channel
+for this distinction; spec §3 documents it as one of <code>oa</code> / <code>metadata</code>
+/ <code>tdm-*</code>).</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.ArxivSource.html" title="struct doiget_core::sources::arxiv::ArxivSource">Arxiv<wbr>Source</a></dt><dd>arXiv <a href="../../source/trait.Source.html" title="trait doiget_core::source::Source"><code>Source</code></a> impl. PDFs are served from <code>arxiv.org</code>; Atom metadata
+from <code>export.arxiv.org</code> (the <code>metadata_url</code> builder).</dd></dl></section></div></main></body></html>

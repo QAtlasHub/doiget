@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sources matrix &middot; doiget</title>
+  <meta name="description" content="| Source | Tier | Phase | Auth | ToS link | doiget feature |">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/sources/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Sources matrix · doiget">
+  <meta property="og:description" content="| Source | Tier | Phase | Auth | ToS link | doiget feature |">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/sources/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Sources matrix · doiget">
+  <meta name="twitter:description" content="| Source | Tier | Phase | Auth | ToS link | doiget feature |">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Sources matrix</h1>
+    <p class="lede">| Source | Tier | Phase | Auth | ToS link | doiget feature |</p>
+  </header>
+
+  <h1 id="sources">Sources</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE (user responsibility advisory).</strong> This document lists every source
+doiget integrates with, the access prerequisites, and a pointer to each source's
+official Terms of Service. <strong>Users are responsible for ensuring they have the right
+to access content via these sources and for compliance with each source's ToS.</strong></p>
+</blockquote>
+<hr />
+<h2 id="1-source-matrix">1. Source matrix</h2>
+<table><thead><tr><th>Source</th><th>Tier</th><th>Phase</th><th>Auth</th><th>ToS link</th><th>doiget feature</th></tr></thead><tbody>
+<tr><td>Crossref</td><td>1 (OA)</td><td>1</td><td>none</td><td><a rel="noopener" target="_blank" href="https://www.crossref.org/documentation/retrieve-metadata/rest-api/">https://www.crossref.org/documentation/retrieve-metadata/rest-api/</a></td><td>always-on</td></tr>
+<tr><td>Unpaywall</td><td>1 (OA)</td><td>1</td><td>email (polite pool)</td><td><a rel="noopener" target="_blank" href="https://unpaywall.org/products/api">https://unpaywall.org/products/api</a></td><td>always-on</td></tr>
+<tr><td>arXiv</td><td>1 (OA)</td><td>1</td><td>none</td><td><a rel="noopener" target="_blank" href="https://info.arxiv.org/help/api/index.html">https://info.arxiv.org/help/api/index.html</a></td><td>always-on</td></tr>
+<tr><td>ar5iv (full text)</td><td>1 (OA)</td><td>4 (PR4)</td><td>none</td><td><a rel="noopener" target="_blank" href="https://ar5iv.labs.arxiv.org/">https://ar5iv.labs.arxiv.org/</a></td><td>always-on</td></tr>
+<tr><td>OpenAlex</td><td>2 (metadata)</td><td>4</td><td>none</td><td><a rel="noopener" target="_blank" href="https://help.openalex.org/how-to/">https://help.openalex.org/how-to/</a></td><td><code>--features metadata</code> + <code>DOIGET_ENABLE_OPENALEX</code></td></tr>
+<tr><td>Semantic Scholar</td><td>2 (metadata)</td><td>4</td><td>API key (optional)</td><td><a rel="noopener" target="_blank" href="https://www.semanticscholar.org/product/api">https://www.semanticscholar.org/product/api</a></td><td><code>--features metadata</code> + <code>DOIGET_ENABLE_S2</code></td></tr>
+<tr><td>DOAJ</td><td>2 (metadata)</td><td>4</td><td>none</td><td><a rel="noopener" target="_blank" href="https://doaj.org/terms/">https://doaj.org/terms/</a></td><td><code>--features metadata</code> + <code>DOIGET_ENABLE_DOAJ</code></td></tr>
+<tr><td>DataCite</td><td>2 (resolution)</td><td>4</td><td>none</td><td><a rel="noopener" target="_blank" href="https://datacite.org/terms-and-conditions/">https://datacite.org/terms-and-conditions/</a></td><td><code>--features metadata</code> + <code>DOIGET_ENABLE_DATACITE</code></td></tr>
+<tr><td>HAL</td><td>2 (metadata)</td><td>4</td><td>none</td><td><a rel="noopener" target="_blank" href="https://api.archives-ouvertes.fr/docs">https://api.archives-ouvertes.fr/docs</a></td><td><code>--features metadata</code> + <code>DOIGET_ENABLE_HAL</code></td></tr>
+<tr><td>OpenAIRE</td><td>2 (metadata)</td><td>4</td><td>none</td><td><a rel="noopener" target="_blank" href="https://graph.openaire.eu/docs/">https://graph.openaire.eu/docs/</a></td><td><code>--features metadata</code> + <code>DOIGET_ENABLE_OPENAIRE</code></td></tr>
+<tr><td>CORE</td><td>2 (metadata)</td><td>4</td><td>free key (<code>DOIGET_CORE_API_KEY</code>); unregistered use is token-tiered, see §6.1</td><td><a rel="noopener" target="_blank" href="https://core.ac.uk/terms">https://core.ac.uk/terms</a></td><td><code>--features metadata</code> + <code>DOIGET_ENABLE_CORE</code></td></tr>
+<tr><td>Europe PMC</td><td>2 (metadata)</td><td>4</td><td>none</td><td><a rel="noopener" target="_blank" href="https://europepmc.org/About">https://europepmc.org/About</a></td><td><code>--features metadata</code> + <code>DOIGET_ENABLE_EUROPE_PMC</code></td></tr>
+<tr><td>Springer Nature OA</td><td>3 (institutional)</td><td>5a</td><td>API key</td><td><a rel="noopener" target="_blank" href="https://dev.springernature.com/terms-conditions/">https://dev.springernature.com/terms-conditions/</a></td><td><code>--features tdm-springer</code> + key + agree</td></tr>
+<tr><td>APS Harvest TDM (<strong>serves PDFs</strong>)</td><td>3 (institutional)</td><td>5b</td><td>API key</td><td><a rel="noopener" target="_blank" href="https://harvest.aps.org/">https://harvest.aps.org/</a></td><td><code>--features tdm-aps</code> + key + agree</td></tr>
+<tr><td>Elsevier ScienceDirect TDM</td><td>3 (institutional)</td><td>5c</td><td>API key</td><td><a rel="noopener" target="_blank" href="https://www.elsevier.com/about/policies-and-standards/text-and-data-mining">https://www.elsevier.com/about/policies-and-standards/text-and-data-mining</a></td><td><code>--features tdm-elsevier</code> + key + agree</td></tr>
+<tr><td>IEEE Xplore TDM (<strong>unverified</strong>)</td><td>3 (institutional)</td><td>5d</td><td>API key</td><td><a rel="noopener" target="_blank" href="https://developer.ieee.org/">https://developer.ieee.org/</a></td><td><code>--features tdm-ieee</code> + key + agree</td></tr>
+</tbody></table>
+<p>When the content leg is blocked, the enabled optional sources are asked whether anyone
+else holds a copy, and the URL they report is tried (#445). Four can name one:</p>
+<table><thead><tr><th>source</th><th>field</th><th>notes</th></tr></thead><tbody>
+<tr><td>CORE</td><td><code>downloadUrl</code></td><td></td></tr>
+<tr><td>HAL</td><td><code>fileMain_s</code></td><td>gated on <code>openAccess_bool</code></td></tr>
+<tr><td>Europe PMC</td><td><code>fullTextUrlList</code></td><td><code>documentStyle: pdf</code> and <code>availabilityCode</code> of <code>F</code> or <code>OA</code></td></tr>
+<tr><td>OpenAlex</td><td><code>locations[]</code></td><td>the first entry with <code>is_oa</code> and a <code>pdf_url</code> (#461)</td></tr>
+</tbody></table>
+<p>OpenAlex is the one that reports <strong>every</strong> location it knows of rather than a single best
+one, which is what makes it the likeliest to name an institutional-repository copy of a
+hybrid-OA article whose publisher refused. That host will not be on any curated list —
+<code>[network] trust_academic_repos</code> (ADR-0028) is the existing answer, and the denial help
+names it when it applies.</p>
+<p>The ceiling on all of this — what doiget may attempt for a given ref, and what bounds
+it — is <a href="https://codes.sota-shimozono.com/doiget/developer/sources/LEGAL.md"><code>LEGAL.md</code></a> §2a. A change that lets doiget try a location it could
+not try before amends that section in the same PR (#497, ADR-0048).</p>
+<h3 id="1-1-when-tier-3-is-consulted-adr-0044">1.1 When Tier 3 is consulted (ADR-0044)</h3>
+<p>Tier-3 sources are asked two different questions at two different points, and the
+distinction is what #458 was about:</p>
+<table><thead><tr><th>point</th><th>question</th><th>trigger</th></tr></thead><tbody>
+<tr><td>metadata stage</td><td>"who can tell me about this DOI?"</td><td>Crossref found nothing</td></tr>
+<tr><td><strong>content stage</strong></td><td>"who will give me the bytes?"</td><td>the OA content leg was <strong>blocked</strong></td></tr>
+</tbody></table>
+<p>The second is the one a TDM agreement is obtained for. Until ADR-0044 it did not
+exist, so for a publisher-registered DOI — which Crossref resolves readily — an
+enabled TDM source was never consulted at all and enabling it changed nothing
+observable.</p>
+<p><strong><code>tdm-aps</code> returns PDF bytes</strong> at the content stage; APS documents single-request
+retrieval with <code>Accept: application/pdf</code>. The stored file reports
+<code>license = "unknown"</code>: it came from the publisher under your agreement, not from the
+OA location whose licence Unpaywall reported, and doiget does not guess licences.</p>
+<p><code>tdm-elsevier</code>, <code>tdm-springer</code> and <code>tdm-ieee</code> remain metadata-only — but for three
+different reasons. This paragraph named them in one sentence with only Elsevier's
+reason attached, so the weaker cases inherited the stronger one's justification
+(#496):</p>
+<table><thead><tr><th>source</th><th>why it is metadata-only</th></tr></thead><tbody>
+<tr><td><code>tdm-elsevier</code></td><td><strong>The vendor's policy.</strong> Retrieval of non-open-access article PDFs through the ScienceDirect APIs is not permitted; a non-OA article yields a first-page preview rather than the article. Full-text <strong>XML</strong> is what an entitlement grants, which is the ADR-0032 <code>paper_text</code> route rather than the content leg.</td></tr>
+<tr><td><code>tdm-springer</code></td><td><strong>doiget's choice.</strong> Springer publishes a Full Text (TDM) API and an Open Access API alongside the Meta API, so full text is contractually available. Staying metadata-only is a conservative decision here, not a restriction.</td></tr>
+<tr><td><code>tdm-ieee</code></td><td><strong>The contract is not public.</strong> Shipped against an inferred one (ADR-0042), so the narrower surface is the honest one until it can be checked.</td></tr>
+</tbody></table>
+<p>Disclosure is bounded exactly as before: a source is only ever told about DOIs its
+own publisher registered (ADR-0041). What rises with ADR-0044 is how often it is
+asked, not what it is told.</p>
+<h2 id="2-user-responsibility">2. User responsibility</h2>
+<p>For each source the user invokes, the user is the contracting party. doiget does not
+hold any credential for any user. Before enabling a source, ensure that you:</p>
+<ul>
+<li>Have read and accepted the source's Terms of Service.</li>
+<li>Hold the institutional or personal access rights the source requires.</li>
+<li>Comply with the source's politeness policy (rate limit, attribution).</li>
+<li>Are operating from a network and device authorized to use those rights.</li>
+</ul>
+<p>doiget enforces a hard rate cap of <strong>5 fetches per second</strong> per process to make polite
+behavior the default (<a href="https://codes.sota-shimozono.com/doiget/developer/sources/LEGAL.md"><code>LEGAL.md</code></a> §6a safeguard 5), tightened per source
+where a vendor publishes something stricter (§6.1 below, ADR-0045).</p>
+<p>This cited "§6 safeguard 8" until #496. Safeguard 8 is marketing-language
+self-policing, and it lives in §6b — <em>policy commitments</em>, the ones a contributor
+could violate without CI catching it. The rate cap is §6a.5, an <em>enforced control</em>.
+The citation sent a reader looking for the enforcement basis to the section that has
+none.</p>
+<h2 id="3-default-release-binaries">3. Default release binaries</h2>
+<p><code>cargo install doiget-cli</code> (default) compiles Tier 1 only. The optional source surface
+requires an opt-in build:</p>
+<pre data-lang="sh" style="background-color:#fafafa;color:#61676c;" class="language-sh "><code class="language-sh" data-lang="sh"><span style="color:#f29718;">cargo</span><span> install doiget-cli</span><span style="color:#ff8f40;"> --features</span><span> metadata
+</span></code></pre>
+<p><strong>What <code>metadata</code> means (ADR-0040, NORMATIVE).</strong> The feature name predates the sources
+it now carries. As of 0.8.8 it gates <strong>the optional non-Tier-1 source surface as a
+whole</strong> — enrichment, resolution <em>and</em> retrieval — not enrichment alone. Compiling it
+in makes that code present; it does <strong>not</strong> turn any source on. Every source under it
+is additionally gated at runtime by its own <code>DOIGET_ENABLE_&lt;NAME&gt;</code>, and with every such
+variable unset the observable behaviour of the binary is identical to a Tier-1-only
+build. The runtime flag is the boundary that matters; the Cargo feature only decides
+what is compiled.</p>
+<p>Published release binaries build <code>--no-default-features --features oa-only,citation</code>,
+and <code>citation = ["metadata"]</code>, so this code ships — inert — in the binaries you
+download.</p>
+<p>Tier 3 TDM sources are individually feature-flagged and require user-driven build:</p>
+<pre data-lang="sh" style="background-color:#fafafa;color:#61676c;" class="language-sh "><code class="language-sh" data-lang="sh"><span style="color:#f29718;">cargo</span><span> install doiget-cli</span><span style="color:#ff8f40;"> --features</span><span> metadata,tdm-springer
+</span><span style="color:#f29718;">cargo</span><span> install doiget-cli</span><span style="color:#ff8f40;"> --features</span><span> metadata,tdm-aps
+</span><span style="color:#f29718;">cargo</span><span> install doiget-cli</span><span style="color:#ff8f40;"> --features</span><span> metadata,tdm-elsevier
+</span><span style="color:#f29718;">cargo</span><span> install doiget-cli</span><span style="color:#ff8f40;"> --features</span><span> metadata,tdm-ieee
+</span></code></pre>
+<p>There is no <code>tdm-all</code> umbrella feature (<a href="https://codes.sota-shimozono.com/doiget/developer/sources/SCOPE.md"><code>SCOPE.md</code></a> §non-goal 12).</p>
+<h2 id="4-source-specific-notes">4. Source-specific notes</h2>
+<h3 id="crossref">Crossref</h3>
+<ul>
+<li>Public, no-auth API. Polite pool requires <code>User-Agent</code> with contact email
+(<code>[network] user_agent</code> in <code>config.toml</code>).</li>
+<li>doiget uses Crossref for: DOI → metadata; OA URL where Crossref's <code>link</code> array
+contains a free-to-read entry.</li>
+</ul>
+<h3 id="unpaywall">Unpaywall</h3>
+<ul>
+<li>Free, but the polite pool requires <code>email=alice@example.org</code> in the URL. Set
+<code>[network] unpaywall_email</code> in <code>config.toml</code>.</li>
+<li>doiget uses Unpaywall for: OA URL discovery for a given DOI, with license metadata.</li>
+</ul>
+<h3 id="arxiv">arXiv</h3>
+<ul>
+<li>Public, no-auth API. Its <a rel="noopener" target="_blank" href="https://info.arxiv.org/help/api/tou.html">Terms of Use</a>
+cap requests at <strong>one every three seconds, over a single connection</strong>, collectively
+across every machine under the caller's control.</li>
+<li>doiget applies that per-source, via <code>SOURCE_RATE_OVERRIDES</code> (ADR-0045). One arXiv
+<em>attempt</em> issues two <em>requests</em> — the Atom feed, then the PDF — and both are paced,
+because the guideline counts requests.</li>
+<li>This page previously claimed the global 5/sec cap "respects this". It did not: the
+effective rate was 15x the guideline and the concurrency 5x (#493).</li>
+<li>doiget uses arXiv for: arXiv id → PDF + metadata. The parsed metadata
+also carries the <strong>published DOI</strong> and <strong>journal reference</strong> when the
+submitter supplied them (<code>&lt;arxiv:doi&gt;</code> / <code>&lt;arxiv:journal_ref&gt;</code>) — the
+arXiv → published-DOI link (#281 item 5). These ride the <strong>raw metadata
+payload</strong>, so they surface via the MCP tools <strong><code>doiget_metadata_only</code></strong> /
+<strong><code>doiget_resolve_paper</code></strong> (which return that payload verbatim). They are
+NOT written to the shared store, so
+<code>doiget info</code> (which reads the stored <code>Metadata</code>) does not show them: the
+store write forces the arXiv entry's own <code>doi</code> to <code>None</code> and has no
+<code>journal_ref</code> field. Omitted when absent.</li>
+</ul>
+<h3 id="ar5iv-full-text-extraction">ar5iv (full-text extraction)</h3>
+<ul>
+<li>ar5iv (<code>ar5iv.labs.arxiv.org</code>) renders arXiv papers as LaTeXML XHTML.
+doiget's <code>paper_text</code> / <code>doiget text</code> extracts sectioned plain text from
+it (the #281 "read" step; ADR-0032). <strong>Tier 1 OA, always-on</strong> — ships in
+the default <code>oa-only</code> binary, no env gate.</li>
+<li>It is registered under a <strong>distinct <code>"ar5iv"</code> source key</strong> (not
+<code>"arxiv"</code>) so provenance distinguishes full-text HTML from the arXiv
+PDF/Atom API. The host is a <code>*.arxiv.org</code> subdomain, so it adds no new
+registrable domain to the network surface
+(<code>http::fulltext_allowlist()</code>).</li>
+<li><strong>Never opens the PDF blob</strong> (ADR-0032 D1): this is a <em>separate</em> fetch of
+the publisher's HTML rendering, not PDF content processing (permanent
+non-goal #1 stays intact). Extracted text is cached at
+<code>&lt;cache_root&gt;/text/&lt;safekey&gt;.json</code> (<code>docs/CACHE.md</code>), not the shared
+store.</li>
+</ul>
+<h3 id="openalex-semantic-scholar-doaj">OpenAlex / Semantic Scholar / DOAJ</h3>
+<ul>
+<li>Metadata enrichment only. doiget does not fetch PDFs from these unless the response
+includes an OA URL whose host is on the per-source allowlist.</li>
+<li><strong>OpenAlex has two distinct call paths with two tiers</strong> (ADR-0031 D4):
+the matrix row above (Tier 2) covers the <em>enrichment</em> / citation-<code>graph</code>
+source (<code>/works/doi:…</code>, <code>referenced_works[]</code>), gated by <code>--features citation</code> + <code>DOIGET_ENABLE_OPENALEX</code>. The separate <strong>discovery search</strong>
+path (<code>doiget search</code>, <code>/works?search=</code>, <code>doiget_core::discovery</code>) is
+<strong>Tier 1 OA metadata, always-on</strong>: it ships in the default <code>oa-only</code>
+binary and needs <strong>no</strong> env-var gate. It is read-only, metadata-only,
+never paywalled, and never fetches a PDF.</li>
+</ul>
+<h3 id="tdm-sources">TDM sources</h3>
+<p>Each requires:</p>
+<ol>
+<li>A Cargo feature compiled in (<code>tdm-elsevier</code>, <code>tdm-aps</code>, <code>tdm-springer</code>, <code>tdm-ieee</code>).</li>
+<li>The user's API key in <code>DOIGET_KEY_&lt;PUBLISHER&gt;</code> env or <code>[tdm.&lt;publisher&gt;] api_key</code> in
+credentials.toml.</li>
+<li>The agreement env <code>DOIGET_AGREE_TDM_&lt;PUBLISHER&gt;=1</code>.</li>
+</ol>
+<p>If any of the three is missing, the source is unavailable at runtime
+(<a href="https://codes.sota-shimozono.com/doiget/developer/sources/CAPABILITY.md"><code>CAPABILITY.md</code></a> §2).</p>
+<p><strong>Scoped to the publisher's own DOIs.</strong> A TDM source is consulted only for DOI
+prefixes its publisher registered (ADR-0041). Enabling <code>tdm-aps</code> does not send
+your Elsevier lookups to APS.</p>
+<table><thead><tr><th>feature</th><th>DOI prefixes consulted</th></tr></thead><tbody>
+<tr><td><code>tdm-aps</code></td><td><code>10.1103</code></td></tr>
+<tr><td><code>tdm-elsevier</code></td><td><code>10.1016</code>, <code>10.1006</code>, <code>10.1053</code></td></tr>
+<tr><td><code>tdm-springer</code></td><td><code>10.1007</code>, <code>10.1038</code>, <code>10.1057</code>, <code>10.1140</code></td></tr>
+<tr><td><code>tdm-ieee</code></td><td><code>10.1109</code>, <code>10.23919</code></td></tr>
+</tbody></table>
+<p>The lists are deliberately conservative, so a publisher may own a prefix not
+listed. That is visible rather than silent: the fetch error names it, as
+<code>not consulted (DOI prefix 10.xxxx is not &lt;publisher&gt;)</code>.</p>
+<h4 id="ieee-xplore-an-inferred-contract-430">IEEE Xplore — an inferred contract (#430)</h4>
+<p><code>tdm-ieee</code> is the one Tier-3 source whose upstream contract has <strong>not</strong> been
+confirmed against a live programme key. IEEE's programme requires registration
+and a project summary before a key is issued, so the endpoint
+(<code>https://ieeexploreapi.ieee.org/api/v1/search/articles</code>), the auth shape (the
+key as an <code>apikey</code> <strong>query parameter</strong>, as with Springer rather than the
+<code>X-API-Key</code> header APS and Elsevier use) and the response envelope
+(<code>{ total_records, total_searched, articles: [...] }</code>) are taken from IEEE's
+public developer portal and SDKs.</p>
+<p>One unauthenticated request on 2026-08-24 (#460) <strong>confirmed the endpoint</strong> — the
+host resolves and <code>/api/v1/search/articles</code> is served — and corrected the assumed
+failure shape: an unauthorised caller gets <code>403</code> with <code>content-type: text/xml</code> and
+a body of <code>&lt;h1&gt;Developer Inactive&lt;/h1&gt;</code>, not JSON. So <code>(unverified)</code> in §1 now means
+specifically <strong>the 200-response envelope and the rate limits</strong>.</p>
+<p>The failure mode is loud, not silent: a 403 surfaces with its status and the key
+redacted out of the URL, and a 200 in any other shape is a schema error naming the
+missing field and quoting the body — so the first run against a real key reports the
+actual contract. <code>DOIGET_IEEE_BASE</code> replays that response against a fixture. <strong>Do not
+drop the "unverified" marking in §1 until a 200 with a real key has been observed.</strong></p>
+<p>Rate limits are likewise unknown; the source is subject to the same hard-coded
+limiter as every other, which may be more or less polite than IEEE requires.</p>
+<p><strong>When they run.</strong> Strictly after Crossref, and only when Crossref produced
+nothing — the same rule the Tier-2 chain follows, so enabling a TDM source can
+never change a resolution that already works. Within that step, TDM runs before
+the Tier-2 OA aggregators: for a DOI its publisher registered, the publisher's
+own API is the authoritative record.</p>
+<p>Every outcome, consulted or not, is recorded in the attempt trace attached to a
+failed fetch, so "asked and had nothing" is always distinguishable from "never
+asked" and from "wrong publisher".</p>
+<p><strong>Pointing them elsewhere.</strong> <code>DOIGET_APS_BASE</code>, <code>DOIGET_ELSEVIER_BASE</code>,
+<code>DOIGET_SPRINGER_BASE</code> and <code>DOIGET_IEEE_BASE</code> override the API base, mirroring <code>DOIGET_CROSSREF_BASE</code>.
+Intended for tests and for institutional proxies.</p>
+<h3 id="when-the-publisher-refuses-the-content">When the publisher refuses the content</h3>
+<p>The OA chain already tries every location Unpaywall returned, advancing past
+each failure — a 429 on one host does not stop it. What it could not do was
+look beyond that list: when Crossref resolved the DOI, the optional sources
+were skipped entirely, so a rate limit on the single publisher URL ended a run
+with other indexes switched on (#445).</p>
+<p>If the content leg is still blocked after the arXiv preprint fallback
+(#325), doiget now asks the <strong>enabled</strong> optional sources whether anyone else
+holds a copy, and tries the document URL they report. Three of them publish
+one: CORE (<code>downloadUrl</code>), HAL (<code>fileMain_s</code>, gated on <code>openAccess_bool</code>) and
+Europe PMC (<code>fullTextUrlList</code>). OpenAIRE and DataCite report a DOI resolver or
+a landing page rather than a file, so they contribute no URL — their outcome
+still appears in the attempt trace.</p>
+<p>The fetch itself stays on the <code>oa-publisher</code> leg, with its allowlist and its
+ADR-0023 denial context, exactly as each source's own docs describe.</p>
+<p>This costs a request only when the content leg has <strong>already</strong> failed and the
+user has switched a source on. With no flags set, behaviour is unchanged.</p>
+<h2 id="5-adding-a-new-source">5. Adding a new source</h2>
+<p>A new source addition requires:</p>
+<ol>
+<li>A new GitHub Discussion describing the source, its access pattern, and Tier
+classification.</li>
+<li>An ADR locking the Tier and (if Tier 3) the Cargo feature name.</li>
+<li>An entry in this document with the official ToS link and prerequisites.</li>
+<li>A doc in <code>INTEGRATION/&lt;source&gt;.md</code> if user-side configuration is non-trivial.</li>
+<li>Update of this matrix.</li>
+</ol>
+<h2 id="6-politeness-defaults">6. Politeness defaults</h2>
+<p>doiget's defaults are designed to be on the polite side of every source we know of:</p>
+<ul>
+<li>5 fetches per second, regardless of source.</li>
+<li>Per-source backoff of 200 ms between consecutive requests.</li>
+<li><code>User-Agent: doiget/&lt;version&gt; (+https://github.com/QAtlasHub/doiget)</code>.</li>
+<li>Honors <code>Retry-After</code> headers (treats 429 as <code>RATE_LIMITED</code> with the indicated wait).</li>
+</ul>
+<p>If a source publishes a stricter rate guideline, doiget adopts the stricter value at
+the per-source level rather than relaxing the global cap. This is now mechanical rather
+than a promise: <code>RateLimits::backoff_ms_for</code> and <code>max_concurrent_for</code> take the stricter
+of the global setting and the source's entry in <code>SOURCE_RATE_OVERRIDES</code>, so an entry can
+only ever tighten (ADR-0045).</p>
+<h3 id="6-1-what-each-vendor-publishes-and-what-doiget-does-about-it">6.1 What each vendor publishes, and what doiget does about it</h3>
+<p>Recorded so the paragraph above is auditable rather than aspirational (#496). A row
+with no <code>SOURCE_RATE_OVERRIDES</code> entry runs on the global cap, and the "doiget" column
+says so rather than leaving it to be inferred.</p>
+<table><thead><tr><th>source</th><th>vendor's published limit</th><th>doiget</th><th>source of the figure</th></tr></thead><tbody>
+<tr><td>arXiv</td><td>1 request / 3 s, single connection</td><td><strong>enforced per-source</strong> (<code>SOURCE_RATE_OVERRIDES</code>)</td><td><a rel="noopener" target="_blank" href="https://info.arxiv.org/help/api/tou.html">https://info.arxiv.org/help/api/tou.html</a></td></tr>
+<tr><td>CORE</td><td>token-cost model: 100 tokens/day and 10/min unregistered, 1 000/day and 25/min registered; a complex query costs 3–5 tokens</td><td>global cap; the key is what raises the tier</td><td><a rel="noopener" target="_blank" href="https://api.core.ac.uk/docs/v3">https://api.core.ac.uk/docs/v3</a></td></tr>
+<tr><td>OpenAlex</td><td>daily and per-second limits, plus a polite pool keyed on <code>mailto</code></td><td>global cap; doiget sends <code>mailto</code> when a contact email is set</td><td><a rel="noopener" target="_blank" href="https://help.openalex.org/how-to/">https://help.openalex.org/how-to/</a></td></tr>
+<tr><td>Springer</td><td>a rate-limits page, tiered Basic / Premium</td><td>global cap</td><td><a rel="noopener" target="_blank" href="https://dev.springernature.com/docs/rate-limit-details/rate-limits/">https://dev.springernature.com/docs/rate-limit-details/rate-limits/</a> — <strong>figures not recorded</strong>, see below</td></tr>
+<tr><td>APS</td><td>none found</td><td>global cap</td><td><a rel="noopener" target="_blank" href="https://harvest.aps.org/docs/harvest-api">https://harvest.aps.org/docs/harvest-api</a></td></tr>
+<tr><td>Unpaywall, Crossref, DataCite, DOAJ, HAL, OpenAIRE, Europe PMC, Semantic Scholar, IEEE</td><td>none found, or not yet checked</td><td>global cap</td><td>—</td></tr>
+</tbody></table>
+<p>The Springer figures are <strong>absent rather than guessed</strong>: that page renders its body
+through JavaScript and the audit could not extract the numbers. A plausible-looking
+number here would be worse than the gap, because the point of the table is that it can
+be checked against the vendor. Someone should open it in a browser and fill the cell in.</p>
+<p>CORE's row is why the §1 matrix no longer calls its key "optional". Requests do resolve
+without one, at roughly a hundred simple queries a day — so a run that worked yesterday
+can stop working today, and "optional" gives the reader nothing to diagnose that with.</p>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/developer&#x2F;sources.md">
+      site/content/developer&#x2F;sources.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

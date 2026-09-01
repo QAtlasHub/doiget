@@ -1,0 +1,34 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="`true` if `name` identifies an artifact-producing subcommand whose stdout output IS the deliverable (per ADR-0017 Amendment 1, extended by Amendment 2). Artifact commands suppress only on explicit Quiet (`ResolvedOutput::quiet_was_explicit` == `true`), never on the non-TTY implicit fallback."><title>is_artifact_command in doiget_cli::commands::output - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="doiget_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">is_artifact_command</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../doiget_cli/index.html">doiget_<wbr>cli</a><span class="version">0.8.13</span></h2></div><div class="sidebar-elems"><div id="rustdoc-modnav"><h2><a href="index.html">In doiget_<wbr>cli::<wbr>commands::<wbr>output</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">doiget_cli</a>::<wbr><a href="../index.html">commands</a>::<wbr><a href="index.html">output</a></div><h1>Function <span class="fn">is_<wbr>artifact_<wbr>command</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/doiget_cli/commands/output.rs.html#182-187">Source</a> </span></div><pre class="rust item-decl"><code>pub fn is_artifact_command(name: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.98.0/std/primitive.str.html">str</a>) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.98.0/std/primitive.bool.html">bool</a></code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p><code>true</code> if <code>name</code> identifies an artifact-producing subcommand whose
+stdout output IS the deliverable (per ADR-0017 Amendment 1, extended
+by Amendment 2). Artifact commands suppress only on <strong>explicit</strong> Quiet
+(<a href="struct.ResolvedOutput.html#structfield.quiet_was_explicit" title="field doiget_cli::commands::output::ResolvedOutput::quiet_was_explicit"><code>ResolvedOutput::quiet_was_explicit</code></a> == <code>true</code>), never on the
+non-TTY implicit fallback.</p>
+<p>The set has two cohorts:</p>
+<ul>
+<li><strong>Export / inventory</strong> (<code>bib</code> / <code>csl</code> / <code>capabilities</code>) — Amendment 1.</li>
+<li><strong>Read / inspection</strong> (<code>info</code> / <code>list-recent</code> / <code>search</code> / <code>link</code> /
+<code>text</code>) — Amendment 2 (#301). For these the stdout rendering IS the
+requested data, not a status report, so a non-TTY caller (agent / pipe
+/ ssh) must still receive it; silencing it reads as “fetch failed” or
+“store empty” when the data is present and correct. <code>text</code> in
+particular is almost always piped (<code>doiget text arxiv:… &gt; paper.txt</code>),
+so the implicit-Quiet fallback would otherwise blank the output.</li>
+</ul>
+<p>Two commands are omitted on purpose, because a name-level predicate
+cannot express them and pretending otherwise would be worse than the
+omission:</p>
+<ul>
+<li><code>audit-log</code> is <em>informational</em> in Human mode and <em>artifact</em> in Json
+mode; the command checks the resolved mode rather than its name.</li>
+<li><code>config</code> is artifact-class in <code>path</code> and <code>show</code> (their stdout is the
+requested value) and status-class in <code>init</code>; <code>doctor</code> writes to
+stderr and is unaffected either way. It takes <code>quiet_was_explicit</code>
+and decides per action (#476).</li>
+</ul>
+<p>This is the third time the list has been found incomplete (#219/#220,
+#301, #476), and the reason is visible above: it is a hand-maintained
+enumeration of a property no type carries. Deriving it from the command
+definition would end the pattern. Until then, a new subcommand that
+writes a <em>value</em> to stdout has to be added here or handled per action,
+or it is silent to every non-interactive caller.</p>
+</div></details></section></div></main></body></html>

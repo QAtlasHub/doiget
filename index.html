@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>doiget · doiget</title>
+  <meta name="description" content="DOIs and arXiv ids -&gt; local PDFs, through official APIs. The agent-facing companion to BiblioFetch.jl.">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="doiget · doiget">
+  <meta property="og:description" content="DOIs and arXiv ids -&gt; local PDFs, through official APIs. The agent-facing companion to BiblioFetch.jl.">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="doiget · doiget">
+  <meta name="twitter:description" content="DOIs and arXiv ids -&gt; local PDFs, through official APIs. The agent-facing companion to BiblioFetch.jl.">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "doiget",
+  "description": "DOIs and arXiv ids -&gt; local PDFs, through official APIs. The agent-facing companion to BiblioFetch.jl.",
+  "url": "https://codes.sota-shimozono.com/doiget/",
+  "codeRepository": "https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget",
+  "programmingLanguage": "Rust",
+  "runtimePlatform": "Rust 1.86+",
+  "license": "https://opensource.org/licenses/MIT",
+  "applicationCategory": "DeveloperApplication"
+}
+</script>
+
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<section class="hero">
+  <h1>doiget</h1>
+  <p class="tagline">
+    DOIs and arXiv ids &rarr; local PDFs, through official APIs.<br>
+    The agent-facing companion to
+    <a href="https://github.com/sotashimozono/BiblioFetch.jl">BiblioFetch.jl</a>.
+  </p>
+
+  <pre class="demo"><code>$ doiget fetch 10.1103/PhysRevLett.130.200601
+wrote ~/papers/2L/2LpQ.../paper.pdf  (412 KB, license: cc-by)
+</code></pre>
+</section>
+
+<section class="posture">
+  <strong>Posture.</strong>
+  doiget does <em>not</em> bypass paywalls, host content, run as a SaaS, or
+  bundle publisher API keys. Open Access by default; TDM credentials are
+  user-supplied and compile-time opt-in.
+  <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">Read the scope &amp; legal page</a>.
+</section>
+
+<section class="audience">
+  <h2>Who is reading this?</h2>
+  <div class="cards">
+    <a class="card" href="https://codes.sota-shimozono.com/doiget/use/">
+      <h3>End user</h3>
+      <p>Use the CLI to fetch papers by DOI or arXiv id. Install, batch, inspect what landed.</p>
+    </a>
+    <a class="card" href="https://codes.sota-shimozono.com/doiget/developer/">
+      <h3>Developer</h3>
+      <p>Wire doiget into an agent host (Claude Desktop, Cursor, Codex) via MCP, or use <code>doiget-core</code> from Rust.</p>
+    </a>
+    <a class="card" href="https://codes.sota-shimozono.com/doiget/contribute/">
+      <h3>Contributor</h3>
+      <p>Read the architecture, the phase plan, and the ADRs before sending a PR.</p>
+    </a>
+  </div>
+</section>
+
+<section class="why">
+  <h2>Why doiget?</h2>
+  <ul>
+    <li>OA-first by default; institutional TDM is opt-in and compile-time gated.</li>
+    <li>Cryptographic provenance log (JSON Lines + SHA-256 hash chain, fail-closed).</li>
+    <li>Shares its on-disk store format with BiblioFetch.jl &mdash; same <code>~/papers/</code> directory.</li>
+    <li>No telemetry, no auto-update, no phone-home (ADR-0015).</li>
+    <li>Single static binary; stdio-only MCP server.</li>
+  </ul>
+</section>
+
+<section class="roadmap">
+  <h2>Status</h2>
+  <p>
+    <span class="done">Shipping &mdash; <strong>v0.2.0</strong></span> on
+    crates.io (<code>doiget-core</code>, <code>doiget-cli</code>,
+    <code>doiget-mcp</code>), with sigstore-signed binaries and an SBOM on
+    every GitHub Release.
+  </p>
+  <p>
+    Tier&nbsp;1 + Tier&nbsp;2 sources, the stdio MCP server, citation-graph
+    expansion, and feature-gated TDM are all implemented. See the
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/CHANGELOG.md">changelog</a>
+    and <a href="https://codes.sota-shimozono.com/doiget/contribute/phases/">project status</a>.
+  </p>
+</section>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Redirect allowlist &middot; doiget</title>
+  <meta name="description" content="Defense-in-depth against open-redirect SSRF and against publisher &#x2F; metadata-source">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Redirect allowlist · doiget">
+  <meta property="og:description" content="Defense-in-depth against open-redirect SSRF and against publisher &#x2F; metadata-source">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Redirect allowlist · doiget">
+  <meta name="twitter:description" content="Defense-in-depth against open-redirect SSRF and against publisher &#x2F; metadata-source">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Redirect allowlist</h1>
+    <p class="lede">Defense-in-depth against open-redirect SSRF and against publisher &#x2F; metadata-source</p>
+  </header>
+
+  <h1 id="redirect-allowlist">Redirect allowlist</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE.</strong> Binding for the doiget HTTP redirect policy. Changes require
+an ADR.</p>
+</blockquote>
+<h2 id="1-purpose">1. Purpose</h2>
+<p>Defense-in-depth against open-redirect SSRF and against publisher / metadata-source
+responses being abused to misroute a fetch to an attacker-controlled host. Even though
+<a href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/SECURITY.md"><code>SECURITY.md</code></a> §1.3 already restricts redirects to <code>https://</code> and bounds
+the redirect chain to ten hops, those mitigations alone do not stop a redirect to an
+arbitrary attacker-owned HTTPS host. The redirect allowlist closes that gap by
+constraining each source's redirect targets to a small, source-specific set of hosts
+that the source legitimately uses.</p>
+<p>The allowlist is consulted on <strong>every</strong> redirect hop, not only the final location, and
+on the OA URL discovered through metadata sources before the actual PDF fetch is issued
+(see <a href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/SECURITY.md"><code>SECURITY.md</code></a> §1.4 entry on Crossref re-validation).</p>
+<h2 id="2-format">2. Format</h2>
+<p>The allowlist is a structured table keyed by <code>source</code> (the same <code>source</code> key used in
+<a href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/SOURCES.md"><code>SOURCES.md</code></a> §1).</p>
+<h3 id="2-1-required-fields-per-source">2.1 Required fields per source</h3>
+<table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>source</code></td><td>string</td><td>Source key. MUST match a <code>source</code> value in <a href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/SOURCES.md"><code>SOURCES.md</code></a> §1 (e.g. <code>crossref</code>, <code>unpaywall</code>, <code>arxiv</code>).</td></tr>
+<tr><td><code>redirect_hosts</code></td><td>array of strings</td><td>Allowed redirect target host patterns. Each entry is either an exact FQDN or a wildcard suffix pattern as defined in §2.2.</td></tr>
+</tbody></table>
+<h3 id="2-2-host-matching-rule-normative">2.2 Host matching rule (NORMATIVE)</h3>
+<p>Each entry in <code>redirect_hosts</code> matches a candidate redirect target host as follows.</p>
+<ol>
+<li>The candidate host is the lowercased hostname of the redirect target URL — i.e.
+the value of <code>Url::host_str()</code> after parse, lowercased. Port, path, query, and
+fragment are ignored. Userinfo is rejected unconditionally.</li>
+<li><strong>Exact-FQDN form</strong>: an entry without a leading <code>*.</code> matches only when the
+candidate host is byte-identical to the entry, after lowercasing.</li>
+<li><strong>Suffix-glob form</strong>: an entry of the form <code>*.&lt;suffix&gt;</code> matches when the candidate
+host either equals <code>&lt;suffix&gt;</code> exactly <strong>or</strong> ends with <code>.&lt;suffix&gt;</code>. This means
+<code>*.example.com</code> matches both <code>example.com</code> and <code>cdn.example.com</code>, but does <strong>not</strong>
+match <code>notexample.com</code>.</li>
+<li>The matching rule is byte-level on the lowercased ASCII form of the host. IDN
+hosts MUST be Punycoded before comparison; raw Unicode in <code>redirect_hosts</code> is a
+spec violation and rejected at config-load time.</li>
+<li>A redirect is permitted if and only if at least one entry in the source's
+<code>redirect_hosts</code> matches. No global fallback; an empty or missing
+<code>redirect_hosts</code> for a source means "no redirects permitted from this source".</li>
+</ol>
+<h3 id="2-3-reference-encoding">2.3 Reference encoding</h3>
+<p>The allowlist data is stored as a single TOML document at
+<code>crates/doiget-core/src/sources/redirect_allowlist.toml</code>, embedded into the binary via
+<code>include_str!</code> and parsed once at process start. Schema:</p>
+<pre data-lang="toml" style="background-color:#fafafa;color:#61676c;" class="language-toml "><code class="language-toml" data-lang="toml"><span style="font-style:italic;color:#abb0b6;"># Reference TOML form. The file declares one [[source]] entry per integrated source.
+</span><span>[[</span><span style="color:#399ee6;">source</span><span>]]
+</span><span style="color:#399ee6;">source </span><span>= </span><span style="color:#86b300;">&quot;crossref&quot;
+</span><span style="color:#399ee6;">redirect_hosts </span><span>= [
+</span><span>  </span><span style="color:#86b300;">&quot;api.crossref.org&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;*.crossref.org&quot;</span><span style="color:#61676ccc;">,
+</span><span>]
+</span><span>
+</span><span>[[</span><span style="color:#399ee6;">source</span><span>]]
+</span><span style="color:#399ee6;">source </span><span>= </span><span style="color:#86b300;">&quot;unpaywall&quot;
+</span><span style="color:#399ee6;">redirect_hosts </span><span>= [
+</span><span>  </span><span style="color:#86b300;">&quot;api.unpaywall.org&quot;</span><span style="color:#61676ccc;">,
+</span><span>]
+</span><span style="font-style:italic;color:#abb0b6;"># ...
+</span></code></pre>
+<p>The exact list of entries is given in §3.</p>
+<h3 id="2-4-transparent-doi-resolvers-normative">2.4 Transparent DOI resolvers (NORMATIVE)</h3>
+<p>A small, closed set of hosts is <strong>addressing, not hosting</strong>, and is exempt from
+the rule in §2.2:</p>
+<table><thead><tr><th>host</th><th>what it is</th></tr></thead><tbody>
+<tr><td><code>doi.org</code></td><td>the canonical DOI resolver</td></tr>
+<tr><td><code>dx.doi.org</code></td><td>its long-standing alias, still present in live metadata</td></tr>
+<tr><td><code>hdl.handle.net</code></td><td>the Handle System resolver <code>doi.org</code> proxies</td></tr>
+</tbody></table>
+<p>These are <strong>followed</strong> but MUST NOT be added to any source's entry, MUST NOT
+appear in a denial's <code>expected</code> list, and MUST NOT be offered as remediation.
+The host that actually serves the response is adjudicated exactly as it would be
+otherwise, so this is transparent to §1's invariant rather than an exception to
+it.</p>
+<p>Matching is <strong>exact</strong>, not the §2.2 suffix-glob. <code>*.doi.org</code> would sweep in
+<code>www.doi.org</code>, which is the DOI Foundation's website and not a resolver;
+<code>evil-doi.org</code> and <code>doi.org.evil.test</code> are what an attacker registers.</p>
+<p><strong>Why this rule exists.</strong> Unpaywall routinely reports a <code>doi.org</code> URL as
+<code>best_oa_location.url</code> for publisher-hosted gold OA — for <code>10.1002/pcn5.205</code> it
+is the <em>only</em> location, with no <code>url_for_pdf</code>. Adjudicating that first hop as a
+content host refused a cc-by paper one hop before the publisher that was already
+on the list, and the denial then advised adding <code>doi.org</code>, which does not widen
+the trusted surface toward one publisher: it removes the bound entirely, because
+every DOI resolves through it. See <a href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/DECISIONS/0053-doi-resolvers-are-addressing.md">ADR-0053</a>
+and #533.</p>
+<p><strong>Enforced by:</strong> <code>http::is_transparent_resolver</code>, reached through
+<code>SourceAllowlist::permits</code> — the predicate every adjudication site calls.
+<code>SourceAllowlist::matches</code> remains the narrower "is this host on the list"
+question and is used only to build and assert the lists. A posture-lint step
+fails any gate that calls <code>matches</code> on a host variable.</p>
+<h2 id="3-tier-1-entries">3. Tier 1 entries</h2>
+<p>The entries below are the binding redirect-host allowlist for the Tier 1
+sources. They were validated by replaying real fetches against representative
+DOIs / arXiv ids; subsequent changes follow the §5 update process.</p>
+<p>The Tier 1 sources are taken from <a href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/SOURCES.md"><code>SOURCES.md</code></a> §1: Crossref, Unpaywall,
+arXiv. Tier 2 / Tier 3 sources are covered in §4.</p>
+<h3 id="3-1-crossref">3.1 <code>crossref</code></h3>
+<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>
+<tr><td><code>source</code></td><td><code>crossref</code></td></tr>
+<tr><td><code>redirect_hosts</code></td><td><code>api.crossref.org</code>, <code>*.crossref.org</code></td></tr>
+</tbody></table>
+<p>Notes:</p>
+<ul>
+<li><code>api.crossref.org</code> is the documented endpoint host.</li>
+<li><code>*.crossref.org</code> covers any internal Crossref subdomain redirects (e.g. legacy or
+CDN-fronted variants).</li>
+<li>Crossref's <code>link</code> array can contain publisher-side OA URLs whose host is NOT under
+<code>crossref.org</code>. Those URLs are NOT followed under the <code>crossref</code> source's
+allowlist; they are instead handed to the publisher-side fetch path, which is
+governed by the allowlist of the source that owns that publisher (see §4).</li>
+</ul>
+<h3 id="3-2-unpaywall">3.2 <code>unpaywall</code></h3>
+<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>
+<tr><td><code>source</code></td><td><code>unpaywall</code></td></tr>
+<tr><td><code>redirect_hosts</code></td><td><code>api.unpaywall.org</code></td></tr>
+</tbody></table>
+<p>Notes:</p>
+<ul>
+<li><code>api.unpaywall.org</code> is the documented endpoint host.</li>
+<li>Unpaywall's response describes an OA URL hosted on a third-party server (publisher,
+preprint server, institutional repository). Redirects encountered while fetching
+that OA URL are NOT subject to the <code>unpaywall</code> allowlist; they are subject to the
+allowlist of the source that owns the publisher host (the synthetic <code>oa-publisher</code>
+source — see §3.4). OA URLs that resolve to non-allowlisted hosts abort the fetch.</li>
+</ul>
+<h3 id="3-3-arxiv">3.3 <code>arxiv</code></h3>
+<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>
+<tr><td><code>source</code></td><td><code>arxiv</code></td></tr>
+<tr><td><code>redirect_hosts</code></td><td><code>arxiv.org</code>, <code>export.arxiv.org</code>, <code>*.arxiv.org</code></td></tr>
+</tbody></table>
+<p>Notes:</p>
+<ul>
+<li><code>arxiv.org</code> and <code>export.arxiv.org</code> are the documented endpoint hosts (HTML / API
+vs. metadata export).</li>
+<li><code>*.arxiv.org</code> covers redirects to subdomains arXiv may use for PDF delivery.</li>
+<li>arXiv MAY in some configurations redirect to a CDN host outside <code>arxiv.org</code>. If
+the fetcher observes such a redirect, the response is to add the
+CDN's host suffix here via ADR — NOT to silently widen the allowlist at runtime.</li>
+</ul>
+<h3 id="3-4-oa-publisher">3.4 <code>oa-publisher</code></h3>
+<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>
+<tr><td><code>source</code></td><td><code>oa-publisher</code> (synthetic — see notes)</td></tr>
+<tr><td><code>redirect_hosts</code></td><td><code>*.springer.com</code>, <code>*.springeropen.com</code>, <code>*.springernature.com</code>, <code>*.nature.com</code>, <code>*.wiley.com</code>, <code>*.elsevier.com</code>, <code>*.sciencedirect.com</code>, <code>*.frontiersin.org</code>, <code>*.mdpi.com</code>, <code>*.plos.org</code>, <code>*.biorxiv.org</code>, <code>*.medrxiv.org</code>, <code>europepmc.org</code>, <code>*.europepmc.org</code>, <code>*.nih.gov</code>, <code>*.ncbi.nlm.nih.gov</code>, <code>*.aps.org</code>, <code>scipost.org</code>, <code>*.scipost.org</code>, <code>*.iop.org</code>, <code>doaj.org</code>, <code>*.doaj.org</code>, <code>arxiv.org</code>, <code>*.arxiv.org</code></td></tr>
+</tbody></table>
+<p>Notes:</p>
+<ul>
+<li><strong>Synthetic source key.</strong> Unlike the other §3 entries, <code>oa-publisher</code> is not
+one of the integrated metadata sources in <a href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/SOURCES.md"><code>SOURCES.md</code></a> §1. It is
+the source key the orchestrator uses when fetching the PDF that
+Unpaywall's <code>best_oa_location.url_for_pdf</code> (or <code>best_oa_location.url</code>)
+resolves to — i.e. the URL Unpaywall hands back, which lives on a publisher /
+preprint / repository host, not on <code>api.unpaywall.org</code>. The redirect-policy
+closure is the same per-source one used everywhere else; the orchestrator
+registers an <code>HttpClient</code> with this allowlist and calls
+<code>HttpClient::fetch_pdf("oa-publisher", url)</code>.</li>
+<li><strong>Documented OA hosts.</strong> Each entry below is the documented OA host for the
+named publisher / repository. Changes follow the §5 update process.</li>
+<li><strong>DOAJ (ADR-0037).</strong> <code>doaj.org</code> + <code>*.doaj.org</code> were promoted here from the
+<code>doaj</code> <strong>metadata</strong> source key (<code>tier_2_allowlist</code>), which the CLI wires in
+only under <code>#[cfg(feature = "citation")]</code>. The two keys disagreed about a
+host the project had already accepted, and a stock build could not reach it
+at all — so a gold-OA article redirected through DOAJ was denied while a
+green-OA copy on an institutional repository was reachable behind one flag.
+Promoted on the ADR-0027 precedent that made <code>*.aps.org</code> unconditional
+rather than feature-gated. Empirically observed via
+<code>10.1109/access.2024.3495502</code> (IEEE Access, gold OA; #405).</li>
+<li><strong>Empirical verification (ADR-0027).</strong> The physics-society / diamond-OA
+hosts (<code>*.aps.org</code>, <code>scipost.org</code>, <code>*.scipost.org</code>, <code>*.iop.org</code>) were
+added from a real <code>doiget batch</code> over 30 OpenAlex-OA
+finite-temperature-MPS DOIs in which Unpaywall <code>best_oa_location</code>
+resolved to these hosts and the PDF leg was denied. This is the
+empirical pass the §3 informed-best-effort note calls for; these
+entries are <em>verified</em>, not <code>(unverified)</code>. Open-ended institutional /
+handle repositories observed in the same run (<code>hdl.handle.net</code>,
+<code>ruj.uj.edu.pl</code>) are deliberately <strong>excluded</strong> as a separate
+open-surface question.</li>
+<li><strong>Partial-success semantics.</strong> When the OA URL host is NOT on this list,
+the denial is raised as <code>HttpError::RedirectDenied</code> — at the <strong>pre-fetch
+check</strong> on the metadata-discovered OA URL per §1 (the host is rejected
+before the PDF fetch is issued, even when no redirect hop occurs) and,
+for hosts that pass the pre-check but redirect off-list mid-fetch, again
+at the redirect-closure boundary. Both raise the <em>same</em>
+<code>HttpError::RedirectDenied</code> value, so the downstream shape (the
+structured <code>DenialContext</code> with <code>reason = redirect_not_in_allowlist</code>)
+is identical regardless of which guard fires. In either case the
+orchestrator falls back to metadata-only success — the metadata is still
+useful. The PDF outcome is logged as a distinct <code>Fetch</code> provenance row
+with <code>source = "oa-publisher"</code> and <code>result = err</code> /
+<code>error_code = "NETWORK_ERROR"</code>.</li>
+<li><strong>Host families:</strong>
+<ul>
+<li>Springer Nature OA imprints: <code>*.springer.com</code>, <code>*.springeropen.com</code>,
+<code>*.springernature.com</code>, <code>*.nature.com</code>.</li>
+<li>Wiley OA: <code>*.wiley.com</code>.</li>
+<li>Elsevier OA route only: <code>*.elsevier.com</code>, <code>*.sciencedirect.com</code>. The TDM
+gated path is a separate Tier 3 source (<code>elsevier-tdm</code>).</li>
+<li>Frontiers: <code>*.frontiersin.org</code>.</li>
+<li>MDPI: <code>*.mdpi.com</code>.</li>
+<li>PLOS: <code>*.plos.org</code>.</li>
+<li>Preprint servers: <code>*.biorxiv.org</code>, <code>*.medrxiv.org</code>.</li>
+<li>Europe PMC + NIH PMC: <code>europepmc.org</code>, <code>*.europepmc.org</code>, <code>*.nih.gov</code>,
+<code>*.ncbi.nlm.nih.gov</code>.</li>
+<li>Physics society / diamond OA (empirically verified, ADR-0027):
+<code>*.aps.org</code> (APS — <code>link.aps.org</code> / <code>journals.aps.org</code>; also trusted
+under the separate <code>tdm-aps</code> Tier-3 key), <code>scipost.org</code> +
+<code>*.scipost.org</code> (SciPost — community-run diamond OA), <code>*.iop.org</code>
+(IOP Publishing — <code>iopscience.iop.org</code>, <em>New J. Phys.</em> etc.).</li>
+<li>arXiv: <code>arxiv.org</code>, <code>*.arxiv.org</code> (mirrors §3.3 because the Unpaywall
+flow re-derives an arXiv URL through the <code>oa-publisher</code> source key, not
+the tier-1 <code>arxiv</code> key).</li>
+</ul>
+</li>
+<li>Additions or removals follow the §5 update process.</li>
+</ul>
+<h2 id="4-tier-2-tier-3-entries">4. Tier 2 / Tier 3 entries</h2>
+<table><thead><tr><th>Source</th><th>Tier</th><th>Phase</th><th>Status</th></tr></thead><tbody>
+<tr><td><code>openalex</code></td><td>2</td><td>4</td><td>(reserved)</td></tr>
+<tr><td><code>semantic-scholar</code></td><td>2</td><td>4</td><td>(reserved)</td></tr>
+<tr><td><code>doaj</code></td><td>2</td><td>4</td><td>(reserved)</td></tr>
+<tr><td><code>springer-tdm</code></td><td>3</td><td>5a</td><td>(reserved)</td></tr>
+<tr><td><code>aps-tdm</code></td><td>3</td><td>5b</td><td>(reserved)</td></tr>
+<tr><td><code>elsevier-tdm</code></td><td>3</td><td>5c</td><td>(reserved)</td></tr>
+</tbody></table>
+<p>Each <code>(reserved)</code> entry is populated via the update process in §5 when that
+source's redirect targets are validated. A <code>(reserved)</code> source has no
+<code>redirect_hosts</code>, so per §2.2 rule 5 no redirects are permitted from it; such
+a fetch is also blocked earlier by the source's Cargo feature gate
+(<a href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/SOURCES.md"><code>SOURCES.md</code></a> §3) and never reaches the redirect policy.</p>
+<h2 id="5-update-process">5. Update process</h2>
+<p>Changes to this allowlist are user-impacting: a fetch that previously worked may
+stop working (a redirect target host is removed) or a fetch that previously failed
+may start working (a host is added). Both directions are subject to the same
+process:</p>
+<ol>
+<li><strong>ADR.</strong> Add or update a <code>docs/DECISIONS/NNNN-redirect-allowlist-&lt;source&gt;.md</code> ADR
+that names the source, lists the host(s) added or removed, and explains why
+(e.g., "observed in real fetch traces", "publisher migrated CDN").</li>
+<li><strong>CHANGELOG.</strong> Add an entry under <code>[Unreleased] -&gt; Changed</code> (or <code>Added</code> / <code>Removed</code>
+as appropriate) in <a href="../CHANGELOG.md"><code>CHANGELOG.md</code></a> referencing the ADR.</li>
+<li><strong>Reference file.</strong> Update the TOML reference file described in §2.3.</li>
+<li><strong>Tests.</strong> Update or add a test in <code>crates/doiget-core/tests/</code> that asserts the
+new entry matches / does not match the relevant host strings, including the
+suffix-glob negative case (<code>notexample.com</code> MUST NOT match <code>*.example.com</code>).</li>
+</ol>
+<p>The §3 entries were populated under the initial ADR series. Subsequent changes
+always require a dedicated ADR.</p>
+<h2 id="6-non-goals">6. Non-goals</h2>
+<ul>
+<li>This document does NOT govern the initial fetch URL; that is constructed from
+validated identifiers via source-side URL templates and is bounded by the
+<code>https://</code>-only redirect policy in <a href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/SECURITY.md"><code>SECURITY.md</code></a> §1.3.</li>
+<li>This document does NOT define rate-limiting, retry behavior, or politeness; see
+<a href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/SOURCES.md"><code>SOURCES.md</code></a> §6.</li>
+<li>This document does NOT govern outbound DNS, proxying, or anonymization; see
+<a href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/SECURITY.md"><code>SECURITY.md</code></a> §1.10.</li>
+</ul>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/developer&#x2F;redirect-allowlist.md">
+      site/content/developer&#x2F;redirect-allowlist.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

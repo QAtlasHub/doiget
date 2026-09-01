@@ -1,0 +1,27 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Run the `doiget capabilities` subcommand."><title>run in doiget_cli::commands::capabilities - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="doiget_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">run</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../doiget_cli/index.html">doiget_<wbr>cli</a><span class="version">0.8.13</span></h2></div><div class="sidebar-elems"><div id="rustdoc-modnav"><h2><a href="index.html">In doiget_<wbr>cli::<wbr>commands::<wbr>capabilities</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">doiget_cli</a>::<wbr><a href="../index.html">commands</a>::<wbr><a href="index.html">capabilities</a></div><h1>Function <span class="fn">run</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/doiget_cli/commands/capabilities.rs.html#784-803">Source</a> </span></div><pre class="rust item-decl"><code>pub fn run(
+    cli: &amp;Command,
+    mode: <a class="enum" href="../output/enum.OutputMode.html" title="enum doiget_cli::commands::output::OutputMode">OutputMode</a>,
+    quiet_was_explicit: <a class="primitive" href="https://doc.rust-lang.org/1.98.0/std/primitive.bool.html">bool</a>,
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.104/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.98.0/std/primitive.unit.html">()</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Run the <code>doiget capabilities</code> subcommand.</p>
+<p><code>capabilities</code> is an <strong>artifact</strong> command per ADR-0017 Amendment 1:
+its stdout output IS the deliverable (the inventory JSON an LLM
+reads on cold-boot). It honors only <strong>explicit</strong> Quiet —
+<code>--quiet</code> / <code>-q</code> / <code>--mode quiet</code> / <code>DOIGET_MODE=quiet</code> — and emits
+the inventory on every other path. The <code>quiet_was_explicit</code>
+discriminator is what distinguishes the two cases:</p>
+<div><table><thead><tr><th>mode</th><th>quiet_was_explicit</th><th>behaviour</th></tr></thead><tbody>
+<tr><td>non-<code>Quiet</code></td><td>-</td><td>emit</td></tr>
+<tr><td><code>Quiet</code> (explicit)</td><td><code>true</code></td><td>suppress</td></tr>
+<tr><td><code>Quiet</code> (non-TTY)</td><td><code>false</code></td><td><strong>emit</strong> (#219)</td></tr>
+</tbody></table>
+</div>
+<p>The non-TTY case is the one #219 / #220 report: an LLM tool
+executor captures stdout, so <code>stdout_is_tty()</code> is <code>false</code>, the
+resolver falls through to <code>Quiet</code>, but the caller wants the JSON
+inventory exactly because it’s about to be machine-parsed. The
+table’s bottom row is the fix.</p>
+<p>The caller passes the live <code>clap::Command</code> so the clap walk
+operates on the binary’s actual <code>Cli</code> tree (which the lib half of
+this crate can’t reach directly — the <code>Cli</code> struct lives in
+<code>main.rs</code>).</p>
+</div></details></section></div></main></body></html>

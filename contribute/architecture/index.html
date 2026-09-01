@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Architecture &middot; doiget</title>
+  <meta name="description" content="doiget is a Rust workspace of three crates (`doiget-core`, `doiget-cli`, `doiget-mcp`)">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/contribute/architecture/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Architecture · doiget">
+  <meta property="og:description" content="doiget is a Rust workspace of three crates (`doiget-core`, `doiget-cli`, `doiget-mcp`)">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/contribute/architecture/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Architecture · doiget">
+  <meta name="twitter:description" content="doiget is a Rust workspace of three crates (`doiget-core`, `doiget-cli`, `doiget-mcp`)">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Architecture</h1>
+    <p class="lede">doiget is a Rust workspace of three crates (`doiget-core`, `doiget-cli`, `doiget-mcp`)</p>
+  </header>
+
+  <h1 id="architecture">Architecture</h1>
+<blockquote>
+<p><strong>Status: INFORMATIVE.</strong> This document describes the high-level architecture of doiget
+and is intended to orient new contributors. The binding contracts referenced from here
+live in their own NORMATIVE docs (each linked below).</p>
+</blockquote>
+<hr />
+<h2 id="1-one-paragraph-summary">1. One-paragraph summary</h2>
+<p>doiget is a Rust workspace of three crates (<code>doiget-core</code>, <code>doiget-cli</code>, <code>doiget-mcp</code>)
+plus an optional fourth (<code>doiget-obsidian</code>). The library crate <code>doiget-core</code> defines the
+abstract <code>Source</code> and <code>Store</code> traits and provides Open Access source implementations. A
+runtime <code>CapabilityProfile</code> resolved from environment variables gates which sources are
+allowed for the current invocation. CLI subcommands consume <code>doiget-core</code> directly. The
+MCP server is a separate library that wraps <code>doiget-core</code> and is invoked from <code>doiget-cli</code>
+via the <code>serve</code> subcommand. Every fetch passes through a fail-closed provenance log
+(JSON Lines + SHA-256 hash chain) before reaching the store.</p>
+<h2 id="2-system-diagram">2. System diagram</h2>
+<pre data-lang="mermaid" style="background-color:#fafafa;color:#61676c;" class="language-mermaid "><code class="language-mermaid" data-lang="mermaid"><span>flowchart TB
+</span><span>    User[CLI user / Agent host]
+</span><span>    User --&gt; CLI[doiget-cli&lt;br/&gt;fetch / batch / info / serve]
+</span><span>    CLI --&gt; MCP[doiget-mcp&lt;br/&gt;stdio JSON-RPC, 22 tools]
+</span><span>    CLI --&gt; Core[doiget-core]
+</span><span>    MCP --&gt; Core
+</span><span>
+</span><span>    Core --&gt; Cap{CapabilityProfile&lt;br/&gt;oa / metadata / tdm-*}
+</span><span>    Cap --&gt;|always on| OA[Tier 1 OA&lt;br/&gt;Crossref / Unpaywall / arXiv]
+</span><span>    Cap --&gt;|opt-in env| Meta[Tier 2 metadata&lt;br/&gt;OpenAlex / S2 / DOAJ]
+</span><span>    Cap --&gt;|opt-in env + key + agree&lt;br/&gt;compile-time gated| TDM[Tier 3 TDM&lt;br/&gt;Springer OA / APS / Elsevier]
+</span><span>
+</span><span>    OA --&gt; Fetcher[Fetcher&lt;br/&gt;rate-cap 5/sec, size cap, redirect allowlist]
+</span><span>    Meta -.-&gt; Fetcher
+</span><span>    TDM -.-&gt; Fetcher
+</span><span>
+</span><span>    Fetcher --&gt; Log[Provenance Log&lt;br/&gt;JSON Lines + SHA256 hash chain&lt;br/&gt;fail-closed]
+</span><span>    Fetcher --&gt; Store[Store&lt;br/&gt;./papers default + TOML metadata&lt;br/&gt;BiblioFetch.jl 互換]
+</span><span>
+</span><span>    classDef hot fill:#fbb,stroke:#900
+</span><span>    classDef oa fill:#bfb,stroke:#060
+</span><span>    classDef gated fill:#fec,stroke:#a60
+</span><span>    class Cap hot
+</span><span>    class OA oa
+</span><span>    class TDM gated
+</span></code></pre>
+<h2 id="3-workspace-layout">3. Workspace layout</h2>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>doiget/                              # workspace root
+</span><span>├── Cargo.toml                       # workspace + shared deps + features
+</span><span>├── Cargo.lock                       # committed
+</span><span>├── rust-toolchain.toml              # MSRV pin
+</span><span>├── deny.toml                        # cargo-deny banned crate list
+</span><span>├── clippy.toml                      # workspace lints
+</span><span>├── .cargo/config.toml               # build flags
+</span><span>│
+</span><span>├── crates/
+</span><span>│   ├── doiget-core/                 # ★ library, semver-strict
+</span><span>│   ├── doiget-cli/                  # binary `doiget`
+</span><span>│   ├── doiget-mcp/                  # MCP server library
+</span><span>│   └── doiget-obsidian/             # optional, default OFF
+</span><span>│
+</span><span>├── examples/
+</span><span>│   ├── 01-basic-fetch/
+</span><span>│   ├── 02-batch/
+</span><span>│   └── 03-mcp-host-integration/
+</span><span>│
+</span><span>├── tests/                           # integration tests
+</span><span>│   ├── cli_fetch.rs
+</span><span>│   ├── mcp_smoke.rs
+</span><span>│   ├── safekey_vectors.rs
+</span><span>│   ├── bibliofetch_roundtrip.rs
+</span><span>│   └── fixtures/
+</span><span>│
+</span><span>└── docs/                            # NORMATIVE + INFORMATIVE specs
+</span></code></pre>
+<p>See <a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/DECISIONS/">ADR-0008</a> for the rationale of this layout.</p>
+<h2 id="4-crate-dependency-graph">4. Crate dependency graph</h2>
+<pre data-lang="mermaid" style="background-color:#fafafa;color:#61676c;" class="language-mermaid "><code class="language-mermaid" data-lang="mermaid"><span>flowchart LR
+</span><span>    cli[doiget-cli&lt;br/&gt;binary] --&gt; core[doiget-core&lt;br/&gt;library, semver-strict]
+</span><span>    cli --&gt; mcp[doiget-mcp&lt;br/&gt;library]
+</span><span>    mcp --&gt; core
+</span><span>    obs[doiget-obsidian&lt;br/&gt;optional] --&gt; core
+</span><span>
+</span><span>    classDef core fill:#bfb,stroke:#060
+</span><span>    classDef bin fill:#bef,stroke:#069
+</span><span>    classDef mcp fill:#fec,stroke:#a60
+</span><span>    classDef opt fill:#eee,stroke:#666,stroke-dasharray:4
+</span><span>    class core core
+</span><span>    class cli bin
+</span><span>    class mcp mcp
+</span><span>    class obs opt
+</span></code></pre>
+<p>Forbidden directions (CI-enforced):</p>
+<ul>
+<li><code>doiget-core</code> → <code>doiget-cli</code> (lib must not depend on bin).</li>
+<li><code>doiget-core</code> → <code>doiget-mcp</code> (lib must not depend on server).</li>
+<li><code>doiget-mcp</code> → <code>doiget-cli</code> (server must not depend on CLI).</li>
+</ul>
+<h2 id="5-core-trait-surface-doiget-core">5. Core trait surface (<code>doiget-core</code>)</h2>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#fa6e32;">pub trait </span><span style="color:#399ee6;">Source</span><span>: Send + Sync {
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">name</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">can_serve</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">profile</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>CapabilityProfile, </span><span style="color:#ff8f40;">ref_</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Ref) </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#fa6e32;">bool</span><span style="color:#61676ccc;">;
+</span><span>    async </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">fetch</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">ref_</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Ref, </span><span style="color:#ff8f40;">profile</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>CapabilityProfile, </span><span style="color:#ff8f40;">ctx</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>FetchContext)
+</span><span>        </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;FetchResult, FetchError&gt;</span><span style="color:#61676ccc;">;
+</span><span>}
+</span><span>
+</span><span style="color:#fa6e32;">pub trait </span><span style="color:#399ee6;">Store</span><span>: Send + Sync {
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">read</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">key</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Safekey) </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;Metadata&gt;, StoreError&gt;</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">write</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">key</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Safekey, </span><span style="color:#ff8f40;">m</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Metadata, </span><span style="color:#ff8f40;">pdf</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="color:#ed9366;">&amp;</span><span>Path&gt;) </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;(), StoreError&gt;</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">list_recent</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">limit</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">usize</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">Vec</span><span>&lt;EntryInfo&gt;, StoreError&gt;</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">search</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">query</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span>, </span><span style="color:#ff8f40;">limit</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">usize</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">Vec</span><span>&lt;EntryInfo&gt;, StoreError&gt;</span><span style="color:#61676ccc;">;
+</span><span>}
+</span><span>
+</span><span style="color:#fa6e32;">pub enum </span><span style="color:#399ee6;">Ref </span><span>{ Doi(Doi)</span><span style="color:#61676ccc;">,</span><span> Arxiv(ArxivId) }
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">Safekey</span><span>(String)</span><span style="color:#61676ccc;">;
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">Metadata </span><span>{ </span><span style="font-style:italic;color:#abb0b6;">/* ... */ </span><span>}
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">CapabilityProfile </span><span>{ </span><span style="font-style:italic;color:#abb0b6;">/* see CAPABILITY.md */ </span><span>}
+</span></code></pre>
+<p>The full normative API surface is in <a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/PUBLIC_API.md"><code>PUBLIC_API.md</code></a>. This is the
+semver-locked public contract for <code>doiget-core</code>.</p>
+<h2 id="6-data-flow-a-single-fetch-paper-doi">6. Data flow: a single <code>fetch_paper(doi)</code></h2>
+<pre data-lang="mermaid" style="background-color:#fafafa;color:#61676c;" class="language-mermaid "><code class="language-mermaid" data-lang="mermaid"><span>sequenceDiagram
+</span><span>    participant U as User / Agent
+</span><span>    participant R as Resolver (doiget-core)
+</span><span>    participant P as CapabilityProfile
+</span><span>    participant S as Source (e.g. Unpaywall)
+</span><span>    participant L as Provenance Log
+</span><span>    participant FS as Store
+</span><span>
+</span><span>    U-&gt;&gt;R: fetch_paper(&quot;10.1234/example&quot;)
+</span><span>    R-&gt;&gt;R: validate ref (regex, length)
+</span><span>    R-&gt;&gt;P: which sources can_serve?
+</span><span>    P--&gt;&gt;R: [Crossref, Unpaywall]
+</span><span>    R-&gt;&gt;S: try Unpaywall.fetch(ref, profile, ctx)
+</span><span>    S-&gt;&gt;S: HTTPS GET api.unpaywall.org/...
+</span><span>    S--&gt;&gt;R: PDF URL + license
+</span><span>    R-&gt;&gt;S: HTTPS GET PDF (size cap, redirect allowlist)
+</span><span>    S--&gt;&gt;R: PDF bytes
+</span><span>    R-&gt;&gt;R: validate magic bytes (%PDF-)
+</span><span>    R-&gt;&gt;L: append { ts, ref, source, license, ... } + SHA256 chain
+</span><span>    L--&gt;&gt;R: ok (if write fails: Err and abort)
+</span><span>    R-&gt;&gt;FS: atomic write metadata + PDF
+</span><span>    FS--&gt;&gt;R: ok
+</span><span>    R--&gt;&gt;U: FetchResult { ok: true, path, source, license }
+</span></code></pre>
+<h2 id="7-document-index">7. Document index</h2>
+<table><thead><tr><th>Document</th><th>Status</th><th>Topic</th></tr></thead><tbody>
+<tr><td><a href="../README.md">README.md</a></td><td>Entry</td><td>Project overview, posture</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/LEGAL.md">LEGAL.md</a></td><td>NORMATIVE</td><td>Posture, jurisdictional caveat, eight safeguards</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/SCOPE.md">SCOPE.md</a></td><td>NORMATIVE</td><td>Permanent non-goals</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/SECURITY.md">SECURITY.md</a></td><td>NORMATIVE</td><td>Threat model, supply chain</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/STORE.md">STORE.md</a></td><td>NORMATIVE</td><td>Store layout, schema versioning, flock, atomic write</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/SAFEKEY.md">SAFEKEY.md</a></td><td>NORMATIVE</td><td>safekey algorithm + reference test vectors</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/CAPABILITY.md">CAPABILITY.md</a></td><td>NORMATIVE</td><td>CapabilityProfile spec, env var precedence</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/PROVENANCE_LOG.md">PROVENANCE_LOG.md</a></td><td>NORMATIVE</td><td>JSON Lines + hash chain log spec</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/CACHE.md">CACHE.md</a></td><td>NORMATIVE</td><td>Resolver / citation cache layout, TTL</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/ERRORS.md">ERRORS.md</a></td><td>NORMATIVE</td><td>Error taxonomy × persona presentation</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/CONFIG.md">CONFIG.md</a></td><td>NORMATIVE</td><td>env / file / flag precedence</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/PUBLIC_API.md">PUBLIC_API.md</a></td><td>NORMATIVE</td><td>semver-locked Rust API surface</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/MCP_TOOLS.md">MCP_TOOLS.md</a></td><td>NORMATIVE</td><td>MCP tool spec (9 + 3)</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/SOURCES.md">SOURCES.md</a></td><td>NORMATIVE</td><td>Source list, ToS links, prerequisites</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/PHASES.md">PHASES.md</a></td><td>INFORMATIVE</td><td>Phase plan + Phase 0 deliverable checklist</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/MIGRATION.md">MIGRATION.md</a></td><td>INFORMATIVE</td><td>BiblioFetch.jl ↔ doiget migration</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/INTEGRATION/">INTEGRATION/</a></td><td>INFORMATIVE</td><td>MCP host install snippets</td></tr>
+<tr><td><a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/DECISIONS/">DECISIONS/</a></td><td>NORMATIVE</td><td>ADRs (Architecture Decision Records)</td></tr>
+<tr><td><a href="../CONTACT.md">CONTACT.md</a></td><td>Entry</td><td>Takedown / SLA / DMCA / security disclosure</td></tr>
+<tr><td><a href="../CONTRIBUTING.md">CONTRIBUTING.md</a></td><td>Process</td><td>PR rules, doc style, scope-reopening meta-rule</td></tr>
+</tbody></table>
+<h2 id="8-phase-plan">8. Phase plan</h2>
+<p>The MVP (core resolver + Tier 1 sources + <code>fetch</code> / <code>batch</code> CLI, store +
+<code>info</code> / <code>search</code> / <code>bib</code> / <code>csl</code>, MCP server + tools + strict stdio) plus
+Tier 2 sources, the citation graph, and feature-gated Tier 3 TDM are shipped.
+The optional <code>doiget-obsidian</code> crate is the remaining per-feature work. The
+historical phase breakdown is in <a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/PHASES.md"><code>PHASES.md</code></a>.</p>
+<h2 id="9-cross-tool-relationship-with-bibliofetch-jl">9. Cross-tool relationship with BiblioFetch.jl</h2>
+<p>doiget shares the on-disk store format with <a rel="noopener" target="_blank" href="https://github.com/sotashimozono/BiblioFetch.jl">BiblioFetch.jl</a>.
+The boundary contracts are documented as part of <a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/STORE.md"><code>STORE.md</code></a>:</p>
+<ul>
+<li>TOML schema versioning (<code>schema_version = "1.0"</code>).</li>
+<li>Concurrent access via <code>flock</code> on <code>&lt;safekey&gt;.toml.lock</code>.</li>
+<li>Atomic write protocol (<code>tmp</code> → <code>fsync</code> → <code>rename</code> → <code>fsync</code> parent).</li>
+<li>A shared <code>safekey</code> algorithm with 100 reference test vectors in
+<a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/SAFEKEY.md"><code>SAFEKEY.md</code></a>.</li>
+</ul>
+<h2 id="10-where-to-start-as-a-new-contributor">10. Where to start as a new contributor</h2>
+<ol>
+<li>Read <a href="../README.md">README.md</a> and <a href="../CONTRIBUTING.md">CONTRIBUTING.md</a>.</li>
+<li>Read <a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/LEGAL.md">LEGAL.md</a> and <a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/SCOPE.md">SCOPE.md</a>. These set the boundaries on what
+contributions are accepted.</li>
+<li>Skim <a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/DECISIONS/">DECISIONS/</a> — the ADRs explain why doiget is shaped the way it is.</li>
+<li>Open an issue to discuss a contribution, keeping it within the boundaries
+set by <a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/LEGAL.md">LEGAL.md</a> and <a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/SCOPE.md">SCOPE.md</a>.</li>
+</ol>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/contribute&#x2F;architecture.md">
+      site/content/contribute&#x2F;architecture.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

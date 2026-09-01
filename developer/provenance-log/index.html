@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Provenance log &middot; doiget</title>
+  <meta name="description" content="```">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/provenance-log/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Provenance log · doiget">
+  <meta property="og:description" content="```">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/provenance-log/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Provenance log · doiget">
+  <meta name="twitter:description" content="```">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Provenance log</h1>
+    <p class="lede">```</p>
+  </header>
+
+  <h1 id="provenance-log">Provenance log</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE.</strong> Defines the on-disk audit log format. The log is fail-closed:
+a fetch that cannot be logged MUST NOT proceed.</p>
+</blockquote>
+<h2 id="1-location">1. Location</h2>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>~/.config/doiget/access.log               # current
+</span><span>~/.config/doiget/access.log.&lt;DATE&gt;.gz     # rotated
+</span></code></pre>
+<p>Override path via <code>DOIGET_LOG_PATH</code> env or <code>[log] path</code> in <code>config.toml</code> (see
+<a href="https://codes.sota-shimozono.com/doiget/developer/provenance-log/CONFIG.md"><code>CONFIG.md</code></a>).</p>
+<h2 id="2-format">2. Format</h2>
+<p>JSON Lines. One JSON object per line, terminated by <code>\n</code> (LF). UTF-8. Timezone is UTC
+in all timestamps.</p>
+<h2 id="3-row-schema">3. Row schema</h2>
+<pre data-lang="json" style="background-color:#fafafa;color:#61676c;" class="language-json "><code class="language-json" data-lang="json"><span>{
+</span><span>  </span><span style="color:#86b300;">&quot;ts&quot;</span><span style="color:#61676ccc;">:               </span><span style="color:#86b300;">&quot;2026-05-05T08:30:12.345Z&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;ts_seq&quot;</span><span style="color:#61676ccc;">:           </span><span style="color:#ff8f40;">1234</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;event&quot;</span><span style="color:#61676ccc;">:            </span><span style="color:#86b300;">&quot;fetch&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;ref&quot;</span><span style="color:#61676ccc;">:              </span><span style="color:#86b300;">&quot;10.1234/example&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;source&quot;</span><span style="color:#61676ccc;">:           </span><span style="color:#86b300;">&quot;unpaywall&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;result&quot;</span><span style="color:#61676ccc;">:           </span><span style="color:#86b300;">&quot;ok&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;license&quot;</span><span style="color:#61676ccc;">:          </span><span style="color:#86b300;">&quot;CC-BY-4.0&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;size_bytes&quot;</span><span style="color:#61676ccc;">:       </span><span style="color:#ff8f40;">1234567</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;store_path&quot;</span><span style="color:#61676ccc;">:       </span><span style="color:#86b300;">&quot;papers/doi_10.1234_example.pdf&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;capability&quot;</span><span style="color:#61676ccc;">:       </span><span style="color:#86b300;">&quot;oa&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;session_id&quot;</span><span style="color:#61676ccc;">:       </span><span style="color:#86b300;">&quot;01JCKZ7Q...&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;schema_version&quot;</span><span style="color:#61676ccc;">:   </span><span style="color:#86b300;">&quot;v2&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;canonical_digest&quot;</span><span style="color:#61676ccc;">: </span><span style="color:#86b300;">&quot;6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;prev_hash&quot;</span><span style="color:#61676ccc;">:        </span><span style="color:#86b300;">&quot;9f86d081884c7d659a2feaa0c55ad015...&quot;</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="color:#86b300;">&quot;this_hash&quot;</span><span style="color:#61676ccc;">:        </span><span style="color:#86b300;">&quot;a948904f2f0f479b8f8197694b30184b...&quot;
+</span><span>}
+</span></code></pre>
+<table><thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Notes</th></tr></thead><tbody>
+<tr><td><code>ts</code></td><td>RFC3339 UTC, millisecond precision</td><td>yes</td><td></td></tr>
+<tr><td><code>ts_seq</code></td><td><code>u64</code></td><td>yes</td><td>Per-session monotonic sequence number.</td></tr>
+<tr><td><code>event</code></td><td>enum</td><td>yes</td><td><code>session_start</code>, <code>capability_resolved</code>, <code>resolve</code>, <code>fetch</code>, <code>store_write</code>, <code>session_end</code></td></tr>
+<tr><td><code>ref</code></td><td>string</td><td>event-dependent</td><td>DOI or arXiv id (validated; no log injection).</td></tr>
+<tr><td><code>source</code></td><td>enum</td><td>event-dependent</td><td><code>crossref</code>/<code>unpaywall</code>/<code>arxiv</code>/<code>openalex</code>/<code>s2</code>/<code>doaj</code>/<code>tdm-elsevier</code>/<code>tdm-aps</code>/<code>tdm-springer</code></td></tr>
+<tr><td><code>result</code></td><td>enum</td><td>yes</td><td><code>ok</code> / <code>err</code> / <code>denied</code></td></tr>
+<tr><td><code>license</code></td><td>string</td><td>event=fetch ok</td><td>OA license string, or <code>"unknown"</code></td></tr>
+<tr><td><code>size_bytes</code></td><td><code>u64</code></td><td>event=fetch ok</td><td></td></tr>
+<tr><td><code>store_path</code></td><td>string</td><td>event=fetch ok</td><td>Relative to store root.</td></tr>
+<tr><td><code>capability</code></td><td>enum</td><td>yes</td><td><code>oa</code> / <code>metadata</code> / <code>tdm-elsevier</code> / <code>tdm-aps</code> / <code>tdm-springer</code></td></tr>
+<tr><td><code>error_code</code></td><td>enum (<code>docs/ERRORS.md</code> §3)</td><td><code>result=err</code></td><td>The closed-set code for this row's failure. <strong>Which code depends on the layer, deliberately:</strong> a failed <code>fetch</code> leg records the <em>transport</em> mechanism (a policy-blocked OA leg is <code>NETWORK_ERROR</code> — see <code>ERRORS.md</code> §6.1), while a <code>session_end</code> row records the code the CALLER was given, after any reclassification. So the two rows for one blocked fetch legitimately differ, and each is true about its own layer. <code>null</code> on <code>result=ok</code> rows, and on a batch <code>session_end</code>, which spans many refs and has no single code (#507).</td></tr>
+<tr><td><code>session_id</code></td><td>ULID (26 chars)</td><td>yes</td><td>One per process invocation.</td></tr>
+<tr><td><code>schema_version</code></td><td>string</td><td>yes</td><td>Always the literal <code>"v2"</code> for rows written by current builds (ADR-0024). v1 rows (pre-Slice-4) lack this field; the migration tool in §"Schema migration" below brings them onto the v2 shape.</td></tr>
+<tr><td><code>canonical_digest</code></td><td>hex SHA-256 (64 lowercase chars)</td><td>event-dependent</td><td>ADR-0021 §1 canonical-digest of the <code>(source_type, source_id, resolver_profile, version)</code> tuple. Present on rows with a <code>ref</code> (<code>fetch</code> / <code>resolve</code> / <code>store_write</code>); <code>null</code> on session bookend rows. Two fetches of the same DOI through Crossref vs. Unpaywall produce two distinct digests.</td></tr>
+<tr><td><code>prev_hash</code></td><td>hex SHA-256</td><td>yes (except first row)</td><td>Equals previous row's <code>this_hash</code>. First row of a fresh log uses literal <code>"GENESIS"</code>.</td></tr>
+<tr><td><code>this_hash</code></td><td>hex SHA-256</td><td>yes</td><td>SHA-256 of the canonical-JSON of this row excluding <code>this_hash</code>.</td></tr>
+</tbody></table>
+<h2 id="3-1-schema-migration-v1-v2">3.1 Schema migration (v1 → v2)</h2>
+<blockquote>
+<p><strong>Status: NORMATIVE.</strong> Implemented per
+<a href="https://codes.sota-shimozono.com/doiget/developer/provenance-log/DECISIONS/0024-canonical-ref-impl.md">ADR-0024</a>, which supersedes the
+spec-only posture of <a href="https://codes.sota-shimozono.com/doiget/developer/provenance-log/DECISIONS/0021-canonical-tuple-identity.md">ADR-0021</a>.</p>
+</blockquote>
+<p>Pre-Slice-4 logs are <strong>v1</strong>: rows have neither a <code>schema_version</code>
+field nor a <code>canonical_digest</code> field, and <code>#[serde(deny_unknown_fields)]</code>
+plus the non-defaulted <code>schema_version</code> mean v1 rows fail to parse
+under v2 with a clear <code>corrupted log at line N</code> error. Operators MUST
+migrate before the v2 binary will read their existing log.</p>
+<p>The migration is exposed via the CLI as
+<code>doiget provenance migrate [--dry-run]</code> and via the library as
+<code>doiget_core::provenance::migrate_v1_to_v2(log_path, dry_run)</code>.</p>
+<p><strong>Algorithm.</strong></p>
+<ol>
+<li>Read all v1 rows.</li>
+<li>For each row with a <code>ref</code>: derive <code>canonical_digest</code> by promoting
+<code>(source_type from ref shape, source_id = ref, resolver_profile = source, version = None)</code>
+through <a href="https://codes.sota-shimozono.com/doiget/developer/provenance-log/DECISIONS/0021-canonical-tuple-identity.md">ADR-0021</a> §1.
+Rows without a <code>ref</code> (session bookends) keep <code>canonical_digest = null</code>.</li>
+<li>Recompute the SHA-256 hash chain across the new row payloads — the
+v1 chain is invalidated by the schema change (the v2
+canonical-JSON includes the two new fields, so old <code>this_hash</code>
+values no longer match).</li>
+<li><strong>Idempotency</strong>: if the input file already contains v2 rows, the
+migrator re-parses them via a v2 fallback and produces
+byte-equivalent output. Re-running on a v2 log is a no-op.</li>
+<li><strong>Dry-run</strong>: <code>--dry-run</code> returns a <code>MigrationReport</code> summarizing
+<code>rows_rewritten</code>, the first-row v1 chain anchor, and the first-row
+v2 chain anchor without touching disk.</li>
+<li><strong>Live</strong>: on success, the original is preserved at
+<code>&lt;log_path&gt;.v1-backup</code> and the migrated v2 log is atomically
+renamed onto <code>&lt;log_path&gt;</code> from a staged <code>&lt;log_path&gt;.v2-migrated</code>.
+The staged file MUST pass <code>verify()</code> before the rename; failure
+aborts the migration without touching the live log.</li>
+</ol>
+<p>Test vectors: synthetic v1 fixture at
+<code>tests/fixtures/provenance/migration_v1_to_v2.json</code>; the migration
+end-to-end suite lives at
+<code>crates/doiget-core/tests/provenance_migration_e2e.rs</code>.</p>
+<h2 id="4-hash-chain">4. Hash chain</h2>
+<p>Canonical JSON = compact (no whitespace), keys sorted lexicographically, no trailing
+whitespace.</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>this_hash = hex(SHA256(canonical_json(row \ {this_hash})))
+</span><span>prev_hash[N] = this_hash[N-1]  (chain)
+</span></code></pre>
+<p>Tampering is detected by <code>doiget audit-log --verify</code>, which recomputes every row's
+<code>this_hash</code> and validates the chain.</p>
+<h2 id="5-failure-mode-fail-closed-at-the-operation-boundary">5. Failure mode (fail-closed at the operation boundary)</h2>
+<p>If the log writer cannot append a row (disk full, permission denied, fsync error),
+the caller MUST receive <code>Err(LogError)</code> and the surrounding fetch MUST NOT proceed.
+The user can recover by clearing the obstruction (free disk, fix permissions) and
+retrying — <code>LogError</code> is classified as recoverable in
+<a href="https://codes.sota-shimozono.com/doiget/developer/provenance-log/ERRORS.md"><code>ERRORS.md</code></a> §2.</p>
+<p>This makes the log a <strong>best-effort tamper-evident local audit record</strong>, not a
+cryptographic enforcement mechanism: a determined local attacker with write access
+to <code>~/.config/doiget/</code> can still modify or replay the log (see §8 below). The
+fail-closed behavior closes the easiest evasion path (silently dropping rows
+without the user noticing), but the legal posture in
+<a href="https://codes.sota-shimozono.com/doiget/developer/provenance-log/LEGAL.md"><code>LEGAL.md</code></a> does not depend on the log being unforgeable. The log is
+documentary evidence of intent and operation, evaluated as such.</p>
+<p>If the log directory is missing at startup, doiget creates it (<code>mkdir -p</code>, <code>0700</code>
+on POSIX) and writes a <code>session_start</code> row.</p>
+<h2 id="6-rotation-and-retention">6. Rotation and retention</h2>
+<ul>
+<li>A log file rotates when its size exceeds <strong>100 MB</strong>: it is gzip-compressed and renamed
+to <code>access.log.&lt;YYYY-MM-DD-HHMMSS&gt;.gz</code>. A new <code>access.log</code> opens.</li>
+<li>The new file's first row uses <code>prev_hash = "GENESIS"</code> (chain restart).</li>
+<li>Files older than <strong>90 days</strong> (default) are auto-deleted at startup. Configurable via
+<code>DOIGET_LOG_RETENTION_DAYS=N</code>. <code>N=0</code> disables auto-deletion.</li>
+</ul>
+<h2 id="7-audit-tool">7. Audit tool</h2>
+<pre data-lang="sh" style="background-color:#fafafa;color:#61676c;" class="language-sh "><code class="language-sh" data-lang="sh"><span style="color:#f29718;">doiget</span><span> audit-log</span><span style="color:#ff8f40;"> --verify
+</span><span style="color:#f29718;">doiget</span><span> audit-log</span><span style="color:#ff8f40;"> --since</span><span> 2026-01-01
+</span><span style="color:#f29718;">doiget</span><span> audit-log</span><span style="color:#ff8f40;"> --source</span><span> elsevier
+</span><span style="color:#f29718;">doiget</span><span> audit-log</span><span style="color:#ff8f40;"> --session</span><span> 01JCKZ7Q...
+</span></code></pre>
+<p><code>--verify</code> recomputes the hash chain and reports any mismatches.</p>
+<h2 id="8-tamper-resistance">8. Tamper resistance</h2>
+<p>doiget makes a best-effort attempt to set the log file append-only on Linux:</p>
+<ul>
+<li><code>chattr +a access.log</code> (ignored if not root or unsupported).</li>
+<li>On macOS / Windows: no equivalent generally available; rely on hash chain detection.</li>
+<li>A determined local attacker with write access to <code>~/.config/doiget/</code> can still rewrite
+history. The hash chain ensures rewrites are detectable, not impossible.</li>
+</ul>
+<h2 id="9-privacy">9. Privacy</h2>
+<ul>
+<li>The log is <strong>local only</strong>. doiget does not transmit log contents anywhere.</li>
+<li>The log contains DOIs/arXiv ids the user has fetched. Users who consider that
+sensitive should use file-system encryption (e.g., per-user disk encryption) at the OS
+level.</li>
+<li>API keys are NEVER logged in any field. The capability resolution log row records
+which env var name granted access (e.g., <code>agree_env_var: "DOIGET_AGREE_TDM_ELSEVIER"</code>)
+but never the key value.</li>
+</ul>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/developer&#x2F;provenance-log.md">
+      site/content/developer&#x2F;provenance-log.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

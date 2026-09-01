@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Store contract &middot; doiget</title>
+  <meta name="description" content="```">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/store/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Store contract · doiget">
+  <meta property="og:description" content="```">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/store/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Store contract · doiget">
+  <meta name="twitter:description" content="```">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Store contract</h1>
+    <p class="lede">```</p>
+  </header>
+
+  <h1 id="store-layout">Store layout</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE (shared spec).</strong> This document is binding for both doiget and
+BiblioFetch.jl. Implementations on either side MUST conform. Changes require an ADR
+coordinated across both projects.</p>
+</blockquote>
+<h2 id="1-layout">1. Layout</h2>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>&lt;store-root&gt;/
+</span><span>├── &lt;safekey&gt;.pdf                    # PDF blob (immutable after write)
+</span><span>└── .metadata/
+</span><span>    ├── &lt;safekey&gt;.toml               # metadata
+</span><span>    └── &lt;safekey&gt;.toml.lock          # advisory lock file (see §3)
+</span></code></pre>
+<p>Store root path is configurable per <a href="https://codes.sota-shimozono.com/doiget/developer/store/CONFIG.md"><code>CONFIG.md</code></a>. The default root is
+implementation-specific — doiget defaults to <code>./papers</code> (under the current working
+directory; <a href="https://codes.sota-shimozono.com/doiget/developer/store/DECISIONS/0036-default-store-cwd.md">ADR-0036</a>), BiblioFetch.jl to
+<code>~/papers/</code>. The layout <em>under</em> the root, specified in this document, is identical for
+both; point them at the same root (e.g. <code>DOIGET_STORE_ROOT=~/papers</code>) to share one store.</p>
+<blockquote>
+<p><strong>MCP <code>doiget serve</code>:</strong> the default is resolved relative to the <em>server process's</em>
+working directory, which is indeterminate for a long-running daemon (e.g. a service
+manager may launch it in <code>/</code>). MCP users SHOULD set <code>DOIGET_STORE_ROOT</code> explicitly so
+the store does not silently vary by launch directory.</p>
+</blockquote>
+<p>The <code>&lt;safekey&gt;</code> is computed from the DOI / arXiv id by the algorithm in
+<a href="https://codes.sota-shimozono.com/doiget/developer/store/SAFEKEY.md"><code>SAFEKEY.md</code></a>.</p>
+<h2 id="2-schema-toml">2. Schema (TOML)</h2>
+<pre data-lang="toml" style="background-color:#fafafa;color:#61676c;" class="language-toml "><code class="language-toml" data-lang="toml"><span style="color:#399ee6;">schema_version </span><span>= </span><span style="color:#86b300;">&quot;1.0&quot;
+</span><span>
+</span><span style="font-style:italic;color:#abb0b6;"># --- Reserved top-level fields (shared with BiblioFetch.jl) ---
+</span><span style="color:#399ee6;">title       </span><span>= </span><span style="color:#86b300;">&quot;Example Paper Title&quot;
+</span><span style="color:#399ee6;">authors     </span><span>= [</span><span style="color:#86b300;">&quot;Alice Researcher&quot;</span><span style="color:#61676ccc;">, </span><span style="color:#86b300;">&quot;Bob Coauthor&quot;</span><span>]
+</span><span style="color:#399ee6;">year        </span><span>= </span><span style="color:#ff8f40;">2026
+</span><span style="color:#399ee6;">doi         </span><span>= </span><span style="color:#86b300;">&quot;10.1234/example&quot;
+</span><span style="color:#399ee6;">arxiv_id    </span><span>= </span><span style="color:#86b300;">&quot;2401.12345&quot;           </span><span style="font-style:italic;color:#abb0b6;"># optional
+</span><span style="color:#399ee6;">abstract    </span><span>= </span><span style="color:#86b300;">&quot;...&quot;                   </span><span style="font-style:italic;color:#abb0b6;"># optional
+</span><span style="color:#399ee6;">venue       </span><span>= </span><span style="color:#86b300;">&quot;Phys. Rev. X&quot;          </span><span style="font-style:italic;color:#abb0b6;"># optional
+</span><span style="color:#399ee6;">volume      </span><span>= </span><span style="color:#86b300;">&quot;12&quot;                    </span><span style="font-style:italic;color:#abb0b6;"># optional
+</span><span style="color:#399ee6;">issue       </span><span>= </span><span style="color:#86b300;">&quot;3&quot;                     </span><span style="font-style:italic;color:#abb0b6;"># optional (BibTeX `number`)
+</span><span style="color:#399ee6;">pages       </span><span>= </span><span style="color:#86b300;">&quot;031001&quot;                </span><span style="font-style:italic;color:#abb0b6;"># optional (e.g. &quot;477--528&quot;)
+</span><span style="color:#399ee6;">publisher   </span><span>= </span><span style="color:#86b300;">&quot;American Physical Society&quot;   </span><span style="font-style:italic;color:#abb0b6;"># optional
+</span><span style="color:#399ee6;">issn        </span><span>= </span><span style="color:#86b300;">&quot;2160-3308&quot;             </span><span style="font-style:italic;color:#abb0b6;"># optional
+</span><span style="color:#399ee6;">isbn        </span><span>= </span><span style="color:#86b300;">&quot;&quot;                      </span><span style="font-style:italic;color:#abb0b6;"># optional, for books
+</span><span style="color:#399ee6;">type        </span><span>= </span><span style="color:#86b300;">&quot;journal-article&quot;       </span><span style="font-style:italic;color:#abb0b6;"># crossref taxonomy
+</span><span style="color:#399ee6;">keywords    </span><span>= [</span><span style="color:#86b300;">&quot;physics&quot;</span><span style="color:#61676ccc;">, </span><span style="color:#86b300;">&quot;...&quot;</span><span>]      </span><span style="font-style:italic;color:#abb0b6;"># optional
+</span><span>
+</span><span style="font-style:italic;color:#abb0b6;"># --- doiget extension table (BiblioFetch.jl ignores these) ---
+</span><span>[</span><span style="color:#399ee6;">doiget</span><span>]
+</span><span style="color:#399ee6;">fetched_at  </span><span>= </span><span style="color:#86b300;">&quot;2026-05-05T08:30:12Z&quot;  </span><span style="font-style:italic;color:#abb0b6;"># RFC3339 UTC
+</span><span style="color:#399ee6;">source      </span><span>= </span><span style="color:#86b300;">&quot;unpaywall&quot;             </span><span style="font-style:italic;color:#abb0b6;"># which Source produced this entry
+</span><span style="color:#399ee6;">license     </span><span>= </span><span style="color:#86b300;">&quot;CC-BY-4.0&quot;             </span><span style="font-style:italic;color:#abb0b6;"># OA license string, or &quot;unknown&quot;
+</span><span style="color:#399ee6;">oa_status   </span><span>= </span><span style="color:#86b300;">&quot;gold&quot;                  </span><span style="font-style:italic;color:#abb0b6;"># optional: gold/green/hybrid/bronze/closed (Unpaywall)
+</span><span>                                      </span><span style="font-style:italic;color:#abb0b6;">#   or &quot;green&quot; (arXiv); omitted when not determined (#281)
+</span><span style="color:#399ee6;">size_bytes  </span><span>= </span><span style="color:#ff8f40;">1234567
+</span><span style="color:#399ee6;">mcp_call_id </span><span>= </span><span style="color:#86b300;">&quot;01JCKZ7Q...&quot;           </span><span style="font-style:italic;color:#abb0b6;"># optional, ULID, present if fetched via MCP
+</span></code></pre>
+<h3 id="reserved-top-level-field-list">Reserved top-level field list</h3>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>schema_version, title, authors, year, doi, arxiv_id, abstract, venue, volume,
+</span><span>issue, pages, keywords, type, publisher, issn, isbn, url, pdf_path
+</span></code></pre>
+<p>Both implementations MUST NOT write top-level fields outside this list. Tool-specific
+fields go in a tool-named table (<code>[doiget]</code>, <code>[bibliofetch]</code>).</p>
+<h2 id="3-schema-versioning">3. Schema versioning</h2>
+<p><code>schema_version</code> is a string of the form <code>&lt;MAJOR&gt;.&lt;MINOR&gt;</code>.</p>
+<ul>
+<li><strong>Minor bump</strong> (<code>1.0</code> → <code>1.1</code>): backward-compatible additions only (new optional fields,
+new tables). Implementations on <code>1.x</code> are required to read <code>1.x</code> files for any
+<code>x ≤ self.MINOR</code>. They MUST treat unknown fields as opaque (not delete, not error).</li>
+<li><strong>Major bump</strong> (<code>1.x</code> → <code>2.0</code>): breaking changes (renamed or removed reserved fields).
+Implementations not yet on <code>2.x</code> MUST refuse to write to <code>2.x</code> files (read-only mode,
+warn).</li>
+</ul>
+<p>When an implementation encounters a file with <code>schema_version</code> greater than its own, it
+enters <strong>read-only mode</strong> for that file: reads return <code>Ok(Some(metadata))</code> after a warn,
+writes return <code>Err(StoreError::SchemaTooNew { theirs, ours })</code>.</p>
+<h2 id="4-concurrent-access-contract-lock-protocol">4. Concurrent access (Contract: lock protocol)</h2>
+<p>Both implementations MUST use file-system advisory locking on the <strong>separate lock file</strong>
+<code>&lt;safekey&gt;.toml.lock</code> for the duration of any read-modify-write or write sequence.</p>
+<ul>
+<li>POSIX: <code>flock(..., LOCK_EX)</code> (Rust: <code>fs2::FileExt::lock_exclusive</code>).</li>
+<li>Windows: <code>LockFileEx(..., LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY)</code>.</li>
+</ul>
+<p>Lock acquisition timeout: <strong>5 seconds</strong>. On timeout, return <code>StoreError::LockTimeout</code>.</p>
+<p>Locks are advisory; a third-party process that ignores the lock can corrupt the store.
+Both doiget and BiblioFetch.jl honor the lock. Anyone integrating a third tool with
+the shared store is expected to follow the same contract.</p>
+<p>The lock file itself is created on demand (<code>O_CREAT | O_RDWR</code>) and is never deleted
+during normal operation. It may be safely deleted when no process holds it.</p>
+<h2 id="5-atomic-write-contract">5. Atomic write (Contract)</h2>
+<p>Every metadata write MUST follow this sequence:</p>
+<pre data-lang="text" style="background-color:#fafafa;color:#61676c;" class="language-text "><code class="language-text" data-lang="text"><span>1. Open &lt;safekey&gt;.toml.tmp with O_CREAT | O_TRUNC | O_WRONLY (POSIX)
+</span><span>   or CREATE_ALWAYS, GENERIC_WRITE  (Windows).
+</span><span>2. Write the full serialized TOML.
+</span><span>3. fsync(&lt;safekey&gt;.toml.tmp).
+</span><span>4. rename(&lt;safekey&gt;.toml.tmp, &lt;safekey&gt;.toml).
+</span><span>5. fsync(parent directory).
+</span></code></pre>
+<p>On Windows, step 4 is <code>MoveFileEx(.., MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)</code>.
+Rust's <code>std::fs::rename</code> performs this on Windows.</p>
+<p>PDF writes follow the same pattern: write to <code>&lt;safekey&gt;.pdf.tmp</code>, fsync, rename, fsync
+parent.</p>
+<p>A crash mid-write leaves either:</p>
+<ul>
+<li>The old file intact (if crash before step 4), or</li>
+<li>The new file fully written and visible (if crash after step 4).</li>
+</ul>
+<p>It never leaves a partially-visible new file. The lone <code>.tmp</code> artifact may be reaped at
+startup.</p>
+<p><strong>Cross-file ordering (issue #122).</strong> Each file is atomic <em>individually</em>; there is no
+cross-file transaction across the metadata TOML and its PDF. The writer therefore renames
+the <strong>PDF first</strong>, then the metadata that references it. Consequences of a crash <em>between</em>
+the two renames:</p>
+<ul>
+<li>before the PDF rename → the previous consistent entry (or no entry) — unchanged;</li>
+<li>after the PDF rename, before the metadata rename → an <strong>orphan <code>&lt;safekey&gt;.pdf</code></strong> plus
+the prior/absent metadata. <code>list_recent</code> / <code>search</code> key off metadata and ignore the
+orphan; a subsequent re-fetch overwrites it.</li>
+</ul>
+<p>What is <strong>guaranteed not to happen</strong>: metadata becoming visible while its <code>pdf_path</code>
+points at a <code>.pdf</code> that is absent or stale. A full two-file transaction is out of scope
+for the MVP; this ordering is the bounded guarantee.</p>
+<h2 id="6-doiget-side-write-discipline">6. doiget-side write discipline</h2>
+<p>When doiget writes to a <code>&lt;safekey&gt;.toml</code> that already exists (e.g., a re-fetch):</p>
+<ul>
+<li>doiget MUST NOT modify reserved top-level fields written by BiblioFetch.jl. doiget may
+upgrade a missing field, but never overwrite an existing one.</li>
+<li>doiget writes only inside the <code>[doiget]</code> table for state it owns (<code>fetched_at</code>,
+<code>source</code>, <code>license</code>, etc.).</li>
+<li>Exception: <code>schema_version</code> may be bumped on a coordinated minor revision.</li>
+</ul>
+<p>This rule prevents a user who runs both BiblioFetch.jl and doiget against the same store
+from losing BiblioFetch-authored fields. Unknown keys inside <code>other</code> (e.g. an unknown
+top-level scalar or a <code>[bibliofetch]</code> sub-key) follow the same rule: on a re-write, an
+existing on-disk value WINS over whatever doiget carries (issue #123).</p>
+<blockquote>
+<p><strong>Re-fetch downgrade behaviour (issue #123).</strong> A doiget re-fetch of an entry that
+previously had a PDF but is now metadata-only (e.g. the OA host went off-allowlist)
+rewrites the <code>[doiget]</code> table (<code>source</code>, <code>size_bytes</code>, …) in place. The PDF blob is
+immutable-after-write (§1) so the existing <code>.pdf</code> file is <strong>not</strong> deleted, but the
+entry's recorded state changes. This is intentional, not silent: as of issue #118 the
+blocked-PDF reason is surfaced to the caller (CLI <code>note:</code> line / MCP <code>pdf.status</code>),
+so the operator always learns the entry was downgraded and why. A guard that refuses
+to downgrade a <strong>determination</strong> is deferred (post-MVP) — it is a policy choice, not a
+correctness bug.</p>
+<p>This permission covers determinations only. Two <code>[doiget]</code> fields carry a
+not-determined <em>marker</em> rather than a reading — <code>oa_status</code> is omitted when not
+determined, and <code>license</code> falls back to <code>"unknown"</code> — and a re-write that carries
+the marker did not look, so it is not news. Per
+<a href="https://codes.sota-shimozono.com/doiget/developer/store/DECISIONS/0056-not-determined-is-not-an-answer.md">ADR-0056</a> the merge keeps the
+stored value in that case. A paper that genuinely stops being open access reports
+<code>oa_status = "closed"</code>, and a changed license reports the new string; both still
+win. The distinction matters because the permission above is granted on the
+condition that the downgrade is reported, and a field the caller never asked about
+has nothing to report it against (#583).</p>
+</blockquote>
+<h2 id="7-toml-normalization">7. TOML normalization</h2>
+<p>To make <code>bib</code> / <code>csl</code> / TOML output diff-stable across implementations:</p>
+<ul>
+<li>Keys at the top level appear in this order: <code>schema_version</code> first, then reserved fields
+alphabetically.</li>
+<li>Tool tables (<code>[doiget]</code>, <code>[bibliofetch]</code>) appear after all top-level fields, in
+alphabetical order of table name. Within a table, keys are alphabetical.</li>
+<li>String quoting: ASCII-safe single-line strings use <code>"..."</code>. Multi-line strings use
+<code>"""..."""</code>.</li>
+<li>Line endings: LF (<code>\n</code>) only. No CR.</li>
+<li>Trailing newline at end of file.</li>
+</ul>
+<p>A reference normalizer is provided by <code>doiget-core::store::normalize_toml(&amp;Metadata) -&gt; String</code>. CI uses it to detect drift.</p>
+<h2 id="8-reading">8. Reading</h2>
+<p>Both implementations MUST tolerate:</p>
+<ul>
+<li>Unknown top-level fields (warn once, ignore).</li>
+<li>Unknown tables (ignore silently).</li>
+<li>Future minor <code>schema_version</code> (degrade to read-only with warn).</li>
+<li>Missing optional fields (<code>arxiv_id</code>, <code>abstract</code>, <code>venue</code>, <code>[doiget]</code>, etc.).</li>
+</ul>
+<p>Both implementations MUST refuse:</p>
+<ul>
+<li>Missing <code>schema_version</code>, <code>title</code>, <code>authors</code>, or year-equivalent.</li>
+<li>Future major <code>schema_version</code> for write operations.</li>
+</ul>
+<blockquote>
+<p><strong>Known doiget limitation (issue #123).</strong> doiget reads any unknown table
+into an opaque <code>other</code> map and preserves <em>flat</em> unknown tables (e.g.
+<code>[bibliofetch]</code> with scalar/array sub-keys) losslessly across a
+read→write→read cycle (proven by
+<code>bibliofetch_typed_table_and_unknown_scalar_survive_roundtrip</code>). It does
+<strong>not</strong> yet round-trip a <em>nested</em> unknown sub-table such as
+<code>[bibliofetch.history]</code>: doiget's TOML normalizer rejects a nested table
+inside <code>other</code>, so a doiget rewrite of an entry containing one returns
+<code>StoreError::Serialize</code> rather than silently dropping data (fail-loud,
+not data loss). BiblioFetch.jl should keep its tool table flat until
+this is lifted; tracked for a post-MVP normalizer pass.</p>
+</blockquote>
+<h2 id="9-round-trip-ci-test">9. Round-trip CI test</h2>
+<p>A CI workflow (<code>cross-tool-compat.yml</code>) exercises this every PR:</p>
+<pre data-lang="text" style="background-color:#fafafa;color:#61676c;" class="language-text "><code class="language-text" data-lang="text"><span>1. Julia: BiblioFetch fetch DOI X            (creates &lt;safekey&gt;.toml + .pdf)
+</span><span>2. doiget info X                             (reads, asserts metadata matches expected)
+</span><span>3. doiget bib X | diff - expected_bibtex     (asserts bib output is bit-identical)
+</span><span>4. doiget fetch DOI Y                        (writes a different entry)
+</span><span>5. Julia: BiblioFetch info Y                 (reads doiget output, must succeed)
+</span></code></pre>
+<p>This guarantees real round-trip compatibility, not just spec conformance.</p>
+<h2 id="10-migration-story">10. Migration story</h2>
+<p>See <a href="https://codes.sota-shimozono.com/doiget/developer/store/MIGRATION.md"><code>MIGRATION.md</code></a> for end-user migration scenarios:</p>
+<ul>
+<li>A BiblioFetch.jl user trying doiget for the first time.</li>
+<li>A doiget user installing BiblioFetch.jl alongside.</li>
+<li>Moving a store between hosts.</li>
+<li>Recovering from a corrupted lock file.</li>
+</ul>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/developer&#x2F;store.md">
+      site/content/developer&#x2F;store.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

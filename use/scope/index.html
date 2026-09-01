@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scope (what doiget does and does not do) &middot; doiget</title>
+  <meta name="description" content="A single-binary CLI plus stdio MCP server that:">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/use/scope/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Scope (what doiget does and does not do) · doiget">
+  <meta property="og:description" content="A single-binary CLI plus stdio MCP server that:">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/use/scope/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Scope (what doiget does and does not do) · doiget">
+  <meta name="twitter:description" content="A single-binary CLI plus stdio MCP server that:">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Scope (what doiget does and does not do)</h1>
+    <p class="lede">A single-binary CLI plus stdio MCP server that:</p>
+  </header>
+
+  <h1 id="scope-and-permanent-non-goals">Scope and Permanent Non-Goals</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE.</strong> This document defines binding contracts. Implementations MUST
+conform. Items listed under "Permanent non-goals" cannot be reversed by a PR; see
+<a href="../CONTRIBUTING.md"><code>../CONTRIBUTING.md</code></a> §"Scope-reopening meta-rule".</p>
+</blockquote>
+<h2 id="what-doiget-is">What doiget is</h2>
+<p>A single-binary CLI plus stdio MCP server that:</p>
+<ol>
+<li>Resolves DOI / arXiv id input to authoritative metadata via Crossref / Unpaywall / arXiv.</li>
+<li>Fetches PDFs through Open Access sources by default; opens additional metadata sources
+and gated TDM sources only when the user has explicitly opted in
+at build time and runtime.</li>
+<li>Stores fetched papers in a layout that is bit-compatible with BiblioFetch.jl
+(see <a href="https://codes.sota-shimozono.com/doiget/use/scope/STORE.md"><code>STORE.md</code></a>); the default store root is <code>./papers</code> under the current
+working directory (ADR-0036), overridable via <code>DOIGET_STORE_ROOT</code> / <code>--store-root</code>.</li>
+<li>Exposes a stdio MCP server with a fixed set of structured tools to agent hosts (see
+<a href="https://codes.sota-shimozono.com/doiget/use/scope/MCP_TOOLS.md"><code>MCP_TOOLS.md</code></a>).</li>
+<li>Verifies that the DOI / arXiv references in a bibliography file (<code>.bib</code> / CSL-JSON /
+plain refs) resolve to real metadata, as a CI gate (<code>doiget verify</code>), without
+downloading PDFs — resolution-only reuse of (1).</li>
+</ol>
+<p>That is the totality of doiget's intended scope. All other functionality is either
+explicitly out of scope below or requires a new ADR.</p>
+<h2 id="two-classes-of-non-goal">Two classes of non-goal</h2>
+<p>doiget enumerates <strong>19 non-goals total</strong>, continuously numbered 1–19 (a stable
+<code>§non-goal N</code> reference scheme), split into two classes — <strong>14 permanent</strong>
+(items 1–14) and <strong>5 current design choices</strong> (items 15–19):</p>
+<ul>
+<li><strong>Permanent non-goals.</strong> Reversing one would weaken the
+<a href="https://codes.sota-shimozono.com/doiget/use/scope/LEGAL.md"><code>LEGAL.md</code></a> posture, the <a href="https://codes.sota-shimozono.com/doiget/use/scope/SECURITY.md"><code>SECURITY.md</code></a> threat
+model, or the contract-party structure that makes doiget a user-driven
+local tool. They can be re-evaluated <strong>only</strong> by opening a GitHub
+Discussion titled <code>[scope-reopening] &lt;topic&gt;</code> and obtaining explicit
+maintainer approval before any code is written. PRs that effectively
+reverse one will be closed.</li>
+<li><strong>Current design choices.</strong> Operational / UX preferences that are
+<em>currently</em> out of scope, but whose reversal does not threaten the posture
+or threat model. They can be changed by a regular ADR (no
+scope-reopening Discussion required).</li>
+</ul>
+<p>The first class is the disciplined heart of doiget; the second class is here
+so contributors know the maintainer's preferences without needing to ask.</p>
+<p>A future ADR may freely move an item from "Current design choices" to
+"Permanent non-goals" — that direction tightens scope and never requires a
+scope-reopening Discussion. Moving the other way (Permanent → Current →
+Removed) requires the full meta-rule.</p>
+<h2 id="permanent-non-goals-14-items-1-14-of-19">Permanent non-goals (14 — items 1–14 of 19)</h2>
+<h3 id="content-processing">Content / processing</h3>
+<ol>
+<li><strong>PDF-blob content processing.</strong> doiget does not extract text from the
+PDF blob (parse its content streams), perform OCR, summarize, parse
+citations from PDF text, extract annotations, or read bibliographic data
+from PDF metadata streams. PDFs are treated as opaque blobs. (ADR-0003,
+narrowed by <a href="https://codes.sota-shimozono.com/doiget/use/scope/DECISIONS/0032-fulltext-html-extraction.md">ADR-0032</a>; see
+also <a href="https://codes.sota-shimozono.com/doiget/use/scope/MCP_TOOLS.md"><code>MCP_TOOLS.md</code></a>: <code>paper_pdf_path</code> returns only a
+path.) Bibliographic indexing from publisher API responses
+(title / authors / venue / abstract for <code>search_local</code>) is in scope and
+distinct from PDF content interpretation; see <a href="https://codes.sota-shimozono.com/doiget/use/scope/LEGAL.md"><code>LEGAL.md</code></a> §3.
+Likewise, extracting <strong>full text from already-structured HTML/XML
+sources</strong> (ar5iv's LaTeXML XHTML for arXiv, PMC / Europe PMC JATS) for
+the <code>paper_text</code> capability is <strong>in scope and distinct from PDF-content
+interpretation</strong> (ADR-0032 D1): that text is fetched as a separate
+structured artifact and the PDF blob is never read. What this item
+forbids is the PDF-blob/OCR processing enumerated above, not reading
+open structured full text.</li>
+</ol>
+<h3 id="distribution-hosting">Distribution / hosting</h3>
+<ol start="2">
+<li><strong>No SaaS / hosted service.</strong> doiget does not operate <code>doiget.example</code>, a
+hosted MCP endpoint, a public proxy, or any maintainer-controlled service
+that fetches on behalf of users.</li>
+<li><strong>No paper hosting, redistribution, or "share-vault".</strong> doiget does not
+redistribute fetched PDFs and does not provide any mechanism for one user
+to share their <code>~/papers/</code> store with another. The <code>Store</code> is local-only.</li>
+</ol>
+<h3 id="network-transport">Network / transport</h3>
+<ol start="4">
+<li><strong>No MCP HTTP / SSE / WebSocket transport.</strong> doiget supports MCP via stdio
+only. This is intentional, not a TODO. (ADR-0001.) A multi-tenant
+network-exposed doiget would shift the user's role from contract party to
+service consumer, which conflicts with the <a href="https://codes.sota-shimozono.com/doiget/use/scope/LEGAL.md"><code>LEGAL.md</code></a> posture.</li>
+<li><strong>No <code>doiget_fetch_url(url: ...)</code> MCP tool.</strong> Tools accept DOI / arXiv id
+input only, never arbitrary URLs (SSRF surface; see
+<a href="https://codes.sota-shimozono.com/doiget/use/scope/SECURITY.md"><code>SECURITY.md</code></a> §1.4).</li>
+</ol>
+<h3 id="credential-safety">Credential / safety</h3>
+<ol start="6">
+<li><strong>No bundled API keys.</strong> No publisher API key is shipped in any doiget
+binary.</li>
+<li><strong>No credential sharing feature.</strong> doiget does not provide a mechanism for
+sharing API keys, sessions, or institutional access between users.</li>
+<li><strong>No <code>doiget_set_credentials(...)</code> MCP tool.</strong> Credentials are read from
+env or <code>credentials.toml</code> only; the MCP surface does not accept credential
+writes.</li>
+</ol>
+<h3 id="operational">Operational</h3>
+<ol start="9">
+<li><strong>No bulk download mode.</strong> Rate limiting
+(<code>MAX_CONCURRENT_FETCHES = 5</code>, <code>MAX_FETCHES_PER_SECOND = 5.0</code>) is hard-coded
+as library constants. There is no flag or config to raise these.</li>
+<li><strong>No telemetry / phone-home / crash reporting / version check.</strong> doiget
+makes no network connection that is not the result of a user-initiated
+fetch. (ADR-0015.)</li>
+<li><strong>No self-update / <code>doiget upgrade</code>.</strong> doiget does not modify its own
+binary. (ADR-0015.)</li>
+</ol>
+<h3 id="build-distribution">Build / distribution</h3>
+<ol start="12">
+<li><strong>No <code>tdm-all</code> umbrella feature flag.</strong> Each TDM source must be opted in
+individually. (ADR-0002.) Removing the per-publisher friction is the same
+kind of LEGAL-posture weakening as bundling keys.</li>
+<li><strong>No public binary release that includes any TDM source code.</strong> TDM
+features are available only by user-driven <code>cargo install</code> / <code>cargo build</code>
+with the appropriate <code>--features tdm-&lt;publisher&gt;</code> flag.</li>
+</ol>
+<h3 id="posture-interpretation">Posture interpretation</h3>
+<ol start="14">
+<li><strong>No re-classification of bibliographic indexing as "PDF content
+processing".</strong> Implementing <code>search_local</code> over title/authors/venue is
+explicitly in scope and is <strong>not</strong> governed by item #1 above. This is the
+same boundary <a href="https://codes.sota-shimozono.com/doiget/use/scope/LEGAL.md"><code>LEGAL.md</code></a> §3 documents.</li>
+</ol>
+<h2 id="current-design-choices-5-items-15-19-of-19">Current design choices (5 — items 15–19 of 19)</h2>
+<p>These are out of scope <strong>today</strong> because the maintainer judges them more
+trouble than they're worth, but they do not threaten the
+LEGAL posture or threat model. Reversing one is a regular ADR, not a
+scope-reopening Discussion.</p>
+<ol start="15">
+<li><strong>No <code>doiget_delete_paper(...)</code> MCP tool.</strong> Destructive store operations
+are CLI-only. <em>Why current-only:</em> the operational caution (agents
+shouldn't delete user data accidentally) is real, but a future agent
+workflow with explicit user confirmation could revisit this.</li>
+<li><strong>No generic shell / exec MCP tool.</strong> doiget never exposes a tool that
+lets an agent run arbitrary commands. <em>Why current-only:</em> the security
+boundary is correct today, but composability with sandboxed shells could
+be revisited in Phase 5+.</li>
+<li><strong>No bidirectional Obsidian sync.</strong> Obsidian export, when available
+(Phase 7), writes only one direction: store → vault. <em>Why current-only:</em>
+conflict resolution complexity is the only reason; if a clean
+last-writer-wins or three-way-merge design surfaces, this can change.</li>
+<li><strong>No Obsidian vault auto-discovery.</strong> The vault path is always passed
+explicitly by the user. <em>Why current-only:</em> false-positive scanning is
+the only concern; a workspace-style <code>.doiget/vault.toml</code> could
+legitimately revisit this.</li>
+<li><strong>No <code>INTEGRATION/</code> host snippets at Phase 0.</strong> Phase 3 ships them
+alongside <code>doiget serve</code>. <em>Why current-only:</em> sequencing, not principle.</li>
+</ol>
+<h2 id="boundaries-with-adjacent-tools">Boundaries with adjacent tools</h2>
+<p>doiget composes with content-processing tools rather than incorporating them:</p>
+<ul>
+<li>For PDF text extraction / OCR / summarization: pair doiget with
+<a rel="noopener" target="_blank" href="https://github.com/whitead/paper-qa">paper-qa</a>,
+<a rel="noopener" target="_blank" href="https://github.com/VikParuchuri/marker">marker</a>, or other dedicated tools. See
+<code>INTEGRATION/chain-with-paperqa.md</code>.</li>
+<li>For Julia REPL workflows: use BiblioFetch.jl directly; doiget and BiblioFetch.jl share
+the on-disk store format (<a href="https://codes.sota-shimozono.com/doiget/use/scope/STORE.md"><code>STORE.md</code></a>). The <em>format</em> is shared; since
+ADR-0036 the default <em>root</em> differs per tool, so point both at the same root (e.g.
+<code>DOIGET_STORE_ROOT=~/papers</code>) to co-locate one store.</li>
+</ul>
+<h2 id="why-these-are-non-goals">Why these are non-goals</h2>
+<p>The non-goal list is the most direct mechanism for keeping doiget's
+<a href="https://codes.sota-shimozono.com/doiget/use/scope/LEGAL.md"><code>LEGAL.md</code></a> posture, <a href="https://codes.sota-shimozono.com/doiget/use/scope/SECURITY.md"><code>SECURITY.md</code></a> threat model, and operational
+simplicity intact. Each non-goal corresponds to a specific risk:</p>
+<table><thead><tr><th>Non-goal</th><th>Primary risk if added</th></tr></thead><tbody>
+<tr><td>PDF-blob content processing / OCR</td><td>Derivative-work copyright posture; tool-neutrality framing weakens. (Structured HTML/XML full text is in scope — ADR-0032.)</td></tr>
+<tr><td>MCP HTTP transport</td><td>Multi-tenant operational status; user is no longer the contract party.</td></tr>
+<tr><td>Bundled API keys</td><td>Direct ToS violation; doiget becomes the contracting party.</td></tr>
+<tr><td><code>fetch_url(...)</code> tool</td><td>Generic SSRF surface; bypasses source-list discipline.</td></tr>
+<tr><td>Bulk download mode</td><td>Bulk-scraper signature pattern; publisher-side flag-and-block.</td></tr>
+<tr><td>Telemetry / self-update</td><td>Phone-home surface; supply-chain risk multiplier.</td></tr>
+<tr><td><code>tdm-all</code> umbrella flag</td><td>Removes the "agree per publisher" friction that grounds opt-in.</td></tr>
+<tr><td>Bidirectional Obsidian sync</td><td>Conflict resolution complexity; user file overwrite incidents.</td></tr>
+</tbody></table>
+<p>If a future situation appears to motivate reversing one of these, the right path is a new
+Discussion, not an in-line PR.</p>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/use&#x2F;scope.md">
+      site/content/use&#x2F;scope.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

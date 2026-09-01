@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["StoreError","UserFields"],"mod":["metadata","render"],"struct":["EntryInfo","FsStore"],"trait":["Store"]};

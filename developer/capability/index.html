@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Capability profile &middot; doiget</title>
+  <meta name="description" content="```rust">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/capability/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Capability profile · doiget">
+  <meta property="og:description" content="```rust">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/capability/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Capability profile · doiget">
+  <meta name="twitter:description" content="```rust">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Capability profile</h1>
+    <p class="lede">```rust</p>
+  </header>
+
+  <h1 id="capabilityprofile">CapabilityProfile</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE.</strong> Defines the runtime capability gate that authorizes which
+sources may be invoked. Every <code>Source::fetch</code> implementation MUST require a
+<code>&amp;CapabilityProfile</code> argument; sources whose capability is not granted at startup
+cannot be invoked at the type level.</p>
+</blockquote>
+<h2 id="1-type-definition">1. Type definition</h2>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="font-style:italic;color:#abb0b6;">// These types are defined in the doiget-core crate.
+</span><span>
+</span><span style="color:#fa6e32;">use </span><span>secrecy</span><span style="color:#ed9366;">::</span><span>SecretString</span><span style="color:#61676ccc;">; </span><span style="font-style:italic;color:#abb0b6;">// = SecretBox&lt;str&gt;; the `secrecy` 0.10 owned-string secret
+</span><span style="color:#fa6e32;">use </span><span>chrono</span><span style="color:#ed9366;">::</span><span>{DateTime</span><span style="color:#61676ccc;">,</span><span> Utc}</span><span style="color:#61676ccc;">;
+</span><span>
+</span><span style="font-style:italic;color:#abb0b6;">// All structs below are #[non_exhaustive] in the Rust source. External crates
+</span><span style="font-style:italic;color:#abb0b6;">// cannot construct them via struct-literal syntax — go through
+</span><span style="font-style:italic;color:#abb0b6;">// `CapabilityProfile::from_env()` (see §2). `TdmGrant::api_key` exists only
+</span><span style="font-style:italic;color:#abb0b6;">// when at least one `tdm-*` Cargo feature is compiled in (the `secrecy` dep is
+</span><span style="font-style:italic;color:#abb0b6;">// `optional = true` and gated on those features per ADR-0002). The field is
+</span><span style="font-style:italic;color:#abb0b6;">// additive under `#[non_exhaustive]`; default release binaries — which contain
+</span><span style="font-style:italic;color:#abb0b6;">// no TDM code at all — do not carry it.
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">non_exhaustive</span><span>]
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">CapabilityProfile </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>oa</span><span style="color:#61676ccc;">:</span><span> AlwaysOn,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>metadata</span><span style="color:#61676ccc;">:</span><span> MetadataAccess,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>tdm_elsevier</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;TdmGrant&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>tdm_aps</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;TdmGrant&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>tdm_springer</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;TdmGrant&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>tdm_ieee</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;TdmGrant&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>rate_limits</span><span style="color:#61676ccc;">:</span><span> RateLimits,
+</span><span>}
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> Copy)]
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">AlwaysOn</span><span style="color:#61676ccc;">;   </span><span style="font-style:italic;color:#abb0b6;">// unit struct — Tier 1 OA is always permitted
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> Default)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">non_exhaustive</span><span>]
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">MetadataAccess </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>openalex</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">bool</span><span>,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>semantic_scholar</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">bool</span><span>,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>doaj</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">bool</span><span>,
+</span><span>}
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">non_exhaustive</span><span>]
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">TdmGrant </span><span>{
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// Present only under a `tdm-*` feature (see the note above). `secrecy`
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// 0.10 replaced `Secret&lt;String&gt;` with `SecretString` (= `SecretBox&lt;str&gt;`).
+</span><span>    </span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">cfg</span><span>(</span><span style="color:#f29718;">any</span><span>(feature </span><span style="color:#ed9366;">= </span><span style="color:#86b300;">&quot;tdm-elsevier&quot;</span><span style="color:#61676ccc;">,</span><span> feature </span><span style="color:#ed9366;">= </span><span style="color:#86b300;">&quot;tdm-aps&quot;</span><span style="color:#61676ccc;">,
+</span><span>              feature </span><span style="color:#ed9366;">= </span><span style="color:#86b300;">&quot;tdm-springer&quot;</span><span style="color:#61676ccc;">,</span><span> feature </span><span style="color:#ed9366;">= </span><span style="color:#86b300;">&quot;tdm-ieee&quot;</span><span>))]
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>api_key</span><span style="color:#61676ccc;">:</span><span>       SecretString,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>agreed_at</span><span style="color:#61676ccc;">:     </span><span>DateTime&lt;Utc&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>agree_env_var</span><span style="color:#61676ccc;">:</span><span> String,            </span><span style="font-style:italic;color:#abb0b6;">// e.g. &quot;DOIGET_AGREE_TDM_ELSEVIER&quot;
+</span><span>}
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> Copy)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">non_exhaustive</span><span>]
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">RateLimits </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub</span><span>(</span><span style="color:#fa6e32;">crate</span><span>) max_concurrent_fetches</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">u32</span><span>, </span><span style="font-style:italic;color:#abb0b6;">// hard-coded 5 (LEGAL §6 safeguard 8)
+</span><span>    </span><span style="color:#fa6e32;">pub</span><span>(</span><span style="color:#fa6e32;">crate</span><span>) max_fetches_per_second</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">f32</span><span>, </span><span style="font-style:italic;color:#abb0b6;">// hard-coded 5.0
+</span><span>    </span><span style="color:#fa6e32;">pub</span><span>(</span><span style="color:#fa6e32;">crate</span><span>) per_source_backoff_ms</span><span style="color:#61676ccc;">:  </span><span style="color:#fa6e32;">u64</span><span>, </span><span style="font-style:italic;color:#abb0b6;">// hard-coded 200
+</span><span>}
+</span><span>
+</span><span style="color:#fa6e32;">impl </span><span style="color:#399ee6;">RateLimits </span><span>{
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">/// Sole public constructor. There is no other way to obtain a
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">/// `RateLimits` outside of `doiget-core`: fields are `pub(crate)`, the
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">/// struct is `#[non_exhaustive]`, and no public `new`-style function
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">/// exists. This closes the legal-safeguard loophole that bare `pub`
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">/// fields would create (cf. `docs/LEGAL.md` §6 safeguard 8).
+</span><span>    </span><span style="color:#fa6e32;">pub const </span><span style="color:#ff8f40;">HARD_CODED</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">Self </span><span style="color:#ed9366;">= </span><span style="color:#fa6e32;">Self </span><span>{
+</span><span>        max_concurrent_fetches</span><span style="color:#61676ccc;">: </span><span style="color:#ff8f40;">5</span><span style="color:#61676ccc;">,
+</span><span>        max_fetches_per_second</span><span style="color:#61676ccc;">: </span><span style="color:#ff8f40;">5.0</span><span style="color:#61676ccc;">,
+</span><span>        per_source_backoff_ms</span><span style="color:#61676ccc;">:  </span><span style="color:#ff8f40;">200</span><span style="color:#61676ccc;">,
+</span><span>    }</span><span style="color:#61676ccc;">;
+</span><span>
+</span><span>    </span><span style="color:#fa6e32;">pub const fn </span><span style="color:#f29718;">max_concurrent_fetches</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#fa6e32;">u32 </span><span>{ </span><span style="font-style:italic;color:#55b4d4;">self</span><span style="color:#ed9366;">.</span><span>max_concurrent_fetches }
+</span><span>    </span><span style="color:#fa6e32;">pub const fn </span><span style="color:#f29718;">max_fetches_per_second</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#fa6e32;">f32 </span><span>{ </span><span style="font-style:italic;color:#55b4d4;">self</span><span style="color:#ed9366;">.</span><span>max_fetches_per_second }
+</span><span>    </span><span style="color:#fa6e32;">pub const fn </span><span style="color:#f29718;">per_source_backoff_ms</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>)  </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#fa6e32;">u64 </span><span>{ </span><span style="font-style:italic;color:#55b4d4;">self</span><span style="color:#ed9366;">.</span><span>per_source_backoff_ms }
+</span><span>}
+</span></code></pre>
+<h3 id="external-construction">External construction</h3>
+<p>External crates always go through:</p>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#fa6e32;">let</span><span> profile </span><span style="color:#ed9366;">= </span><span>CapabilityProfile</span><span style="color:#ed9366;">::</span><span>from_env()</span><span style="color:#ed9366;">?</span><span style="color:#61676ccc;">;
+</span></code></pre>
+<p>Struct-literal construction (<code>CapabilityProfile { oa: ..., ... }</code>) is blocked
+outside <code>doiget-core</code> by <code>#[non_exhaustive]</code>. Tests inside <code>doiget-core</code> may
+still construct profiles directly for fixture purposes.</p>
+<p><code>api_key</code> is wrapped in <code>secrecy::SecretString</code> (the <code>secrecy</code> 0.10 replacement
+for the 0.9 <code>Secret&lt;String&gt;</code>) so that <code>Debug</code> prints a redaction placeholder
+rather than the key. Logs additionally use a redactor for known sensitive field
+names, and any URL that carries a key as a query parameter (Springer Nature —
+see §3) is passed through <code>redact_api_key_in_url</code> before it is logged or
+recorded in provenance.</p>
+<h2 id="2-resolution-algorithm">2. Resolution algorithm</h2>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#fa6e32;">impl </span><span style="color:#399ee6;">CapabilityProfile </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">from_env</span><span>() </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;</span><span style="color:#fa6e32;">Self</span><span>, CapabilityError&gt; {
+</span><span>        </span><span style="font-style:italic;color:#55b4d4;">Ok</span><span>(</span><span style="color:#fa6e32;">Self </span><span>{
+</span><span>            oa</span><span style="color:#61676ccc;">:</span><span> AlwaysOn</span><span style="color:#61676ccc;">,
+</span><span>            metadata</span><span style="color:#61676ccc;">:</span><span> MetadataAccess {
+</span><span>                openalex</span><span style="color:#61676ccc;">:        </span><span>env</span><span style="color:#ed9366;">::</span><span>var(</span><span style="color:#86b300;">&quot;DOIGET_ENABLE_OPENALEX&quot;</span><span>)</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">is_ok</span><span>()</span><span style="color:#61676ccc;">,
+</span><span>                semantic_scholar</span><span style="color:#61676ccc;">: </span><span>env</span><span style="color:#ed9366;">::</span><span>var(</span><span style="color:#86b300;">&quot;DOIGET_ENABLE_S2&quot;</span><span>)</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">is_ok</span><span>()</span><span style="color:#61676ccc;">,
+</span><span>                doaj</span><span style="color:#61676ccc;">:            </span><span>env</span><span style="color:#ed9366;">::</span><span>var(</span><span style="color:#86b300;">&quot;DOIGET_ENABLE_DOAJ&quot;</span><span>)</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">is_ok</span><span>()</span><span style="color:#61676ccc;">,
+</span><span>                datacite</span><span style="color:#61676ccc;">:        </span><span>env</span><span style="color:#ed9366;">::</span><span>var(</span><span style="color:#86b300;">&quot;DOIGET_ENABLE_DATACITE&quot;</span><span>)</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">is_ok</span><span>()</span><span style="color:#61676ccc;">,
+</span><span>                hal</span><span style="color:#61676ccc;">:             </span><span>env</span><span style="color:#ed9366;">::</span><span>var(</span><span style="color:#86b300;">&quot;DOIGET_ENABLE_HAL&quot;</span><span>)</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">is_ok</span><span>()</span><span style="color:#61676ccc;">,
+</span><span>                openaire</span><span style="color:#61676ccc;">:        </span><span>env</span><span style="color:#ed9366;">::</span><span>var(</span><span style="color:#86b300;">&quot;DOIGET_ENABLE_OPENAIRE&quot;</span><span>)</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">is_ok</span><span>()</span><span style="color:#61676ccc;">,
+</span><span>                core</span><span style="color:#61676ccc;">:            </span><span>env</span><span style="color:#ed9366;">::</span><span>var(</span><span style="color:#86b300;">&quot;DOIGET_ENABLE_CORE&quot;</span><span>)</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">is_ok</span><span>()</span><span style="color:#61676ccc;">,
+</span><span>                europe_pmc</span><span style="color:#61676ccc;">:      </span><span>env</span><span style="color:#ed9366;">::</span><span>var(</span><span style="color:#86b300;">&quot;DOIGET_ENABLE_EUROPE_PMC&quot;</span><span>)</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">is_ok</span><span>()</span><span style="color:#61676ccc;">,
+</span><span>            }</span><span style="color:#61676ccc;">,
+</span><span>            tdm_elsevier</span><span style="color:#61676ccc;">: </span><span style="color:#f07171;">read_tdm_grant</span><span>(AgreeVar</span><span style="color:#ed9366;">::</span><span>new(</span><span style="color:#86b300;">&quot;DOIGET_AGREE_TDM_ELSEVIER&quot;</span><span>)</span><span style="color:#61676ccc;">, </span><span>KeyVar</span><span style="color:#ed9366;">::</span><span>new(</span><span style="color:#86b300;">&quot;DOIGET_KEY_ELSEVIER&quot;</span><span>))</span><span style="color:#ed9366;">?</span><span style="color:#61676ccc;">,
+</span><span>            tdm_aps</span><span style="color:#61676ccc;">:      </span><span style="color:#f07171;">read_tdm_grant</span><span>(AgreeVar</span><span style="color:#ed9366;">::</span><span>new(</span><span style="color:#86b300;">&quot;DOIGET_AGREE_TDM_APS&quot;</span><span>)</span><span style="color:#61676ccc;">,      </span><span>KeyVar</span><span style="color:#ed9366;">::</span><span>new(</span><span style="color:#86b300;">&quot;DOIGET_KEY_APS&quot;</span><span>))</span><span style="color:#ed9366;">?</span><span style="color:#61676ccc;">,
+</span><span>            tdm_springer</span><span style="color:#61676ccc;">: </span><span style="color:#f07171;">read_tdm_grant</span><span>(AgreeVar</span><span style="color:#ed9366;">::</span><span>new(</span><span style="color:#86b300;">&quot;DOIGET_AGREE_TDM_SPRINGER&quot;</span><span>)</span><span style="color:#61676ccc;">, </span><span>KeyVar</span><span style="color:#ed9366;">::</span><span>new(</span><span style="color:#86b300;">&quot;DOIGET_KEY_SPRINGER&quot;</span><span>))</span><span style="color:#ed9366;">?</span><span style="color:#61676ccc;">,
+</span><span>            tdm_ieee</span><span style="color:#61676ccc;">:     </span><span style="color:#f07171;">read_tdm_grant</span><span>(AgreeVar</span><span style="color:#ed9366;">::</span><span>new(</span><span style="color:#86b300;">&quot;DOIGET_AGREE_TDM_IEEE&quot;</span><span>)</span><span style="color:#61676ccc;">,     </span><span>KeyVar</span><span style="color:#ed9366;">::</span><span>new(</span><span style="color:#86b300;">&quot;DOIGET_KEY_IEEE&quot;</span><span>))</span><span style="color:#ed9366;">?</span><span style="color:#61676ccc;">,
+</span><span>            rate_limits</span><span style="color:#61676ccc;">:  </span><span>RateLimits</span><span style="color:#ed9366;">::</span><span style="color:#ff8f40;">HARD_CODED</span><span style="color:#61676ccc;">,
+</span><span>        })
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style="font-style:italic;color:#abb0b6;">// `file_key` is `[tdm.&lt;publisher&gt;] api_key` from credentials.toml, one rung
+</span><span style="font-style:italic;color:#abb0b6;">// BELOW the env var (#509, ADR-0050). The agreement has no file rung.
+</span><span style="font-style:italic;color:#abb0b6;">//
+</span><span style="font-style:italic;color:#abb0b6;">// `AgreeVar`/`KeyVar` are newtypes over `&amp;&#39;static str` with private fields:
+</span><span style="font-style:italic;color:#abb0b6;">// two adjacent `&amp;str` parameters could be transposed at a call site and the
+</span><span style="font-style:italic;color:#abb0b6;">// build would then treat the KEY as the agreement signal. The real signature
+</span><span style="font-style:italic;color:#abb0b6;">// also takes `feature: &amp;str` and `feature_enabled: bool`, elided here.
+</span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">read_tdm_grant</span><span>(</span><span style="color:#ff8f40;">agree</span><span style="color:#61676ccc;">:</span><span> AgreeVar, </span><span style="color:#ff8f40;">key</span><span style="color:#61676ccc;">:</span><span> KeyVar, </span><span style="color:#ff8f40;">file_key</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span>&gt;)
+</span><span>    </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;TdmGrant&gt;, CapabilityError&gt;
+</span><span>{
+</span><span>    </span><span style="color:#fa6e32;">let </span><span>(agree_var</span><span style="color:#61676ccc;">,</span><span> key_var) </span><span style="color:#ed9366;">= </span><span>(agree</span><span style="color:#ed9366;">.</span><span style="color:#ff8f40;">0</span><span style="color:#61676ccc;">,</span><span> key</span><span style="color:#ed9366;">.</span><span style="color:#ff8f40;">0</span><span>)</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">let</span><span> agreed </span><span style="color:#ed9366;">= </span><span style="color:#f07171;">matches!</span><span>(env</span><span style="color:#ed9366;">::</span><span>var(agree_var)</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">as_deref</span><span>()</span><span style="color:#61676ccc;">, </span><span style="font-style:italic;color:#55b4d4;">Ok</span><span>(</span><span style="color:#86b300;">&quot;1&quot;</span><span>))</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">let</span><span> key    </span><span style="color:#ed9366;">= </span><span>env</span><span style="color:#ed9366;">::</span><span>var(key_var)</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">ok</span><span>()</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">or_else</span><span>(|| file_key</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">map</span><span>(</span><span style="color:#fa6e32;">str</span><span style="color:#ed9366;">::</span><span>to_string))</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">match </span><span>(agreed</span><span style="color:#61676ccc;">,</span><span> key) {
+</span><span>        (</span><span style="color:#ff8f40;">true</span><span style="color:#61676ccc;">, </span><span style="font-style:italic;color:#55b4d4;">Some</span><span>(k)) </span><span style="color:#ed9366;">=&gt; </span><span style="font-style:italic;color:#55b4d4;">Ok</span><span>(</span><span style="font-style:italic;color:#55b4d4;">Some</span><span>(TdmGrant {
+</span><span>            </span><span style="font-style:italic;color:#abb0b6;">// `secrecy` 0.10: `SecretString::from(String)` replaces the
+</span><span>            </span><span style="font-style:italic;color:#abb0b6;">// 0.9 `Secret::new(k)`. Field present only under a `tdm-*`
+</span><span>            </span><span style="font-style:italic;color:#abb0b6;">// feature; the actual source splits this into a small
+</span><span>            </span><span style="font-style:italic;color:#abb0b6;">// `build_tdm_grant` helper so the cfg lives in one place.
+</span><span>            api_key</span><span style="color:#61676ccc;">:       </span><span>SecretString</span><span style="color:#ed9366;">::</span><span>from(k)</span><span style="color:#61676ccc;">,
+</span><span>            agreed_at</span><span style="color:#61676ccc;">:     </span><span>Utc</span><span style="color:#ed9366;">::</span><span>now()</span><span style="color:#61676ccc;">,
+</span><span>            agree_env_var</span><span style="color:#61676ccc;">:</span><span> agree_var</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">to_string</span><span>()</span><span style="color:#61676ccc;">,
+</span><span>        }))</span><span style="color:#61676ccc;">,
+</span><span>        (</span><span style="color:#ff8f40;">true</span><span style="color:#61676ccc;">, </span><span style="font-style:italic;color:#55b4d4;">None</span><span>)    </span><span style="color:#ed9366;">=&gt; </span><span style="font-style:italic;color:#55b4d4;">Err</span><span>(CapabilityError</span><span style="color:#ed9366;">::</span><span>AgreedButNoKey {
+</span><span>            agree_var</span><span style="color:#61676ccc;">:</span><span> agree_var</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">into</span><span>()</span><span style="color:#61676ccc;">,</span><span> key_var</span><span style="color:#61676ccc;">:</span><span> key_var</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">into</span><span>()</span><span style="color:#61676ccc;">,
+</span><span>        })</span><span style="color:#61676ccc;">,
+</span><span>        (</span><span style="color:#ff8f40;">false</span><span style="color:#61676ccc;">, </span><span style="font-style:italic;color:#55b4d4;">Some</span><span>(</span><span style="color:#ed9366;">_</span><span>)) </span><span style="color:#ed9366;">=&gt; </span><span style="font-style:italic;color:#55b4d4;">Err</span><span>(CapabilityError</span><span style="color:#ed9366;">::</span><span>KeyButNotAgreed {
+</span><span>            agree_var</span><span style="color:#61676ccc;">:</span><span> agree_var</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">into</span><span>()</span><span style="color:#61676ccc;">,
+</span><span>        })</span><span style="color:#61676ccc;">,
+</span><span>        (</span><span style="color:#ff8f40;">false</span><span style="color:#61676ccc;">, </span><span style="font-style:italic;color:#55b4d4;">None</span><span>)   </span><span style="color:#ed9366;">=&gt; </span><span style="font-style:italic;color:#55b4d4;">Ok</span><span>(</span><span style="font-style:italic;color:#55b4d4;">None</span><span>)</span><span style="color:#61676ccc;">,
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<h3 id="three-resolution-rules">Three resolution rules</h3>
+<p>The <strong>key</strong> may come from <code>DOIGET_KEY_&lt;PUBLISHER&gt;</code> or from
+<code>[tdm.&lt;publisher&gt;] api_key</code> in <code>credentials.toml</code>, env first
+(<a href="https://codes.sota-shimozono.com/doiget/developer/capability/CONFIG.md"><code>CONFIG.md</code></a> §6). The <strong>agreement</strong> has no file rung: it is
+<code>DOIGET_AGREE_TDM_&lt;PUBLISHER&gt;=1</code> in the environment or it does not exist, so
+that it is an act taken in the session that runs the fetch rather than a
+boolean written once and forgotten (<a href="https://codes.sota-shimozono.com/doiget/developer/capability/LEGAL.md"><code>LEGAL.md</code></a> §6a.2, ADR-0050).
+The three rules below are unchanged by that — a key from the file still needs
+the agreement, so rule 3 now also fires for a file-supplied key.</p>
+<ol>
+<li><strong><code>agree=1</code> + key present</strong> → <code>Some(TdmGrant)</code>. The source is enabled this session.</li>
+<li><strong><code>agree=1</code> but key missing</strong> → <code>Err(AgreedButNoKey)</code>. Startup fails; user has agreed
+but provided no credential. Silent skip would mask a misconfiguration.</li>
+<li><strong><code>agree</code> unset but key present</strong> → <code>Err(KeyButNotAgreed)</code>. Startup fails; we require
+the explicit agreement env var even when the key is set. Otherwise a leaked
+<code>DOIGET_KEY_ELSEVIER</code> from a parent shell environment could enable a source the user
+did not intend.</li>
+</ol>
+<h2 id="3-environment-variable-reference">3. Environment variable reference</h2>
+<table><thead><tr><th>Variable</th><th>Type</th><th>Effect</th></tr></thead><tbody>
+</tbody></table>
+<blockquote>
+<p><strong>The <code>metadata</code> Cargo feature vs. these variables (ADR-0040, NORMATIVE).</strong> The
+feature decides what is <em>compiled</em>; the variables below decide what is <em>reachable</em>.
+As of 0.8.8 <code>metadata</code> gates the whole optional non-Tier-1 source surface —
+enrichment, resolution and retrieval — and release binaries compile it in. A source
+is inert until its own <code>DOIGET_ENABLE_&lt;NAME&gt;</code> is set, so with all of them unset the
+binary behaves exactly as a Tier-1-only build.</p>
+</blockquote>
+<p>| <code>DOIGET_ENABLE_OPENALEX</code> | presence | Enables OpenAlex (metadata only). |
+| <code>DOIGET_ENABLE_S2</code> | presence | Enables Semantic Scholar. |
+| <code>DOIGET_ENABLE_DOAJ</code> | presence | Enables DOAJ. |
+| <code>DOIGET_ENABLE_DATACITE</code> | presence | Enables DataCite DOI <strong>resolution</strong> (Zenodo / figshare / Dryad / OSF). Unlike its siblings this is not enrichment: without it those DOIs report <code>NOT_FOUND</code> even when the record is live and open (#414). |
+| <code>DOIGET_ENABLE_HAL</code> | presence | Enables HAL, the French national OA repository. OA deposits only: a record whose <code>openAccess_bool</code> is not <code>true</code> is rejected rather than returned (#418). |
+| <code>DOIGET_ENABLE_OPENAIRE</code> | presence | Enables OpenAIRE (European repository aggregation, Graph API v1). Mixed access rights: only a COAR <code>c_abf2</code> (OPEN) <code>bestAccessRight</code> is accepted; EMBARGO / RESTRICTED / CLOSED / absent are refused (#416). |
+| <code>DOIGET_ENABLE_CORE</code> | presence | Enables CORE, the broadest cross-repository OA index and therefore the last fallback in the chain (#417). |
+| <code>DOIGET_CORE_API_KEY</code> | value | <strong>Optional.</strong> Your own free CORE key, raising the rate limit. Absent (or blank) degrades to the key-less limit rather than failing. Never bundled; sent as a bearer header and never logged. A 401/403 with a key set is reported as a transport error, distinct from "not found", so a bad key does not look like a missing paper. |
+| <code>DOIGET_ENABLE_EUROPE_PMC</code> | presence | Enables Europe PMC (biomedical OA full text Unpaywall does not index). Gated on the record advertising a retrievable PDF — a <code>fullTextUrlList</code> entry with <code>documentStyle = pdf</code> and <code>availabilityCode</code> <code>F</code> or <code>OA</code> (#503) — <strong>not</strong> on <code>inEPMC</code> (presence is not openness, #415) and <strong>not</strong> on <code>isOpenAccess</code> (bulk-subset membership, which is reported rather than a veto). |
+| <code>DOIGET_AGREE_TDM_ELSEVIER</code> | <code>=1</code> | Acknowledges Elsevier TDM ToS. Pairs with key. |
+| <code>DOIGET_KEY_ELSEVIER</code> | secret string | Elsevier API key. Read into <code>Secret&lt;String&gt;</code>. |
+| <code>DOIGET_AGREE_TDM_APS</code> | <code>=1</code> | Acknowledges APS Harvest TDM ToS. |
+| <code>DOIGET_KEY_APS</code> | secret string | APS API key. |
+| <code>DOIGET_AGREE_TDM_SPRINGER</code> | <code>=1</code> | Acknowledges Springer Nature OA ToS. |
+| <code>DOIGET_KEY_SPRINGER</code> | secret string | Springer API key. |
+| <code>DOIGET_AGREE_TDM_IEEE</code> | <code>=1</code> | Acknowledges IEEE TDM ToS. |
+| <code>DOIGET_KEY_IEEE</code> | secret string | IEEE Xplore API key. |</p>
+<blockquote>
+<p><strong>Note (ADR-0031):</strong> <code>DOIGET_ENABLE_OPENALEX</code> gates the OpenAlex
+<em>enrichment</em> / citation-graph source only (<code>/works/doi:…</code>,
+<code>referenced_works[]</code>). The <code>doiget search</code> <strong>discovery</strong> path
+(<code>/works?search=</code>, <code>doiget_core::discovery</code>) is classified as Tier-1
+OA metadata, <strong>always-on</strong> — it needs no env var and ships in the
+default <code>oa-only</code> binary.</p>
+</blockquote>
+<blockquote>
+<p><strong>Note (ADR-0032):</strong> full-text extraction (<code>doiget text</code>,
+<code>doiget_core::paper_text</code>) over <strong>ar5iv</strong> is likewise classified Tier-1
+OA metadata, <strong>always-on</strong> — no env var, ships in the <code>oa-only</code> binary.
+It reads the ar5iv HTML rendering, never the PDF blob (permanent
+non-goal #1 / ADR-0003 stays intact, narrowed by ADR-0032 to PDF-blob
+processing).</p>
+</blockquote>
+<p>Setting <code>DOIGET_AGREE_TDM_*</code> only makes the relevant source eligible. The corresponding
+TDM-specific Cargo feature must also have been compiled in (<code>cargo build --features tdm-elsevier</code> etc.). Default release binaries do not contain TDM source code at all.</p>
+<h2 id="4-source-trait-integration">4. Source trait integration</h2>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#fa6e32;">pub trait </span><span style="color:#399ee6;">Source</span><span>: Send + Sync {
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">name</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">can_serve</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">profile</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>CapabilityProfile, </span><span style="color:#ff8f40;">ref_</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Ref) </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#fa6e32;">bool</span><span style="color:#61676ccc;">;
+</span><span>    async </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">fetch</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">ref_</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Ref, </span><span style="color:#ff8f40;">profile</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>CapabilityProfile, </span><span style="color:#ff8f40;">ctx</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>FetchContext)
+</span><span>        </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;FetchResult, FetchError&gt;</span><span style="color:#61676ccc;">;
+</span><span>}
+</span><span>
+</span><span style="font-style:italic;color:#abb0b6;">// Example: Elsevier TDM source (only compiled when feature = &quot;tdm-elsevier&quot;)
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">cfg</span><span>(feature </span><span style="color:#ed9366;">= </span><span style="color:#86b300;">&quot;tdm-elsevier&quot;</span><span>)]
+</span><span style="color:#fa6e32;">impl </span><span>Source </span><span style="color:#fa6e32;">for </span><span style="color:#399ee6;">ElsevierTdm </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">can_serve</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">p</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>CapabilityProfile, </span><span style="color:#ed9366;">_</span><span>: </span><span style="color:#ed9366;">&amp;</span><span>Ref) </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#fa6e32;">bool </span><span>{
+</span><span>        p</span><span style="color:#ed9366;">.</span><span>tdm_elsevier</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">is_some</span><span>()
+</span><span>    }
+</span><span>    async </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">fetch</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">ref_</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Ref, </span><span style="color:#ff8f40;">profile</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>CapabilityProfile, </span><span style="color:#ff8f40;">ctx</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>FetchContext)
+</span><span>        </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;FetchResult, FetchError&gt;
+</span><span>    {
+</span><span>        </span><span style="color:#fa6e32;">let</span><span> grant </span><span style="color:#ed9366;">=</span><span> profile</span><span style="color:#ed9366;">.</span><span>tdm_elsevier</span><span style="color:#ed9366;">.</span><span style="color:#f07171;">as_ref</span><span>()
+</span><span>            </span><span style="color:#ed9366;">.</span><span style="color:#f07171;">ok_or</span><span>(FetchError</span><span style="color:#ed9366;">::</span><span>CapabilityDenied)</span><span style="color:#ed9366;">?</span><span style="color:#61676ccc;">;
+</span><span>        </span><span style="font-style:italic;color:#abb0b6;">// grant.api_key.expose_secret() — use the API key
+</span><span>        </span><span style="font-style:italic;color:#abb0b6;">// ...
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<h2 id="5-startup-banner-auditability">5. Startup banner (auditability)</h2>
+<p>On startup, <code>doiget</code> (CLI or MCP server) writes a single line to <strong>stderr</strong> describing
+the resolved profile. Example:</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>[doiget] capability: oa=on metadata=[openalex] tdm=[elsevier(agreed=2026-05-05T08:00:00Z)]
+</span></code></pre>
+<p>The banner is on stderr in all modes, including MCP mode (where stdout is reserved for
+JSON-RPC). The banner does not include any portion of any API key.</p>
+<h2 id="6-reload-semantics">6. Reload semantics</h2>
+<p><code>CapabilityProfile</code> is <strong>immutable for the lifetime of the process</strong>. A change to
+<code>DOIGET_AGREE_TDM_*</code> or a key environment variable while the process is running has no
+effect; the user must restart. This avoids partial-state security weakening.</p>
+<h2 id="7-mcp-tool-exposure">7. MCP tool exposure</h2>
+<p>The MCP tool <code>doiget_capability_profile</code> (see <a href="https://codes.sota-shimozono.com/doiget/developer/capability/MCP_TOOLS.md"><code>MCP_TOOLS.md</code></a>) reports the
+current profile to agents in a redacted form (no API keys, just booleans / source names
+and <code>agreed_at</code> timestamps). Agents can use this to decide whether a <code>fetch_paper(...)</code>
+call against a TDM source will succeed before issuing it.</p>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/developer&#x2F;capability.md">
+      site/content/developer&#x2F;capability.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

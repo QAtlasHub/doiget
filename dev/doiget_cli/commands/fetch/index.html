@@ -1,0 +1,51 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="`doiget fetch &#60;ref&#62;` subcommand."><title>doiget_cli::commands::fetch - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="doiget_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module fetch</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../doiget_cli/index.html">doiget_<wbr>cli</a><span class="version">0.8.13</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module fetch</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#provenance-contract" title="Provenance contract">Provenance contract</a></li><li><a href="#configuration-surface" title="Configuration surface">Configuration surface</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In doiget_<wbr>cli::<wbr>commands</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">doiget_cli</a>::<wbr><a href="../index.html">commands</a></div><h1>Module <span>fetch</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/doiget_cli/commands/fetch.rs.html#1-2698">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p><code>doiget fetch &lt;ref&gt;</code> subcommand.</p>
+<p>Phase 1 scope:</p>
+<ul>
+<li><strong>arXiv refs</strong> — full end-to-end: PDF bytes are fetched via the
+<code>doiget_core::sources::arxiv::ArxivSource</code>, the <code>[doiget]</code>
+extension table is populated with the resolved license, source,
+size, and <code>fetched_at</code>, and the result is written to the on-disk
+store with both the metadata TOML and the PDF.</li>
+<li><strong>DOI refs</strong> — Crossref metadata + Unpaywall license enrichment + an
+OA PDF fetch when Unpaywall’s <code>best_oa_location.url_for_pdf</code> (or
+<code>best_oa_location.url</code>) resolves to a host on the synthetic
+<code>"oa-publisher"</code> allowlist (<code>docs/REDIRECT_ALLOWLIST.md</code> §3). The OA
+URL host check is informed-best-effort; if the host is not on the
+allowlist or the body fails the magic-byte check, the orchestrator
+logs a <code>Fetch err</code> row under <code>source = "oa-publisher"</code> and falls back
+to metadata-only success — the metadata is still useful.</li>
+</ul>
+<h3 id="provenance-contract"><a class="doc-anchor" href="#provenance-contract">§</a>Provenance contract</h3>
+<p>Per <code>docs/PROVENANCE_LOG.md</code> §3, every invocation emits at least one
+<code>SessionStart</code>, one or more <code>Fetch</code> rows (one per source consulted), one
+<code>StoreWrite</code> row on success, and one <code>SessionEnd</code>. Each <code>Fetch</code> row is
+appended by the underlying <code>Source</code> impl; the orchestrator owns the
+session-bookend rows and the <code>StoreWrite</code> row.</p>
+<h3 id="configuration-surface"><a class="doc-anchor" href="#configuration-surface">§</a>Configuration surface</h3>
+<p>Hard-coded paths with env-var overrides; full <code>config.toml</code> plumbing
+arrives in a follow-up. See <code>docs/CONFIG.md</code> for the eventual surface.</p>
+<div><table><thead><tr><th>Env var</th><th>Default</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>DOIGET_STORE_ROOT</code></td><td><code>./papers</code> (under the current working dir)</td><td>Filesystem store root</td></tr>
+<tr><td><code>DOIGET_LOG_PATH</code></td><td><code>&lt;config&gt;/doiget/access.jsonl</code></td><td>Provenance log file</td></tr>
+<tr><td><code>DOIGET_CONTACT_EMAIL</code></td><td><code>doiget@localhost</code></td><td>Polite-pool contact email (User-Agent and Crossref)</td></tr>
+<tr><td><code>DOIGET_UNPAYWALL_EMAIL</code></td><td>(= contact email)</td><td>Unpaywall query-string email</td></tr>
+<tr><td><code>DOIGET_ARXIV_BASE</code></td><td><code>https://arxiv.org</code></td><td>arXiv source base (test override)</td></tr>
+<tr><td><code>DOIGET_CROSSREF_BASE</code></td><td><code>https://api.crossref.org</code></td><td>Crossref source base (test override)</td></tr>
+<tr><td><code>DOIGET_UNPAYWALL_BASE</code></td><td><code>https://api.unpaywall.org/v2</code></td><td>Unpaywall source base (test override)</td></tr>
+<tr><td><code>DOIGET_OA_PUBLISHER_BASE</code></td><td>(production allowlist)</td><td>OA publisher host allowlist override (test override)</td></tr>
+</tbody></table>
+</div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.CliExit.html" title="struct doiget_cli::commands::fetch::CliExit">CliExit</a></dt><dd>Carries a <code>docs/ERRORS.md</code> §4 process exit code out of a CLI
+command to <code>main</code>, which owns the actual <code>std::process::exit</code>
+(calling it inside <code>run_with_options</code> would kill in-process
+integration tests). The human-readable <code>error[CODE]: …</code> line has
+ALREADY been written to stderr by <code>render_fetch_error</code> before
+this is constructed, so <code>main</code> must NOT print it again. Issue #119.</dd><dt><a class="struct" href="struct.FetchPlan.html" title="struct doiget_cli::commands::fetch::FetchPlan">Fetch<wbr>Plan</a></dt><dd>Structured dry-run preview returned by <code>--dry-run</code> and the
+<code>dry_run: true</code> MCP variants. Wire shape matches ADR-0022 §1 and
+<code>docs/MCP_TOOLS.md</code> §10.</dd><dt><a class="struct" href="struct.PdfSourcePlan.html" title="struct doiget_cli::commands::fetch::PdfSourcePlan">PdfSource<wbr>Plan</a></dt><dd>Per-PDF-source row inside <a href="struct.FetchPlan.html#structfield.pdf_sources" title="field doiget_cli::commands::fetch::FetchPlan::pdf_sources"><code>FetchPlan::pdf_sources</code></a>.</dd><dt><a class="struct" href="struct.RateLimitBudget.html" title="struct doiget_cli::commands::fetch::RateLimitBudget">Rate<wbr>Limit<wbr>Budget</a></dt><dd>Per-process rate-limit context surfaced alongside <a href="struct.FetchPlan.html" title="struct doiget_cli::commands::fetch::FetchPlan"><code>FetchPlan</code></a> so an
+agent can predict the politeness ceiling without a separate
+<code>doiget_capability_profile</code> round-trip.</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.build_dry_run_envelope.html" title="fn doiget_cli::commands::fetch::build_dry_run_envelope">build_<wbr>dry_<wbr>run_<wbr>envelope</a></dt><dd>Build the dry-run envelope as a <code>serde_json::Value</code>, without writing
+anywhere. Used by both the CLI (which prints it to stdout) and the
+MCP tool wrapper (which routes the bytes via JSON-RPC). Wire shape:</dd><dt><a class="fn" href="fn.build_fetch_plan.html" title="fn doiget_cli::commands::fetch::build_fetch_plan">build_<wbr>fetch_<wbr>plan</a></dt><dd>Build the dry-run preview (<a href="struct.FetchPlan.html" title="struct doiget_cli::commands::fetch::FetchPlan"><code>FetchPlan</code></a>) for the given ref and store
+root, without contacting the network or filesystem.</dd><dt><a class="fn" href="fn.emit_dry_run_plan_to_stdout.html" title="fn doiget_cli::commands::fetch::emit_dry_run_plan_to_stdout">emit_<wbr>dry_<wbr>run_<wbr>plan_<wbr>to_<wbr>stdout</a></dt><dd>Serialize the dry-run envelope and write it to stdout. Used by the
+<code>--dry-run</code> flag on <code>doiget fetch</code> and <code>doiget batch</code>. The envelope
+shape matches ADR-0022 §1 / <code>docs/MCP_TOOLS.md</code> §10.</dd><dt><a class="fn" href="fn.run_with_options.html" title="fn doiget_cli::commands::fetch::run_with_options">run_<wbr>with_<wbr>options</a></dt><dd>Run the <code>doiget fetch &lt;ref&gt;</code> subcommand.</dd></dl></section></div></main></body></html>

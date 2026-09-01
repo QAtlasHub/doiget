@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Error codes &middot; doiget</title>
+  <meta name="description" content="```rust">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/errors/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Error codes · doiget">
+  <meta property="og:description" content="```rust">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/errors/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Error codes · doiget">
+  <meta name="twitter:description" content="```rust">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Error codes</h1>
+    <p class="lede">```rust</p>
+  </header>
+
+  <h1 id="error-taxonomy">Error taxonomy</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE.</strong> Defines the closed set of error codes that doiget surfaces and
+how each persona experiences each code. Adding a new error code is a minor semver
+bump; renaming or repurposing one is a breaking change.</p>
+</blockquote>
+<h2 id="1-errorcode-enum">1. ErrorCode enum</h2>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="font-style:italic;color:#abb0b6;">// ErrorCode is defined in the doiget-core crate.
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> Copy</span><span style="color:#61676ccc;">,</span><span> PartialEq</span><span style="color:#61676ccc;">,</span><span> Eq</span><span style="color:#61676ccc;">,</span><span> Hash</span><span style="color:#61676ccc;">,</span><span> serde::Serialize</span><span style="color:#61676ccc;">,</span><span> serde::Deserialize)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">serde</span><span>(rename_all </span><span style="color:#ed9366;">= </span><span style="color:#86b300;">&quot;SCREAMING_SNAKE_CASE&quot;</span><span>)]
+</span><span style="color:#fa6e32;">pub enum </span><span style="color:#399ee6;">ErrorCode </span><span>{
+</span><span>    InvalidRef</span><span style="color:#61676ccc;">,
+</span><span>    NoOaAvailable</span><span style="color:#61676ccc;">,
+</span><span>    RateLimited</span><span style="color:#61676ccc;">,
+</span><span>    NetworkError</span><span style="color:#61676ccc;">,
+</span><span>    NotFound</span><span style="color:#61676ccc;">,
+</span><span>    Ambiguous</span><span style="color:#61676ccc;">,
+</span><span>    StoreError</span><span style="color:#61676ccc;">,
+</span><span>    LogError</span><span style="color:#61676ccc;">,
+</span><span>    CapabilityDenied</span><span style="color:#61676ccc;">,
+</span><span>    FetchTimeout</span><span style="color:#61676ccc;">,
+</span><span>    SchemaTooNew</span><span style="color:#61676ccc;">,
+</span><span>    LockTimeout</span><span style="color:#61676ccc;">,
+</span><span>    InternalError</span><span style="color:#61676ccc;">,
+</span><span>    NotImplemented</span><span style="color:#61676ccc;">,
+</span><span>}
+</span></code></pre>
+<p>Wire form (JSON / MCP): <code>"INVALID_REF"</code>, <code>"NO_OA_AVAILABLE"</code>, etc.</p>
+<h2 id="2-code-semantics">2. Code semantics</h2>
+<table><thead><tr><th>Code</th><th>Meaning</th><th>Disposition</th><th>Recoverable?</th></tr></thead><tbody>
+<tr><td><code>INVALID_REF</code></td><td>DOI / arXiv id failed validation.</td><td><code>terminal</code></td><td>No (user must correct input).</td></tr>
+<tr><td><code>NO_OA_AVAILABLE</code></td><td>No source could supply a free copy: Tier 1 reported no OA URL, <strong>or</strong> a source holds the record and has no retrievable copy (<code>FetchError::NotRetrievable</code>, ADR-0054).</td><td><code>needs_config</code></td><td>Try later, or enable opt-in source.</td></tr>
+<tr><td><code>RATE_LIMITED</code></td><td>Internal rate cap hit, OR 429 from source.</td><td><code>retry_after</code></td><td>Retry after <code>Retry-After</code> (or 1 s).</td></tr>
+<tr><td><code>NETWORK_ERROR</code></td><td>Transport / DNS / TLS failure. <strong>Does NOT cover a deliberate supply-chain policy block</strong> — see §6.1: an off-allowlist / redirect-denied / insecure-scheme OA-PDF leg is <code>CAPABILITY_DENIED</code>, not <code>NETWORK_ERROR</code>.</td><td><code>retry_after</code></td><td>Retry usually fine.</td></tr>
+<tr><td><code>NOT_FOUND</code></td><td>Metadata source authoritatively reported the id does not exist: HTTP <code>404</code> / <code>410</code> / <code>451</code>, or a source-specific absence (arXiv returns HTTP 200 with an empty <code>&lt;feed&gt;</code> for an unknown id). Network-independent and reproducible — distinct from the transient <code>NETWORK_ERROR</code> / <code>RATE_LIMITED</code>. <code>doiget verify</code> treats it as a definite dead reference (<code>absent</code>). For a DOI it is emitted only when all configured sources (Crossref, Unpaywall) fail to resolve it; a DataCite-only DOI may thus be reported <code>NOT_FOUND</code>.</td><td><code>terminal</code></td><td>No (the id is wrong or retracted).</td></tr>
+<tr><td><code>AMBIGUOUS</code></td><td>A name filter (<code>--author</code> / <code>--venue</code> / <code>--publisher</code>) matched several entities with no clear winner; the error lists the candidates. Distinct from <code>NOT_FOUND</code> ("matched nothing"). CLI exit <code>2</code>.</td><td><code>terminal</code></td><td>Yes — narrow the name (add a first name / fuller title) or pass an exact id.</td></tr>
+<tr><td><code>STORE_ERROR</code></td><td>The local store could not serve the request: a filesystem write failed (disk, permission, etc.), or the entry a mutating tool needs is not there yet (<code>doiget_tag</code> / <code>doiget_annotate</code> on a ref nobody has fetched). Deliberately NOT <code>NOT_FOUND</code> in that second case: the id is fine, and <code>NOT_FOUND</code> would tell a caller the reference is dead. The read-only tools (<code>doiget_info</code>, <code>doiget_paper_pdf_path</code>, <code>doiget_search_local</code>) report a store miss as <code>ok: true</code> with a null payload instead, which is preferable where the operation has nothing to mutate.</td><td><code>needs_config</code></td><td>Depends on cause; for a store miss, fetch the paper first.</td></tr>
+<tr><td><code>LOG_ERROR</code></td><td>Provenance log write failed. <strong>Fetch is aborted.</strong></td><td><code>needs_config</code></td><td>Free disk / fix perms.</td></tr>
+<tr><td><code>CAPABILITY_DENIED</code></td><td>Source not in <code>CapabilityProfile</code>.</td><td><code>needs_config</code></td><td>User opts in, or pick different source.</td></tr>
+<tr><td><code>FETCH_TIMEOUT</code></td><td>Per-request timeout exceeded.</td><td><code>retry_after</code></td><td>Retry.</td></tr>
+<tr><td><code>SCHEMA_TOO_NEW</code></td><td>Store entry's <code>schema_version</code> is ahead.</td><td><code>needs_config</code></td><td>Upgrade doiget.</td></tr>
+<tr><td><code>LOCK_TIMEOUT</code></td><td>Could not acquire <code>flock</code> within 5 s.</td><td><code>retry_after</code></td><td>Retry; another process holds it.</td></tr>
+<tr><td><code>INTERNAL_ERROR</code></td><td>Bug.</td><td><code>terminal</code></td><td>Report at <a rel="noopener" target="_blank" href="https://github.com/QAtlasHub/doiget/issues">https://github.com/QAtlasHub/doiget/issues</a>.</td></tr>
+<tr><td><code>NOT_IMPLEMENTED</code></td><td>Feature is spec'd but not yet wired in this Phase.</td><td><code>terminal</code></td><td>Wait for next minor release; do not retry.</td></tr>
+<tr><td><code>TEXT_UNAVAILABLE</code></td><td>The id is valid and resolvable, but the <strong>requested representation</strong> is missing: <code>doiget text</code> got a 200 from ar5iv with no extractable prose (the paper was never converted to HTML). Distinct from <code>NOT_FOUND</code> (the id <em>does</em> exist) and <code>NO_OA_AVAILABLE</code> (the paper may still be OA — only the HTML render is missing). Issue #302.</td><td><code>terminal</code></td><td>Yes — fetch the PDF instead (<code>doiget fetch &lt;id&gt;</code>); do not "fix" the identifier.</td></tr>
+</tbody></table>
+<h2 id="3-persona-x-error-matrix">3. Persona × error matrix</h2>
+<table><thead><tr><th>Persona</th><th>Surface</th></tr></thead><tbody>
+<tr><td>Agent (MCP)</td><td>Structured, never throws. On failure: <code>{ ok: false, error: { code, message, disposition, retry_after_ms?, remediation?, denial_context? } }</code>. <code>disposition</code> is present on every failure that carries a structured <code>error</code> OBJECT, and is the field to branch a retry on — see §2 and ADR-0055. <code>disposition</code> is now present on <strong>every</strong> <code>ok: false</code> envelope. Four tools -- <code>doiget_resolve_citation</code>, <code>doiget_batch_resolve_citations</code>, <code>doiget_tag</code> and <code>doiget_annotate</code> -- used to put a bare string in <code>error</code> instead, so a caller had nothing to branch on; they build the object like every other tool as of 0.8.13 <strong>(breaking for anyone reading <code>error</code> as a string on those four)</strong>. The set is pinned EMPTY by <code>every_bare_string_error_site_is_a_known_one</code>, and <code>the_exemption_list_and_the_document_agree</code> fails if this paragraph and that list ever disagree. Both are new: this document already named the guard as the reason the set "can shrink but not grow", and the guard had not been written -- a claim about the world resting on code that did not exist, which is exactly what this document defines. It is derived from <code>code</code> by <code>ErrorCode::disposition</code>, never hand-written per call site. <code>remediation</code> IS carried here when the failure has a <code>denial_context</code>, from the same <code>remediation::for_denial</code> the blocked leg and the CLI <code>= help:</code> block use — this document previously said it was not, which meant the one field naming the fix was present when a call succeeded with a blocked leg and absent when the call actually failed (#506). It is omitted when there is no named fix rather than emitted empty. <code>attempts</code> remains an <code>ok: true</code> field. A blocked PDF leg is still an <code>ok: true</code> result with a failed leg, not an <code>ok: false</code> call, and it carries <code>pdf.remediation</code> plus <code>pdf.disposition</code>. <code>retry_after_ms</code> is present only when the SERVER sent a <code>Retry-After</code> on the response that ended the attempt; it is never backfilled from doiget's internal backoff, because a guess about the server wearing the name of a server-supplied value is the defect these fields exist to remove (#506).</td></tr>
+<tr><td>Researcher (CLI human)</td><td><code>cargo</code>-style stderr: <code>error[E0007]: rate limited from unpaywall: retry after 1s</code>. Exit code 1.</td></tr>
+<tr><td>CI / Batch (CLI <code>--json</code>)</td><td>JSON Lines record per ref with <code>{"ok":false, "error":{"code":"...","message":"...","denial_context":{...}?,"remediation":[...]?,"attempts":[...]?}}</code>. Exit code = number of failures (capped at 255). <strong>Records are emitted in completion order, not input order</strong> — see below.</td></tr>
+<tr><td>Library (Rust)</td><td><code>Err(FetchError)</code> (typed via <code>thiserror</code>).</td></tr>
+</tbody></table>
+<h3 id="3-1-structured-denial-context-normative-adr-0023">3.1 Structured <code>denial_context</code> (NORMATIVE; ADR-0023)</h3>
+<p>The <code>error</code> envelope MAY carry an additional structured <code>denial_context</code>
+field for machine-readable recovery. The field is <strong>optional and additive</strong> —
+consumers MUST tolerate both its presence and its absence — and is
+populated by the producer on the denial classes named in the §5 mapping
+table below.</p>
+<p><code>denial_context.reason</code> is a <strong>closed</strong> enum (per ADR-0023):</p>
+<pre data-lang="jsonc" style="background-color:#fafafa;color:#61676c;" class="language-jsonc "><code class="language-jsonc" data-lang="jsonc"><span>&quot;denial_context&quot;: {
+</span><span>  &quot;reason&quot;:    &quot;redirect_not_in_allowlist&quot;,   // closed enum, snake_case
+</span><span>  &quot;source&quot;:    &quot;crossref&quot;,                     // resolver source key, optional
+</span><span>  &quot;attempted&quot;: &quot;evil.example.com&quot;,             // host/path/value, optional
+</span><span>  &quot;expected&quot;:  [&quot;api.crossref.org&quot;,
+</span><span>                &quot;*.crossref.org&quot;],             // allowlist entries; the field
+</span><span>                                                //   is ABSENT when the producer
+</span><span>                                                //   did not populate it. An
+</span><span>                                                //   explicit [] means &quot;empty
+</span><span>                                                //   allowlist&quot; (ADR-0023 §3
+</span><span>                                                //   None/Some(vec![])
+</span><span>                                                //   disambiguation).
+</span><span>  &quot;hop_index&quot;: 1,                              // redirect-chain position, optional
+</span><span>  &quot;cap&quot;:       104857600,                      // size/rate cap, optional
+</span><span>  &quot;actual&quot;:    209715200                       // observed value, optional
+</span><span>}
+</span></code></pre>
+<p>Closed <code>reason</code> set: <code>redirect_not_in_allowlist</code>, <code>insecure_scheme</code>,
+<code>host_in_block_list</code>, <code>size_cap_exceeded</code>, <code>schema_drift</code>,
+<code>capability_not_granted</code>, <code>rate_limit_window</code>, <code>ssrf_private_address</code>,
+<code>content_type_mismatch</code>. Adding a new variant is a minor semver bump;
+renaming or repurposing one is a breaking change.</p>
+<p><code>error.message</code> MUST continue to embed the same parameters in human-readable
+form — <code>denial_context</code> is a parallel channel, not a replacement.</p>
+<h3 id="3-2-structured-remediation-normative-adr-0043">3.2 Structured <code>remediation</code> (NORMATIVE; ADR-0043)</h3>
+<p><code>denial_context</code> says what was refused. <code>remediation</code> says what would lift it.
+Both are <strong>optional and additive</strong>; consumers MUST tolerate presence and absence.</p>
+<pre data-lang="jsonc" style="background-color:#fafafa;color:#61676c;" class="language-jsonc "><code class="language-jsonc" data-lang="jsonc"><span>&quot;remediation&quot;: [
+</span><span>  { &quot;kind&quot;: &quot;additional_host&quot;, &quot;value&quot;: &quot;strathprints.strath.ac.uk&quot;, &quot;note&quot;: &quot;this hop only&quot; },
+</span><span>  { &quot;kind&quot;: &quot;additional_host&quot;, &quot;value&quot;: &quot;*.strath.ac.uk&quot;,            &quot;note&quot;: &quot;the whole publisher&quot; },
+</span><span>  { &quot;kind&quot;: &quot;additional_host&quot;, &quot;value&quot;: &quot;strath.ac.uk&quot;,              &quot;note&quot;: &quot;apex too (a wildcard does not match it)&quot; },
+</span><span>  { &quot;kind&quot;: &quot;trust_flag&quot;,      &quot;value&quot;: &quot;trust_academic_repos&quot;,
+</span><span>    &quot;note&quot;: &quot;strathprints.strath.ac.uk matches *.ac.uk — UK academic institutions (Universities UK)&quot; }
+</span><span>]
+</span></code></pre>
+<p><code>kind</code> is a <strong>closed</strong> enum: <code>additional_host</code> (a pattern for
+<code>[[network.additional_hosts]]</code>) and <code>trust_flag</code> (a <code>[network]</code> boolean). Adding a
+variant is a minor semver bump.</p>
+<p>The two kinds are deliberately not collapsed into one pasteable string: adding a host
+trusts one publisher, a trust flag trusts a curated class (ADR-0028), and a caller
+choosing between them is making a policy decision on the user's behalf.</p>
+<p>Emitted only for reasons with a configuration channel — <code>redirect_not_in_allowlist</code> and
+<code>host_in_block_list</code>. A <code>size_cap_exceeded</code> or <code>capability_not_granted</code> denial carries no
+<code>remediation</code>, because offering a host to trust would send the caller after a fix that
+cannot work.</p>
+<h3 id="3-2a-batch-json-record-order-normative">3.2a <code>batch --json</code> record order (NORMATIVE)</h3>
+<p>Records are written as each ref <strong>completes</strong>. <code>batch</code> runs up to
+<code>RateLimits::HARD_CODED.max_concurrent_fetches()</code> fetches at once and emits each
+record when its task finishes, so stdout is in completion order and reordering is
+the normal case rather than a rare one: a parse error returns instantly, a 1 MB PDF
+does not.</p>
+<p><strong>Key on the <code>ref</code> field.</strong> Zipping stdout against the input file positionally is the
+obvious thing to write, it works on a small or uniform batch, and the first time a
+fetch is slow it attaches a result to the wrong DOI with no error anywhere (#479).</p>
+<p>Input order would cost buffering the whole run before emitting anything, which
+would end streaming for large batches. The order is not going to change; consumers
+that need input order must sort by <code>ref</code> themselves.</p>
+<h3 id="3-3-structured-attempts-normative-adr-0043">3.3 Structured <code>attempts</code> (NORMATIVE; ADR-0043)</h3>
+<p>The resolution trace introduced in #413/#438, previously CLI text only.</p>
+<pre data-lang="jsonc" style="background-color:#fafafa;color:#61676c;" class="language-jsonc "><code class="language-jsonc" data-lang="jsonc"><span>&quot;attempts&quot;: [
+</span><span>  { &quot;source&quot;: &quot;hal&quot;, &quot;outcome&quot;: &quot;not_consulted_disabled&quot;,
+</span><span>    &quot;detail&quot;: &quot;DOIGET_ENABLE_HAL&quot;, &quot;required_env&quot;: [&quot;DOIGET_ENABLE_HAL&quot;], &quot;consulted&quot;: false },
+</span><span>  { &quot;source&quot;: &quot;tdm-aps&quot;, &quot;outcome&quot;: &quot;not_consulted_disabled&quot;,
+</span><span>    &quot;detail&quot;: &quot;DOIGET_KEY_APS + DOIGET_AGREE_TDM_APS&quot;,
+</span><span>    &quot;required_env&quot;: [&quot;DOIGET_KEY_APS&quot;, &quot;DOIGET_AGREE_TDM_APS&quot;], &quot;consulted&quot;: false },
+</span><span>  { &quot;source&quot;: &quot;core&quot;, &quot;outcome&quot;: &quot;consulted_denied&quot;,
+</span><span>    &quot;detail&quot;: &quot;consulted: refused (RedirectNotInAllowlist, cdn.example.org)&quot;,
+</span><span>    &quot;denial_context&quot;: { &quot;reason&quot;: &quot;redirect_not_in_allowlist&quot;, &quot;attempted&quot;: &quot;cdn.example.org&quot;,
+</span><span>                        &quot;expected&quot;: [&quot;core.ac.uk&quot;], &quot;hop_index&quot;: 1 },
+</span><span>    &quot;remediation&quot;: [ /* … */ ], &quot;consulted&quot;: true }
+</span><span>]
+</span></code></pre>
+<p><code>outcome</code> is a <strong>closed</strong> enum:
+<code>not_consulted_disabled</code>, <code>not_consulted_not_applicable</code>,
+<code>not_consulted_wrong_publisher</code>, <code>not_consulted_not_needed</code>, <code>consulted_no_record</code>,
+<code>consulted_not_open_access</code>, <code>consulted_denied</code>, <code>consulted_failed</code>,
+<code>consulted_resolved</code>.</p>
+<p><code>detail</code> is present only for the variants carrying one, and is opaque text.</p>
+<p><strong><code>required_env</code></strong> (#470) accompanies <code>not_consulted_disabled</code>: the variables to set,
+as a list. <code>detail</code> carries the same set joined with <code>" + "</code> and is retained for
+compatibility — do not parse it. Tier-3 sources need two variables and Tier-2 one,
+which is why the joined form was a separator a consumer had to split on.</p>
+<p><strong><code>denial_context</code></strong> and <strong><code>remediation</code></strong> (#470) accompany <code>consulted_denied</code>, and
+carry the same ADR-0023 structure the blocked PDF leg already carried. Before this,
+a redirect denial, an oversized body or a not-a-PDF on a <em>metadata-chain</em> source —
+the richest and most actionable failures — flattened into <code>consulted_failed</code> with an
+opaque string, on a surface documented as machine-readable. <code>remediation</code> is omitted
+when the denial reason has no configuration channel (<code>InsecureScheme</code> has none:
+the fix for an <code>http://</code> redirect is not to trust the host).</p>
+<p><code>consulted_denied</code> is a <em>refusal by a policy control</em>, distinct from
+<code>consulted_failed</code> (transport, auth, schema). <code>CapabilityNotGranted</code> is <strong>not</strong> a
+<code>consulted_denied</code>: it is produced before any request goes out, so reporting it as
+consulted would misstate reach.
+<code>consulted</code> is redundant with <code>outcome</code> and present anyway: it is the single question
+every consumer has — <em>did anyone else look?</em> — and requiring them to memorise which of
+eight tokens implies it invites the confusion the trace exists to end.</p>
+<p>"We have no trace" and "the trace is empty" are different, and were the same
+observable before #413. Both surfaces keep them apart, by different means — check
+the one you are parsing:</p>
+<table><thead><tr><th>surface</th><th>no trace available</th><th>trace exists but empty</th></tr></thead><tbody>
+<tr><td>CLI <code>batch --json</code></td><td>the <code>attempts</code> key is <strong>absent</strong></td><td><code>[]</code></td></tr>
+<tr><td>MCP envelope</td><td>the <code>attempts</code> key is <strong>present</strong>, valued <code>null</code></td><td><code>[]</code></td></tr>
+</tbody></table>
+<p>Neither ever renders "no trace" as <code>[]</code>.</p>
+<h2 id="4-cli-exit-codes">4. CLI exit codes</h2>
+<table><thead><tr><th>Exit</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>0</code></td><td>Success (all refs ok).</td></tr>
+<tr><td><code>1</code></td><td>At least one fetch was attempted and failed.</td></tr>
+<tr><td><code>2</code></td><td>Misuse — a bad argument or missing config. Covers both an argv shape <code>clap</code> rejects <strong>and</strong> a well-formed argument whose <em>value</em> fails validation, which is why <code>INVALID_REF</code> and <code>AMBIGUOUS</code> are both 2 (ADR-0049).</td></tr>
+<tr><td><code>3</code></td><td>Capability denied (no source could serve).</td></tr>
+<tr><td><code>4</code></td><td>I/O failure (store / log unwritable).</td></tr>
+<tr><td><code>64..=78</code></td><td><code>sysexits.h</code> mapping for select cases.</td></tr>
+<tr><td><code>124</code></td><td>Timeout (matches GNU <code>timeout</code>).</td></tr>
+<tr><td><code>255</code></td><td>Capped failure count for <code>batch</code>.</td></tr>
+</tbody></table>
+<h2 id="5-error-wrapping">5. Error wrapping</h2>
+<ul>
+<li><code>doiget-core</code> exports <code>FetchError</code> (typed, <code>thiserror</code>). Each variant carries an
+<code>ErrorCode</code> and any context data needed by callers.</li>
+<li><code>doiget-cli</code> uses <code>anyhow::Error</code> for context, mapping the leaf <code>FetchError</code> to a CLI
+presentation per persona.</li>
+<li><code>doiget-mcp</code> translates <code>FetchError</code> to the MCP <code>{ok: false, error}</code> shape and never
+throws across the JSON-RPC boundary.</li>
+</ul>
+<h3 id="5-1-denialcontext-mapping-adr-0023-ss4">5.1 <code>DenialContext</code> mapping (ADR-0023 §4)</h3>
+<p>The producer-side mapping from internal error variants to <code>DenialContext</code> is
+defined in <a href="https://codes.sota-shimozono.com/doiget/developer/errors/DECISIONS/0023-denial-context-structured.md"><code>DECISIONS/0023-denial-context-structured.md</code></a>
+§4 (NORMATIVE table). Summary: every <code>HttpError::RedirectDenied</code>,
+<code>OversizedBody</code>, <code>NotAPdf</code>, <code>InsecureRedirect</code>, and every
+<code>FetchError::NotEligible</code> produces a populated <code>Option&lt;DenialContext&gt;</code> via
+<code>From</code> impls in <code>doiget-core</code>. Other error variants leave <code>denial_context</code>
+unset.</p>
+<h2 id="6-no-silent-failures">6. No silent failures</h2>
+<p>doiget MUST NOT return a "success" result with placeholder data when a real fetch
+failed. A fetch either succeeds with a real PDF + license + metadata, or returns an
+error with one of the codes above.</p>
+<h3 id="6-1-off-allowlist-redirect-denied-oa-pdf-leg-capability-denied-exit-3-normative-issue-145">6.1 Off-allowlist / redirect-denied OA-PDF leg → <code>CAPABILITY_DENIED</code> / exit 3 (NORMATIVE; issue #145)</h3>
+<p>When a DOI fetch discovers an OA PDF URL but the OA-PDF leg is <strong>blocked
+by supply-chain redirect policy</strong> — the host is off the <code>oa-publisher</code>
+allowlist (<code>redirect_not_in_allowlist</code>), a redirect hop is non-HTTPS
+(<code>insecure_scheme</code>), or the host is on the block list
+(<code>host_in_block_list</code>) — the metadata is still written, but the leg is a
+<strong>deliberate policy denial, not a transport failure</strong>.</p>
+<p>Internally <code>doiget-core</code> collapses every <code>FetchError::Http(_)</code> (including
+a redirect denial that <code>reqwest</code> re-wraps as <code>HttpError::Network</code>) to
+<code>NetworkError</code>, and the provenance-log row for the failed <code>oa-publisher</code>
+leg is therefore written with <code>error_code = NETWORK_ERROR</code> (the
+transport-layer truth — unchanged). However, surfacing this to the user
+as <code>NETWORK_ERROR</code> would be <strong>wrong</strong>: §2 defines <code>NETWORK_ERROR</code> as
+"retry usually fine", whereas retrying a policy block never helps.</p>
+<p>NORMATIVE rule: the CLI MUST reclassify such a blocked OA-PDF leg using
+the preserved <code>denial_context.reason</code> (§3.1) and surface it as:</p>
+<ul>
+<li>error code <strong><code>CAPABILITY_DENIED</code></strong> (rendered <code>error[CAPABILITY_DENIED]:</code>,
+with the closed-set <code>denial_context.reason</code> named inline so the block is
+unambiguously a policy denial, not a flaky network);</li>
+<li>process <strong>exit code <code>3</code></strong> (§4 "Capability denied"), the same exit code
+<code>fetch</code> / <code>graph</code> use for every other <code>ErrorCode::CapabilityDenied</code>.</li>
+</ul>
+<p>The provenance row keeps <code>error_code = NETWORK_ERROR</code> (it records the
+transport mechanism); the <em>user-facing</em> code/exit is <code>CAPABILITY_DENIED</code> /
+<code>3</code>. Non-policy OA-PDF blocks (genuine transport fault with no
+<code>denial_context</code>, or a non-policy reason such as <code>size_cap_exceeded</code> /
+<code>content_type_mismatch</code>) remain <code>NETWORK_ERROR</code> / exit 1.</p>
+<p>Covered end-to-end (closed by #163; originally tracked under #145): the
+<code>oa-publisher</code> host allowlist is no longer enforced <em>only</em> inside the
+redirect-policy closure. PR #163 added a <strong>pre-fetch host allowlist
+check</strong> on the metadata-discovered OA URL in
+<code>doiget_core::orchestrator::try_fetch_oa_pdf</code>
+(<code>docs/REDIRECT_ALLOWLIST.md</code> §1 — NORMATIVE), applied <strong>before</strong> the PDF
+fetch is issued, not only on redirect hops. An OA URL whose <em>initial</em>
+host is off-allowlist with <strong>no redirect</strong> is therefore rejected by the
+pre-check with the <strong>same</strong> <code>HttpError::RedirectDenied</code> value the redirect
+closure produces (same <code>source_key</code> / lowercased <code>host</code> /
+<code>expected_hosts</code>), so it still carries a policy <code>denial_context</code>
+(<code>redirect_not_in_allowlist</code>). The CLI reclassification rule above then
+promotes it to <code>CAPABILITY_DENIED</code> / exit 3 — the off-allowlist OA URL is
+<strong>not</strong> fetched and never reaches connect. The reclassification rule now
+covers every supply-chain policy block uniformly: pre-fetch off-allowlist
+OA URLs, real redirect denials, insecure-scheme hops, and host-blocklist
+hits. Only a genuine transport fault with no <code>denial_context</code> (or a
+non-policy reason such as <code>size_cap_exceeded</code> / <code>content_type_mismatch</code>)
+remains <code>NETWORK_ERROR</code> / exit 1, consistent with §2.</p>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/developer&#x2F;errors.md">
+      site/content/developer&#x2F;errors.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,37 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Apply the four CONFIG.md §5 global flags (#211) by overwriting the matching process env vars before any command resolver reads them."><title>apply_global_overrides in doiget - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="doiget" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">apply_global_overrides</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../doiget/index.html">doiget</a><span class="version">0.8.13</span></h2></div><div class="sidebar-elems"><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="index.html">doiget</a></div><h1>Function <span class="fn">apply_<wbr>global_<wbr>overrides</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/doiget/main.rs.html#714-732">Source</a> </span></div><pre class="rust item-decl"><code>pub(crate) fn apply_global_overrides(cli: &amp;<a class="struct" href="struct.Cli.html" title="struct doiget::Cli">Cli</a>)</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Apply the four CONFIG.md §5 global flags (#211) by overwriting the
+matching process env vars before any command resolver reads them.</p>
+<p>This keeps the precedence ladder <code>flag &gt; env &gt; default</code> correct
+uniformly across every command without threading a new
+<code>ResolvedFlags</code> value through eleven <code>run(..)</code> signatures: the
+existing env-driven resolvers (<code>resolve_store_root</code>,
+<code>resolve_log_path</code>, the future <code>--color</code> / <code>--progress</code>
+consumers) keep reading env and will see the flag value when one
+is given.</p>
+<p><code>--color</code> and <code>--progress</code> / <code>--no-progress</code> are <em>surface-only</em> in
+this slice — they are accepted and exposed via <code>DOIGET_COLOR</code> /
+<code>DOIGET_PROGRESS</code> for future consumers, but doiget does not yet
+emit ANSI escapes or per-ref progress lines that would respect
+them. <code>NO_COLOR=1</code> (per <a href="https://no-color.org/">https://no-color.org/</a>) still wins over
+<code>--color always</code> because the consumer-side resolver checks
+<code>NO_COLOR</code> first by the standard convention.</p>
+<p><strong>Thread safety:</strong> <code>std::env::set_var</code> is safe on edition 2021 /
+Rust 1.86 (the workspace MSRV; cf. <code>Cargo.toml [workspace.package] edition</code>). Under edition 2024 it becomes <code>unsafe fn</code> (the
+<code>setenv</code> POSIX call is documented as non-thread-safe), and the
+workspace <code>-F unsafe-code</code> lint will need a localized
+<code>#[allow(unsafe_code)]</code> here when migrating. Tracked under #211
+follow-up.</p>
+<p>We invoke this from <code>run_dispatch</code> (see call site below) before
+any <code>.await</code> in the function. The <code>#[tokio::main]</code> runtime has
+already constructed its multi-thread worker pool by that point,
+but the workers are parked on the work queue and do not read
+<code>environ</code>; the active thread is the binary’s startup thread. The
+concurrent-read soundness condition for <code>setenv</code> is therefore met.
+If a future change introduces an async background task that reads
+<code>DOIGET_STORE_ROOT</code> (or any other key this function writes), the
+application of overrides must move ahead of the runtime
+construction (i.e. above the <code>#[tokio::main]</code> boundary).</p>
+<p>The function intentionally has no error path: each flag value has
+already passed <code>parse_utf8_path</code> (empty and NUL rejected) or
+clap’s <code>ValueEnum</code> (closed set of strings), so <code>set_var</code> cannot
+panic on the value. The function is fire-and-forget by design.</p>
+</div></details></section></div></main></body></html>

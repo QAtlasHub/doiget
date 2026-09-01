@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_dry_run_envelope","build_fetch_plan","emit_dry_run_plan_to_stdout","run_with_options"],"struct":["CliExit","FetchPlan","PdfSourcePlan","RateLimitBudget"]};

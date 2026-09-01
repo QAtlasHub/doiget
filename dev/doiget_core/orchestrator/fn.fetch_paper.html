@@ -1,0 +1,36 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Resolve a `Ref` to a PDF (or metadata-only fallback) and write it through `store`."><title>fetch_paper in doiget_core::orchestrator - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="doiget_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">fetch_paper</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../doiget_core/index.html">doiget_<wbr>core</a><span class="version">0.8.13</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">fetch_<wbr>paper</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#dispatch" title="Dispatch">Dispatch</a></li><li><a href="#side-effects" title="Side effects">Side effects</a></li><li><a href="#errors" title="Errors">Errors</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In doiget_<wbr>core::<wbr>orchestrator</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">doiget_core</a>::<wbr><a href="index.html">orchestrator</a></div><h1>Function <span class="fn">fetch_<wbr>paper</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/doiget_core/orchestrator.rs.html#1281-1297">Source</a> </span></div><pre class="rust item-decl"><code>pub async fn fetch_paper(
+    ref_: &amp;<a class="enum" href="../enum.Ref.html" title="enum doiget_core::Ref">Ref</a>,
+    profile: &amp;<a class="struct" href="../struct.CapabilityProfile.html" title="struct doiget_core::CapabilityProfile">CapabilityProfile</a>,
+    ctx: &amp;<a class="struct" href="../source/struct.FetchContext.html" title="struct doiget_core::source::FetchContext">FetchContext</a>,
+    store: &amp;dyn <a class="trait" href="../store/trait.Store.html" title="trait doiget_core::store::Store">Store</a>,
+    store_root: &amp;Utf8Path,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.98.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="struct.FetchPaperOutcome.html" title="struct doiget_core::orchestrator::FetchPaperOutcome">FetchPaperOutcome</a>, <a class="enum" href="../source/enum.FetchError.html" title="enum doiget_core::source::FetchError">FetchError</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Resolve a <a href="../enum.Ref.html" title="enum doiget_core::Ref"><code>Ref</code></a> to a PDF (or metadata-only fallback) and write it
+through <code>store</code>.</p>
+<p>Binding spec: <code>docs/MCP_TOOLS.md</code> §4 (<code>doiget_fetch_paper</code>),
+<code>docs/REDIRECT_ALLOWLIST.md</code> §3 (informed-best-effort posture for the
+DOI OA PDF leg), <code>docs/PROVENANCE_LOG.md</code> §3 (per-attempt <code>Fetch</code> rows
+emitted by the source impls; <code>StoreWrite</code> row emitted by this
+orchestrator).</p>
+<h2 id="dispatch"><a class="doc-anchor" href="#dispatch">§</a>Dispatch</h2>
+<ul>
+<li><code>Ref::Arxiv(_)</code> → <a href="../sources/arxiv/struct.ArxivSource.html#method.fetch" title="method doiget_core::sources::arxiv::ArxivSource::fetch"><code>ArxivSource::fetch</code></a>; the source returns PDF
+bytes + Atom-feed metadata. The orchestrator writes both the PDF
+and the metadata TOML.</li>
+<li><code>Ref::Doi(_)</code> → Crossref metadata + Unpaywall license/OA-URL
+enrichment + (when the OA URL host is on the <code>oa-publisher</code>
+allowlist) a publisher PDF leg. A failure on the PDF leg is
+non-fatal: the metadata is still written and the orchestrator
+returns <code>Ok(...)</code> with <code>source</code> set to the metadata source.</li>
+</ul>
+<h2 id="side-effects"><a class="doc-anchor" href="#side-effects">§</a>Side effects</h2>
+<p>Each consulted source emits one <code>LogEvent::Fetch</code> row via
+<code>ctx.log.append</code>. The orchestrator additionally emits one
+<code>LogEvent::StoreWrite</code> row on the successful write. Session bookend
+rows are the caller’s responsibility (the CLI’s
+<code>commands::fetch::run_with_options</code> wraps the call; the MCP server’s
+<code>doiget_fetch_paper</code> tool method wraps it too).</p>
+<h2 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h2>
+<p>Returns <a href="../source/enum.FetchError.html" title="enum doiget_core::source::FetchError"><code>FetchError</code></a> from the underlying <a href="../source/trait.Source.html" title="trait doiget_core::source::Source"><code>Source</code></a> dispatch. The
+MCP boundary converts these to the closed <a href="../enum.ErrorCode.html" title="enum doiget_core::ErrorCode"><code>crate::ErrorCode</code></a> set
+via the existing <code>From&lt;FetchError&gt; for ErrorCode</code> impl.</p>
+</div></details></section></div></main></body></html>

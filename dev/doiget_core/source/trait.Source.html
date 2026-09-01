@@ -1,0 +1,99 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="The trait implemented by every Tier 1 / 2 / 3 fetcher."><title>Source in doiget_core::source - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="doiget_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc trait"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Source</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../doiget_core/index.html">doiget_<wbr>core</a><span class="version">0.8.13</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Source</a></h2><h3><a href="#required-methods">Required Methods</a></h3><ul class="block"><li><a href="#tymethod.can_serve" title="can_serve">can_serve</a></li><li><a href="#tymethod.fetch" title="fetch">fetch</a></li><li><a href="#tymethod.name" title="name">name</a></li></ul><h3><a href="#provided-methods">Provided Methods</a></h3><ul class="block"><li><a href="#method.fetch_content" title="fetch_content">fetch_content</a></li></ul><h3><a href="#implementors">Implementors</a></h3></section><div id="rustdoc-modnav"><h2><a href="index.html">In doiget_<wbr>core::<wbr>source</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">doiget_core</a>::<wbr><a href="index.html">source</a></div><h1>Trait <span class="trait">Source</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/doiget_core/source.rs.html#388-459">Source</a> </span></div><pre class="rust item-decl"><code>pub trait Source: <a class="trait" href="https://doc.rust-lang.org/1.98.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + <a class="trait" href="https://doc.rust-lang.org/1.98.0/core/marker/trait.Sync.html" title="trait core::marker::Sync">Sync</a> {
+    // Required methods
+    fn <a href="#tymethod.name" class="fn">name</a>(&amp;self) -&gt; &amp;<a class="primitive" href="https://doc.rust-lang.org/1.98.0/std/primitive.str.html">str</a>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.can_serve" class="fn">can_serve</a>(&amp;self, profile: &amp;<a class="struct" href="../struct.CapabilityProfile.html" title="struct doiget_core::CapabilityProfile">CapabilityProfile</a>, ref_: &amp;<a class="enum" href="../enum.Ref.html" title="enum doiget_core::Ref">Ref</a>) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.98.0/std/primitive.bool.html">bool</a>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.fetch" class="fn">fetch</a>&lt;'life0, 'life1, 'life2, 'life3, 'async_trait&gt;(
+        &amp;'life0 self,
+        ref_: &amp;'life1 <a class="enum" href="../enum.Ref.html" title="enum doiget_core::Ref">Ref</a>,
+        profile: &amp;'life2 <a class="struct" href="../struct.CapabilityProfile.html" title="struct doiget_core::CapabilityProfile">CapabilityProfile</a>,
+        ctx: &amp;'life3 <a class="struct" href="struct.FetchContext.html" title="struct doiget_core::source::FetchContext">FetchContext</a>,
+    ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.98.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.98.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.98.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="enum" href="https://doc.rust-lang.org/1.98.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="struct.FetchResult.html" title="struct doiget_core::source::FetchResult">FetchResult</a>, <a class="enum" href="enum.FetchError.html" title="enum doiget_core::source::FetchError">FetchError</a>&gt;&gt; + <a class="trait" href="https://doc.rust-lang.org/1.98.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;
+       <span class="where">where Self: 'async_trait,
+             'life0: 'async_trait,
+             'life1: 'async_trait,
+             'life2: 'async_trait,
+             'life3: 'async_trait</span>;
+
+    // Provided method
+    fn <a href="#method.fetch_content" class="fn">fetch_content</a>&lt;'life0, 'life1, 'life2, 'life3, 'async_trait&gt;(
+        &amp;'life0 self,
+        _ref_: &amp;'life1 <a class="enum" href="../enum.Ref.html" title="enum doiget_core::Ref">Ref</a>,
+        _profile: &amp;'life2 <a class="struct" href="../struct.CapabilityProfile.html" title="struct doiget_core::CapabilityProfile">CapabilityProfile</a>,
+        _ctx: &amp;'life3 <a class="struct" href="struct.FetchContext.html" title="struct doiget_core::source::FetchContext">FetchContext</a>,
+    ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.98.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.98.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.98.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="enum" href="https://doc.rust-lang.org/1.98.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="enum" href="https://doc.rust-lang.org/1.98.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;Bytes&gt;, <a class="enum" href="enum.FetchError.html" title="enum doiget_core::source::FetchError">FetchError</a>&gt;&gt; + <a class="trait" href="https://doc.rust-lang.org/1.98.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;
+       <span class="where">where Self: 'async_trait,
+             'life0: 'async_trait,
+             'life1: 'async_trait,
+             'life2: 'async_trait,
+             'life3: 'async_trait</span> { ... }
+}</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The trait implemented by every Tier 1 / 2 / 3 fetcher.</p>
+<p>Binding signature: <code>docs/PUBLIC_API.md</code> §2 (NORMATIVE — the wire shape
+of these three methods is semver-locked).</p>
+</div></details><h2 id="required-methods" class="section-header">Required Methods<a href="#required-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="tymethod.name" class="method"><a class="src rightside" href="../../src/doiget_core/source.rs.html#393">Source</a><h4 class="code-header">fn <a href="#tymethod.name" class="fn">name</a>(&amp;self) -&gt; &amp;<a class="primitive" href="https://doc.rust-lang.org/1.98.0/std/primitive.str.html">str</a></h4></section></summary><div class="docblock"><p>Stable name used in metadata (<code>[doiget].source</code>) and provenance
+rows. Conventional values: <code>"crossref"</code>, <code>"unpaywall"</code>, <code>"arxiv"</code>,
+<code>"openalex"</code>, <code>"semantic-scholar"</code>, <code>"doaj"</code>, <code>"tdm-elsevier"</code>,
+etc. (see <code>docs/SOURCES.md</code>).</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.can_serve" class="method"><a class="src rightside" href="../../src/doiget_core/source.rs.html#399">Source</a><h4 class="code-header">fn <a href="#tymethod.can_serve" class="fn">can_serve</a>(&amp;self, profile: &amp;<a class="struct" href="../struct.CapabilityProfile.html" title="struct doiget_core::CapabilityProfile">CapabilityProfile</a>, ref_: &amp;<a class="enum" href="../enum.Ref.html" title="enum doiget_core::Ref">Ref</a>) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.98.0/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>True if this source can plausibly serve the given ref under the
+runtime capability profile. Implementations MUST be fast and
+non-blocking; the orchestrator calls <code>can_serve</code> to decide whether
+to invoke <code>fetch</code> at all.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.fetch" class="method"><a class="src rightside" href="../../src/doiget_core/source.rs.html#412-417">Source</a><h4 class="code-header">fn <a href="#tymethod.fetch" class="fn">fetch</a>&lt;'life0, 'life1, 'life2, 'life3, 'async_trait&gt;(
+    &amp;'life0 self,
+    ref_: &amp;'life1 <a class="enum" href="../enum.Ref.html" title="enum doiget_core::Ref">Ref</a>,
+    profile: &amp;'life2 <a class="struct" href="../struct.CapabilityProfile.html" title="struct doiget_core::CapabilityProfile">CapabilityProfile</a>,
+    ctx: &amp;'life3 <a class="struct" href="struct.FetchContext.html" title="struct doiget_core::source::FetchContext">FetchContext</a>,
+) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.98.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.98.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.98.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="enum" href="https://doc.rust-lang.org/1.98.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="struct.FetchResult.html" title="struct doiget_core::source::FetchResult">FetchResult</a>, <a class="enum" href="enum.FetchError.html" title="enum doiget_core::source::FetchError">FetchError</a>&gt;&gt; + <a class="trait" href="https://doc.rust-lang.org/1.98.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
+    Self: 'async_trait,
+    'life0: 'async_trait,
+    'life1: 'async_trait,
+    'life2: 'async_trait,
+    'life3: 'async_trait,</div></h4></section></summary><div class="docblock"><p>Perform the source-specific fetch.</p>
+<p>Implementations:</p>
+<ol>
+<li>acquire <code>ctx.rate_limiter.acquire(self.name()).await</code>,</li>
+<li>fetch via <code>ctx.http.fetch_bytes</code> / <code>ctx.http.fetch_pdf</code>,</li>
+<li>emit one <code>LogEvent::Fetch</code> row via <code>ctx.log.append</code>,</li>
+<li>return a <a href="struct.FetchResult.html" title="struct doiget_core::source::FetchResult"><code>FetchResult</code></a>.</li>
+</ol>
+<p>The trait does NOT enforce these steps; it documents the protocol
+so concrete impls produce uniform audit trails (per
+<code>docs/ARCHITECTURE.md</code> §6 and <code>docs/PROVENANCE_LOG.md</code> §3).</p>
+</div></details></div><h2 id="provided-methods" class="section-header">Provided Methods<a href="#provided-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="method.fetch_content" class="method"><a class="src rightside" href="../../src/doiget_core/source.rs.html#451-458">Source</a><h4 class="code-header">fn <a href="#method.fetch_content" class="fn">fetch_content</a>&lt;'life0, 'life1, 'life2, 'life3, 'async_trait&gt;(
+    &amp;'life0 self,
+    _ref_: &amp;'life1 <a class="enum" href="../enum.Ref.html" title="enum doiget_core::Ref">Ref</a>,
+    _profile: &amp;'life2 <a class="struct" href="../struct.CapabilityProfile.html" title="struct doiget_core::CapabilityProfile">CapabilityProfile</a>,
+    _ctx: &amp;'life3 <a class="struct" href="struct.FetchContext.html" title="struct doiget_core::source::FetchContext">FetchContext</a>,
+) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.98.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.98.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.98.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="enum" href="https://doc.rust-lang.org/1.98.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="enum" href="https://doc.rust-lang.org/1.98.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;Bytes&gt;, <a class="enum" href="enum.FetchError.html" title="enum doiget_core::source::FetchError">FetchError</a>&gt;&gt; + <a class="trait" href="https://doc.rust-lang.org/1.98.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
+    Self: 'async_trait,
+    'life0: 'async_trait,
+    'life1: 'async_trait,
+    'life2: 'async_trait,
+    'life3: 'async_trait,</div></h4></section></summary><div class="docblock"><p>Fetch the publisher’s own copy of the document itself, when this
+source holds one.</p>
+<p>Distinct from <a href="trait.Source.html#tymethod.fetch" title="method doiget_core::source::Source::fetch"><code>Self::fetch</code></a>, which resolves a <em>record</em>. A Tier-3
+TDM source is consulted for two different reasons at two different
+points in the fetch, and conflating them is what #458 was:</p>
+<ul>
+<li><a href="trait.Source.html#tymethod.fetch" title="method doiget_core::source::Source::fetch"><code>fetch</code></a> answers “who can tell me about this DOI?”
+and runs when Crossref could not;</li>
+<li><code>fetch_content</code> answers “who will give me the bytes?” and runs
+when the content leg was blocked — which is usually <em>after</em>
+Crossref answered perfectly well.</li>
+</ul>
+<p>The default is <code>Ok(None)</code>: “this source is metadata-only”. Stating
+it is the point. Before #458 the same fact was expressed by every
+Tier-3 impl setting <code>FetchResult.pdf_bytes</code> to <code>None</code> and saying so
+in a doc-comment, which the orchestrator could neither read nor act
+on — so it could not tell a source that had nothing to offer from
+one it had simply never asked.</p>
+<p>Implementations that override it MUST use a PDF-validating fetch
+(<a href="../http/struct.HttpClient.html#method.fetch_pdf" title="method doiget_core::http::HttpClient::fetch_pdf"><code>HttpClient::fetch_pdf</code></a> or
+<a href="../http/struct.HttpClient.html#method.fetch_pdf_with_headers" title="method doiget_core::http::HttpClient::fetch_pdf_with_headers"><code>HttpClient::fetch_pdf_with_headers</code></a>). A publisher error page or
+a WAF holding response is a 200 with a body, and storing one under
+<code>&lt;safekey&gt;.pdf</code> would be worse than returning nothing.</p>
+<h5 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h5>
+<p>Any <a href="enum.FetchError.html" title="enum doiget_core::source::FetchError"><code>FetchError</code></a>. <code>Ok(None)</code> means “not me”; <code>Err</code> means “me, and
+it went wrong”. The orchestrator keeps the original content-leg
+block either way, but records the two as different attempt
+outcomes.</p>
+</div></details></div><h2 id="dyn-compatibility" class="section-header">Dyn Compatibility<a href="#dyn-compatibility" class="anchor">§</a></h2><div class="dyn-compatibility-info"><p>This trait <b>is</b> <a href="https://doc.rust-lang.org/1.98.0/reference/items/traits.html#dyn-compatibility">dyn compatible</a>.</p><p><i>In older versions of Rust, dyn compatibility was called "object safety".</i></p></div><h2 id="implementors" class="section-header">Implementors<a href="#implementors" class="anchor">§</a></h2><div id="implementors-list"><div class="negative-marker"></div><section id="impl-Source-for-ArxivSource" class="impl"><a class="src rightside" href="../../src/doiget_core/sources/arxiv.rs.html#212-335">Source</a><a href="#impl-Source-for-ArxivSource" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.Source.html" title="trait doiget_core::source::Source">Source</a> for <a class="struct" href="../sources/arxiv/struct.ArxivSource.html" title="struct doiget_core::sources::arxiv::ArxivSource">ArxivSource</a></h3></section><section id="impl-Source-for-CrossrefSource" class="impl"><a class="src rightside" href="../../src/doiget_core/sources/crossref.rs.html#223-297">Source</a><a href="#impl-Source-for-CrossrefSource" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.Source.html" title="trait doiget_core::source::Source">Source</a> for <a class="struct" href="../sources/crossref/struct.CrossrefSource.html" title="struct doiget_core::sources::crossref::CrossrefSource">CrossrefSource</a></h3></section><section id="impl-Source-for-UnpaywallSource" class="impl"><a class="src rightside" href="../../src/doiget_core/sources/unpaywall.rs.html#72-148">Source</a><a href="#impl-Source-for-UnpaywallSource" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.Source.html" title="trait doiget_core::source::Source">Source</a> for <a class="struct" href="../sources/unpaywall/struct.UnpaywallSource.html" title="struct doiget_core::sources::unpaywall::UnpaywallSource">UnpaywallSource</a></h3></section></div><script src="../../trait.impl/doiget_core/source/trait.Source.js" async></script></section></div></main></body></html>

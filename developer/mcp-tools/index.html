@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MCP tools &middot; doiget</title>
+  <meta name="description" content="`doiget` runs as a Model Context Protocol server when invoked as `doiget serve`. It">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/mcp-tools/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="MCP tools · doiget">
+  <meta property="og:description" content="`doiget` runs as a Model Context Protocol server when invoked as `doiget serve`. It">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/mcp-tools/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="MCP tools · doiget">
+  <meta name="twitter:description" content="`doiget` runs as a Model Context Protocol server when invoked as `doiget serve`. It">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>MCP tools</h1>
+    <p class="lede">`doiget` runs as a Model Context Protocol server when invoked as `doiget serve`. It</p>
+  </header>
+
+  <h1 id="mcp-tools">MCP tools</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE.</strong> Defines the tool surface exposed by <code>doiget serve</code> over stdio
+JSON-RPC. Renaming or removing a tool is a breaking change.</p>
+</blockquote>
+<p><code>doiget</code> runs as a Model Context Protocol server when invoked as <code>doiget serve</code>. It
+speaks <strong>stdio only</strong> (<a href="https://codes.sota-shimozono.com/doiget/developer/mcp-tools/DECISIONS/">ADR-0001</a>, <a href="https://codes.sota-shimozono.com/doiget/developer/mcp-tools/SCOPE.md"><code>SCOPE.md</code></a> §non-goal 6).</p>
+<h2 id="1-tool-list">1. Tool list</h2>
+<table><thead><tr><th>Tool</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>doiget_resolve_paper</code></td><td>Resolve DOI / arXiv id to authoritative metadata.</td></tr>
+<tr><td><code>doiget_fetch_paper</code></td><td>Resolve and download a single PDF to the store. Accepts <code>dry_run</code>.</td></tr>
+<tr><td><code>doiget_metadata_only</code></td><td>Resolve to metadata. <strong>Guarantees no PDF / publisher fetch.</strong> Accepts <code>dry_run</code>.</td></tr>
+<tr><td><code>doiget_batch_fetch</code></td><td>Up to 100 refs in one call. Accepts <code>dry_run</code>.</td></tr>
+<tr><td><code>doiget_info</code></td><td>Retrieve a store entry's metadata.</td></tr>
+<tr><td><code>doiget_search_local</code></td><td>Search store metadata (title / authors / venue).</td></tr>
+<tr><td><code>doiget_paper_search</code></td><td>External literature discovery over OpenAlex (<code>/works?search=</code>); abstract-bearing candidates for triage. Tier-1 OA metadata, always-on; <strong>never fetches a PDF</strong> (ADR-0031).</td></tr>
+<tr><td><code>doiget_paper_text</code></td><td>Extract an <strong>arXiv</strong> paper's full text from ar5iv as sectioned plain text (<code>ref</code>, optional <code>max_chars</code>). Tier-1 OA, always-on; <strong>never opens the PDF blob</strong> (ADR-0032). A DOI → <code>NOT_IMPLEMENTED</code> (terminal: the tool is arXiv-only and DOI→arXiv linking is #281 item 5, not a config knob).</td></tr>
+<tr><td><code>doiget_link</code></td><td>Resolve a <strong>DOI</strong> to its arXiv preprint + identity cluster (<code>{ doi, arxiv, openalex_id, title }</code>) over OpenAlex, for reading or dedup (#281 item 5). Tier-1 OA, always-on; <strong>never fetches a PDF</strong>. arXiv → DOI is a follow-up; a non-DOI ref → <code>INVALID_REF</code>.</td></tr>
+<tr><td><code>doiget_list_recent</code></td><td>Last N fetched entries.</td></tr>
+<tr><td><code>doiget_paper_pdf_path</code></td><td>Return the local path of a cached PDF. <strong>Does not read, parse, or transmit content.</strong></td></tr>
+<tr><td><code>doiget_capability_profile</code></td><td>Report which sources this instance is allowed to use.</td></tr>
+<tr><td><code>doiget_health</code></td><td>Operational sanity (store writable, version, schema). <code>store_writable</code> is a best-effort probe of the nearest <strong>existing</strong> ancestor of the store root — it creates nothing, so calling this tool never materialises <code>papers/</code> (#406).</td></tr>
+</tbody></table>
+<p>Additional tools:</p>
+<table><thead><tr><th>Tool</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>doiget_expand_citation_graph</code></td><td>BFS expansion of citations. Hard-capped. <strong>Build-gated:</strong> advertised only when compiled with <code>--features citation</code> (ADR-0010); a default <code>cargo install</code> build omits it from <code>tools/list</code> entirely rather than advertising a tool that can only answer <code>NOT_IMPLEMENTED</code> (#379). The shipped <code>.mcpb</code> enables the feature, so Claude Desktop always sees it.</td></tr>
+<tr><td><code>doiget_bibtex_export</code></td><td>BibTeX for one or many entries.</td></tr>
+<tr><td><code>doiget_csl_export</code></td><td>CSL JSON for one or many entries.</td></tr>
+<tr><td><code>doiget_resolve_citation</code></td><td>Resolve a free-form bibliographic citation string to ranked DOI candidates.</td></tr>
+<tr><td><code>doiget_batch_resolve_citations</code></td><td>Batch resolve bibliographic citation strings to ranked DOI candidates.</td></tr>
+<tr><td><code>doiget_batch_from_bibliography</code></td><td>Fetch every OA-resolvable entry in a Zotero / Mendeley CSL-JSON export.</td></tr>
+<tr><td><code>doiget_paper_tex_source</code></td><td>Fetch an <strong>arXiv</strong> paper's raw LaTeX source. More reliable than <code>doiget_paper_text</code> for papers ar5iv has not processed through LaTeXML. A DOI is not a valid input.</td></tr>
+<tr><td><code>doiget_tag</code></td><td>Add or remove tags and collection membership on a stored entry, for local knowledge-base organisation (#294).</td></tr>
+<tr><td><code>doiget_annotate</code></td><td>Attach or clear a freeform note on a stored entry (#294).</td></tr>
+</tbody></table>
+<h2 id="2-naming-and-convention">2. Naming and convention</h2>
+<ul>
+<li>All tools use <code>snake_case</code> with the <code>doiget_</code> prefix.</li>
+<li>Inputs are validated via JSON Schema declared in the tool's <code>inputSchema</code> (per MCP).</li>
+<li>Outputs are structured: <code>{ ok: true, ... }</code> or <code>{ ok: false, error: { code, message } }</code>.
+Tools never throw across the JSON-RPC boundary.</li>
+<li>Error <code>code</code> values are the closed set defined in <a href="https://codes.sota-shimozono.com/doiget/developer/mcp-tools/ERRORS.md"><code>ERRORS.md</code></a>.</li>
+</ul>
+<h2 id="3-tool-description-format">3. Tool description format</h2>
+<p>Each tool's <code>description</code> field follows this six-section format so LLM agents can pick
+the right tool with minimal mistakes:</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>WHEN TO USE: &lt;one sentence&gt;
+</span><span>INPUTS: &lt;field-by-field&gt;
+</span><span>OUTPUTS: &lt;shape on success&gt;
+</span><span>COSTS: &lt;network / time / quota&gt;
+</span><span>SIDE EFFECTS: &lt;what writes to disk / log / store&gt;
+</span><span>LIMITS: &lt;hard caps&gt;
+</span></code></pre>
+<h2 id="4-example-tool-spec-doiget-fetch-paper">4. Example tool spec — <code>doiget_fetch_paper</code></h2>
+<pre data-lang="jsonc" style="background-color:#fafafa;color:#61676c;" class="language-jsonc "><code class="language-jsonc" data-lang="jsonc"><span>{
+</span><span>  &quot;name&quot;: &quot;doiget_fetch_paper&quot;,
+</span><span>  &quot;description&quot;: &quot;WHEN TO USE: User wants to download a paper PDF given a DOI or arXiv id.\nINPUTS: ref: DOI (&#39;10.1234/abc&#39;) or arXiv id (&#39;2401.12345&#39;).\nOUTPUTS: { ok: true, ref, source, path, license, size_bytes } or { ok: false, error: { code, message } }.\nCOSTS: 1-3 s network call. May fail if not Open Access.\nSIDE EFFECTS: Writes PDF to the store. Appends a row to the provenance log.\nLIMITS: Max 5 fetches/sec. Use doiget_batch_fetch for &gt;5 refs.&quot;,
+</span><span>  &quot;inputSchema&quot;: {
+</span><span>    &quot;type&quot;: &quot;object&quot;,
+</span><span>    &quot;required&quot;: [&quot;ref&quot;],
+</span><span>    &quot;properties&quot;: {
+</span><span>      &quot;ref&quot;: {
+</span><span>        &quot;type&quot;: &quot;string&quot;,
+</span><span>        &quot;minLength&quot;: 7,
+</span><span>        &quot;maxLength&quot;: 256,
+</span><span>        &quot;pattern&quot;: &quot;^(10\\.\\d{4,9}/[A-Za-z0-9._/()-]+|arXiv:\\d{4}\\.\\d{4,5}|\\d{4}\\.\\d{4,5})$&quot;
+</span><span>      }
+</span><span>    },
+</span><span>    &quot;additionalProperties&quot;: false
+</span><span>  }
+</span><span>}
+</span></code></pre>
+<h2 id="5-output-shape-normative">5. Output shape (NORMATIVE)</h2>
+<pre data-lang="typescript" style="background-color:#fafafa;color:#61676c;" class="language-typescript "><code class="language-typescript" data-lang="typescript"><span style="color:#fa6e32;">type </span><span style="color:#399ee6;">FetchResult </span><span style="color:#ed9366;">=
+</span><span>  </span><span style="color:#ed9366;">| </span><span>{ ok</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">true</span><span style="color:#61676ccc;">,
+</span><span>      ref</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>      source</span><span style="color:#ed9366;">: </span><span style="color:#86b300;">&quot;crossref&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;unpaywall&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;arxiv&quot;
+</span><span>            </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;openalex&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;s2&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;doaj&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;oa-publisher&quot;
+</span><span>            </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;tdm-elsevier&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;tdm-aps&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;tdm-springer&quot;</span><span style="color:#61676ccc;">,
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// ADR-0021 §4 / ADR-0024: the resolver profile under which the
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// canonical-digest for this fetch was minted. Currently equal to
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// `source` verbatim; kept a distinct field so the two can be
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// decoupled if overlapping resolvers are ever added.
+</span><span>      resolver_profile</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>      path</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>      license</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// OA transparency (#281 item 4): &quot;gold&quot;|&quot;green&quot;|&quot;hybrid&quot;|&quot;bronze&quot;|
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// &quot;closed&quot; (Unpaywall) or &quot;green&quot; (arXiv); null when not determined.
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// With `pdf.status` an agent tells &quot;paywalled&quot; (closed + no_oa_url)
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// from &quot;couldn&#39;t reach it&quot;. Also on doiget_metadata_only + batch JSON.
+</span><span>      oa_status</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string </span><span style="color:#ed9366;">| </span><span style="font-style:italic;color:#55b4d4;">null</span><span style="color:#61676ccc;">,
+</span><span>      size_bytes</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">number</span><span style="color:#61676ccc;">,
+</span><span>      schema_version</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// Issue #118 / #243: PDF leg status. Always present on ok:true responses.
+</span><span>      pdf</span><span style="color:#ed9366;">: </span><span style="color:#399ee6;">PdfLeg</span><span style="color:#61676ccc;">,
+</span><span>    }
+</span><span>  </span><span style="color:#ed9366;">| </span><span>{ ok</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">true</span><span style="color:#61676ccc;">, </span><span>dry_run</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">true</span><span style="color:#61676ccc;">, </span><span>ref</span><span style="color:#ed9366;">: </span><span style="color:#399ee6;">RefShape</span><span style="color:#61676ccc;">, </span><span>plan</span><span style="color:#ed9366;">: </span><span style="color:#399ee6;">FetchPlan</span><span style="color:#61676ccc;">,
+</span><span>      rate_limit_budget</span><span style="color:#ed9366;">: </span><span>{ global_per_sec</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">number</span><span style="color:#61676ccc;">, </span><span>per_source_min_gap_ms</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">number </span><span>} }
+</span><span>  </span><span style="color:#ed9366;">| </span><span>{ ok</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">false</span><span style="color:#61676ccc;">,
+</span><span>      ref</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>      error</span><span style="color:#ed9366;">: </span><span>{ code</span><span style="color:#ed9366;">: </span><span style="color:#399ee6;">ErrorCode</span><span style="color:#61676ccc;">, </span><span>message</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">, </span><span>denial_context</span><span style="color:#ed9366;">?: </span><span style="color:#399ee6;">DenialContext </span><span>}
+</span><span>    }</span><span style="color:#61676ccc;">;
+</span><span>
+</span><span style="color:#fa6e32;">type </span><span style="color:#399ee6;">PdfLeg </span><span style="color:#ed9366;">=
+</span><span>  </span><span style="color:#ed9366;">| </span><span>{ status</span><span style="color:#ed9366;">: </span><span style="color:#86b300;">&quot;fetched&quot; </span><span>}
+</span><span>  </span><span style="color:#ed9366;">| </span><span>{ status</span><span style="color:#ed9366;">: </span><span style="color:#86b300;">&quot;no_oa_url&quot; </span><span>}
+</span><span>  </span><span style="color:#ed9366;">| </span><span>{ status</span><span style="color:#ed9366;">: </span><span style="color:#86b300;">&quot;blocked&quot;</span><span style="color:#61676ccc;">,
+</span><span>      code</span><span style="color:#ed9366;">: </span><span style="color:#399ee6;">ErrorCode</span><span style="color:#61676ccc;">,
+</span><span>      message</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// Present when the failure was an allowlist / scheme denial (ADR-0023).
+</span><span>      denial_context</span><span style="color:#ed9366;">?: </span><span style="color:#399ee6;">DenialContext</span><span style="color:#61676ccc;">,
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// Present when Unpaywall metadata includes an arXiv alternative URL
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// for the same paper. The version suffix (e.g. `v2`) is stripped so
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// the ID refers to the latest version. Use as:
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">//   doiget fetch arxiv:&lt;suggested_arxiv_id&gt;
+</span><span>      suggested_arxiv_id</span><span style="color:#ed9366;">?: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>    }
+</span><span>  </span><span style="color:#ed9366;">| </span><span>{ status</span><span style="color:#ed9366;">: </span><span style="color:#86b300;">&quot;unknown&quot; </span><span>}</span><span style="color:#61676ccc;">;
+</span><span>
+</span><span style="color:#fa6e32;">type </span><span style="color:#399ee6;">DenialContext </span><span style="color:#ed9366;">= </span><span>{
+</span><span>  reason</span><span style="color:#ed9366;">: </span><span style="color:#86b300;">&quot;redirect_not_in_allowlist&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;insecure_scheme&quot;
+</span><span>        </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;host_in_block_list&quot;
+</span><span>        </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;size_cap_exceeded&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;schema_drift&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;capability_not_granted&quot;
+</span><span>        </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;rate_limit_window&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;ssrf_private_address&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;content_type_mismatch&quot;</span><span style="color:#61676ccc;">,
+</span><span>  source</span><span style="color:#ed9366;">?: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>  attempted</span><span style="color:#ed9366;">?: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>  </span><span style="font-style:italic;color:#abb0b6;">// `expected?` is absent when the producer did not populate this field for
+</span><span>  </span><span style="font-style:italic;color:#abb0b6;">// this reason. An empty array (`&quot;expected&quot;: []`) is the distinct
+</span><span>  </span><span style="font-style:italic;color:#abb0b6;">// &quot;explicit empty allowlist&quot; signal — see ADR-0023 §3 for the
+</span><span>  </span><span style="font-style:italic;color:#abb0b6;">// None / Some(vec![]) disambiguation.
+</span><span>  expected</span><span style="color:#ed9366;">?: </span><span style="font-style:italic;color:#55b4d4;">string</span><span>[]</span><span style="color:#61676ccc;">,
+</span><span>  hop_index</span><span style="color:#ed9366;">?: </span><span style="font-style:italic;color:#55b4d4;">number</span><span style="color:#61676ccc;">,
+</span><span>  cap</span><span style="color:#ed9366;">?: </span><span style="font-style:italic;color:#55b4d4;">number</span><span style="color:#61676ccc;">,
+</span><span>  actual</span><span style="color:#ed9366;">?: </span><span style="font-style:italic;color:#55b4d4;">number</span><span style="color:#61676ccc;">,
+</span><span>}</span><span style="color:#61676ccc;">;
+</span></code></pre>
+<p><code>ErrorCode</code> is the closed enum in <a href="https://codes.sota-shimozono.com/doiget/developer/mcp-tools/ERRORS.md"><code>ERRORS.md</code></a>. <code>DenialContext</code>
+is the optional structured-recovery payload defined in
+<a href="https://codes.sota-shimozono.com/doiget/developer/mcp-tools/DECISIONS/0023-denial-context-structured.md">ADR-0023</a>. <code>FetchPlan</code> is the
+dry-run preview shape — see §10 below.</p>
+<h3 id="5-1-denial-context-presence-single-paper-vs-batch-normative">5.1 <code>denial_context</code> presence: single-paper vs batch (NORMATIVE)</h3>
+<p>There is an <strong>intentional, normative asymmetry</strong> in how the optional
+<code>denial_context</code> field is represented on an <code>ok:false</code> error:</p>
+<ul>
+<li><strong>Single-paper tools</strong> (<code>doiget_fetch_paper</code>, <code>doiget_metadata_only</code>,
+<code>doiget_resolve_paper</code>): the <code>denial_context</code> key is <strong>omit-when-None</strong>.
+When the error <em>does</em> carry a structured recovery channel (e.g. a
+<code>CAPABILITY_DENIED</code> allowlist/scheme denial), the key <strong>is present</strong>
+with the <code>DenialContext</code> payload; when there is no denial channel for
+the error (e.g. a <code>NETWORK_ERROR</code>), the key is <strong>omitted</strong> entirely.
+<code>doiget_resolve_paper</code> follows this exact same contract as the other
+two single-paper tools — it is <em>not</em> a tool that can never carry a
+denial context; the key is simply absent rather than <code>null</code> when there
+is nothing to report. Agents MUST treat absence and <code>null</code> as
+equivalent ("no structured recovery payload").</li>
+<li><strong><code>doiget_batch_fetch</code></strong> per-ref error entries: the <code>denial_context</code>
+key is <strong>always present</strong>, set to <code>null</code> when there is no denial
+channel. Per-ref rows are uniform table rows in the agent's view, so
+the explicit <code>null</code> lets an agent index every row's
+<code>error.denial_context</code> without a presence test.</li>
+</ul>
+<p>An agent that wants to work across both surfaces should read
+<code>error.denial_context</code> and treat both <em>missing</em> and <code>null</code> as "none".
+A serialization failure of a non-<code>null</code> <code>DenialContext</code> (today
+unreachable — the type is a typed <code>Serialize</code> struct) emits <code>null</code> <strong>and
+a <code>tracing::warn!</code> on stderr</strong> so the swallow is observable; it is never
+silent (see #154 / ADR-0023 §4).</p>
+<h2 id="6-excluded-tools-permanent">6. Excluded tools (permanent)</h2>
+<p>The following are intentionally <strong>not</strong> offered as MCP tools and will not be added.
+See <a href="https://codes.sota-shimozono.com/doiget/developer/mcp-tools/SCOPE.md"><code>SCOPE.md</code></a> §"Credential / safety non-goals":</p>
+<ul>
+<li><code>doiget_delete_paper(...)</code> — destructive store ops are CLI-only.</li>
+<li><code>doiget_set_credentials(...)</code> — credentials never enter the MCP surface.</li>
+<li><code>doiget_run_shell(...)</code> — no generic command escape.</li>
+<li><code>doiget_fetch_url(url: ...)</code> — SSRF surface; only DOI / arXiv id input.</li>
+</ul>
+<h2 id="7-capability-awareness">7. Capability awareness</h2>
+<p>Agents can call <code>doiget_capability_profile</code> first to determine which sources the
+instance is allowed to use. The output is redacted (no API key contents) and is suitable
+for an agent to use in planning whether a TDM-class fetch will succeed.</p>
+<pre data-lang="typescript" style="background-color:#fafafa;color:#61676c;" class="language-typescript "><code class="language-typescript" data-lang="typescript"><span style="color:#fa6e32;">type </span><span style="color:#399ee6;">CapabilityProfileResponse </span><span style="color:#ed9366;">= </span><span>{
+</span><span>  oa_enabled</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">true</span><span style="color:#61676ccc;">,
+</span><span>  metadata_sources</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span>[]</span><span style="color:#61676ccc;">,          </span><span style="font-style:italic;color:#abb0b6;">// e.g. [&quot;openalex&quot;]
+</span><span>  tdm_enabled</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">boolean</span><span style="color:#61676ccc;">,                </span><span style="font-style:italic;color:#abb0b6;">// disjunction over individual TDM grants
+</span><span>  tdm_elsevier</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">boolean</span><span style="color:#61676ccc;">,
+</span><span>  tdm_aps</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">boolean</span><span style="color:#61676ccc;">,
+</span><span>  tdm_springer</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">boolean</span><span style="color:#61676ccc;">,
+</span><span>  rate_limit_per_sec</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">number</span><span style="color:#61676ccc;">,          </span><span style="font-style:italic;color:#abb0b6;">// always 5.0
+</span><span>}</span><span style="color:#61676ccc;">;
+</span></code></pre>
+<h2 id="8-server-lifecycle">8. Server lifecycle</h2>
+<ul>
+<li>Started by an MCP host as <code>doiget serve</code>.</li>
+<li>stdin EOF triggers a 5-second graceful shutdown that completes ongoing fetches and
+releases store locks.</li>
+<li>stdout carries only JSON-RPC frames (banner, log, progress all forbidden, see
+<a href="https://codes.sota-shimozono.com/doiget/developer/mcp-tools/SECURITY.md"><code>SECURITY.md</code></a> §3).</li>
+<li>stderr carries <code>tracing-subscriber</code> output (<code>RUST_LOG</code> controlled).</li>
+</ul>
+<h2 id="9-smoke-test">9. Smoke test</h2>
+<p>A CI workflow <code>mcp-smoke.yml</code> spawns the server, sends a minimal sequence
+(<code>initialize</code> → <code>tools/list</code> → <code>tools/call doiget_health</code>), asserts the responses, and
+asserts that no stray bytes appeared on stdout outside JSON-RPC frames.</p>
+<h2 id="10-dry-run-preview-normative-adr-0022">10. Dry-run preview (NORMATIVE; ADR-0022)</h2>
+<p><code>doiget_fetch_paper</code>, <code>doiget_metadata_only</code>, and <code>doiget_batch_fetch</code> accept
+an optional <code>dry_run: boolean</code> input field, defaulting to <code>false</code>. When
+<code>true</code>:</p>
+<ul>
+<li>The orchestrator builds a <code>FetchPlan</code> and returns it without touching the
+network or the filesystem and without appending a provenance row.</li>
+<li>The result envelope is <code>{ ok: true, dry_run: true, ref, plan, rate_limit_budget }</code>.</li>
+<li>The <code>plan.pdf_sources[].candidate_hosts</code> list is the <strong>static allowlist</strong>
+for the resolver, not a prediction of the single host the real fetch would
+hit. doiget cannot resolve the post-Unpaywall OA URL host without making
+the Unpaywall call, and <code>dry_run</code> MUST NOT make it.</li>
+<li>The <code>plan.candidate_hosts_are_upper_bound</code> boolean is always <code>true</code> and
+machine-encodes the bullet above (ADR-0022 §4) directly into
+the wire envelope, so an agent can detect the upper-bound semantics
+without consulting the spec.</li>
+</ul>
+<pre data-lang="jsonc" style="background-color:#fafafa;color:#61676c;" class="language-jsonc "><code class="language-jsonc" data-lang="jsonc"><span>{
+</span><span>  &quot;ok&quot;: true,
+</span><span>  &quot;dry_run&quot;: true,
+</span><span>  &quot;ref&quot;: { &quot;doi&quot;: &quot;10.1234/foo&quot; },
+</span><span>  &quot;plan&quot;: {
+</span><span>    &quot;metadata_sources&quot;: [&quot;crossref&quot;, &quot;unpaywall&quot;],
+</span><span>    &quot;pdf_sources&quot;:      [{
+</span><span>      &quot;key&quot;:             &quot;oa-publisher&quot;,
+</span><span>      &quot;candidate_hosts&quot;: [&quot;*.springer.com&quot;, &quot;*.springeropen.com&quot;]
+</span><span>    }],
+</span><span>    &quot;redirect_allowlists_loaded&quot;:      [&quot;crossref&quot;, &quot;unpaywall&quot;, &quot;arxiv&quot;, &quot;oa-publisher&quot;],
+</span><span>    &quot;candidate_hosts_are_upper_bound&quot;: true,
+</span><span>    &quot;target_pdf_path&quot;:                 &quot;/home/.../store/doi_10.1234_foo.pdf&quot;,
+</span><span>    &quot;target_metadata_path&quot;:            &quot;/home/.../store/doi_10.1234_foo.toml&quot;,
+</span><span>    &quot;would_append_provenance&quot;:         true
+</span><span>  },
+</span><span>  &quot;rate_limit_budget&quot;: {
+</span><span>    &quot;global_per_sec&quot;:        5.0,
+</span><span>    &quot;per_source_min_gap_ms&quot;: 200
+</span><span>  }
+</span><span>}
+</span></code></pre>
+<p>Tools where <code>dry_run</code> does not apply (<code>doiget_info</code>, <code>doiget_search_local</code>,
+<code>doiget_paper_search</code>, <code>doiget_paper_text</code>, <code>doiget_link</code>, <code>doiget_list_recent</code>, <code>doiget_paper_pdf_path</code>,
+<code>doiget_capability_profile</code>, <code>doiget_health</code>, <code>doiget_resolve_paper</code>) reject the field as
+<code>INVALID_REF</code>-class — i.e. surface as
+<code>{ok:false, error:{code:"INVALID_REF", ...}}</code>.</p>
+<h2 id="11-doiget-metadata-only-normative">11. <code>doiget_metadata_only</code> (NORMATIVE)</h2>
+<p><code>doiget_metadata_only</code> resolves a <code>ref</code> through the configured metadata
+sources (Crossref + Unpaywall + arXiv-meta) and returns the resulting
+metadata. It <strong>MUST NOT</strong> trigger a publisher-side PDF fetch, even when the
+metadata source returns an OA URL. The OA URL, when known, is surfaced in the
+response as <code>oa_url</code> (string) for the caller to act on separately.</p>
+<h3 id="oa-url-is-opt-in-539"><code>oa_url</code> is opt-in (#539)</h3>
+<p>On the default path <code>oa_url</code> is <code>null</code> whenever Crossref answered -- which is
+nearly every DOI -- and callers MUST NOT read that as "this work has no OA
+location".</p>
+<p>It is <strong>not</strong> unconditionally null without the flag. <code>metadata_only_doi</code> keeps a
+pre-existing fallback: when Crossref <em>fails</em>, Unpaywall is consulted regardless
+of <code>include_oa_location</code>, and <code>oa_url</code> / <code>oa_status</code> come from that record.
+<code>source</code> tells the two apart -- <code>crossref</code> means the default path answered,
+<code>unpaywall</code> means the fallback did.</p>
+<p>The DOI path is Crossref-first, on the rationale that Crossref's
+<code>message.link[]</code> supplied an OA URL without a second request. It does not:
+measured across twelve live entries and eight captured fixtures, every one
+carried an <code>intended-application</code> scoping it to a licensed programme
+(Similarity Check, TDM, syndication) rather than being general-purpose, and
+following one outside that programme would be taking a licensed route
+without the licence. So the extractor refuses all of them, correctly, and the
+field it was meant to fill stays empty (ADR-0052, #517).</p>
+<p>A caller that wants a real OA location passes <code>include_oa_location: true</code>,
+which consults Unpaywall. That costs one extra metadata round-trip; it does
+NOT weaken any guarantee above, because Unpaywall is a metadata source and
+the URL is still reported and never followed.</p>
+<p>With the flag set, the <code>oa_status</code>/<code>oa_url</code> pair says which answer you got:</p>
+<table><thead><tr><th><code>oa_status</code></th><th><code>oa_url</code></th><th>meaning</th></tr></thead><tbody>
+<tr><td><code>"closed"</code></td><td><code>null</code></td><td>the lookup completed; this work has no OA location</td></tr>
+<tr><td><code>"gold"</code>, <code>"green"</code>, <code>"hybrid"</code>, <code>"bronze"</code></td><td>string</td><td>the lookup completed; here it is</td></tr>
+<tr><td><code>null</code></td><td><code>null</code></td><td>the lookup did not complete</td></tr>
+</tbody></table>
+<p>A failed Unpaywall call is NOT an error: the Crossref metadata the caller also
+asked for is still returned, and the null <code>oa_status</code> is what distinguishes
+"could not find out" from a completed lookup reporting <code>"closed"</code>. This
+mirrors the <code>oa_status</code> + <code>pdf.status</code> pairing already used by
+<code>doiget_fetch_paper</code> (§4).</p>
+<pre data-lang="jsonc" style="background-color:#fafafa;color:#61676c;" class="language-jsonc "><code class="language-jsonc" data-lang="jsonc"><span>{
+</span><span>  &quot;name&quot;: &quot;doiget_metadata_only&quot;,
+</span><span>  &quot;description&quot;: &quot;WHEN TO USE: User wants metadata for a DOI / arXiv id without paying for or being noticed by a PDF download.\nINPUTS: ref (DOI or arXiv id), dry_run (optional bool), include_oa_location (optional bool).\nOUTPUTS: { ok: true, ref, source, license?, oa_url:string|null, oa_status:string|null, metadata } or { ok:false, error }.\nCOSTS: 1-2 s metadata round-trip (roughly doubled when include_oa_location). No publisher fetch.\nSIDE EFFECTS: Appends a provenance row tagged &#39;metadata-only&#39; (unless dry_run). Writes the metadata TOML to the store.\nLIMITS: Subject to the same rate cap as fetch_paper (5/sec). The OA URL is reported but never followed. oa_url is null unless include_oa_location is set.&quot;,
+</span><span>  &quot;inputSchema&quot;: {
+</span><span>    &quot;type&quot;: &quot;object&quot;,
+</span><span>    &quot;required&quot;: [&quot;ref&quot;],
+</span><span>    &quot;properties&quot;: {
+</span><span>      &quot;ref&quot;: {
+</span><span>        &quot;type&quot;: &quot;string&quot;,
+</span><span>        &quot;minLength&quot;: 7,
+</span><span>        &quot;maxLength&quot;: 256,
+</span><span>        &quot;pattern&quot;: &quot;^(10\\.\\d{4,9}/[A-Za-z0-9._/()-]+|arXiv:\\d{4}\\.\\d{4,5}|\\d{4}\\.\\d{4,5})$&quot;
+</span><span>      },
+</span><span>      &quot;dry_run&quot;: { &quot;type&quot;: &quot;boolean&quot;, &quot;default&quot;: false },
+</span><span>      &quot;include_oa_location&quot;: { &quot;type&quot;: &quot;boolean&quot;, &quot;default&quot;: false }
+</span><span>    },
+</span><span>    &quot;additionalProperties&quot;: false
+</span><span>  }
+</span><span>}
+</span></code></pre>
+<p>Output:</p>
+<pre data-lang="typescript" style="background-color:#fafafa;color:#61676c;" class="language-typescript "><code class="language-typescript" data-lang="typescript"><span style="color:#fa6e32;">type </span><span style="color:#399ee6;">MetadataOnlyResult </span><span style="color:#ed9366;">=
+</span><span>  </span><span style="color:#ed9366;">| </span><span>{ ok</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">true</span><span style="color:#61676ccc;">,
+</span><span>      ref</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>      source</span><span style="color:#ed9366;">: </span><span style="color:#86b300;">&quot;crossref&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;unpaywall&quot; </span><span style="color:#ed9366;">| </span><span style="color:#86b300;">&quot;arxiv&quot;</span><span style="color:#61676ccc;">,
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// ADR-0021 §4 / ADR-0024: the resolver profile under which the
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// canonical-digest for this metadata-only call was minted.
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// Currently equal to `source` verbatim.
+</span><span>      resolver_profile</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>      license</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// Null whenever Crossref answered and `include_oa_location` was not set;
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// see above for the Crossref-failure case, which fills it either way. A
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// null here is NOT evidence that the work has no OA location.
+</span><span>      oa_url</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string </span><span style="color:#ed9366;">| </span><span style="font-style:italic;color:#55b4d4;">null</span><span style="color:#61676ccc;">,
+</span><span>      </span><span style="font-style:italic;color:#abb0b6;">// gold / green / hybrid / bronze / closed, or null when not determined.
+</span><span>      oa_status</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string </span><span style="color:#ed9366;">| </span><span style="font-style:italic;color:#55b4d4;">null</span><span style="color:#61676ccc;">,
+</span><span>      metadata</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">object</span><span style="color:#61676ccc;">,
+</span><span>      schema_version</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">,
+</span><span>    }
+</span><span>  </span><span style="color:#ed9366;">| </span><span>{ ok</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">true</span><span style="color:#61676ccc;">, </span><span>dry_run</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">true</span><span style="color:#61676ccc;">, </span><span>ref</span><span style="color:#ed9366;">: </span><span style="color:#399ee6;">RefShape</span><span style="color:#61676ccc;">, </span><span>plan</span><span style="color:#ed9366;">: </span><span style="color:#399ee6;">FetchPlan</span><span style="color:#61676ccc;">,
+</span><span>      rate_limit_budget</span><span style="color:#ed9366;">: </span><span>{ global_per_sec</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">number</span><span style="color:#61676ccc;">, </span><span>per_source_min_gap_ms</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">number </span><span>} }
+</span><span>  </span><span style="color:#ed9366;">| </span><span>{ ok</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">false</span><span style="color:#61676ccc;">, </span><span>ref</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">, </span><span>error</span><span style="color:#ed9366;">: </span><span>{ code</span><span style="color:#ed9366;">: </span><span style="color:#399ee6;">ErrorCode</span><span style="color:#61676ccc;">, </span><span>message</span><span style="color:#ed9366;">: </span><span style="font-style:italic;color:#55b4d4;">string</span><span style="color:#61676ccc;">, </span><span>denial_context</span><span style="color:#ed9366;">?: </span><span style="color:#399ee6;">DenialContext </span><span>} }</span><span style="color:#61676ccc;">;
+</span></code></pre>
+<p>Posture: covered by the same posture-lint check as ADR-0022 §5 — a
+<code>metadata_only</code> codepath that reaches <code>HttpClient::fetch_pdf</code> is a hard
+failure.</p>
+<h2 id="12-doiget-resolve-citation-and-doiget-batch-resolve-citations-normative">12. <code>doiget_resolve_citation</code> and <code>doiget_batch_resolve_citations</code> (NORMATIVE)</h2>
+<p><code>doiget_resolve_citation</code> resolves a free-form bibliographic citation string to ranked DOI candidates via the Crossref works query API.</p>
+<p><code>doiget_batch_resolve_citations</code> batch-resolves multiple citation strings (up to 50).</p>
+<p>Both tools calculate token-based overlap similarity scores, filter out results with a score &lt; 0.5, and sort candidates by score descending. No local store writes or provenance logs are created.</p>
+<h3 id="branch-on-confidence-not-score-536">Branch on <code>confidence</code>, not <code>score</code> (#536)</h3>
+<p>Each candidate carries <code>confidence</code> and <code>matched</code> alongside <code>score</code>.</p>
+<p><code>score</code> alone is not enough to judge with. It is <strong>token overlap against your
+query string</strong>, not semantic similarity, and 0.5 is the <strong>floor</strong> — so the
+worst candidate these tools can emit still looks like a positive number. A
+citation naming an author, a title, a journal, a volume and a year that comes
+back at 0.5 means most of it did not match, which for a known-item lookup is a
+negative result.</p>
+<table><thead><tr><th><code>confidence</code></th><th>meaning</th></tr></thead><tbody>
+<tr><td><code>exact</code></td><td>every query token was found in the candidate's record</td></tr>
+<tr><td><code>probable</code></td><td>at least four query tokens in five</td></tr>
+<tr><td><code>weak</code></td><td>cleared the 0.5 floor and no more — a near-miss, not a match</td></tr>
+</tbody></table>
+<p><code>matched</code> lists which of your tokens were found, which is how you see whether
+the author and the journal were among them. In the case that produced #536 they
+were <code>quality</code>, <code>life</code>, <code>bipolar</code>, <code>2010</code> — and the returned paper was by a
+different author in a different journal.</p>
+<p>These are bands over token overlap, not a semantic verdict: <code>exact</code> is a strong
+signal and still not proof, so verify with <code>doiget_resolve_paper</code> before citing.</p>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/developer&#x2F;mcp-tools.md">
+      site/content/developer&#x2F;mcp-tools.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

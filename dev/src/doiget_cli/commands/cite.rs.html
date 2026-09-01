@@ -1,0 +1,175 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/doiget-cli/src/commands/cite.rs`."><title>cite.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="doiget_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">doiget_cli/commands/</div>cite.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! `doiget cite &lt;ref&gt;` subcommand — resolve a DOI / arXiv reference to a
+<a href=#2 id=2 data-nosnippet>2</a>//! clean BibTeX entry on stdout, a `doi2bib`-style citation helper.
+<a href=#3 id=3 data-nosnippet>3</a>//!
+<a href=#4 id=4 data-nosnippet>4</a>//! Unlike [`bib`](super::bib) (which renders an entry already in the local
+<a href=#5 id=5 data-nosnippet>5</a>//! store), `cite` resolves the reference **live** — cache-aware via the
+<a href=#6 id=6 data-nosnippet>6</a>//! resolver cache (`docs/CACHE.md`), so repeat citations of the same ref
+<a href=#7 id=7 data-nosnippet>7</a>//! avoid upstream rate limits — and never writes to the store. The DOI
+<a href=#8 id=8 data-nosnippet>8</a>//! path enriches the entry from the Crossref envelope
+<a href=#9 id=9 data-nosnippet>9</a>//! ([`doiget_core::orchestrator::cite_metadata`]) so the output carries
+<a href=#10 id=10 data-nosnippet>10</a>//! year / journal / publisher / ISSN, not just the bare id.
+<a href=#11 id=11 data-nosnippet>11</a>//!
+<a href=#12 id=12 data-nosnippet>12</a>//! ## Offline resilience (issue #305)
+<a href=#13 id=13 data-nosnippet>13</a>//!
+<a href=#14 id=14 data-nosnippet>14</a>//! A live resolve that fails (network hiccup, OpenAlex flake) does NOT
+<a href=#15 id=15 data-nosnippet>15</a>//! discard an already-fetched reference: `cite` falls back to the local
+<a href=#16 id=16 data-nosnippet>16</a>//! store and renders the stored metadata, with a `note:` on stderr so the
+<a href=#17 id=17 data-nosnippet>17</a>//! offline path is visible. `--offline` skips the live resolve entirely
+<a href=#18 id=18 data-nosnippet>18</a>//! (store-only). Either way a total miss is a non-zero error, never a
+<a href=#19 id=19 data-nosnippet>19</a>//! silent empty stdout (the #302 / #304 "never exit 0 with nothing"
+<a href=#20 id=20 data-nosnippet>20</a>//! contract).
+<a href=#21 id=21 data-nosnippet>21</a>//!
+<a href=#22 id=22 data-nosnippet>22</a>//! Rendering (field mapping, brace-stripping, HTML/MathML tag scrubbing)
+<a href=#23 id=23 data-nosnippet>23</a>//! is shared with `doiget bib` via
+<a href=#24 id=24 data-nosnippet>24</a>//! [`doiget_core::store::render::to_bibtex`].
+<a href=#25 id=25 data-nosnippet>25</a>//!
+<a href=#26 id=26 data-nosnippet>26</a>//! ## Relation to doi2bib
+<a href=#27 id=27 data-nosnippet>27</a>//!
+<a href=#28 id=28 data-nosnippet>28</a>//! This command is functionally comparable to the `doi2bib` tool, and the
+<a href=#29 id=29 data-nosnippet>29</a>//! "doi2bib-style" / "doi2bib-quality" phrasing throughout doiget is a
+<a href=#30 id=30 data-nosnippet>30</a>//! descriptive comparison only. `cite` is an **independent, clean-room
+<a href=#31 id=31 data-nosnippet>31</a>//! implementation** built on doiget's own Crossref/arXiv resolver and
+<a href=#32 id=32 data-nosnippet>32</a>//! `to_bibtex` renderer; it incorporates **no code** from any external
+<a href=#33 id=33 data-nosnippet>33</a>//! doi2bib project. In particular it does not derive from the AGPL-3.0
+<a href=#34 id=34 data-nosnippet>34</a>//! `doi2bib` at &lt;https://github.com/vandroogenbroeckmarc/doi2bib&gt; — none
+<a href=#35 id=35 data-nosnippet>35</a>//! of that project's source, field-correction heuristics, or
+<a href=#36 id=36 data-nosnippet>36</a>//! Unicode→ASCII tables are used here, so doiget remains MIT-licensed.
+<a href=#37 id=37 data-nosnippet>37</a>
+<a href=#38 id=38 data-nosnippet>38</a></span><span class="kw">use </span>std::io::Write;
+<a href=#39 id=39 data-nosnippet>39</a>
+<a href=#40 id=40 data-nosnippet>40</a><span class="kw">use </span>anyhow::{anyhow, Context, <span class="prelude-ty">Result</span>};
+<a href=#41 id=41 data-nosnippet>41</a>
+<a href=#42 id=42 data-nosnippet>42</a><span class="kw">use </span>doiget_core::orchestrator::{cite_metadata, resolve_only, MetadataOnlyOutcome};
+<a href=#43 id=43 data-nosnippet>43</a><span class="kw">use </span>doiget_core::store::{render, FsStore, Metadata, Store};
+<a href=#44 id=44 data-nosnippet>44</a><span class="kw">use </span>doiget_core::{CapabilityProfile, Ref};
+<a href=#45 id=45 data-nosnippet>45</a>
+<a href=#46 id=46 data-nosnippet>46</a><span class="kw">use </span><span class="kw">super</span>::output::print_err;
+<a href=#47 id=47 data-nosnippet>47</a><span class="kw">use </span><span class="kw">super</span>::resolve_store_root;
+<a href=#48 id=48 data-nosnippet>48</a>
+<a href=#49 id=49 data-nosnippet>49</a><span class="doccomment">/// Run the `cite` subcommand.
+<a href=#50 id=50 data-nosnippet>50</a>///
+<a href=#51 id=51 data-nosnippet>51</a>/// `input` is the user-supplied ref string (a DOI, `arxiv:&lt;id&gt;`, or any
+<a href=#52 id=52 data-nosnippet>52</a>/// scheme accepted by [`Ref::parse`]). When `offline` is set the live
+<a href=#53 id=53 data-nosnippet>53</a>/// resolve is skipped and the entry is rendered from the local store;
+<a href=#54 id=54 data-nosnippet>54</a>/// otherwise a live resolve is attempted first and the store is used as a
+<a href=#55 id=55 data-nosnippet>55</a>/// fallback when it fails.
+<a href=#56 id=56 data-nosnippet>56</a>///
+<a href=#57 id=57 data-nosnippet>57</a>/// On success a BibTeX entry is written to stdout. Like `bib`, the BibTeX
+<a href=#58 id=58 data-nosnippet>58</a>/// is the requested artifact (product output, not a diagnostic), so
+<a href=#59 id=59 data-nosnippet>59</a>/// `--quiet` does NOT suppress it. A total miss (no live resolve and no
+<a href=#60 id=60 data-nosnippet>60</a>/// store entry) returns an error so the CLI exits non-zero.
+<a href=#61 id=61 data-nosnippet>61</a></span><span class="kw">pub async fn </span>run(input: String, offline: bool, _mode: <span class="kw">super</span>::output::OutputMode) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#62 id=62 data-nosnippet>62</a>    <span class="kw">let </span>ref_ = <span class="kw">super</span>::parse_ref_or_exit(<span class="kw-2">&amp;</span>input)<span class="question-mark">?</span>;
+<a href=#63 id=63 data-nosnippet>63</a>
+<a href=#64 id=64 data-nosnippet>64</a>    <span class="comment">// `--offline`: render straight from the store, no network at all.
+<a href=#65 id=65 data-nosnippet>65</a>    </span><span class="kw">if </span>offline {
+<a href=#66 id=66 data-nosnippet>66</a>        <span class="kw">let </span>bib = bib_from_store(<span class="kw-2">&amp;</span>ref_)<span class="question-mark">?</span>.ok_or_else(|| {
+<a href=#67 id=67 data-nosnippet>67</a>            <span class="macro">anyhow!</span>(
+<a href=#68 id=68 data-nosnippet>68</a>                <span class="string">"--offline: no local store entry for {input} (fetch it first with `doiget fetch`)"
+<a href=#69 id=69 data-nosnippet>69</a>            </span>)
+<a href=#70 id=70 data-nosnippet>70</a>        })<span class="question-mark">?</span>;
+<a href=#71 id=71 data-nosnippet>71</a>        <span class="kw">return </span>write_bib(<span class="kw-2">&amp;</span>bib);
+<a href=#72 id=72 data-nosnippet>72</a>    }
+<a href=#73 id=73 data-nosnippet>73</a>
+<a href=#74 id=74 data-nosnippet>74</a>    <span class="kw">let </span>ctx = <span class="kw">crate</span>::commands::fetch::build_resolve_context()<span class="question-mark">?</span>;
+<a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">let </span>profile = CapabilityProfile::from_env().context(<span class="string">"resolving capability profile"</span>)<span class="question-mark">?</span>;
+<a href=#76 id=76 data-nosnippet>76</a>
+<a href=#77 id=77 data-nosnippet>77</a>    <span class="kw">match </span>resolve_only(<span class="kw-2">&amp;</span>ref_, <span class="kw-2">&amp;</span>profile, <span class="kw-2">&amp;</span>ctx).<span class="kw">await </span>{
+<a href=#78 id=78 data-nosnippet>78</a>        <span class="prelude-val">Ok</span>(outcome) =&gt; {
+<a href=#79 id=79 data-nosnippet>79</a>            <span class="kw">let </span><span class="kw-2">mut </span>metadata = cite_metadata(<span class="kw-2">&amp;</span>ref_, <span class="kw-2">&amp;</span>outcome);
+<a href=#80 id=80 data-nosnippet>80</a>            <span class="comment">// #303 published-version merge: when an arXiv preprint's Atom
+<a href=#81 id=81 data-nosnippet>81</a>            // feed cross-references a published journal DOI (`&lt;arxiv:doi&gt;`),
+<a href=#82 id=82 data-nosnippet>82</a>            // resolve that DOI (Crossref) and prefer its rich `@article`
+<a href=#83 id=83 data-nosnippet>83</a>            // fields (journal / volume / issue / pages / publisher / issn /
+<a href=#84 id=84 data-nosnippet>84</a>            // doi) while RETAINING the arXiv preprint identity
+<a href=#85 id=85 data-nosnippet>85</a>            // (eprint / archivePrefix / primaryClass). Best-effort: a
+<a href=#86 id=86 data-nosnippet>86</a>            // missing or unresolvable cross-ref keeps the `@misc` preprint
+<a href=#87 id=87 data-nosnippet>87</a>            // entry, never failing the cite. No extra OpenAlex call — the
+<a href=#88 id=88 data-nosnippet>88</a>            // DOI comes free from the Atom feed already fetched.
+<a href=#89 id=89 data-nosnippet>89</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(doi_ref) = published_doi_ref(<span class="kw-2">&amp;</span>ref_, <span class="kw-2">&amp;</span>outcome) {
+<a href=#90 id=90 data-nosnippet>90</a>                <span class="kw">match </span>resolve_only(<span class="kw-2">&amp;</span>doi_ref, <span class="kw-2">&amp;</span>profile, <span class="kw-2">&amp;</span>ctx).<span class="kw">await </span>{
+<a href=#91 id=91 data-nosnippet>91</a>                    <span class="prelude-val">Ok</span>(doi_outcome) =&gt; {
+<a href=#92 id=92 data-nosnippet>92</a>                        metadata = merge_published(cite_metadata(<span class="kw-2">&amp;</span>doi_ref, <span class="kw-2">&amp;</span>doi_outcome), metadata);
+<a href=#93 id=93 data-nosnippet>93</a>                    }
+<a href=#94 id=94 data-nosnippet>94</a>                    <span class="comment">// Best-effort, but make the degradation VISIBLE (review
+<a href=#95 id=95 data-nosnippet>95</a>                    // #318): a published version exists yet could not be
+<a href=#96 id=96 data-nosnippet>96</a>                    // resolved, so we fall back to the @misc preprint — say
+<a href=#97 id=97 data-nosnippet>97</a>                    // so on stderr rather than silently.
+<a href=#98 id=98 data-nosnippet>98</a>                    </span><span class="prelude-val">Err</span>(e) =&gt; print_err(<span class="macro">format_args!</span>(
+<a href=#99 id=99 data-nosnippet>99</a>                        <span class="string">"note: published-version DOI resolve failed ({e}); citing the arXiv preprint"
+<a href=#100 id=100 data-nosnippet>100</a>                    </span>)),
+<a href=#101 id=101 data-nosnippet>101</a>                }
+<a href=#102 id=102 data-nosnippet>102</a>            }
+<a href=#103 id=103 data-nosnippet>103</a>            <span class="kw">let </span>bib = render::to_bibtex(ref_.safekey().as_str(), <span class="kw-2">&amp;</span>metadata);
+<a href=#104 id=104 data-nosnippet>104</a>            write_bib(<span class="kw-2">&amp;</span>bib)
+<a href=#105 id=105 data-nosnippet>105</a>        }
+<a href=#106 id=106 data-nosnippet>106</a>        <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#107 id=107 data-nosnippet>107</a>            <span class="comment">// Live resolve failed. Fall back to the store so an
+<a href=#108 id=108 data-nosnippet>108</a>            // already-fetched ref still cites (issue #305) — but never a
+<a href=#109 id=109 data-nosnippet>109</a>            // silent empty stdout: a ref that is in neither place is a
+<a href=#110 id=110 data-nosnippet>110</a>            // non-zero error carrying the original resolve failure.
+<a href=#111 id=111 data-nosnippet>111</a>            </span><span class="kw">match </span>bib_from_store(<span class="kw-2">&amp;</span>ref_)<span class="question-mark">? </span>{
+<a href=#112 id=112 data-nosnippet>112</a>                <span class="prelude-val">Some</span>(bib) =&gt; {
+<a href=#113 id=113 data-nosnippet>113</a>                    print_err(<span class="macro">format_args!</span>(
+<a href=#114 id=114 data-nosnippet>114</a>                        <span class="string">"note: live resolve failed ({e}); citing offline from the local store"
+<a href=#115 id=115 data-nosnippet>115</a>                    </span>));
+<a href=#116 id=116 data-nosnippet>116</a>                    write_bib(<span class="kw-2">&amp;</span>bib)
+<a href=#117 id=117 data-nosnippet>117</a>                }
+<a href=#118 id=118 data-nosnippet>118</a>                <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Err</span>(anyhow::Error::new(e).context(<span class="macro">format!</span>(
+<a href=#119 id=119 data-nosnippet>119</a>                    <span class="string">"failed to resolve {input}, and no local store entry to cite offline"
+<a href=#120 id=120 data-nosnippet>120</a>                </span>))),
+<a href=#121 id=121 data-nosnippet>121</a>            }
+<a href=#122 id=122 data-nosnippet>122</a>        }
+<a href=#123 id=123 data-nosnippet>123</a>    }
+<a href=#124 id=124 data-nosnippet>124</a>}
+<a href=#125 id=125 data-nosnippet>125</a>
+<a href=#126 id=126 data-nosnippet>126</a><span class="doccomment">/// The published-journal DOI an arXiv Atom feed cross-references via
+<a href=#127 id=127 data-nosnippet>127</a>/// `&lt;arxiv:doi&gt;` (issue #303), as a `Ref::Doi`. `None` for a DOI input, an
+<a href=#128 id=128 data-nosnippet>128</a>/// absent cross-ref, or a malformed DOI (a bad cross-ref is simply ignored
+<a href=#129 id=129 data-nosnippet>129</a>/// rather than failing the cite).
+<a href=#130 id=130 data-nosnippet>130</a></span><span class="kw">fn </span>published_doi_ref(ref_: <span class="kw-2">&amp;</span>Ref, outcome: <span class="kw-2">&amp;</span>MetadataOnlyOutcome) -&gt; <span class="prelude-ty">Option</span>&lt;Ref&gt; {
+<a href=#131 id=131 data-nosnippet>131</a>    <span class="kw">if </span>!<span class="macro">matches!</span>(ref_, Ref::Arxiv(<span class="kw">_</span>)) {
+<a href=#132 id=132 data-nosnippet>132</a>        <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#133 id=133 data-nosnippet>133</a>    }
+<a href=#134 id=134 data-nosnippet>134</a>    <span class="kw">let </span>doi = outcome.metadata.get(<span class="string">"doi"</span>).and_then(|v| v.as_str())<span class="question-mark">?</span>;
+<a href=#135 id=135 data-nosnippet>135</a>    <span class="comment">// Narrow to a DOI: a URL-form or arXiv-shaped cross-ref must NOT trigger
+<a href=#136 id=136 data-nosnippet>136</a>    // a spurious second arXiv resolve against the wrong id (review #318). A
+<a href=#137 id=137 data-nosnippet>137</a>    // value that does not parse as a bare DOI is simply ignored.
+<a href=#138 id=138 data-nosnippet>138</a>    </span><span class="kw">match </span>Ref::parse(doi).ok()<span class="question-mark">? </span>{
+<a href=#139 id=139 data-nosnippet>139</a>        r @ Ref::Doi(<span class="kw">_</span>) =&gt; <span class="prelude-val">Some</span>(r),
+<a href=#140 id=140 data-nosnippet>140</a>        Ref::Arxiv(<span class="kw">_</span>) =&gt; <span class="prelude-val">None</span>,
+<a href=#141 id=141 data-nosnippet>141</a>    }
+<a href=#142 id=142 data-nosnippet>142</a>}
+<a href=#143 id=143 data-nosnippet>143</a>
+<a href=#144 id=144 data-nosnippet>144</a><span class="doccomment">/// Merge the arXiv preprint identity into the published DOI's `@article`
+<a href=#145 id=145 data-nosnippet>145</a>/// metadata: keep the rich Crossref entry and graft on the arXiv id +
+<a href=#146 id=146 data-nosnippet>146</a>/// categories so `to_bibtex` still emits `eprint` / `archivePrefix` /
+<a href=#147 id=147 data-nosnippet>147</a>/// `primaryClass`. The published record wins on every shared field — it is
+<a href=#148 id=148 data-nosnippet>148</a>/// the version a reader should cite — with the preprint retained for
+<a href=#149 id=149 data-nosnippet>149</a>/// discoverability.
+<a href=#150 id=150 data-nosnippet>150</a></span><span class="kw">fn </span>merge_published(<span class="kw-2">mut </span>article: Metadata, arxiv: Metadata) -&gt; Metadata {
+<a href=#151 id=151 data-nosnippet>151</a>    article.arxiv_id = arxiv.arxiv_id;
+<a href=#152 id=152 data-nosnippet>152</a>    article.arxiv_categories = arxiv.arxiv_categories;
+<a href=#153 id=153 data-nosnippet>153</a>    article
+<a href=#154 id=154 data-nosnippet>154</a>}
+<a href=#155 id=155 data-nosnippet>155</a>
+<a href=#156 id=156 data-nosnippet>156</a><span class="doccomment">/// Render the stored BibTeX for `ref_`, or `None` when the store has no
+<a href=#157 id=157 data-nosnippet>157</a>/// entry. The citation key is the entry's safekey, matching `bib`.
+<a href=#158 id=158 data-nosnippet>158</a></span><span class="kw">fn </span>bib_from_store(ref_: <span class="kw-2">&amp;</span>Ref) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt; {
+<a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">let </span>store = FsStore::new(resolve_store_root()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+<a href=#160 id=160 data-nosnippet>160</a>    <span class="kw">let </span>safekey = ref_.safekey();
+<a href=#161 id=161 data-nosnippet>161</a>    <span class="prelude-val">Ok</span>(store
+<a href=#162 id=162 data-nosnippet>162</a>        .read(<span class="kw-2">&amp;</span>safekey)<span class="question-mark">?
+<a href=#163 id=163 data-nosnippet>163</a>        </span>.map(|m| render::to_bibtex(safekey.as_str(), <span class="kw-2">&amp;</span>m)))
+<a href=#164 id=164 data-nosnippet>164</a>}
+<a href=#165 id=165 data-nosnippet>165</a>
+<a href=#166 id=166 data-nosnippet>166</a><span class="doccomment">/// Write a rendered BibTeX entry to stdout. `to_bibtex` already terminates
+<a href=#167 id=167 data-nosnippet>167</a>/// the entry with `}\n`, so no extra newline is added. Workspace lints deny
+<a href=#168 id=168 data-nosnippet>168</a>/// `print!`/`println!`; `write!` against an explicit `stdout().lock()` is
+<a href=#169 id=169 data-nosnippet>169</a>/// the sanctioned escape hatch (ADR-0001).
+<a href=#170 id=170 data-nosnippet>170</a></span><span class="kw">fn </span>write_bib(bib: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#171 id=171 data-nosnippet>171</a>    <span class="kw">let </span>stdout = std::io::stdout();
+<a href=#172 id=172 data-nosnippet>172</a>    <span class="kw">let </span><span class="kw-2">mut </span>out = stdout.lock();
+<a href=#173 id=173 data-nosnippet>173</a>    <span class="macro">write!</span>(out, <span class="string">"{bib}"</span>).context(<span class="string">"failed to write BibTeX entry to stdout"</span>)
+<a href=#174 id=174 data-nosnippet>174</a>}
+</code></pre></div></section></main></body></html>

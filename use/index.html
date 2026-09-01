@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Use &middot; doiget</title>
+  <meta name="description" content="Fetch papers by DOI or arXiv id from the command line.">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/use/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Use · doiget">
+  <meta property="og:description" content="Fetch papers by DOI or arXiv id from the command line.">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/use/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Use · doiget">
+  <meta name="twitter:description" content="Fetch papers by DOI or arXiv id from the command line.">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="section">
+  <header class="section-head">
+    <h1>Use</h1>
+    <p class="lede">Fetch papers by DOI or arXiv id from the command line.</p>
+  </header>
+
+  <p>This section is for people who want to <strong>use the <code>doiget</code> CLI directly</strong>
+to fetch papers locally. If you want to wire doiget into an agent host or
+embed it in a Rust program, see the [Developer]({{ get_url(path='@/developer/_index.md') | safe }}) section.
+If you want to contribute to doiget, see [Contribute]({{ get_url(path='@/contribute/_index.md') | safe }}).</p>
+<h2 id="what-doiget-does">What <code>doiget</code> does</h2>
+<p>Given a DOI or arXiv id, it tries the official metadata APIs (Crossref,
+Unpaywall, arXiv) and writes the resulting PDF (and a metadata TOML) to a
+local store under <code>~/papers/</code>. By default it only touches Open Access
+sources; institutional TDM access is opt-in at build time per publisher.</p>
+<h2 id="quick-start">Quick start</h2>
+<pre data-lang="sh" style="background-color:#fafafa;color:#61676c;" class="language-sh "><code class="language-sh" data-lang="sh"><span style="font-style:italic;color:#abb0b6;"># install (after Phase 6 release lands)
+</span><span style="color:#f29718;">cargo</span><span> install doiget-cli
+</span><span>
+</span><span style="font-style:italic;color:#abb0b6;"># fetch a paper by DOI
+</span><span style="color:#f29718;">doiget</span><span> fetch 10.1103/PhysRevLett.130.200601
+</span><span>
+</span><span style="font-style:italic;color:#abb0b6;"># fetch by arXiv id
+</span><span style="color:#f29718;">doiget</span><span> fetch arXiv:2401.12345
+</span><span>
+</span><span style="font-style:italic;color:#abb0b6;"># batch fetch
+</span><span style="color:#f29718;">doiget</span><span> batch refs.txt
+</span><span>
+</span><span style="font-style:italic;color:#abb0b6;"># inspect what landed locally
+</span><span style="color:#f29718;">doiget</span><span> info 10.1103/PhysRevLett.130.200601
+</span></code></pre>
+<p>Default features fetch only Open Access PDFs through Crossref / Unpaywall
+/ arXiv. See [posture &amp; legal]({{ get_url(path='@/use/posture-and-legal.md') | safe }})
+for what doiget will and will not do.</p>
+<h2 id="coexistence-with-bibliofetch-jl">Coexistence with BiblioFetch.jl</h2>
+<p>doiget shares its on-disk store format (TOML metadata + PDF files under
+<code>~/papers/</code>) with <a rel="noopener" target="_blank" href="https://github.com/sotashimozono/BiblioFetch.jl">BiblioFetch.jl</a>.
+If you already use BiblioFetch.jl, doiget will reuse the same vault.</p>
+<table><thead><tr><th>Tool</th><th>Best for</th></tr></thead><tbody>
+<tr><td>BiblioFetch.jl</td><td>Julia REPL, research vault, citation graph exploration</td></tr>
+<tr><td>doiget</td><td>Agents / MCP hosts, batch operations, scripted pipelines, container deployments</td></tr>
+</tbody></table>
+
+
+  
+
+  
+  <h2>Pages</h2>
+  <ul class="index">
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">Posture &amp; legal</a>
+        <span class="lede">&mdash; What doiget will and will not do. Scope, eight safeguards, and legal posture.</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/use/contact/">Contact</a>
+        <span class="lede">&mdash; Where to send takedown notices, security disclosures, and other formal correspondence.</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/use/migration/">BiblioFetch.jl migration</a>
+        <span class="lede">&mdash; This document covers migration scenarios between doiget and</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/use/scope/">Scope (what doiget does and does not do)</a>
+        <span class="lede">&mdash; A single-binary CLI plus stdio MCP server that:</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/use/legal/">Legal posture</a>
+        <span class="lede">&mdash; This document is the canonical statement of doiget&#x27;s legal posture. It exists so that</span>
+      </li>
+    
+  </ul>
+  
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

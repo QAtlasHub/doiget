@@ -1,0 +1,72 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Output-mode resolution for the `doiget` CLI (ADR-0017, #144; Amendment 1 = #219/#220; Amendment 2 = #301)."><title>doiget_cli::commands::output - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="doiget_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module output</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../doiget_cli/index.html">doiget_<wbr>cli</a><span class="version">0.8.13</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module output</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#per-mode-honoring-across-the-cli-surface" title="Per-mode honoring across the CLI surface">Per-mode honoring across the CLI surface</a></li><li><a href="#json-wire-conventions-a-single-line-note" title="JSON wire conventions (a single-line note)">JSON wire conventions (a single-line note)</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In doiget_<wbr>cli::<wbr>commands</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">doiget_cli</a>::<wbr><a href="../index.html">commands</a></div><h1>Module <span>output</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/doiget_cli/commands/output.rs.html#1-450">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Output-mode resolution for the <code>doiget</code> CLI (ADR-0017, #144;
+Amendment 1 = #219/#220; Amendment 2 = #301).</p>
+<p>ADR-0017 specifies the precedence ladder
+<code>--mode &gt; --json/--quiet &gt; DOIGET_MODE env &gt; subcommand-implicit &gt; TTY &gt; quiet</code>.
+CONFIG.md §5 additionally pins <code>doiget serve</code> to <code>mcp</code> mode regardless
+of flags — a load-bearing security invariant (the stdout-purity Slice 9
+CI job already enforces “MCP mode forbids non-JSON stdout”). The
+<code>forced_implicit</code> parameter to <a href="fn.resolve.html" title="fn doiget_cli::commands::output::resolve"><code>resolve</code></a> expresses that override: when
+<code>Some(_)</code>, it overrides everything else.</p>
+<p><a href="fn.resolve.html" title="fn doiget_cli::commands::output::resolve"><code>resolve</code></a> returns a <a href="struct.ResolvedOutput.html" title="struct doiget_cli::commands::output::ResolvedOutput"><code>ResolvedOutput</code></a> carrying the <a href="enum.OutputMode.html" title="enum doiget_cli::commands::output::OutputMode"><code>OutputMode</code></a>
+plus a <code>quiet_was_explicit</code> discriminator. The distinction is
+load-bearing per ADR-0017 Amendment 1 (extended by Amendment 2, #301):
+artifact-producing commands — export/inventory (<code>bib</code> / <code>csl</code> /
+<code>capabilities</code>) and read/inspection (<code>info</code> / <code>list-recent</code> / <code>search</code> /
+<code>link</code> / <code>text</code>), plus <code>audit-log --verify --mode json</code> — suppress only
+on <strong>explicit</strong> Quiet (<code>--quiet</code> / <code>-q</code> / <code>DOIGET_MODE=quiet</code> /
+<code>--mode quiet</code>), not on the non-TTY default. Informational commands
+continue to suppress on any Quiet. See <a href="fn.is_artifact_command.html" title="fn doiget_cli::commands::output::is_artifact_command"><code>is_artifact_command</code></a>.</p>
+<p>Resolution is split into a pure function (<a href="fn.resolve.html" title="fn doiget_cli::commands::output::resolve"><code>resolve</code></a>) plus a thin
+TTY-detection wrapper (<a href="fn.stdout_is_tty.html" title="fn doiget_cli::commands::output::stdout_is_tty"><code>stdout_is_tty</code></a>) so the ladder is fully
+unit-testable without environment manipulation.</p>
+<h2 id="per-mode-honoring-across-the-cli-surface"><a class="doc-anchor" href="#per-mode-honoring-across-the-cli-surface">§</a>Per-mode honoring across the CLI surface</h2>
+<ul>
+<li><code>Human</code> — default for TTY stdout. Human-readable text, the
+pre-#144 behaviour.</li>
+<li><code>Quiet</code> — stdout suppressed for <em>informational</em> commands whose
+stdout is a status report (audit-log Human / config show / config
+path / provenance migrate / fetch + batch status) per #203. Errors
+(stderr) and exit codes are unaffected. <em>Artifact</em> commands —
+whose stdout IS the requested product — suppress ONLY on
+<strong>explicit</strong> Quiet, never on the non-TTY implicit fallback:
+export/inventory (bib / csl / capabilities) per Amendment 1, and
+read/inspection (info / list-recent / search / link / text) per
+Amendment 2 (#301). See <a href="fn.is_artifact_command.html" title="fn doiget_cli::commands::output::is_artifact_command"><code>is_artifact_command</code></a>.</li>
+<li><code>Json</code> — structured JSON bodies for the human-table commands
+(#204) plus the ERRORS.md §3 JSON-Lines per-ref shape for batch
+(#205). Single-value-per-stdout for the table commands;
+line-oriented for batch.</li>
+<li><code>Mcp</code> — JSON-RPC framing on stdout (only reachable via
+<code>doiget serve</code>; forced by <code>forced_implicit_for</code> in <code>main.rs</code>).</li>
+</ul>
+<h2 id="json-wire-conventions-a-single-line-note"><a class="doc-anchor" href="#json-wire-conventions-a-single-line-note">§</a>JSON wire conventions (a single-line note)</h2>
+<p>Two intentional conventions live side-by-side in the codebase, and
+they are different on purpose:</p>
+<ol>
+<li><strong>Pretty-printed single value</strong> for the table commands’ <code>--mode json</code> bodies (info / list-recent / search / config show /
+audit-log / provenance migrate). Optimised for <code>| jq .</code> and
+human-on-a-screen reading.</li>
+<li><strong>Compact JSON-Lines</strong> for <code>batch --mode json</code> per the
+ERRORS.md §3 CI persona — one record per stdout line, no embedded
+newlines, so a consumer can <code>split('\n').map(json.loads)</code>.</li>
+</ol>
+<p>Future-maintainer reminder: do NOT unify these by accident — they
+serve different consumers.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.ResolvedOutput.html" title="struct doiget_cli::commands::output::ResolvedOutput">Resolved<wbr>Output</a></dt><dd>The resolved output state per ADR-0017 Amendment 1: the
+<a href="enum.OutputMode.html" title="enum doiget_cli::commands::output::OutputMode"><code>OutputMode</code></a> the resolution ladder picked, plus a
+<code>quiet_was_explicit</code> discriminator that distinguishes the user’s
+<strong>explicit</strong> request for silence (<code>--quiet</code> / <code>-q</code> /
+<code>DOIGET_MODE=quiet</code> / <code>--mode quiet</code>) from the resolver’s
+<strong>implicit</strong> fallback to Quiet when stdout is not a TTY.</dd></dl><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.FlagInput.html" title="enum doiget_cli::commands::output::FlagInput">Flag<wbr>Input</a></dt><dd>Which short-form implication, if any, was given on the command line.</dd><dt><a class="enum" href="enum.OutputMode.html" title="enum doiget_cli::commands::output::OutputMode">Output<wbr>Mode</a></dt><dd>The four output modes from <code>docs/CONFIG.md</code> §3 / ADR-0017.</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.is_artifact_command.html" title="fn doiget_cli::commands::output::is_artifact_command">is_<wbr>artifact_<wbr>command</a></dt><dd><code>true</code> if <code>name</code> identifies an artifact-producing subcommand whose
+stdout output IS the deliverable (per ADR-0017 Amendment 1, extended
+by Amendment 2). Artifact commands suppress only on <strong>explicit</strong> Quiet
+(<a href="struct.ResolvedOutput.html#structfield.quiet_was_explicit" title="field doiget_cli::commands::output::ResolvedOutput::quiet_was_explicit"><code>ResolvedOutput::quiet_was_explicit</code></a> == <code>true</code>), never on the
+non-TTY implicit fallback.</dd><dt><a class="fn" href="fn.parse_env_mode.html" title="fn doiget_cli::commands::output::parse_env_mode">parse_<wbr>env_<wbr>mode</a></dt><dd>Parse a <code>DOIGET_MODE</code> env-var value. Recognises the four
+CONFIG.md §3 modes case-insensitively; returns <code>None</code> for empty,
+whitespace-only, or unrecognised input (the resolution ladder then
+falls through to TTY detection).</dd><dt><a class="fn" href="fn.print_err.html" title="fn doiget_cli::commands::output::print_err">print_<wbr>err</a></dt><dd>Stderr sink for the <code>docs/ERRORS.md</code> §3 human lines — errors, <code>= note:</code>
+advisories, progress and skip notes.</dd><dt><a class="fn" href="fn.resolve.html" title="fn doiget_cli::commands::output::resolve">resolve</a></dt><dd>Resolve the effective <a href="enum.OutputMode.html" title="enum doiget_cli::commands::output::OutputMode"><code>OutputMode</code></a> per ADR-0017 and the
+<code>quiet_was_explicit</code> discriminator per ADR-0017 Amendment 1.</dd><dt><a class="fn" href="fn.stdout_is_tty.html" title="fn doiget_cli::commands::output::stdout_is_tty">stdout_<wbr>is_<wbr>tty</a></dt><dd><code>true</code> if stdout is attached to a terminal. Wraps the standard
+library’s <a href="https://doc.rust-lang.org/1.98.0/std/io/stdio/trait.IsTerminal.html" title="trait std::io::stdio::IsTerminal"><code>std::io::IsTerminal</code></a> probe; the trait is in scope only
+here so test code can call <a href="fn.resolve.html" title="fn doiget_cli::commands::output::resolve"><code>resolve</code></a> with a synthetic <code>is_tty</code>
+boolean without linking to <code>IsTerminal</code>.</dd></dl></section></div></main></body></html>

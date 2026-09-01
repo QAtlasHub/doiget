@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["HttpError"],"fn":["discovery_allowlist","fulltext_allowlist","init_tls","is_transparent_resolver","oa_publisher_allowlist","tier_1_allowlist","tier_2_allowlist","tier_3_allowlists"],"struct":["HttpClient","ProbeOutcome","SourceAllowlist"]};

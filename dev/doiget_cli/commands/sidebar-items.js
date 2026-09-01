@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["parse_ref_or_exit","render_ref_parse_error"],"mod":["audit_log","batch","bib","capabilities","cite","config","csl","fetch","frontier","info","link","lint","list_recent","output","provenance","resolve_citation","search","source","tag","tex_source","text","verify","version"]};

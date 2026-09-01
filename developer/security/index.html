@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Security &middot; doiget</title>
+  <meta name="description" content="For vulnerability reporting, see [`..&#x2F;CONTACT.md`](..&#x2F;CONTACT.md). **Do not file a public">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/security/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Security · doiget">
+  <meta property="og:description" content="For vulnerability reporting, see [`..&#x2F;CONTACT.md`](..&#x2F;CONTACT.md). **Do not file a public">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/security/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Security · doiget">
+  <meta name="twitter:description" content="For vulnerability reporting, see [`..&#x2F;CONTACT.md`](..&#x2F;CONTACT.md). **Do not file a public">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Security</h1>
+    <p class="lede">For vulnerability reporting, see [`..&#x2F;CONTACT.md`](..&#x2F;CONTACT.md). **Do not file a public</p>
+  </header>
+
+  <h1 id="security">Security</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE.</strong> This document defines binding security contracts and threat
+surfaces. Implementations and reviewers MUST address each surface before introducing
+code in the affected area. Changes require a new ADR in <a href="https://codes.sota-shimozono.com/doiget/developer/security/DECISIONS/"><code>DECISIONS/</code></a>.</p>
+</blockquote>
+<p>For vulnerability reporting, see <a href="../CONTACT.md"><code>../CONTACT.md</code></a>. <strong>Do not file a public
+issue for security disclosures.</strong></p>
+<hr />
+<h2 id="1-threat-surfaces">1. Threat surfaces</h2>
+<h3 id="1-1-input-doi-arxiv-id-strings">1.1 Input — DOI / arXiv id strings</h3>
+<p>Source: CLI argument or MCP tool argument. Trust level: <strong>untrusted</strong>.</p>
+<table><thead><tr><th>Vector</th><th>Mitigation</th></tr></thead><tbody>
+<tr><td>Path traversal in DOI suffix</td><td>Strict regex (<code>^10\.\d{4,9}/[A-Za-z0-9._/():-]+$</code>); <code>safekey</code> algorithm escapes all characters outside <code>[A-Za-z0-9._\-_]</code> (see <a href="https://codes.sota-shimozono.com/doiget/developer/security/SAFEKEY.md"><code>SAFEKEY.md</code></a>). <code>:</code> is in-charset (ADR-0026) for legacy Kluwer (<code>10.1023/A:NNNN</code>) and EDP Sciences / Journal de Physique (<code>10.1051/jphys:NNNN</code>) DOIs; it grants no traversal capability (traversal requires composing <code>/</code> and <code>.</code> into <code>../</code>, and both characters are already in the suffix charset), and <code>safekey</code> escapes it before any filesystem use, so <code>:</code> never reaches a path literally.</td></tr>
+<tr><td>Excessively long suffix</td><td><code>DOI_SUFFIX_MAX_LEN = 256</code> chars; longer inputs are rejected with <code>INVALID_REF</code>.</td></tr>
+<tr><td>Regex DoS</td><td>Validation regex is anchored, deterministic, no nested quantifiers.</td></tr>
+<tr><td>Log injection (CR / LF / control chars)</td><td>Provenance log is JSON Lines; all string fields are JSON-escaped, control chars become <code>\uXXXX</code>.</td></tr>
+</tbody></table>
+<h3 id="1-2-http-responses">1.2 HTTP responses</h3>
+<p>Source: publisher / source API. Trust level: <strong>partially trusted</strong> (TLS-authenticated host, content-typed payload).</p>
+<table><thead><tr><th>Vector</th><th>Mitigation</th></tr></thead><tbody>
+<tr><td>Oversized PDF</td><td>Streaming download with body cap (<code>PDF_MAX_BYTES = 100_000_000</code>); writes to a temp file, validated then renamed.</td></tr>
+<tr><td>Malformed JSON</td><td><code>serde_json</code> strict mode; deserialization errors map to <code>STORE_ERROR</code> or <code>NETWORK_ERROR</code>.</td></tr>
+<tr><td>Magic-byte mismatch</td><td>PDFs are checked for <code>%PDF-</code> header. Files failing this are deleted and the fetch errors.</td></tr>
+<tr><td>Slowloris-style stalled response</td><td><code>reqwest</code> per-request timeouts (<code>connect 10s</code>, <code>read 60s</code>, total <code>300s</code>).</td></tr>
+</tbody></table>
+<h3 id="1-3-http-redirects">1.3 HTTP redirects</h3>
+<table><thead><tr><th>Vector</th><th>Mitigation</th></tr></thead><tbody>
+<tr><td>Redirect to <code>file://</code>, <code>data:</code>, internal</td><td>reqwest is configured with redirect policy <code>RedirectPolicy::custom</code>: only <code>https://</code> redirects allowed.</td></tr>
+<tr><td>Redirect to attacker host</td><td>Per-source allowlist of redirect target hosts; redirects outside the allowlist abort the fetch. See <a href="https://codes.sota-shimozono.com/doiget/developer/security/REDIRECT_ALLOWLIST.md"><code>REDIRECT_ALLOWLIST.md</code></a>.</td></tr>
+<tr><td>Redirect loop</td><td><code>redirect_limit = 10</code>.</td></tr>
+<tr><td>Open-redirect SSRF chain</td><td>Tool inputs never accept URLs (only DOI / arXiv id). All URLs are constructed from validated source-side templates.</td></tr>
+</tbody></table>
+<h3 id="1-4-mcp-server-inputs">1.4 MCP server inputs</h3>
+<p>Source: MCP host (LLM agent loop). Trust level: <strong>untrusted</strong> — even when the host is a
+trusted application, the agent may relay attacker-controlled paper text or hallucinated
+identifiers.</p>
+<table><thead><tr><th>Vector</th><th>Mitigation</th></tr></thead><tbody>
+<tr><td>Hallucinated DOI</td><td><code>INVALID_REF</code> returned; never crashes the server.</td></tr>
+<tr><td>Prompt injection from paper abstract</td><td>doiget never reads paper content; tool inputs are typed, not free text.</td></tr>
+<tr><td><code>fetch_url(url: ...)</code> style abuse</td><td>Permanent non-goal. No tool accepts a URL.</td></tr>
+<tr><td>Crafted long ref to overflow log</td><td><code>DOI_SUFFIX_MAX_LEN = 256</code> truncate-or-reject before log.</td></tr>
+<tr><td>Per-session fetch flood</td><td><code>MAX_CONCURRENT_FETCHES = 5</code> (process-wide), <code>MCP_BATCH_MAX_SIZE = 100</code>, queue depth <code>MCP_QUEUE_DEPTH_MAX = 100</code> returns <code>RATE_LIMITED</code>.</td></tr>
+<tr><td>Crafted Crossref response that misroutes a fetch</td><td>All fetch URLs are constructed from validated identifiers; we trust the source's TLS-authenticated response only for OA URL discovery, then re-validate the resulting URL against the per-source allowlist.</td></tr>
+</tbody></table>
+<h3 id="1-5-filesystem-store-cache-log">1.5 Filesystem (Store, Cache, Log)</h3>
+<table><thead><tr><th>Vector</th><th>Mitigation</th></tr></thead><tbody>
+<tr><td>Path traversal in safekey</td><td><code>safekey</code> algorithm replaces every character outside <code>[A-Za-z0-9._\-_]</code> with <code>_</code>. Reference test vectors in <a href="https://codes.sota-shimozono.com/doiget/developer/security/SAFEKEY.md"><code>SAFEKEY.md</code></a>.</td></tr>
+<tr><td>Concurrent writers (BiblioFetch.jl + doiget)</td><td><code>flock</code> on <code>&lt;safekey&gt;.toml.lock</code>, 5s timeout. (<a href="https://codes.sota-shimozono.com/doiget/developer/security/STORE.md"><code>STORE.md</code></a> §Contract 2)</td></tr>
+<tr><td>Partial write on crash</td><td>Write to <code>&lt;safekey&gt;.toml.tmp</code> → <code>fsync</code> → <code>rename</code> → <code>fsync</code> parent. (<a href="https://codes.sota-shimozono.com/doiget/developer/security/STORE.md"><code>STORE.md</code></a> §Contract 3)</td></tr>
+<tr><td>Log file tampering</td><td>SHA-256 hash chain; <code>chattr +a</code> attempted on Linux; <code>doiget audit-log --verify</code> recomputes the chain.</td></tr>
+<tr><td>Disk-full DoS via large PDFs</td><td>Per-fetch size cap; on disk-full the fetch errors and the partial temp file is cleaned up.</td></tr>
+<tr><td>Credential file readable to other users</td><td>Startup warns if <code>credentials.toml</code> permissions are not <code>0600</code> on POSIX.</td></tr>
+</tbody></table>
+<h3 id="1-6-secrets-credentials">1.6 Secrets / credentials</h3>
+<table><thead><tr><th>Vector</th><th>Mitigation</th></tr></thead><tbody>
+<tr><td>Bundled API key in binary</td><td>Banned by code review; CI greps source for known publisher key formats. No constant string in source matching <code>sk-</code>, <code>Bearer </code>, etc.</td></tr>
+<tr><td>Logged in raw form</td><td>All credential types are <code>secrecy::Secret&lt;String&gt;</code>; <code>Display</code> and <code>Debug</code> print <code>****</code>; <code>tracing</code> uses a redactor for known field names.</td></tr>
+<tr><td>Leaked via error message</td><td>Errors avoid printing source URLs that contain query-param keys (e.g., <code>?apikey=...</code>).</td></tr>
+<tr><td>Persisted in shell history</td><td>Recommend <code>~/.config/doiget/credentials.toml</code> over inline env in shell rc; documented in <a href="https://codes.sota-shimozono.com/doiget/developer/security/CONFIG.md"><code>CONFIG.md</code></a>.</td></tr>
+</tbody></table>
+<h3 id="1-7-pdf-content-after-fetch">1.7 PDF content (after fetch)</h3>
+<p>doiget does <strong>not</strong> parse PDF content (ADR-0003). Malicious PDFs (embedded JS, exploits)
+are stored as opaque blobs; their handling is the responsibility of any downstream tool
+the user pipes the path into.</p>
+<p>This is a deliberate design choice. doiget does not implement countermeasures for
+malicious PDFs because doiget does not interact with their content.</p>
+<h3 id="1-8-concurrent-processes-multiple-doiget-invocations">1.8 Concurrent processes (multiple <code>doiget</code> invocations)</h3>
+<table><thead><tr><th>Vector</th><th>Mitigation</th></tr></thead><tbody>
+<tr><td>Race on store write</td><td><code>flock</code> (see 1.5).</td></tr>
+<tr><td>Log write interleaving</td><td>Process-local mutex on log appender; fsync per write in audit-grade mode.</td></tr>
+<tr><td>Cache race</td><td><code>~/.cache/doiget/</code> writes go through atomic rename.</td></tr>
+</tbody></table>
+<h3 id="1-9-supply-chain">1.9 Supply chain</h3>
+<table><thead><tr><th>Vector</th><th>Mitigation</th></tr></thead><tbody>
+<tr><td>Malicious dependency update</td><td><code>cargo-vet</code> audit chain; <code>cargo-deny</code> allowlist; pinned <code>Cargo.lock</code>.</td></tr>
+<tr><td>Hijacked author GitHub account</td><td>2FA required; verified-signed commits enforced on <code>main</code>; release workflow gated by GitHub Environment with manual approval.</td></tr>
+<tr><td>Malicious release artifact swap</td><td>Sigstore keyless signing of release binaries; verifiable with <code>cosign verify-blob</code>.</td></tr>
+<tr><td><code>cargo publish</code> token leak</td><td>Use crates.io trusted publishing (OIDC) — no long-lived token in repo.</td></tr>
+<tr><td>3rd-party Action injection</td><td>All Actions pinned by SHA, not floating tag; Dependabot updates SHAs.</td></tr>
+<tr><td>Reproducible builds</td><td><code>Cargo.lock</code> committed; <code>rust-toolchain.toml</code> pins rustc; <code>RUSTFLAGS</code> fixed in release-plz.yml.</td></tr>
+</tbody></table>
+<h3 id="1-10-network-side-channel">1.10 Network side channel</h3>
+<p>doiget cannot prevent third parties (ISP, institution DNS resolver, transit network) from
+observing <strong>the existence</strong> of fetches, even with correctly configured TLS:</p>
+<ul>
+<li>DNS lookups for <code>api.elsevier.com</code>, <code>unpaywall.org</code>, etc., are visible to the resolver.</li>
+<li>TLS SNI is plaintext on networks that do not implement Encrypted ClientHello.</li>
+</ul>
+<p>doiget honors the user's <code>HTTPS_PROXY</code> environment variable; users who require
+unobservability should configure their network layer (Tor, VPN) externally. doiget does
+not provide its own proxying or anonymization.</p>
+<p>doiget sends a stable <code>User-Agent</code> header per fetch to comply with each source's
+politeness policy:</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>User-Agent: doiget/&lt;version&gt; (+https://github.com/QAtlasHub/doiget)
+</span></code></pre>
+<h3 id="1-11-auto-update-telemetry">1.11 Auto-update / telemetry</h3>
+<p>doiget contains no auto-update path, no version check, no crash report transmission, and
+no usage analytics. (ADR-0015) These are denied at the dependency level via <code>cargo-deny</code>
+to prevent inadvertent introduction.</p>
+<h2 id="2-defense-in-depth-controls">2. Defense-in-depth controls</h2>
+<p>The following controls are established:</p>
+<ul>
+<li><a href="../Cargo.lock"><code>Cargo.lock</code></a> committed.</li>
+<li><code>cargo audit</code> and <code>cargo deny check</code> in CI (<code>audit.yml</code>).</li>
+<li><code>cargo-vet</code> baseline.</li>
+<li><code>posture-lint.yml</code> denying telemetry / HTTP server / self-update crate imports.</li>
+<li><code>safekey-vectors.yml</code> validating 100 reference vectors against the algorithm.</li>
+<li><code>cross-tool-compat.yml</code> round-tripping a sample DOI through BiblioFetch.jl + doiget.</li>
+<li>Branch protection on <code>main</code>: required PR review, status checks must pass, signed
+commits.</li>
+<li>Author 2FA mandatory.</li>
+</ul>
+<h2 id="3-mcp-server-additional-controls">3. MCP server additional controls</h2>
+<ul>
+<li><code>clippy::print_stdout</code> denied workspace-wide (and especially in <code>doiget-mcp</code>).</li>
+<li><code>tracing-subscriber</code> global writer redirected to stderr; <code>std::panic::set_hook</code>
+redirects panic output to stderr.</li>
+<li><code>mcp-smoke.yml</code> asserts that <code>doiget serve | head -c 1</code> over its stdin/stdout produces
+only well-formed JSON-RPC frames after <code>initialize</code> (zero stray bytes on stdout).</li>
+<li>All tool inputs validated with <code>serde</code> strict mode and explicit JSON Schema declared in
+<code>inputSchema</code>.</li>
+</ul>
+<h2 id="4-release-additional-controls">4. Release additional controls</h2>
+<ul>
+<li>crates.io trusted publishing (OIDC).</li>
+<li>GitHub Environment-protected release workflow (manual approval).</li>
+<li>Sigstore keyless signing of binaries.</li>
+<li><code>cargo-sbom</code> SPDX SBOM per release artifact.</li>
+<li>musl-static (Linux), universal (macOS), msvc (Windows). No glibc, gnu, or openssl
+variants.</li>
+</ul>
+<h2 id="5-vulnerability-disclosure">5. Vulnerability disclosure</h2>
+<p>See <a href="../CONTACT.md"><code>../CONTACT.md</code></a> §"Security disclosures". Do not file a public issue.</p>
+<h2 id="6-limitations-transparently-acknowledged">6. Limitations (transparently acknowledged)</h2>
+<p>doiget cannot defend against:</p>
+<ul>
+<li>A user who deliberately misconfigures their environment to violate a publisher ToS.</li>
+<li>A network adversary who can rewrite TLS connections (CA compromise).</li>
+<li>An OS-level adversary with root / Administrator on the user's machine.</li>
+<li>A compromise of an upstream publisher API responding with malicious URLs that resolve
+to a host inside the per-source allowlist.</li>
+</ul>
+<p>These are out of scope for doiget's threat model and are noted here to set realistic
+expectations.</p>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/developer&#x2F;security.md">
+      site/content/developer&#x2F;security.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,242 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/doiget-cli/src/commands/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="doiget_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">doiget_cli/commands/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! Subcommand implementations for the `doiget` CLI.
+<a href=#2 id=2 data-nosnippet>2</a>//!
+<a href=#3 id=3 data-nosnippet>3</a>//! Each module corresponds to a single `clap` subcommand declared in
+<a href=#4 id=4 data-nosnippet>4</a>//! `main.rs`. The dispatch table in `main.rs` calls `run(...)` on the
+<a href=#5 id=5 data-nosnippet>5</a>//! matching module. Subcommands return `anyhow::Result&lt;()&gt;`; any error
+<a href=#6 id=6 data-nosnippet>6</a>//! surfaces via the CLI's top-level error reporter (stderr).
+<a href=#7 id=7 data-nosnippet>7</a>//!
+<a href=#8 id=8 data-nosnippet>8</a>//! ## Phase 1 surface (so far)
+<a href=#9 id=9 data-nosnippet>9</a>//!
+<a href=#10 id=10 data-nosnippet>10</a>//! - [`audit_log`] — `doiget audit-log --verify` recomputes the SHA-256 hash
+<a href=#11 id=11 data-nosnippet>11</a>//!   chain on the provenance log and reports any mismatches.
+<a href=#12 id=12 data-nosnippet>12</a>//! - [`batch`] — `doiget batch &lt;path&gt;` multi-ref orchestrator (rate-bounded).
+<a href=#13 id=13 data-nosnippet>13</a>//! - [`bib`] — `doiget bib &lt;ref&gt;` BibTeX exporter (Phase 2 starter).
+<a href=#14 id=14 data-nosnippet>14</a>//! - [`cite`] — `doiget cite &lt;ref&gt;` live-resolve BibTeX (doi2bib-style).
+<a href=#15 id=15 data-nosnippet>15</a>//! - [`config`] — `doiget config show/path/doctor`.
+<a href=#16 id=16 data-nosnippet>16</a>//! - [`csl`] — `doiget csl &lt;ref&gt;` exports a stored entry as CSL JSON 1.0.
+<a href=#17 id=17 data-nosnippet>17</a>//! - [`fetch`] — `doiget fetch &lt;ref&gt;` orchestrator (arXiv E2E + DOI metadata-only).
+<a href=#18 id=18 data-nosnippet>18</a>//! - [`info`] — prints a stored entry's `Metadata` as TOML on stdout.
+<a href=#19 id=19 data-nosnippet>19</a>//! - [`list_recent`] — prints up to N most-recently-fetched entries.
+<a href=#20 id=20 data-nosnippet>20</a>//! - [`search`] — case-insensitive substring search over stored metadata.
+<a href=#21 id=21 data-nosnippet>21</a>//!
+<a href=#22 id=22 data-nosnippet>22</a>//! `serve` has no module here: it delegates straight to `doiget-mcp`. It
+<a href=#23 id=23 data-nosnippet>23</a>//! is wired in `main.rs` and is what every `docs/INTEGRATION/` guide tells
+<a href=#24 id=24 data-nosnippet>24</a>//! users to run.
+<a href=#25 id=25 data-nosnippet>25</a>
+<a href=#26 id=26 data-nosnippet>26</a>/// Parse a ref, or render the failure in the `docs/ERRORS.md` §3
+<a href=#27 id=27 data-nosnippet>27</a>/// "Researcher (CLI human)" form and return the CLI exit error.
+<a href=#28 id=28 data-nosnippet>28</a>///
+<a href=#29 id=29 data-nosnippet>29</a>/// #477. `error[CODE]: message` held on `fetch` alone -- #119 did it there
+<a href=#30 id=30 data-nosnippet>30</a>/// and nowhere else -- while `info`, `link`, `cite`, `text`, `tag`, `bib`,
+<a href=#31 id=31 data-nosnippet>31</a>/// `csl` and `source` each wrote their own `with_context("invalid ref: …")`
+<a href=#32 id=32 data-nosnippet>32</a>/// and let `anyhow` print a bare `Error:` plus a `Caused by:` chain. The
+<a href=#33 id=33 data-nosnippet>33</a>/// closed error-code set is a load-bearing promise of this project: a
+<a href=#34 id=34 data-nosnippet>34</a>/// caller is told it can key off `error[CODE]:`, and on eight of nine
+<a href=#35 id=35 data-nosnippet>35</a>/// commands there was no code to key off, while the `Caused by:` chain
+<a href=#36 id=36 data-nosnippet>36</a>/// leaked internal error types that are in no contract.
+<a href=#37 id=37 data-nosnippet>37</a>///
+<a href=#38 id=38 data-nosnippet>38</a>/// Same shape as `render_fetch_error` and for the same reason -- one
+<a href=#39 id=39 data-nosnippet>39</a>/// renderer, so a future change to the contract cannot reach some call
+<a href=#40 id=40 data-nosnippet>40</a>/// sites and miss others.
+<a href=#41 id=41 data-nosnippet>41</a>///
+<a href=#42 id=42 data-nosnippet>42</a>/// # Errors
+<a href=#43 id=43 data-nosnippet>43</a>///
+<a href=#44 id=44 data-nosnippet>44</a>/// Always, when parsing fails: an [`anyhow::Error`] wrapping
+<a href=#45 id=45 data-nosnippet>45</a>/// [`CliExit`](fetch::CliExit) with the `INVALID_REF` exit code. The
+<a href=#46 id=46 data-nosnippet>46</a>/// message has already been written to stderr.
+<a href=#47 id=47 data-nosnippet>47</a></span><span class="kw">pub fn </span>parse_ref_or_exit(input: <span class="kw-2">&amp;</span>str) -&gt; anyhow::Result&lt;doiget_core::Ref&gt; {
+<a href=#48 id=48 data-nosnippet>48</a>    <span class="kw">match </span>doiget_core::Ref::parse(input) {
+<a href=#49 id=49 data-nosnippet>49</a>        <span class="prelude-val">Ok</span>(r) =&gt; <span class="prelude-val">Ok</span>(r),
+<a href=#50 id=50 data-nosnippet>50</a>        <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#51 id=51 data-nosnippet>51</a>            render_ref_parse_error(<span class="kw-2">&amp;</span>e);
+<a href=#52 id=52 data-nosnippet>52</a>            <span class="prelude-val">Err</span>(anyhow::Error::new(fetch::CliExit(fetch::cli_exit_code(
+<a href=#53 id=53 data-nosnippet>53</a>                doiget_core::ErrorCode::InvalidRef,
+<a href=#54 id=54 data-nosnippet>54</a>            ))))
+<a href=#55 id=55 data-nosnippet>55</a>        }
+<a href=#56 id=56 data-nosnippet>56</a>    }
+<a href=#57 id=57 data-nosnippet>57</a>}
+<a href=#58 id=58 data-nosnippet>58</a>
+<a href=#59 id=59 data-nosnippet>59</a><span class="doccomment">/// The renderer on its own, for call sites holding a
+<a href=#60 id=60 data-nosnippet>60</a>/// [`doiget_core::RefParseError`] that did not come from
+<a href=#61 id=61 data-nosnippet>61</a>/// [`parse_ref_or_exit`].
+<a href=#62 id=62 data-nosnippet>62</a>///
+<a href=#63 id=63 data-nosnippet>63</a>/// Both now take the exit code from `fetch::cli_exit_code(InvalidRef)`,
+<a href=#64 id=64 data-nosnippet>64</a>/// which is **2** since #492 / ADR-0049. Before that `fetch` fell to the
+<a href=#65 id=65 data-nosnippet>65</a>/// generic `_ =&gt; 1` arm while `graph` hard-coded the 2 that
+<a href=#66 id=66 data-nosnippet>66</a>/// `docs/ERRORS.md` §4 prescribes, so one binary gave two answers for the
+<a href=#67 id=67 data-nosnippet>67</a>/// same input and each site's comment claimed agreement with the other.
+<a href=#68 id=68 data-nosnippet>68</a>///
+<a href=#69 id=69 data-nosnippet>69</a>/// One renderer and one exit code. `every_ref_taking_command_exits_2_for_
+<a href=#70 id=70 data-nosnippet>70</a>/// an_invalid_ref` is what keeps it that way.
+<a href=#71 id=71 data-nosnippet>71</a></span><span class="kw">pub fn </span>render_ref_parse_error(e: <span class="kw-2">&amp;</span>doiget_core::RefParseError) {
+<a href=#72 id=72 data-nosnippet>72</a>    output::print_err(<span class="macro">format_args!</span>(
+<a href=#73 id=73 data-nosnippet>73</a>        <span class="string">"error[{}]: invalid ref: {e}"</span>,
+<a href=#74 id=74 data-nosnippet>74</a>        doiget_core::ErrorCode::InvalidRef.as_wire()
+<a href=#75 id=75 data-nosnippet>75</a>    ));
+<a href=#76 id=76 data-nosnippet>76</a>}
+<a href=#77 id=77 data-nosnippet>77</a>
+<a href=#78 id=78 data-nosnippet>78</a><span class="kw">pub mod </span>audit_log;
+<a href=#79 id=79 data-nosnippet>79</a><span class="kw">pub mod </span>batch;
+<a href=#80 id=80 data-nosnippet>80</a><span class="kw">pub mod </span>bib;
+<a href=#81 id=81 data-nosnippet>81</a><span class="kw">pub mod </span>capabilities;
+<a href=#82 id=82 data-nosnippet>82</a><span class="kw">pub mod </span>cite;
+<a href=#83 id=83 data-nosnippet>83</a><span class="kw">pub mod </span>config;
+<a href=#84 id=84 data-nosnippet>84</a><span class="kw">pub mod </span>csl;
+<a href=#85 id=85 data-nosnippet>85</a><span class="kw">pub mod </span>fetch;
+<a href=#86 id=86 data-nosnippet>86</a><span class="kw">pub mod </span>frontier;
+<a href=#87 id=87 data-nosnippet>87</a><span class="kw">pub mod </span>info;
+<a href=#88 id=88 data-nosnippet>88</a><span class="kw">pub mod </span>link;
+<a href=#89 id=89 data-nosnippet>89</a><span class="kw">pub mod </span>lint;
+<a href=#90 id=90 data-nosnippet>90</a><span class="kw">pub mod </span>list_recent;
+<a href=#91 id=91 data-nosnippet>91</a><span class="kw">pub mod </span>output;
+<a href=#92 id=92 data-nosnippet>92</a><span class="kw">pub mod </span>provenance;
+<a href=#93 id=93 data-nosnippet>93</a><span class="kw">pub mod </span>resolve_citation;
+<a href=#94 id=94 data-nosnippet>94</a><span class="kw">pub mod </span>search;
+<a href=#95 id=95 data-nosnippet>95</a><span class="kw">pub mod </span>source;
+<a href=#96 id=96 data-nosnippet>96</a><span class="kw">pub mod </span>tag;
+<a href=#97 id=97 data-nosnippet>97</a><span class="kw">pub mod </span>tex_source;
+<a href=#98 id=98 data-nosnippet>98</a><span class="kw">pub mod </span>text;
+<a href=#99 id=99 data-nosnippet>99</a><span class="kw">pub mod </span>verify;
+<a href=#100 id=100 data-nosnippet>100</a><span class="kw">pub mod </span>version;
+<a href=#101 id=101 data-nosnippet>101</a>
+<a href=#102 id=102 data-nosnippet>102</a><span class="comment">// Phase 4 / Slice 16. Compile-gated by the `citation` Cargo feature
+<a href=#103 id=103 data-nosnippet>103</a>// (which itself enables `doiget-core/citation`).
+<a href=#104 id=104 data-nosnippet>104</a></span><span class="attr">#[cfg(feature = <span class="string">"citation"</span>)]
+<a href=#105 id=105 data-nosnippet>105</a></span><span class="kw">pub mod </span>graph;
+<a href=#106 id=106 data-nosnippet>106</a>
+<a href=#107 id=107 data-nosnippet>107</a><span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
+<a href=#108 id=108 data-nosnippet>108</a><span class="kw">use </span>camino::Utf8PathBuf;
+<a href=#109 id=109 data-nosnippet>109</a>
+<a href=#110 id=110 data-nosnippet>110</a><span class="doccomment">/// Resolve the path of the user `config.toml`, for messages that need to
+<a href=#111 id=111 data-nosnippet>111</a>/// name the file the user must edit.
+<a href=#112 id=112 data-nosnippet>112</a>///
+<a href=#113 id=113 data-nosnippet>113</a>/// Same resolution as [`config::ResolvedConfig::from_env`]
+<a href=#114 id=114 data-nosnippet>114</a>/// (`&lt;dirs::config_dir()&gt;/doiget/config.toml`), kept here so the fetch-side
+<a href=#115 id=115 data-nosnippet>115</a>/// denial help (issue #405) and `config doctor` cannot drift. Returns
+<a href=#116 id=116 data-nosnippet>116</a>/// `None` only when the platform has no config dir at all, in which case
+<a href=#117 id=117 data-nosnippet>117</a>/// callers should fall back to naming the file generically — a missing
+<a href=#118 id=118 data-nosnippet>118</a>/// config dir must never turn an advisory line into a hard error.
+<a href=#119 id=119 data-nosnippet>119</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>user_config_path() -&gt; <span class="prelude-ty">Option</span>&lt;Utf8PathBuf&gt; {
+<a href=#120 id=120 data-nosnippet>120</a>    <span class="comment">// MUST stay `config_dir_utf8` — the resolver the READER uses. This
+<a href=#121 id=121 data-nosnippet>121</a>    // shipped as `dirs::config_dir()`, which ignores `XDG_CONFIG_HOME` on
+<a href=#122 id=122 data-nosnippet>122</a>    // Windows, so the denial help named `%APPDATA%\doiget\config.toml`
+<a href=#123 id=123 data-nosnippet>123</a>    // while `build_http_client` was loading the XDG one. Naming the wrong
+<a href=#124 id=124 data-nosnippet>124</a>    // file is worse than naming none, and it is the whole point of the
+<a href=#125 id=125 data-nosnippet>125</a>    // #405 help line. Same fix as `ResolvedConfig::from_env`.
+<a href=#126 id=126 data-nosnippet>126</a>    </span><span class="prelude-val">Some</span>(
+<a href=#127 id=127 data-nosnippet>127</a>        fetch::config_dir_utf8()
+<a href=#128 id=128 data-nosnippet>128</a>            .ok()<span class="question-mark">?
+<a href=#129 id=129 data-nosnippet>129</a>            </span>.join(<span class="string">"doiget"</span>)
+<a href=#130 id=130 data-nosnippet>130</a>            .join(<span class="string">"config.toml"</span>),
+<a href=#131 id=131 data-nosnippet>131</a>    )
+<a href=#132 id=132 data-nosnippet>132</a>}
+<a href=#133 id=133 data-nosnippet>133</a>
+<a href=#134 id=134 data-nosnippet>134</a><span class="doccomment">/// Where a resolved store root came from (#441).
+<a href=#135 id=135 data-nosnippet>135</a>///
+<a href=#136 id=136 data-nosnippet>136</a>/// Reported by `doiget config doctor` so that a setting which did nothing
+<a href=#137 id=137 data-nosnippet>137</a>/// can no longer look like a setting that worked. That was the sharpest
+<a href=#138 id=138 data-nosnippet>138</a>/// part of #441: `config init` recommended `[store] root`, `doctor`
+<a href=#139 id=139 data-nosnippet>139</a>/// confirmed the recommendation, and the value was never read.
+<a href=#140 id=140 data-nosnippet>140</a></span><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+<a href=#141 id=141 data-nosnippet>141</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">enum </span>StoreRootSource {
+<a href=#142 id=142 data-nosnippet>142</a>    <span class="doccomment">/// `DOIGET_STORE_ROOT` (also how `--store-root` is applied).
+<a href=#143 id=143 data-nosnippet>143</a>    </span>Env,
+<a href=#144 id=144 data-nosnippet>144</a>    <span class="doccomment">/// `[store] root` in the user's `config.toml`.
+<a href=#145 id=145 data-nosnippet>145</a>    </span>ConfigFile,
+<a href=#146 id=146 data-nosnippet>146</a>    <span class="doccomment">/// Nothing set it — `./papers` under the cwd (ADR-0036).
+<a href=#147 id=147 data-nosnippet>147</a>    </span>CwdDefault,
+<a href=#148 id=148 data-nosnippet>148</a>}
+<a href=#149 id=149 data-nosnippet>149</a>
+<a href=#150 id=150 data-nosnippet>150</a><span class="kw">impl </span>StoreRootSource {
+<a href=#151 id=151 data-nosnippet>151</a>    <span class="doccomment">/// Short label for `config show` / `doctor`.
+<a href=#152 id=152 data-nosnippet>152</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>label(<span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
+<a href=#153 id=153 data-nosnippet>153</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#154 id=154 data-nosnippet>154</a>            <span class="self">Self</span>::Env =&gt; <span class="string">"DOIGET_STORE_ROOT"</span>,
+<a href=#155 id=155 data-nosnippet>155</a>            <span class="self">Self</span>::ConfigFile =&gt; <span class="string">"[store] root in config.toml"</span>,
+<a href=#156 id=156 data-nosnippet>156</a>            <span class="self">Self</span>::CwdDefault =&gt; <span class="string">"default: ./papers under the cwd"</span>,
+<a href=#157 id=157 data-nosnippet>157</a>        }
+<a href=#158 id=158 data-nosnippet>158</a>    }
+<a href=#159 id=159 data-nosnippet>159</a>}
+<a href=#160 id=160 data-nosnippet>160</a>
+<a href=#161 id=161 data-nosnippet>161</a><span class="doccomment">/// Resolve the on-disk store root.
+<a href=#162 id=162 data-nosnippet>162</a>///
+<a href=#163 id=163 data-nosnippet>163</a>/// Resolution order (ADR-0036, `docs/CONFIG.md` §4):
+<a href=#164 id=164 data-nosnippet>164</a>///
+<a href=#165 id=165 data-nosnippet>165</a>/// 1. `DOIGET_STORE_ROOT`, if set and non-empty. `--store-root` is applied
+<a href=#166 id=166 data-nosnippet>166</a>///    by writing this variable, so the flag rides the same rung.
+<a href=#167 id=167 data-nosnippet>167</a>/// 2. `[store] root` in the user's `config.toml`, expanded via
+<a href=#168 id=168 data-nosnippet>168</a>///    [`doiget_core::user_extension::expand_store_root`].
+<a href=#169 id=169 data-nosnippet>169</a>/// 3. `./papers` — `papers/` directly under the current working directory
+<a href=#170 id=170 data-nosnippet>170</a>///    (#344 / ADR-0036), so fetched artifacts are visible where the user
+<a href=#171 id=171 data-nosnippet>171</a>///    (or an LLM agent) is working rather than hidden in a far-off home
+<a href=#172 id=172 data-nosnippet>172</a>///    directory.
+<a href=#173 id=173 data-nosnippet>173</a>///
+<a href=#174 id=174 data-nosnippet>174</a>/// Rung 2 is new in #441. It was documented from the start — ADR-0036
+<a href=#175 id=175 data-nosnippet>175</a>/// states the order, `docs/CONFIG.md` §3 lists the key, `config init`
+<a href=#176 id=176 data-nosnippet>176</a>/// writes it into the template it generates and `config doctor` recommends
+<a href=#177 id=177 data-nosnippet>177</a>/// it — and read by nothing, so the store silently kept following the cwd.
+<a href=#178 id=178 data-nosnippet>178</a>/// The old doc comment on this function said the config rung "lands with
+<a href=#179 id=179 data-nosnippet>179</a>/// the `config` subcommand"; that subcommand shipped in 0.8.8 without it.
+<a href=#180 id=180 data-nosnippet>180</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>resolve_store_root() -&gt; <span class="prelude-ty">Result</span>&lt;Utf8PathBuf&gt; {
+<a href=#181 id=181 data-nosnippet>181</a>    resolve_store_root_with_source().map(|(root, <span class="kw">_</span>)| root)
+<a href=#182 id=182 data-nosnippet>182</a>}
+<a href=#183 id=183 data-nosnippet>183</a>
+<a href=#184 id=184 data-nosnippet>184</a><span class="doccomment">/// [`resolve_store_root`] plus which rung answered.
+<a href=#185 id=185 data-nosnippet>185</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>resolve_store_root_with_source() -&gt; <span class="prelude-ty">Result</span>&lt;(Utf8PathBuf, StoreRootSource)&gt; {
+<a href=#186 id=186 data-nosnippet>186</a>    <span class="kw">if let </span><span class="prelude-val">Ok</span>(s) = std::env::var(<span class="string">"DOIGET_STORE_ROOT"</span>) {
+<a href=#187 id=187 data-nosnippet>187</a>        <span class="comment">// Ignore an empty value or an unexpanded "${...}" placeholder — a
+<a href=#188 id=188 data-nosnippet>188</a>        // Desktop-Extension config left blank can pass the literal
+<a href=#189 id=189 data-nosnippet>189</a>        // "${user_config.store_root}", which must not become a path (#369).
+<a href=#190 id=190 data-nosnippet>190</a>        </span><span class="kw">let </span>s = s.trim();
+<a href=#191 id=191 data-nosnippet>191</a>        <span class="kw">if </span>!s.is_empty() &amp;&amp; !s.contains(<span class="string">"${"</span>) {
+<a href=#192 id=192 data-nosnippet>192</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>((Utf8PathBuf::from(s), StoreRootSource::Env));
+<a href=#193 id=193 data-nosnippet>193</a>        }
+<a href=#194 id=194 data-nosnippet>194</a>    }
+<a href=#195 id=195 data-nosnippet>195</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(root) = store_root_from_config() {
+<a href=#196 id=196 data-nosnippet>196</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>((root, StoreRootSource::ConfigFile));
+<a href=#197 id=197 data-nosnippet>197</a>    }
+<a href=#198 id=198 data-nosnippet>198</a>    <span class="kw">let </span>cwd = std::env::current_dir().context(
+<a href=#199 id=199 data-nosnippet>199</a>        <span class="string">"could not determine the current working directory for the default store root (set \
+<a href=#200 id=200 data-nosnippet>200</a>            DOIGET_STORE_ROOT to choose an explicit store location)"</span>,
+<a href=#201 id=201 data-nosnippet>201</a>    )<span class="question-mark">?</span>;
+<a href=#202 id=202 data-nosnippet>202</a>    Utf8PathBuf::from_path_buf(cwd)
+<a href=#203 id=203 data-nosnippet>203</a>        .map(|d| (d.join(<span class="string">"papers"</span>), StoreRootSource::CwdDefault))
+<a href=#204 id=204 data-nosnippet>204</a>        .map_err(|p| <span class="macro">anyhow::anyhow!</span>(<span class="string">"current directory path is not UTF-8: {}"</span>, p.display()))
+<a href=#205 id=205 data-nosnippet>205</a>}
+<a href=#206 id=206 data-nosnippet>206</a>
+<a href=#207 id=207 data-nosnippet>207</a><span class="doccomment">/// `[store] root` from the user's `config.toml`, if any.
+<a href=#208 id=208 data-nosnippet>208</a>///
+<a href=#209 id=209 data-nosnippet>209</a>/// Does not fail the command on a malformed file — the store root is
+<a href=#210 id=210 data-nosnippet>210</a>/// resolved by every subcommand, and one bad line should not be a total
+<a href=#211 id=211 data-nosnippet>211</a>/// outage — but it does NOT stay quiet about it.
+<a href=#212 id=212 data-nosnippet>212</a>///
+<a href=#213 id=213 data-nosnippet>213</a>/// The previous comment here justified silence by claiming "a parse error
+<a href=#214 id=214 data-nosnippet>214</a>/// surfaces with a proper diagnostic on the network path that owns this
+<a href=#215 id=215 data-nosnippet>215</a>/// file". The #468 review checked that claim and it is false for most
+<a href=#216 id=216 data-nosnippet>216</a>/// callers: `list-recent`, `search`, `info`, `tag`, `bib` and `csl` never
+<a href=#217 id=217 data-nosnippet>217</a>/// build an HTTP client, so that diagnostic never runs for them. TOML fails
+<a href=#218 id=218 data-nosnippet>218</a>/// the whole document, so a typo anywhere — even under `[network]` — makes
+<a href=#219 id=219 data-nosnippet>219</a>/// `[store] root` unreadable, and the command silently used `./papers`
+<a href=#220 id=220 data-nosnippet>220</a>/// under the cwd as though nothing had been configured.
+<a href=#221 id=221 data-nosnippet>221</a>///
+<a href=#222 id=222 data-nosnippet>222</a>/// `search` then reports zero results, indistinguishable from an empty
+<a href=#223 id=223 data-nosnippet>223</a>/// library. Worse, `tag` **writes** metadata into the wrong store and
+<a href=#224 id=224 data-nosnippet>224</a>/// reports success. A warning is the minimum; the resolved source is also
+<a href=#225 id=225 data-nosnippet>225</a>/// reported by `config doctor`.
+<a href=#226 id=226 data-nosnippet>226</a></span><span class="kw">fn </span>store_root_from_config() -&gt; <span class="prelude-ty">Option</span>&lt;Utf8PathBuf&gt; {
+<a href=#227 id=227 data-nosnippet>227</a>    <span class="kw">let </span>path = user_config_path()<span class="question-mark">?</span>;
+<a href=#228 id=228 data-nosnippet>228</a>    <span class="kw">let </span>cfg = <span class="kw">match </span>doiget_core::user_extension::load(<span class="kw-2">&amp;</span>path) {
+<a href=#229 id=229 data-nosnippet>229</a>        <span class="prelude-val">Ok</span>(c) =&gt; c,
+<a href=#230 id=230 data-nosnippet>230</a>        <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#231 id=231 data-nosnippet>231</a>            <span class="macro">tracing::warn!</span>(
+<a href=#232 id=232 data-nosnippet>232</a>                path = %path,
+<a href=#233 id=233 data-nosnippet>233</a>                error = %e,
+<a href=#234 id=234 data-nosnippet>234</a>                <span class="string">"config.toml could not be read; [store] root ignored and the default store root used instead. Run `doiget config doctor` to see which root is in effect."
+<a href=#235 id=235 data-nosnippet>235</a>            </span>);
+<a href=#236 id=236 data-nosnippet>236</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#237 id=237 data-nosnippet>237</a>        }
+<a href=#238 id=238 data-nosnippet>238</a>    };
+<a href=#239 id=239 data-nosnippet>239</a>    <span class="kw">let </span>raw = cfg.store_root<span class="question-mark">?</span>;
+<a href=#240 id=240 data-nosnippet>240</a>    <span class="prelude-val">Some</span>(doiget_core::user_extension::expand_store_root(<span class="kw-2">&amp;</span>raw))
+<a href=#241 id=241 data-nosnippet>241</a>}
+</code></pre></div></section></main></body></html>

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Developer &middot; doiget</title>
+  <meta name="description" content="Wire doiget into an agent host or embed doiget-core in a Rust program.">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Developer · doiget">
+  <meta property="og:description" content="Wire doiget into an agent host or embed doiget-core in a Rust program.">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Developer · doiget">
+  <meta name="twitter:description" content="Wire doiget into an agent host or embed doiget-core in a Rust program.">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="section">
+  <header class="section-head">
+    <h1>Developer</h1>
+    <p class="lede">Wire doiget into an agent host or embed doiget-core in a Rust program.</p>
+  </header>
+
+  <p>This section is for people who want to <strong>embed doiget</strong> into their own
+agent host (Claude Desktop, Cursor, Codex CLI, ...) or use the
+<code>doiget-core</code> Rust crate directly. If you just want to fetch papers from
+the command line, see [Use]({{ get_url(path='@/use/_index.md') | safe }}) instead.</p>
+<h2 id="two-integration-surfaces">Two integration surfaces</h2>
+<h3 id="1-mcp-server-stdio-json-rpc">1. MCP server (stdio JSON-RPC)</h3>
+<p><code>doiget serve</code> is a Model Context Protocol server speaking JSON-RPC over
+stdio. It exposes ten tools (Phase 3 baseline) named with the <code>doiget_</code>
+prefix:</p>
+<ul>
+<li><code>doiget_health</code> — operational sanity (version, schema_version, store_writable).</li>
+<li><code>doiget_capability_profile</code> — which sources this instance can use.</li>
+<li><code>doiget_metadata_only</code> — resolve to metadata without fetching the PDF.</li>
+<li><code>doiget_fetch_paper</code> — download a single PDF.</li>
+<li><code>doiget_batch_fetch</code> — up to 100 refs in one call.</li>
+<li><code>doiget_resolve_paper</code> — one-shot resolution, no persistence (Phase 3).</li>
+<li><code>doiget_info</code> — read a store entry's metadata (Phase 3).</li>
+<li><code>doiget_search_local</code> — search store metadata (Phase 3).</li>
+<li><code>doiget_list_recent</code> — last N fetched entries (Phase 3).</li>
+<li><code>doiget_paper_pdf_path</code> — absolute path of a cached PDF (Phase 3).</li>
+</ul>
+<p>The MCP transport is <strong>stdio only</strong> (ADR-0001). No HTTP, no WebSocket,
+no socket. This is a permanent posture decision.</p>
+<h3 id="2-rust-library-doiget-core">2. Rust library (<code>doiget-core</code>)</h3>
+<p>Embed the resolver directly via the <code>doiget-core</code> crate. The library
+surface is semver-strict from <code>0.1.0</code> onward (workspace stays at
+<code>0.0.0</code> until Phase 6).</p>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#fa6e32;">use </span><span>doiget_core</span><span style="color:#ed9366;">::</span><span>{Ref</span><span style="color:#61676ccc;">,</span><span> CapabilityProfile</span><span style="color:#61676ccc;">,</span><span> orchestrator}</span><span style="color:#61676ccc;">;
+</span><span>
+</span><span style="color:#fa6e32;">let</span><span> ref_ </span><span style="color:#ed9366;">= </span><span>Ref</span><span style="color:#ed9366;">::</span><span>parse(</span><span style="color:#86b300;">&quot;10.1103/PhysRevLett.130.200601&quot;</span><span>)</span><span style="color:#ed9366;">?</span><span style="color:#61676ccc;">;
+</span><span style="color:#fa6e32;">let</span><span> profile </span><span style="color:#ed9366;">= </span><span>CapabilityProfile</span><span style="color:#ed9366;">::</span><span>from_env()</span><span style="color:#ed9366;">?</span><span style="color:#61676ccc;">;
+</span><span style="color:#fa6e32;">let</span><span> outcome </span><span style="color:#ed9366;">= </span><span>orchestrator</span><span style="color:#ed9366;">::</span><span>fetch_paper(</span><span style="color:#ed9366;">&amp;</span><span>ref_</span><span style="color:#61676ccc;">, </span><span style="color:#ed9366;">&amp;</span><span>profile</span><span style="color:#61676ccc;">, </span><span style="color:#ed9366;">&amp;</span><span>ctx)</span><span style="color:#ed9366;">.</span><span>await</span><span style="color:#ed9366;">?</span><span style="color:#61676ccc;">;
+</span><span style="color:#f07171;">println!</span><span>(</span><span style="color:#86b300;">&quot;wrote: </span><span style="color:#ff8f40;">{}</span><span style="color:#86b300;">&quot;</span><span style="color:#61676ccc;">,</span><span> outcome</span><span style="color:#ed9366;">.</span><span>path)</span><span style="color:#61676ccc;">;
+</span></code></pre>
+<p>See [docs.rs/doiget-core]({{ config.extra.docs_rs_url }}) for the full
+rustdoc once Phase 6 ships.</p>
+<h2 id="host-integration-snippets">Host integration snippets</h2>
+<p>Detailed JSON-RPC traces and host-side config for the major MCP hosts
+land in Phase 3 (after <code>doiget serve</code> is feature-complete). Until then,
+the canonical contract is the
+[MCP tools spec]({{ config.extra.github_url }}/blob/main/docs/MCP_TOOLS.md).</p>
+
+
+  
+
+  
+  <h2>Pages</h2>
+  <ul class="index">
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/developer/mcp-tools/">MCP tools</a>
+        <span class="lede">&mdash; `doiget` runs as a Model Context Protocol server when invoked as `doiget serve`. It</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/developer/capability/">Capability profile</a>
+        <span class="lede">&mdash; ```rust</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/developer/cache/">Cache</a>
+        <span class="lede">&mdash; ```</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/developer/config/">Configuration</a>
+        <span class="lede">&mdash; ```</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/developer/errors/">Error codes</a>
+        <span class="lede">&mdash; ```rust</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/developer/provenance-log/">Provenance log</a>
+        <span class="lede">&mdash; ```</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/developer/public-api/">Public API</a>
+        <span class="lede">&mdash; `doiget-cli` and `doiget-mcp` are not bound by this guarantee — they are end-user</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/developer/redirect-allowlist/">Redirect allowlist</a>
+        <span class="lede">&mdash; Defense-in-depth against open-redirect SSRF and against publisher &#x2F; metadata-source</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/developer/safekey/">Safekey algorithm</a>
+        <span class="lede">&mdash; Map any DOI or arXiv id to a deterministic, cross-platform, bit-identical filesystem-safe</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/developer/security/">Security</a>
+        <span class="lede">&mdash; For vulnerability reporting, see [`..&#x2F;CONTACT.md`](..&#x2F;CONTACT.md). **Do not file a public</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/developer/sources/">Sources matrix</a>
+        <span class="lede">&mdash; | Source | Tier | Phase | Auth | ToS link | doiget feature |</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/developer/store/">Store contract</a>
+        <span class="lede">&mdash; ```</span>
+      </li>
+    
+  </ul>
+  
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

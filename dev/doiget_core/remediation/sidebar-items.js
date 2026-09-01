@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["RemediationKind"],"fn":["for_denial","trust_flag_for_host","widening_suggestions"],"struct":["Remediation"]};

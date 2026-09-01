@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_LIMIT","MAX_PER_PAGE"],"enum":["DiscoverySource","SearchSort"],"fn":["frontier_view","paper_search","resolve_links_for_doi","zero_result_hint"],"struct":["FrontierQuery","FrontierResults","PaperHit","PaperLinks","PaperSearchQuery","PaperSearchResults"]};

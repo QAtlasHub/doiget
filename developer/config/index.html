@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Configuration &middot; doiget</title>
+  <meta name="description" content="```">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/config/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Configuration · doiget">
+  <meta property="og:description" content="```">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/config/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Configuration · doiget">
+  <meta name="twitter:description" content="```">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Configuration</h1>
+    <p class="lede">```</p>
+  </header>
+
+  <h1 id="configuration">Configuration</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE.</strong> Defines configuration sources and their precedence.</p>
+</blockquote>
+<h2 id="1-sources-in-priority-order">1. Sources, in priority order</h2>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>1. CLI flags                        (highest)
+</span><span>2. Environment variables
+</span><span>3. User config file ~/.config/doiget/config.toml
+</span><span>4. Built-in defaults                (lowest)
+</span></code></pre>
+<p>A value set higher in the chain overrides any value set lower.</p>
+<h2 id="2-built-in-defaults">2. Built-in defaults</h2>
+<table><thead><tr><th>Key</th><th>Default</th></tr></thead><tbody>
+<tr><td><code>store.root</code></td><td><code>./papers</code> — <code>papers/</code> under the current working directory (ADR-0036). Set <code>DOIGET_STORE_ROOT</code> for a central library.</td></tr>
+<tr><td><code>cache.root</code></td><td>POSIX: <code>$HOME/.cache/doiget</code>. Windows: <code>%LOCALAPPDATA%\doiget\cache</code>.</td></tr>
+<tr><td><code>log.path</code></td><td>POSIX: <code>$HOME/.config/doiget/access.log</code>. Windows: <code>%APPDATA%\doiget\access.log</code>.</td></tr>
+<tr><td><code>log.retention_days</code></td><td><code>90</code></td></tr>
+<tr><td><code>network.user_agent</code></td><td><code>doiget/&lt;version&gt; (+https://github.com/QAtlasHub/doiget)</code></td></tr>
+<tr><td><code>network.contact_email</code></td><td>unset; if unset, every outbound request identifies as <code>doiget@localhost</code> and goes to the non-polite pool</td></tr>
+<tr><td><code>network.unpaywall_email</code></td><td>unset; falls back to <code>network.contact_email</code></td></tr>
+<tr><td><code>network.connect_timeout_sec</code></td><td><code>10</code></td></tr>
+<tr><td><code>network.read_timeout_sec</code></td><td><code>60</code></td></tr>
+<tr><td><code>network.total_timeout_sec</code></td><td><code>300</code></td></tr>
+<tr><td><code>output.mode</code></td><td><code>quiet</code> (see <a href="https://codes.sota-shimozono.com/doiget/developer/config/ARCHITECTURE.md"><code>ARCHITECTURE.md</code></a> §personas)</td></tr>
+<tr><td><code>output.color</code></td><td><code>auto</code> (honors <code>NO_COLOR</code> env)</td></tr>
+<tr><td><code>output.progress</code></td><td><code>false</code></td></tr>
+<tr><td><code>output.emoji</code></td><td><code>false</code></td></tr>
+<tr><td><code>verify.on_missing_id</code></td><td><code>warn</code></td></tr>
+<tr><td><code>verify.strict</code></td><td><code>false</code></td></tr>
+</tbody></table>
+<h2 id="3-config-toml-schema">3. config.toml schema</h2>
+<blockquote>
+<p><strong>The file does not exist by default.</strong> A fresh install has no
+<code>config.toml</code> at all, and three of the four settings that most often decide the
+outcome of a session — store location, the two allowlist flags — fail <em>silently</em>
+when it is absent. Run <strong><code>doiget config init</code></strong> to write a fully commented
+template to the path <code>doiget config path</code> reports; every line is commented out,
+so it documents the choices without changing behaviour until you edit it.
+<code>--force</code> overwrites an existing file (without it, <code>init</code> refuses, so it can
+never silently discard a hand-written allowlist).</p>
+</blockquote>
+<pre data-lang="toml" style="background-color:#fafafa;color:#61676c;" class="language-toml "><code class="language-toml" data-lang="toml"><span style="font-style:italic;color:#abb0b6;"># ~/.config/doiget/config.toml — all fields optional
+</span><span>
+</span><span>[</span><span style="color:#399ee6;">store</span><span>]
+</span><span style="font-style:italic;color:#abb0b6;"># Overridden by DOIGET_STORE_ROOT and --store-root (one rung above).
+</span><span style="font-style:italic;color:#abb0b6;"># A leading `~` is expanded; the env var relies on the shell for that.
+</span><span style="color:#399ee6;">root </span><span>= </span><span style="color:#86b300;">&quot;/home/alice/papers&quot;
+</span><span>
+</span><span>[</span><span style="color:#399ee6;">cache</span><span>]
+</span><span style="color:#399ee6;">root </span><span>= </span><span style="color:#86b300;">&quot;/home/alice/.cache/doiget&quot;
+</span><span>
+</span><span>[</span><span style="color:#399ee6;">log</span><span>]
+</span><span style="color:#399ee6;">path </span><span>= </span><span style="color:#86b300;">&quot;/home/alice/.config/doiget/access.log&quot;
+</span><span style="color:#399ee6;">retention_days </span><span>= </span><span style="color:#ff8f40;">90
+</span><span>
+</span><span>[</span><span style="color:#399ee6;">network</span><span>]
+</span><span style="color:#399ee6;">user_agent </span><span>= </span><span style="color:#86b300;">&quot;doiget/0.1.0 (+https://github.com/QAtlasHub/doiget; user=alice@example.org)&quot;
+</span><span style="font-style:italic;color:#abb0b6;"># Polite-pool contact for every outbound request. Overridden by
+</span><span style="font-style:italic;color:#abb0b6;"># DOIGET_CONTACT_EMAIL, one rung above. This is what `doiget config doctor`
+</span><span style="font-style:italic;color:#abb0b6;"># checks, and `doctor` names which rung answered.
+</span><span style="color:#399ee6;">contact_email </span><span>= </span><span style="color:#86b300;">&quot;alice@example.org&quot;
+</span><span style="font-style:italic;color:#abb0b6;"># Only if Unpaywall should see a different address. Overridden by
+</span><span style="font-style:italic;color:#abb0b6;"># DOIGET_UNPAYWALL_EMAIL; falls back to contact_email above.
+</span><span style="color:#399ee6;">unpaywall_email </span><span>= </span><span style="color:#86b300;">&quot;alice@example.org&quot;
+</span><span style="color:#399ee6;">connect_timeout_sec </span><span>= </span><span style="color:#ff8f40;">10
+</span><span style="color:#399ee6;">read_timeout_sec </span><span>= </span><span style="color:#ff8f40;">60
+</span><span style="color:#399ee6;">total_timeout_sec </span><span>= </span><span style="color:#ff8f40;">300
+</span><span>
+</span><span style="font-style:italic;color:#abb0b6;"># Allowlist extension — these two keys decide whether a fetch is ALLOWED.
+</span><span style="font-style:italic;color:#abb0b6;"># Without them, an OA PDF hosted off the built-in allowlist is denied with
+</span><span style="font-style:italic;color:#abb0b6;"># `error[CAPABILITY_DENIED]: ... redirect_not_in_allowlist`.
+</span><span style="color:#399ee6;">trust_academic_repos </span><span>= </span><span style="color:#ff8f40;">false   </span><span style="font-style:italic;color:#abb0b6;"># true = also allow the 15 curated academic suffixes below
+</span><span style="color:#399ee6;">trust_oa_registries  </span><span>= </span><span style="color:#ff8f40;">false   </span><span style="font-style:italic;color:#abb0b6;"># true = also allow the curated OA registries (SciELO, Zenodo, ...)
+</span><span>
+</span><span>[[</span><span style="color:#399ee6;">network</span><span style="color:#61676ccc;">.</span><span style="color:#399ee6;">additional_hosts</span><span>]]
+</span><span style="color:#399ee6;">host </span><span>= </span><span style="color:#86b300;">&quot;*.uj.edu.pl&quot;           </span><span style="font-style:italic;color:#abb0b6;"># single-suffix wildcard, or a literal FQDN
+</span><span style="color:#399ee6;">note </span><span>= </span><span style="color:#86b300;">&quot;Jagiellonian University repository&quot;
+</span><span>
+</span><span>[</span><span style="color:#399ee6;">output</span><span>]
+</span><span style="color:#399ee6;">mode </span><span>= </span><span style="color:#86b300;">&quot;human&quot;          </span><span style="font-style:italic;color:#abb0b6;"># human | json | quiet | mcp
+</span><span style="color:#399ee6;">color </span><span>= </span><span style="color:#86b300;">&quot;auto&quot;          </span><span style="font-style:italic;color:#abb0b6;"># auto | always | never
+</span><span style="color:#399ee6;">progress </span><span>= </span><span style="color:#ff8f40;">false
+</span><span style="color:#399ee6;">emoji </span><span>= </span><span style="color:#ff8f40;">false
+</span><span>
+</span><span>[</span><span style="color:#399ee6;">verify</span><span>]                 </span><span style="font-style:italic;color:#abb0b6;"># consumed by `doiget verify`
+</span><span style="color:#399ee6;">on_missing_id </span><span>= </span><span style="color:#86b300;">&quot;warn&quot;   </span><span style="font-style:italic;color:#abb0b6;"># warn | error | skip — policy for id-less entries
+</span><span style="color:#399ee6;">strict </span><span>= </span><span style="color:#ff8f40;">false           </span><span style="font-style:italic;color:#abb0b6;"># also fail on unreachable (transient) ids; absent (404/410) ids fail regardless
+</span></code></pre>
+<p>doiget reads only the keys it knows about. Unknown keys cause a startup warning but do
+not fail.</p>
+<h3 id="3-1-allowlist-extension-trust-academic-repos-network-additional-hosts">3.1 Allowlist extension — <code>trust_academic_repos</code> / <code>[[network.additional_hosts]]</code></h3>
+<p>doiget only fetches from hosts on its allowlist, and a redirect to an off-allowlist host is
+denied:</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>error[CAPABILITY_DENIED]: an OA PDF was found but its host is blocked by supply-chain
+</span><span>policy (redirect_not_in_allowlist): redirect target strathprints.strath.ac.uk not in
+</span><span>allowlist for source oa-publisher
+</span></code></pre>
+<p>The two keys below are the supported way to widen it. Both live under <code>[network]</code>, and
+neither is set by default — a fresh install has no <code>config.toml</code> at all, so every fetch
+runs against the built-in allowlist only.</p>
+<table><thead><tr><th>Key</th><th>Type</th><th>Default</th><th>Effect</th></tr></thead><tbody>
+<tr><td><code>trust_academic_repos</code></td><td>bool</td><td><code>false</code></td><td>Adds 15 curated single-suffix academic wildcards — where institutions host their own <strong>Green OA</strong>.</td></tr>
+<tr><td><code>trust_oa_registries</code></td><td>bool</td><td><code>false</code></td><td>Adds the curated <strong>OA registries / repositories</strong> — where cross-publisher <strong>Gold OA</strong> is indexed or hosted.</td></tr>
+<tr><td><code>[[network.additional_hosts]]</code></td><td>array of tables</td><td>empty</td><td>Adds individual hosts. <code>host</code> is required; <code>note</code> is optional and free-text.</td></tr>
+</tbody></table>
+<p><strong>Prefer the registrable-domain wildcard.</strong> A publisher often redirects across its own
+subdomains — <code>www.ams.org</code> → <code>pubs.ams.org</code> — so an entry for the exact host that was
+refused buys you one hop and another denial. <code>*.ams.org</code> covers the publisher in one
+line, and matches how the built-in list is written (ADR-0027 bounds the trusted surface
+to registrable-domain wildcards for established publishers). Add the apex alongside it
+when the publisher redirects there too: a single-suffix wildcard does <strong>not</strong> match
+<code>ams.org</code> itself, which is why the built-in list carries both forms for <code>doaj.org</code>,
+<code>arxiv.org</code> and <code>europepmc.org</code>.</p>
+<p>The denial message suggests all three, most specific first (#443).</p>
+<p>The two flags are separate because the trust arguments differ — "this institution
+publishes its own work here" is not "this registry indexes open content across
+publishers" — so you can take either without the other.</p>
+<p><code>trust_academic_repos = true</code> activates exactly these patterns, which cover the national
+registration blocks institutions use for Green-OA repositories:</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>*.ac.uk   *.ac.jp   *.jst.go.jp   *.edu.au   *.edu.cn
+</span><span>*.ac.cn   *.edu.pl  *.ac.nz       *.ac.za    *.ac.in
+</span><span>*.edu.br  *.edu.tw  *.edu.tr      *.edu.ar   *.edu.mx
+</span></code></pre>
+<p>So the denial above is fixed by one line — <code>strathprints.strath.ac.uk</code> is <code>.ac.uk</code>:</p>
+<pre data-lang="toml" style="background-color:#fafafa;color:#61676c;" class="language-toml "><code class="language-toml" data-lang="toml"><span>[</span><span style="color:#399ee6;">network</span><span>]
+</span><span style="color:#399ee6;">trust_academic_repos </span><span>= </span><span style="color:#ff8f40;">true
+</span></code></pre>
+<p><code>trust_oa_registries = true</code> activates the OA-registry set:</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>scielo.org    *.scielo.org    *.scielo.br
+</span><span>zenodo.org    *.zenodo.org    osf.io        *.osf.io
+</span><span>hal.science   *.hal.science   core.ac.uk
+</span></code></pre>
+<p>Every entry is a registry or repository whose <em>purpose</em> is open distribution, never a
+publisher platform — turning this on must not become a way to reach paywalled content.
+Note that both the apex and the wildcard are listed where the apex serves content: a
+single-suffix wildcard does <strong>not</strong> match the apex.</p>
+<p><strong>DOAJ is not in this set — it needs no flag.</strong> <code>doaj.org</code> is on the <em>default</em>
+allowlist as of 0.8.8 (ADR-0037), because the project already trusted it under the
+<code>doaj</code> metadata source key and the two keys simply disagreed. So a Gold-OA article
+routed through DOAJ — e.g. IEEE Access <code>10.1109/access.2024.3495502</code> — works on a
+stock install with no configuration at all.</p>
+<p><code>[[network.additional_hosts]]</code> is for anything outside either set. A pattern is either a
+literal FQDN (<code>ruj.uj.edu.pl</code>) or a <strong>single-suffix wildcard</strong> (<code>*.uj.edu.pl</code>). Multi-segment
+globs (<code>*.edu.*</code>), a bare <code>*</code>, and a misplaced <code>*</code> (<code>foo.*.org</code>) are rejected at load time —
+this table uses <code>deny_unknown_fields</code>, so a typo such as <code>hsot = "..."</code> fails loudly rather
+than being silently ignored.</p>
+<pre data-lang="toml" style="background-color:#fafafa;color:#61676c;" class="language-toml "><code class="language-toml" data-lang="toml"><span>[[</span><span style="color:#399ee6;">network</span><span style="color:#61676ccc;">.</span><span style="color:#399ee6;">additional_hosts</span><span>]]
+</span><span style="color:#399ee6;">host </span><span>= </span><span style="color:#86b300;">&quot;*.uj.edu.pl&quot;
+</span><span style="color:#399ee6;">note </span><span>= </span><span style="color:#86b300;">&quot;Jagiellonian University repository&quot;
+</span><span>
+</span><span>[[</span><span style="color:#399ee6;">network</span><span style="color:#61676ccc;">.</span><span style="color:#399ee6;">additional_hosts</span><span>]]
+</span><span style="color:#399ee6;">host </span><span>= </span><span style="color:#86b300;">&quot;repository.example.edu&quot;
+</span><span style="color:#399ee6;">note </span><span>= </span><span style="color:#86b300;">&quot;a repository outside both curated sets&quot;
+</span></code></pre>
+<p>Run <code>doiget config doctor</code> to confirm what was loaded:</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>[ ok ] user-extension hosts loaded: 2 (trust_academic_repos=true)
+</span></code></pre>
+<h2 id="4-environment-variables">4. Environment variables</h2>
+<p>All <code>DOIGET_*</code> env vars use <code>SCREAMING_SNAKE_CASE</code>. Boolean env vars accept <code>1</code> / <code>0</code>,
+<code>true</code> / <code>false</code>. Path env vars take a single absolute path.</p>
+<table><thead><tr><th>Variable</th><th>Maps to</th></tr></thead><tbody>
+<tr><td><code>DOIGET_STORE_ROOT</code></td><td><code>store.root</code></td></tr>
+<tr><td><code>DOIGET_CACHE_ROOT</code></td><td><code>cache.root</code></td></tr>
+<tr><td><code>DOIGET_LOG_PATH</code></td><td><code>log.path</code></td></tr>
+<tr><td><code>DOIGET_LOG_RETENTION_DAYS</code></td><td><code>log.retention_days</code></td></tr>
+<tr><td><code>DOIGET_USER_AGENT</code></td><td><code>network.user_agent</code></td></tr>
+<tr><td><code>DOIGET_CONTACT_EMAIL</code></td><td><code>network.contact_email</code>. Polite-pool contact address; also the default for <code>DOIGET_UNPAYWALL_EMAIL</code>.</td></tr>
+<tr><td><code>DOIGET_UNPAYWALL_EMAIL</code></td><td><code>network.unpaywall_email</code></td></tr>
+<tr><td><code>DOIGET_MODE</code></td><td><code>output.mode</code></td></tr>
+<tr><td><code>NO_COLOR</code></td><td>Forces <code>output.color = "never"</code> (xdg standard).</td></tr>
+<tr><td><code>HTTPS_PROXY</code> / <code>HTTP_PROXY</code> / <code>NO_PROXY</code></td><td>reqwest honors these (system standard).</td></tr>
+</tbody></table>
+<p>Both addresses are resolved <strong>per field</strong>, across the §1 chain: the env var, then
+<code>[network]</code> in <code>config.toml</code>, then the next-broader default. <code>DOIGET_UNPAYWALL_EMAIL</code> →
+<code>[network] unpaywall_email</code> → whatever <code>contact_email</code> resolved to → <code>doiget@localhost</code>.
+The more specific field wins at each rung.</p>
+<p>With neither set, doiget still queries Unpaywall — it sends the placeholder
+<code>doiget@localhost</code>, which lands in the non-polite pool and may be rate-limited or refused.
+Setting one is worth doing before any batch run, and it is what <code>doiget config doctor</code>
+flags. It also makes the automatic arXiv preprint fallback reliable: when a DOI's OA PDF is
+blocked, doiget retries via the arXiv preprint that Unpaywall named, so a throttled
+Unpaywall response costs you that fallback too — and the run still exits 0 saying
+<code>no OA PDF available</code>, which is why a degraded search and a true negative looked the same.</p>
+<p><code>doiget config doctor</code> reports <strong>which rung answered</strong>, e.g.
+<code>[ ok ] contact_email set (from: [network] contact_email in config.toml)</code>. Before #504 the
+file rung did not exist for either address, so a <code>config.toml</code> written from the <code>config init</code>
+template was inert while <code>doctor</code> reported the store root correctly from the same file.</p>
+<p>CapabilityProfile-related env vars are documented in <a href="https://codes.sota-shimozono.com/doiget/developer/config/CAPABILITY.md"><code>CAPABILITY.md</code></a>.</p>
+<h2 id="5-cli-flags">5. CLI flags</h2>
+<p>CLI flags use <code>--kebab-case</code>. Any path-or-string value with a config equivalent is
+overridable by flag:</p>
+<table><thead><tr><th>Flag</th><th>Maps to</th></tr></thead><tbody>
+<tr><td><code>--store-root &lt;path&gt;</code></td><td><code>store.root</code></td></tr>
+<tr><td><code>--log-path &lt;path&gt;</code></td><td><code>log.path</code></td></tr>
+<tr><td><code>--mode &lt;human|json|quiet|mcp&gt;</code></td><td><code>output.mode</code></td></tr>
+<tr><td><code>--color &lt;auto|always|never&gt;</code></td><td><code>output.color</code></td></tr>
+<tr><td><code>--progress</code> / <code>--no-progress</code></td><td><code>output.progress</code></td></tr>
+<tr><td><code>--quiet</code> / <code>-q</code></td><td>implies <code>--mode=quiet</code></td></tr>
+<tr><td><code>--json</code></td><td>implies <code>--mode=json</code></td></tr>
+<tr><td><code>--force</code></td><td><code>config init</code> only: overwrite an existing <code>config.toml</code></td></tr>
+<tr><td><code>--network</code></td><td><code>config doctor</code> only: also run the outbound report (§6.1)</td></tr>
+</tbody></table>
+<p><code>doiget serve</code> always runs in <code>mcp</code> mode regardless of flags. Other subcommands honor the
+mode resolution above.</p>
+<h2 id="6-credentials-file">6. Credentials file</h2>
+<p>This file carries <strong>API keys only</strong>. The per-publisher agreement is
+environment-only and cannot be given here — see below, and ADR-0050.</p>
+<pre data-lang="toml" style="background-color:#fafafa;color:#61676c;" class="language-toml "><code class="language-toml" data-lang="toml"><span style="font-style:italic;color:#abb0b6;"># ~/.config/doiget/credentials.toml — optional.
+</span><span style="font-style:italic;color:#abb0b6;"># Permissions SHOULD be 0600 on POSIX. `doiget config doctor` fails on a
+</span><span style="font-style:italic;color:#abb0b6;"># group- or world-readable file, and the fetch path logs a warning.
+</span><span>
+</span><span>[</span><span style="color:#399ee6;">tdm</span><span style="color:#61676ccc;">.</span><span style="color:#399ee6;">elsevier</span><span>]
+</span><span style="color:#399ee6;">api_key </span><span>= </span><span style="color:#86b300;">&quot;...&quot;
+</span><span>
+</span><span>[</span><span style="color:#399ee6;">tdm</span><span style="color:#61676ccc;">.</span><span style="color:#399ee6;">aps</span><span>]
+</span><span style="color:#399ee6;">api_key </span><span>= </span><span style="color:#86b300;">&quot;...&quot;
+</span><span>
+</span><span>[</span><span style="color:#399ee6;">tdm</span><span style="color:#61676ccc;">.</span><span style="color:#399ee6;">springer</span><span>]
+</span><span style="color:#399ee6;">api_key </span><span>= </span><span style="color:#86b300;">&quot;...&quot;
+</span><span>
+</span><span style="font-style:italic;color:#abb0b6;"># Requires a build with `--features tdm-ieee`. The endpoint and response
+</span><span style="font-style:italic;color:#abb0b6;"># shape are INFERRED from IEEE&#39;s public developer portal, not confirmed
+</span><span style="font-style:italic;color:#abb0b6;"># against a live programme key (#430) — a response in another shape is
+</span><span style="font-style:italic;color:#abb0b6;"># reported as a schema error naming the field and quoting the body,
+</span><span style="font-style:italic;color:#abb0b6;"># rather than silently returning nothing.
+</span><span>[</span><span style="color:#399ee6;">tdm</span><span style="color:#61676ccc;">.</span><span style="color:#399ee6;">ieee</span><span>]
+</span><span style="color:#399ee6;">api_key </span><span>= </span><span style="color:#86b300;">&quot;...&quot;
+</span></code></pre>
+<p><strong>Precedence.</strong> <code>DOIGET_KEY_&lt;PUBLISHER&gt;</code> wins over <code>[tdm.&lt;publisher&gt;] api_key</code>,
+per §1. A blank value on either rung counts as unset.</p>
+<p><strong>The agreement is not here.</strong> Each TDM source needs
+<code>DOIGET_AGREE_TDM_&lt;PUBLISHER&gt;=1</code> <strong>in the environment</strong>, in addition to a key
+from either rung. An <code>agreed</code> key in this file is read only so doiget can warn
+that it does nothing; it grants nothing. <a href="https://codes.sota-shimozono.com/doiget/developer/config/LEGAL.md"><code>LEGAL.md</code></a> §6a.2 makes the
+agreement an <em>enforced control</em>, and part of why it is meaningful is that it is
+an act taken in the session that runs the fetch — a boolean written once into a
+file and forgotten is weaker, and weakening it as a side effect of adding a
+convenience is not a trade this file is worth (ADR-0050).</p>
+<p>So the three states are:</p>
+<table><thead><tr><th>key</th><th><code>DOIGET_AGREE_TDM_&lt;PUB&gt;=1</code></th><th>result</th></tr></thead><tbody>
+<tr><td>env or file</td><td>yes</td><td>grant (if the <code>tdm-*</code> feature is compiled in)</td></tr>
+<tr><td>env or file</td><td>no</td><td><code>KeyButNotAgreed</code> — refuses, names the variable</td></tr>
+<tr><td>none</td><td>yes</td><td><code>AgreedButNoKey</code> — refuses, names both</td></tr>
+</tbody></table>
+<p><strong>Before #509 this file was read by nothing.</strong> It was specified here in full,
+including the <code>0600</code> warning, and no code path opened it; a user who followed
+this section wrote their key into a file doiget ignored and then reported the
+source unavailable for want of a key. Both the reader and the permission
+warning exist as of 0.8.11.</p>
+<p><strong>Where the problems show up.</strong> Run <code>doiget config doctor</code>. A file that cannot
+be read or does not parse fails a check naming the position — never quoting the
+line, because the line that fails to parse is usually the one holding the key. A
+file that parses fails a check for each thing worth acting on: a group- or
+world-readable mode, an <code>api_key</code> present but blank, an <code>agreed</code> that grants
+nothing, a <code>[tdm.&lt;publisher&gt;]</code> naming a publisher doiget does not know. None of
+these is fatal to a fetch, and none of them is silent.</p>
+<h2 id="6-1-institutional-networks-what-works-and-what-does-not">6.1 Institutional networks: what works and what does not</h2>
+<p>Being on a subscribing university network does <strong>not</strong> make paywalled content
+fetchable. Three things sit in the way, in this order — and until 0.8.11 this section
+listed only the last two, which meant it sent readers after fixes that could not help.</p>
+<ol start="0">
+<li>
+<p><strong>Nothing is attempted at all</strong>, and this comes first. The fetch path carries only
+OA locations an enabled source reported. For a closed work there are none, so the
+leg ends before any host is chosen: not refused, <strong>never attempted</strong>. The run exits
+<strong>0</strong> with <code>metadata-only: no OA PDF available</code>, which reads as "this paper has no
+OA copy".</p>
+<p>Both blockers below sit behind this one and are never reached, so widening the
+allowlist or obtaining TDM credentials does not change the outcome for a closed
+DOI. Until 0.8.11 this section listed only (1) and (2), and therefore sent readers
+after two fixes that could not help.</p>
+<p><strong>This is not a bug awaiting a fix.</strong> #517 asked whether Crossref's publisher link
+could fill the gap. Measured across six live DOIs and eight captured responses,
+every <code>link[]</code> entry Crossref returns is scoped to Similarity Check, syndication or
+a TDM programme, and none is general-purpose - so following one would mean using a
+licensed route without the licence. See <a href="https://codes.sota-shimozono.com/doiget/developer/config/LEGAL.md"><code>LEGAL.md</code></a> §2a(a-i) and
+ADR-0052. <strong>The supported route for a closed work is a TDM credential (§6)</strong>, which
+is the licensed version of exactly that.</p>
+</li>
+<li>
+<p><strong>The allowlist.</strong> IEEE, ACM, SIAM and AMS are not on the default <code>oa-publisher</code>
+allowlist, so the attempt is refused at the redirect policy with
+<code>error[CAPABILITY_DENIED] ... redirect_not_in_allowlist</code> naming the host. IEEE has
+a TDM route instead (<code>[tdm.ieee]</code> above, <code>--features tdm-ieee</code>) — a different host
+(<code>ieeexploreapi.ieee.org</code>, the API) under a different source key, not a widening of
+<code>oa-publisher</code> (ADR-0039).</p>
+</li>
+<li>
+<p><strong>The publisher's bot wall.</strong> Even from a subscribing address, a scripted client
+commonly gets <code>202 Accepted</code> with an <strong>empty body</strong> — a challenge holding response,
+not a paywall and not a 403. The subscription is not the binding constraint; being a
+program is.</p>
+</li>
+</ol>
+<p>So widening the allowlist alone would not fix such a fetch; it would move the failure
+one step later. That is now demonstrable rather than asserted: the request is formed
+and refused by name, so you can see which of (1) and (2) you are hitting.
+<code>HTTPS_PROXY</code> is honoured (§4), but a proxy fixes <em>addressing</em>, never the bot wall —
+and if you are already on the subscribing network, tunnelling elsewhere routes you
+away from your entitlement.</p>
+<p><strong>Where this does work.</strong> For a closed work whose publisher <strong>is</strong> on the
+<code>oa-publisher</code> allowlist — the physics societies and diamond-OA hosts of ADR-0027, or
+a host you added yourself via <code>[[network.additional_hosts]]</code> / <code>trust_academic_repos</code>
+/ <code>trust_oa_registries</code> — the attempt now goes out, and on an entitled network it can
+succeed. That is not circumvention: the URL is the one Crossref reports, the request
+carries no credential doiget invented, and any access control on the far side applies
+unchanged.</p>
+<p>The two routes that do work:</p>
+<ul>
+<li><strong>Per-publisher TDM credentials</strong> (§6). This is the interface publishers intend
+programs to use, and it sidesteps the WAF by not being the web front end.</li>
+<li><strong>A real browser</strong> on the subscribing network.</li>
+</ul>
+<p><code>doiget config doctor --network</code> reports which of your publishers will actually talk to
+this client:</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>$ doiget config doctor --network
+</span><span>network (--network):
+</span><span>  egress          not probed (needs a third-party echo service; try `curl ifconfig.me`)
+</span><span>                  a proxy fixes addressing, never a bot wall
+</span><span>  unpaywall       polite pool as you@institution.edu
+</span><span>  oa-publisher    24 host patterns allowlisted
+</span><span>  probe link.springer.com      200 3100 bytes    ok
+</span><span>  probe arxiv.org              200 5854 bytes    ok
+</span><span>  probe ieeexplore.ieee.org    not allowlisted   no request sent; ...
+</span><span>  probe doaj.org               200 793 bytes     ok
+</span></code></pre>
+<p>The flag is opt-in because it makes real outbound requests: one GET per listed host, no
+retries, and only against hosts already on the allowlist — the probe enforces the same
+allowlist a fetch would, so it cannot be pointed at an arbitrary host. Hosts that are
+<strong>not</strong> allowlisted are still listed, reported as <code>not allowlisted</code> with no request
+sent; that line is usually the answer.</p>
+<p><code>202</code> with an empty body is called out as a bot challenge rather than reported as a
+success, because a status code alone cannot distinguish the two.</p>
+<h2 id="7-inspecting-effective-config">7. Inspecting effective config</h2>
+<pre data-lang="sh" style="background-color:#fafafa;color:#61676c;" class="language-sh "><code class="language-sh" data-lang="sh"><span style="color:#f29718;">doiget</span><span> config show          </span><span style="font-style:italic;color:#abb0b6;"># prints the resolved config (with API keys redacted as ****)
+</span><span style="color:#f29718;">doiget</span><span> config path          </span><span style="font-style:italic;color:#abb0b6;"># prints the path of the config file in use
+</span><span style="color:#f29718;">doiget</span><span> config doctor        </span><span style="font-style:italic;color:#abb0b6;"># checks file permissions, reachability, sanity
+</span></code></pre>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/developer&#x2F;config.md">
+      site/content/developer&#x2F;config.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Public API &middot; doiget</title>
+  <meta name="description" content="`doiget-cli` and `doiget-mcp` are not bound by this guarantee — they are end-user">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/public-api/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Public API · doiget">
+  <meta property="og:description" content="`doiget-cli` and `doiget-mcp` are not bound by this guarantee — they are end-user">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/public-api/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Public API · doiget">
+  <meta name="twitter:description" content="`doiget-cli` and `doiget-mcp` are not bound by this guarantee — they are end-user">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Public API</h1>
+    <p class="lede">`doiget-cli` and `doiget-mcp` are not bound by this guarantee — they are end-user</p>
+  </header>
+
+  <h1 id="public-api-doiget-core">Public API (<code>doiget-core</code>)</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE.</strong> This is the semver-locked Rust API surface of the <code>doiget-core</code>
+crate. Breaking changes to any item here require a major version bump and an ADR.
+Adding new items is a minor bump.</p>
+</blockquote>
+<p><code>doiget-cli</code> and <code>doiget-mcp</code> are not bound by this guarantee — they are end-user
+binaries / servers and may evolve more freely.</p>
+<h2 id="1-re-exports-top-of-lib-rs">1. Re-exports (top of <code>lib.rs</code>)</h2>
+<blockquote>
+<p><strong>Note:</strong> the semver-locked surface is the public identifier set, not the
+submodule layout. File splits within <code>doiget-core</code> that preserve the public
+identifier set are not a major bump.</p>
+</blockquote>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#fa6e32;">pub use crate</span><span style="color:#ed9366;">::</span><span>ref_</span><span style="color:#ed9366;">::</span><span>{Ref</span><span style="color:#61676ccc;">,</span><span> Doi</span><span style="color:#61676ccc;">,</span><span> ArxivId}</span><span style="color:#61676ccc;">;
+</span><span style="color:#fa6e32;">pub use crate</span><span style="color:#ed9366;">::</span><span>safekey</span><span style="color:#ed9366;">::</span><span>Safekey</span><span style="color:#61676ccc;">;
+</span><span style="color:#fa6e32;">pub use crate</span><span style="color:#ed9366;">::</span><span>capability</span><span style="color:#ed9366;">::</span><span>{
+</span><span>    AlwaysOn</span><span style="color:#61676ccc;">,</span><span> CapabilityProfile</span><span style="color:#61676ccc;">,</span><span> MetadataAccess</span><span style="color:#61676ccc;">,</span><span> RateLimits</span><span style="color:#61676ccc;">,</span><span> TdmGrant</span><span style="color:#61676ccc;">,
+</span><span>}</span><span style="color:#61676ccc;">;
+</span><span style="color:#fa6e32;">pub use crate</span><span style="color:#ed9366;">::</span><span>source</span><span style="color:#ed9366;">::</span><span>{Source</span><span style="color:#61676ccc;">,</span><span> FetchContext</span><span style="color:#61676ccc;">,</span><span> FetchResult</span><span style="color:#61676ccc;">,</span><span> FetchError}</span><span style="color:#61676ccc;">;
+</span><span style="color:#fa6e32;">pub use crate</span><span style="color:#ed9366;">::</span><span>store</span><span style="color:#ed9366;">::</span><span>{Store</span><span style="color:#61676ccc;">,</span><span> Metadata</span><span style="color:#61676ccc;">,</span><span> EntryInfo</span><span style="color:#61676ccc;">,</span><span> StoreError}</span><span style="color:#61676ccc;">;
+</span><span style="color:#fa6e32;">pub use crate</span><span style="color:#ed9366;">::</span><span>error</span><span style="color:#ed9366;">::</span><span>{ErrorCode</span><span style="color:#61676ccc;">,</span><span> DenialContext</span><span style="color:#61676ccc;">,</span><span> DenialReason}</span><span style="color:#61676ccc;">;
+</span><span style="color:#fa6e32;">pub use crate</span><span style="color:#ed9366;">::</span><span>provenance</span><span style="color:#ed9366;">::</span><span>{ProvenanceLog</span><span style="color:#61676ccc;">,</span><span> LogEvent</span><span style="color:#61676ccc;">,</span><span> LogError}</span><span style="color:#61676ccc;">;
+</span><span style="font-style:italic;color:#abb0b6;">// ADR-0024 — audit-identity surface:
+</span><span style="color:#fa6e32;">pub use crate</span><span style="color:#ed9366;">::</span><span>canonical</span><span style="color:#ed9366;">::</span><span>{CanonicalRef</span><span style="color:#61676ccc;">,</span><span> SourceType}</span><span style="color:#61676ccc;">;
+</span></code></pre>
+<h2 id="2-trait-surface">2. Trait surface</h2>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#fa6e32;">pub trait </span><span style="color:#399ee6;">Source</span><span>: Send + Sync {
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">name</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">can_serve</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">profile</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>CapabilityProfile, </span><span style="color:#ff8f40;">ref_</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Ref) </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#fa6e32;">bool</span><span style="color:#61676ccc;">;
+</span><span>    async </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">fetch</span><span>(
+</span><span>        </span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>,
+</span><span>        </span><span style="color:#ff8f40;">ref_</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Ref,
+</span><span>        </span><span style="color:#ff8f40;">profile</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>CapabilityProfile,
+</span><span>        </span><span style="color:#ff8f40;">ctx</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>FetchContext,
+</span><span>    ) </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;FetchResult, FetchError&gt;</span><span style="color:#61676ccc;">;
+</span><span>}
+</span><span>
+</span><span style="color:#fa6e32;">pub trait </span><span style="color:#399ee6;">Store</span><span>: Send + Sync {
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">read</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">key</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Safekey) </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;Metadata&gt;, StoreError&gt;</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">write</span><span>(
+</span><span>        </span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>,
+</span><span>        </span><span style="color:#ff8f40;">key</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Safekey,
+</span><span>        </span><span style="color:#ff8f40;">m</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span>Metadata,
+</span><span>        </span><span style="color:#ff8f40;">pdf</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="color:#ed9366;">&amp;</span><span>Path&gt;,
+</span><span>    ) </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;(), StoreError&gt;</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">list_recent</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">limit</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">usize</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">Vec</span><span>&lt;EntryInfo&gt;, StoreError&gt;</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">fn </span><span style="color:#f29718;">search</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">query</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span>, </span><span style="color:#ff8f40;">limit</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">usize</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">Vec</span><span>&lt;EntryInfo&gt;, StoreError&gt;</span><span style="color:#61676ccc;">;
+</span><span>}
+</span></code></pre>
+<h2 id="3-core-types">3. Core types</h2>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> PartialEq</span><span style="color:#61676ccc;">,</span><span> Eq</span><span style="color:#61676ccc;">,</span><span> Hash</span><span style="color:#61676ccc;">,</span><span> serde::Serialize</span><span style="color:#61676ccc;">,</span><span> serde::Deserialize)]
+</span><span style="color:#fa6e32;">pub enum </span><span style="color:#399ee6;">Ref </span><span>{
+</span><span>    Doi(Doi)</span><span style="color:#61676ccc;">,
+</span><span>    Arxiv(ArxivId)</span><span style="color:#61676ccc;">,
+</span><span>}
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> PartialEq</span><span style="color:#61676ccc;">,</span><span> Eq</span><span style="color:#61676ccc;">,</span><span> Hash</span><span style="color:#61676ccc;">,</span><span> serde::Serialize</span><span style="color:#61676ccc;">,</span><span> serde::Deserialize)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">serde</span><span>(transparent)]
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">Doi</span><span>(pub(crate) </span><span style="font-style:italic;color:#55b4d4;">String</span><span>)</span><span style="color:#61676ccc;">;
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> PartialEq</span><span style="color:#61676ccc;">,</span><span> Eq</span><span style="color:#61676ccc;">,</span><span> Hash</span><span style="color:#61676ccc;">,</span><span> serde::Serialize</span><span style="color:#61676ccc;">,</span><span> serde::Deserialize)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">serde</span><span>(transparent)]
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">ArxivId</span><span>(pub(crate) </span><span style="font-style:italic;color:#55b4d4;">String</span><span>)</span><span style="color:#61676ccc;">;
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> PartialEq</span><span style="color:#61676ccc;">,</span><span> Eq</span><span style="color:#61676ccc;">,</span><span> Hash</span><span style="color:#61676ccc;">,</span><span> serde::Serialize</span><span style="color:#61676ccc;">,</span><span> serde::Deserialize)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">serde</span><span>(transparent)]
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">Safekey</span><span>(pub(crate) </span><span style="font-style:italic;color:#55b4d4;">String</span><span>)</span><span style="color:#61676ccc;">;
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> serde::Serialize</span><span style="color:#61676ccc;">,</span><span> serde::Deserialize)]
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">Metadata </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>schema_version</span><span style="color:#61676ccc;">:</span><span> String,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>title</span><span style="color:#61676ccc;">:</span><span>    String,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>authors</span><span style="color:#61676ccc;">:  </span><span style="font-style:italic;color:#55b4d4;">Vec</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>year</span><span style="color:#61676ccc;">:     </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="color:#fa6e32;">i32</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>doi</span><span style="color:#61676ccc;">:      </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;Doi&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>arxiv_id</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;ArxivId&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>abstract_</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>venue</span><span style="color:#61676ccc;">:    </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>volume</span><span style="color:#61676ccc;">:   </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>issue</span><span style="color:#61676ccc;">:    </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,   </span><span style="font-style:italic;color:#abb0b6;">// BibTeX `number`
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>pages</span><span style="color:#61676ccc;">:    </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>publisher</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>issn</span><span style="color:#61676ccc;">:     </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>isbn</span><span style="color:#61676ccc;">:     </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>type_</span><span style="color:#61676ccc;">:    </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>keywords</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Vec</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>doiget</span><span style="color:#61676ccc;">:   </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;DoigetExtension&gt;,
+</span><span>}
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> serde::Serialize</span><span style="color:#61676ccc;">,</span><span> serde::Deserialize)]
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">DoigetExtension </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>fetched_at</span><span style="color:#61676ccc;">: </span><span>chrono</span><span style="color:#ed9366;">::</span><span>DateTime&lt;chrono</span><span style="color:#ed9366;">::</span><span>Utc&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>source</span><span style="color:#61676ccc;">:</span><span>     String,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>license</span><span style="color:#61676ccc;">:</span><span>    String,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>size_bytes</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">u64</span><span>,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>mcp_call_id</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>}
+</span></code></pre>
+<h2 id="4-constructors-and-validation">4. Constructors and validation</h2>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#fa6e32;">impl </span><span style="color:#399ee6;">Doi </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">parse</span><span>(</span><span style="color:#ff8f40;">s</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;</span><span style="color:#fa6e32;">Self</span><span>, RefParseError&gt;</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">as_str</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span style="color:#61676ccc;">;
+</span><span>}
+</span><span>
+</span><span style="color:#fa6e32;">impl </span><span style="color:#399ee6;">ArxivId </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">parse</span><span>(</span><span style="color:#ff8f40;">s</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;</span><span style="color:#fa6e32;">Self</span><span>, RefParseError&gt;</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">as_str</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span style="color:#61676ccc;">;
+</span><span>}
+</span><span>
+</span><span style="color:#fa6e32;">impl </span><span style="color:#399ee6;">Ref </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">parse</span><span>(</span><span style="color:#ff8f40;">s</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;</span><span style="color:#fa6e32;">Self</span><span>, RefParseError&gt;</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">safekey</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>) </span><span style="color:#61676ccc;">-&gt;</span><span> Safekey</span><span style="color:#61676ccc;">;
+</span><span>}
+</span></code></pre>
+<p><code>parse</code> returns a [<code>RefParseError</code>] variant naming the specific rejection
+category (<code>Empty</code>, <code>MissingDoiPrefix</code>, <code>MissingDoiSuffixSeparator</code>,
+<code>InvalidDoiRegistrant</code>, <code>EmptyDoiSuffix</code>, <code>DoiSuffixTooLong { len, max }</code>,
+<code>InvalidDoiSuffixChar { ch }</code>, <code>InvalidArxivShape</code>). The granular shape is
+preserved for tests and future log breadcrumbs; at the public MCP / CLI
+boundary, all variants funnel to [<code>ErrorCode::InvalidRef</code>] via the
+<code>impl From&lt;RefParseError&gt; for ErrorCode</code> blanket conversion, so <code>?</code>
+propagation collapses to <code>INVALID_REF</code> automatically.</p>
+<p><code>RefParseError</code> is <code>#[non_exhaustive]</code>; adding new categories is a
+non-breaking change. Pattern-match with a wildcard arm.</p>
+<p>The dedicated <code>RefParseError</code> type was introduced by PR #55; see also
+the <a href="../CHANGELOG.md"><code>CHANGELOG.md</code></a>.</p>
+<h2 id="5-capabilityprofile">5. CapabilityProfile</h2>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#fa6e32;">impl </span><span style="color:#399ee6;">CapabilityProfile </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">from_env</span><span>() </span><span style="color:#61676ccc;">-&gt; </span><span style="font-style:italic;color:#55b4d4;">Result</span><span>&lt;</span><span style="color:#fa6e32;">Self</span><span>, CapabilityError&gt;</span><span style="color:#61676ccc;">;
+</span><span>}
+</span><span>
+</span><span style="color:#fa6e32;">pub enum </span><span style="color:#399ee6;">CapabilityError </span><span>{
+</span><span>    AgreedButNoKey { agree_var</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">String</span><span style="color:#61676ccc;">,</span><span> key_var</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">String </span><span>}</span><span style="color:#61676ccc;">,
+</span><span>    KeyButNotAgreed { agree_var</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">String </span><span>}</span><span style="color:#61676ccc;">,
+</span><span>}
+</span></code></pre>
+<p>See <a href="https://codes.sota-shimozono.com/doiget/developer/public-api/CAPABILITY.md"><code>CAPABILITY.md</code></a> for the full type definition and resolution rules.</p>
+<h2 id="6-stability-guarantees">6. Stability guarantees</h2>
+<ul>
+<li>A type listed here may gain new fields if they are <code>#[non_exhaustive]</code> or behind a
+<code>Default</code> value; this is a minor bump.</li>
+<li>Removing or renaming any item listed here is a breaking change requiring a major
+version bump and an ADR.</li>
+<li>Items not listed here (private types, <code>pub(crate)</code>, types under <code>__internal::</code>) carry
+no stability guarantee.</li>
+<li>During the <code>0.x</code> line, breaking changes are allowed at any minor bump but must still
+be documented in <code>CHANGELOG.md</code> and an ADR. The <code>1.0</code> release freezes this surface.</li>
+</ul>
+<h2 id="7-msrv">7. MSRV</h2>
+<p><code>doiget-core</code>'s declared MSRV (<code>Cargo.toml [workspace.package] rust-version</code>) is
+<strong>1.86</strong>. Active development tracks <code>channel = "stable"</code> in <code>rust-toolchain.toml</code>,
+so day-to-day builds use the latest stable toolchain; the CI <code>msrv</code> job pins
+explicitly to 1.86 to verify the declared floor still holds.</p>
+<p>Raising the declared MSRV is a <strong>minor</strong> version bump and requires a CHANGELOG
+entry. Lowering it requires an ADR (we do not retroactively re-support older
+toolchains without explicit reason). The <code>1.0</code> release may re-evaluate the
+policy and adopt a stable-channel-tracks-current-stable-minus-N rule.</p>
+<h2 id="8-structured-denial-context-normative-adr-0023">8. Structured denial context (NORMATIVE; ADR-0023)</h2>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> Copy</span><span style="color:#61676ccc;">,</span><span> PartialEq</span><span style="color:#61676ccc;">,</span><span> Eq</span><span style="color:#61676ccc;">,</span><span> Hash</span><span style="color:#61676ccc;">,</span><span> serde::Serialize</span><span style="color:#61676ccc;">,</span><span> serde::Deserialize)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">serde</span><span>(rename_all </span><span style="color:#ed9366;">= </span><span style="color:#86b300;">&quot;snake_case&quot;</span><span>)]
+</span><span style="color:#fa6e32;">pub enum </span><span style="color:#399ee6;">DenialReason </span><span>{
+</span><span>    RedirectNotInAllowlist</span><span style="color:#61676ccc;">,
+</span><span>    InsecureScheme</span><span style="color:#61676ccc;">,
+</span><span>    HostInBlockList</span><span style="color:#61676ccc;">,
+</span><span>    SizeCapExceeded</span><span style="color:#61676ccc;">,
+</span><span>    SchemaDrift</span><span style="color:#61676ccc;">,
+</span><span>    CapabilityNotGranted</span><span style="color:#61676ccc;">,
+</span><span>    RateLimitWindow</span><span style="color:#61676ccc;">,
+</span><span>    SsrfPrivateAddress</span><span style="color:#61676ccc;">,
+</span><span>    ContentTypeMismatch</span><span style="color:#61676ccc;">,
+</span><span>}
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> PartialEq</span><span style="color:#61676ccc;">,</span><span> Eq</span><span style="color:#61676ccc;">,</span><span> serde::Serialize</span><span style="color:#61676ccc;">,</span><span> serde::Deserialize)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">serde</span><span>(deny_unknown_fields)]
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">DenialContext </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>reason</span><span style="color:#61676ccc;">:</span><span>    DenialReason,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>source</span><span style="color:#61676ccc;">:    </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>attempted</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>expected</span><span style="color:#61676ccc;">:  </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">Vec</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>hop_index</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="color:#fa6e32;">u8</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>cap</span><span style="color:#61676ccc;">:       </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="color:#fa6e32;">u64</span><span>&gt;,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>actual</span><span style="color:#61676ccc;">:    </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="color:#fa6e32;">u64</span><span>&gt;,
+</span><span>}
+</span><span>
+</span><span style="color:#fa6e32;">impl </span><span style="font-style:italic;color:#55b4d4;">From</span><span>&lt;</span><span style="color:#ed9366;">&amp;</span><span>crate</span><span style="color:#ed9366;">::</span><span>http</span><span style="color:#ed9366;">::</span><span>HttpError&gt; </span><span style="color:#fa6e32;">for </span><span style="color:#399ee6;">Option</span><span>&lt;DenialContext&gt; { </span><span style="font-style:italic;color:#abb0b6;">/* … */ </span><span>}
+</span><span style="color:#fa6e32;">impl </span><span style="font-style:italic;color:#55b4d4;">From</span><span>&lt;</span><span style="color:#ed9366;">&amp;</span><span>crate</span><span style="color:#ed9366;">::</span><span>source</span><span style="color:#ed9366;">::</span><span>FetchError&gt; </span><span style="color:#fa6e32;">for </span><span style="color:#399ee6;">Option</span><span>&lt;DenialContext&gt; { </span><span style="font-style:italic;color:#abb0b6;">/* … */ </span><span>}
+</span></code></pre>
+<p>The <code>DenialReason</code> enum is <strong>closed</strong>: adding a variant is a minor semver
+bump, renaming or repurposing one is breaking. The <code>DenialContext</code> struct is
+<strong>not</strong> <code>#[non_exhaustive]</code> because <code>deny_unknown_fields</code> already prevents
+forward-compatible field additions on the wire — adding a field is a
+breaking change. See <a href="https://codes.sota-shimozono.com/doiget/developer/public-api/ERRORS.md"><code>ERRORS.md</code></a> §3.1, §5.1 for the runtime
+surface and <a href="https://codes.sota-shimozono.com/doiget/developer/public-api/MCP_TOOLS.md"><code>MCP_TOOLS.md</code></a> §5 for the JSON envelope.</p>
+<h2 id="9-audit-identity-canonicalref-normative-adr-0021-adr-0024">9. Audit-identity: <code>CanonicalRef</code> (NORMATIVE; ADR-0021, ADR-0024)</h2>
+<p><code>doiget-core</code> provides the four-tuple audit identity defined by
+<a href="https://codes.sota-shimozono.com/doiget/developer/public-api/DECISIONS/0021-canonical-tuple-identity.md">ADR-0021</a> and implemented per
+<a href="https://codes.sota-shimozono.com/doiget/developer/public-api/DECISIONS/0024-canonical-ref-impl.md">ADR-0024</a>. The re-exports are listed
+in §1 (<code>CanonicalRef</code>, <code>SourceType</code>).</p>
+<pre data-lang="rust" style="background-color:#fafafa;color:#61676c;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> PartialEq</span><span style="color:#61676ccc;">,</span><span> Eq</span><span style="color:#61676ccc;">,</span><span> Hash</span><span style="color:#61676ccc;">,</span><span> serde::Serialize</span><span style="color:#61676ccc;">,</span><span> serde::Deserialize)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">serde</span><span>(rename_all </span><span style="color:#ed9366;">= </span><span style="color:#86b300;">&quot;lowercase&quot;</span><span>)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">non_exhaustive</span><span>]
+</span><span style="color:#fa6e32;">pub enum </span><span style="color:#399ee6;">SourceType </span><span>{
+</span><span>    Doi</span><span style="color:#61676ccc;">,
+</span><span>    Arxiv</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">// future: Pmid, Handle, ...
+</span><span>}
+</span><span>
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">derive</span><span>(Debug</span><span style="color:#61676ccc;">,</span><span> Clone</span><span style="color:#61676ccc;">,</span><span> PartialEq</span><span style="color:#61676ccc;">,</span><span> Eq</span><span style="color:#61676ccc;">,</span><span> Hash</span><span style="color:#61676ccc;">,</span><span> serde::Serialize</span><span style="color:#61676ccc;">,</span><span> serde::Deserialize)]
+</span><span style="color:#61676ccc;">#</span><span>[</span><span style="color:#f29718;">non_exhaustive</span><span>]
+</span><span style="color:#fa6e32;">pub struct </span><span style="color:#399ee6;">CanonicalRef </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>source_type</span><span style="color:#61676ccc;">:</span><span> SourceType,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>source_id</span><span style="color:#61676ccc;">:</span><span> String,
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>resolver_profile</span><span style="color:#61676ccc;">:</span><span> String, </span><span style="font-style:italic;color:#abb0b6;">// e.g. &quot;crossref&quot;, &quot;unpaywall&quot;, &quot;arxiv&quot;, &quot;oa-publisher&quot;
+</span><span>    </span><span style="color:#fa6e32;">pub </span><span>version</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,  </span><span style="font-style:italic;color:#abb0b6;">// e.g. arXiv &quot;v2&quot;; None encodes the empty trailing input
+</span><span>}
+</span><span>
+</span><span style="color:#fa6e32;">impl </span><span style="color:#399ee6;">CanonicalRef </span><span>{
+</span><span>    </span><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">new</span><span>(
+</span><span>        </span><span style="color:#ff8f40;">source_type</span><span style="color:#61676ccc;">:</span><span> SourceType,
+</span><span>        </span><span style="color:#ff8f40;">source_id</span><span style="color:#61676ccc;">:</span><span> impl </span><span style="font-style:italic;color:#55b4d4;">Into</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>        </span><span style="color:#ff8f40;">resolver_profile</span><span style="color:#61676ccc;">:</span><span> impl </span><span style="font-style:italic;color:#55b4d4;">Into</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>        </span><span style="color:#ff8f40;">version</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="font-style:italic;color:#55b4d4;">String</span><span>&gt;,
+</span><span>    ) </span><span style="color:#61676ccc;">-&gt; </span><span style="color:#fa6e32;">Self</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">digest</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>) </span><span style="color:#61676ccc;">-&gt; </span><span>[</span><span style="color:#fa6e32;">u8</span><span style="color:#61676ccc;">; </span><span style="color:#ff8f40;">32</span><span>]</span><span style="color:#61676ccc;">;
+</span><span>    </span><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">digest_hex</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>) </span><span style="color:#61676ccc;">-&gt;</span><span> String</span><span style="color:#61676ccc;">;
+</span><span>}
+</span><span>
+</span><span style="color:#fa6e32;">impl </span><span style="color:#399ee6;">Ref </span><span>{
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">/// Promote a `Ref` to a `CanonicalRef` with the given resolver
+</span><span>    </span><span style="font-style:italic;color:#abb0b6;">/// profile and optional version (ADR-0021 §1).
+</span><span>    </span><span style="color:#fa6e32;">pub fn </span><span style="color:#f29718;">promote</span><span>(</span><span style="color:#ed9366;">&amp;</span><span style="color:#ff8f40;">self</span><span>, </span><span style="color:#ff8f40;">resolver_profile</span><span style="color:#61676ccc;">: </span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span>, </span><span style="color:#ff8f40;">version</span><span style="color:#61676ccc;">: </span><span style="font-style:italic;color:#55b4d4;">Option</span><span>&lt;</span><span style="color:#ed9366;">&amp;</span><span style="color:#fa6e32;">str</span><span>&gt;) </span><span style="color:#61676ccc;">-&gt;</span><span> CanonicalRef</span><span style="color:#61676ccc;">;
+</span><span>}
+</span></code></pre>
+<p>The digest algorithm is the NORMATIVE
+<code>SHA256(source_type | 0x00 | source_id | 0x00 | resolver_profile | 0x00 | version_or_empty)</code>
+shape — <code>version_or_empty</code> is the empty byte sequence when <code>version</code> is
+<code>None</code>, NOT a sentinel.</p>
+<p>The companion provenance-log row schema bump (v1 → v2) is documented in
+<a href="https://codes.sota-shimozono.com/doiget/developer/public-api/PROVENANCE_LOG.md"><code>PROVENANCE_LOG.md</code></a> §3 + §3.1. The one-shot
+migration ships as <code>doiget provenance migrate [--dry-run]</code>.</p>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/developer&#x2F;public-api.md">
+      site/content/developer&#x2F;public-api.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>
