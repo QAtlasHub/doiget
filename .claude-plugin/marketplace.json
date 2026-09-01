@@ -2,7 +2,7 @@
   "name": "doiget",
   "metadata": {
     "description": "The doiget marketplace — one plugin: an OA-first paper fetcher for DOIs and arXiv IDs.",
-    "version": "0.8.12"
+    "version": "0.8.13"
   },
   "owner": {
     "name": "QAtlasHub",
