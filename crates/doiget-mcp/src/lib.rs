@@ -98,12 +98,39 @@ pub struct Server {
     /// the per-instance trimming visible to `tools/list` and `tools/call`
     /// (issue #379). Do not switch the handler back to the associated fn.
     tool_router: ToolRouter<Server>,
+    /// ONE per process, shared by every tool call.
+    ///
+    /// `RateLimiter`'s state -- the rolling global window and the
+    /// per-source next-allowed instants -- lives in its own `Arc<Mutex<..>>`
+    /// fields, so it paces only the calls that share the instance. Building
+    /// a fresh one inside every tool handler, which is what this server did,
+    /// gave each call an empty `per_source_next` and no memory of the last:
+    /// arXiv's 3 s spacing, which `docs/LEGAL.md` treats as an obligation
+    /// rather than politeness, was not enforced between MCP calls at all.
+    /// The type calls itself "process-wide"; nothing made it so.
+    rate_limiter: Arc<RateLimiter>,
+    /// ONE per process, opened lazily because `Server::new` is infallible.
+    ///
+    /// `ProvenanceLog::open` documents its own contract: the `session_id`
+    /// "MUST be a 26-char ULID generated once per process", and a long-lived
+    /// handle reuses it. Opening per tool call broke that thirteen times
+    /// over, and worse: `open` seeds `(next_seq, last_hash)` by reading the
+    /// file, so two overlapping calls both read the same state and both
+    /// append rows claiming the same `ts_seq` with a `prev_hash` that does
+    /// not match the row actually before them -- which is precisely what
+    /// `doiget audit-log --verify` reports as a broken chain.
+    log: std::sync::OnceLock<Arc<ProvenanceLog>>,
+    /// The process ULID the log above is opened with.
+    session_id: String,
 }
 
 #[tool_router]
 impl Server {
     /// Construct a server with the given runtime capability profile.
     pub fn new(profile: CapabilityProfile) -> Self {
+        let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
+        let session_id = ulid::Ulid::generate().to_string();
+        let log = std::sync::OnceLock::new();
         let mut tool_router = Self::tool_router();
         // Issue #379 / #373(b): a tool that can only ever answer
         // NOT_IMPLEMENTED is worse than an absent one — an agent will
@@ -126,7 +153,40 @@ impl Server {
         Self {
             profile,
             tool_router,
+            rate_limiter,
+            log,
+            session_id,
         }
+    }
+
+    /// The per-call [`FetchContext`], built from the process-lifetime
+    /// rate limiter and provenance log this server owns.
+    ///
+    /// Was a free `self.fetch_context()` that constructed both fresh on
+    /// every tool call. See the field docs on [`Server`] for what that cost:
+    /// no rate pacing between MCP calls, and a provenance hash chain that
+    /// two overlapping calls could break.
+    fn fetch_context(&self) -> anyhow::Result<FetchContext> {
+        let log = match self.log.get() {
+            Some(l) => Arc::clone(l),
+            None => {
+                let opened = Arc::new(open_provenance_log(self.session_id.clone())?);
+                // A racing caller may have won; prefer whichever landed so
+                // every context in this process shares ONE handle, which is
+                // what serialises `append` and keeps the chain intact.
+                let _ = self.log.set(Arc::clone(&opened));
+                self.log.get().map_or(opened, Arc::clone)
+            }
+        };
+        Ok(FetchContext {
+            http: Arc::new(build_http_client_for_fetch()?),
+            rate_limiter: Arc::clone(&self.rate_limiter),
+            log,
+            session_id: self.session_id.clone(),
+            // Resolver cache disabled on the MCP path for now; the resolve
+            // cache (docs/CACHE.md) is wired through `doiget verify` first.
+            cache_root: None,
+        })
     }
 
     /// Run the MCP server until stdin reaches EOF.
@@ -300,7 +360,7 @@ impl Server {
         // selection and per-leg politeness; we own the per-call
         // session boundary (SessionStart / SessionEnd bookend rows) and
         // the wire envelope shape (`docs/MCP_TOOLS.md` §11).
-        let ctx = match build_fetch_context() {
+        let ctx = match self.fetch_context() {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
@@ -472,7 +532,7 @@ impl Server {
 
         // Step 2: build the per-call context. Failures here surface as
         // INTERNAL_ERROR per the metadata_only pattern.
-        let ctx = match build_fetch_context() {
+        let ctx = match self.fetch_context() {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
@@ -602,7 +662,7 @@ impl Server {
 
         // Step 3: non-dry-run path. Build foundation modules + open
         // FsStore + dispatch through core orchestrator.
-        let ctx = match build_fetch_context() {
+        let ctx = match self.fetch_context() {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(fetch_paper_error_envelope(
@@ -794,7 +854,7 @@ impl Server {
         // Step 4: non-dry-run — stand up the shared FetchContext +
         // store, emit a single SessionStart row, fan out via the core
         // orchestrator.
-        let ctx = match build_fetch_context() {
+        let ctx = match self.fetch_context() {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(batch_fetch_error_envelope(
@@ -1082,7 +1142,7 @@ impl Server {
         // Step 5: stand up the shared context + store (mirrors
         // `doiget_batch_fetch`). A context-init failure aborts the
         // whole call.
-        let ctx = match build_fetch_context() {
+        let ctx = match self.fetch_context() {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(batch_fetch_error_envelope(
@@ -1417,7 +1477,7 @@ impl Server {
         let contact_email =
             doiget_core::orchestrator::configured_contact_email().unwrap_or_default();
 
-        let ctx = match build_fetch_context() {
+        let ctx = match self.fetch_context() {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
@@ -1577,7 +1637,7 @@ impl Server {
         // for now, mirroring `build_fetch_context`'s resolver-cache note;
         // enabling it here is a follow-up. Correctness is unaffected — a
         // cache miss just re-fetches.
-        let ctx = match build_fetch_context() {
+        let ctx = match self.fetch_context() {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
@@ -1693,7 +1753,7 @@ impl Server {
             }
         };
 
-        let ctx = match build_fetch_context() {
+        let ctx = match self.fetch_context() {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
@@ -1826,7 +1886,7 @@ impl Server {
         let contact_email =
             doiget_core::orchestrator::configured_contact_email().unwrap_or_default();
 
-        let ctx = match build_fetch_context() {
+        let ctx = match self.fetch_context() {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
@@ -2109,7 +2169,7 @@ impl Server {
                 }
             };
 
-            let ctx = match build_fetch_context() {
+            let ctx = match self.fetch_context() {
                 Ok(c) => c,
                 Err(e) => {
                     return Ok(CallToolResult::structured(read_path_error_envelope(
@@ -2291,7 +2351,7 @@ impl Server {
         &self,
         Parameters(input): Parameters<ResolveCitationInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let ctx = match build_fetch_context() {
+        let ctx = match self.fetch_context() {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(serde_json::json!({
@@ -2359,7 +2419,7 @@ impl Server {
             })));
         }
 
-        let ctx = match build_fetch_context() {
+        let ctx = match self.fetch_context() {
             Ok(c) => c,
             Err(e) => {
                 return Ok(CallToolResult::structured(serde_json::json!({
@@ -2538,7 +2598,7 @@ impl Server {
         let tags = ext.tags.clone();
         let collections = ext.collections.clone();
 
-        match store.write(&safekey, &metadata, None) {
+        match store.write_user_authored(&safekey, &metadata, None) {
             Ok(()) => Ok(CallToolResult::structured(json!({
                 "ok": true,
                 "ref": input.ref_,
@@ -2686,7 +2746,7 @@ impl Server {
 
         let annotation = ext.annotation.clone();
 
-        match store.write(&safekey, &metadata, None) {
+        match store.write_user_authored(&safekey, &metadata, None) {
             Ok(()) => Ok(CallToolResult::structured(json!({
                 "ok": true,
                 "ref": input.ref_,
@@ -4047,7 +4107,7 @@ fn paper_text_success_envelope(t: &doiget_core::paper_text::PaperText) -> Value 
 ///   if missing.
 /// - `session_id` — fresh 26-char ULID per call (one tool call = one
 ///   logical session, per `docs/PROVENANCE_LOG.md` §3).
-fn build_fetch_context() -> anyhow::Result<FetchContext> {
+fn open_provenance_log(session_id: String) -> anyhow::Result<ProvenanceLog> {
     let log_path = resolve_log_path()?;
     if let Some(parent) = log_path.parent() {
         if !parent.as_str().is_empty() {
@@ -4055,23 +4115,8 @@ fn build_fetch_context() -> anyhow::Result<FetchContext> {
                 .map_err(|e| anyhow::anyhow!("creating log dir {parent}: {e}"))?;
         }
     }
-    let session_id = ulid::Ulid::generate().to_string();
-    let log = Arc::new(
-        ProvenanceLog::open(log_path, session_id.clone())
-            .map_err(|e| anyhow::anyhow!("opening provenance log: {e}"))?,
-    );
-    let http = Arc::new(build_http_client_for_fetch()?);
-    let rate_limiter = Arc::new(RateLimiter::new(RateLimits::HARD_CODED));
-    Ok(FetchContext {
-        http,
-        rate_limiter,
-        log,
-        session_id,
-        // Resolver cache disabled on the MCP path for now; the resolve
-        // cache (docs/CACHE.md) is wired through `doiget verify` first.
-        // Enabling it here for metadata_only / resolve_paper is a follow-up.
-        cache_root: None,
-    })
+    ProvenanceLog::open(log_path, session_id)
+        .map_err(|e| anyhow::anyhow!("opening provenance log: {e}"))
 }
 
 /// Build a [`CrossrefSource`] from environment variables
@@ -4542,6 +4587,47 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
+    /// The rate limiter and the provenance log are ONE per process.
+    ///
+    /// Every tool handler used to call a free `build_fetch_context()` that
+    /// constructed both fresh. `RateLimiter`'s pacing state is instance-local,
+    /// so arXiv's 3 s spacing -- an obligation, not politeness -- was not
+    /// enforced between MCP calls; and `ProvenanceLog::open` seeds its
+    /// `(next_seq, last_hash)` by reading the file, so two overlapping calls
+    /// could append rows whose `prev_hash` does not match the row before
+    /// them, which `audit-log --verify` reports as a broken chain.
+    ///
+    /// Asserted by pointer identity, because that is the property: two
+    /// contexts from one server must share the same allocation, not merely
+    /// equal configuration.
+    #[test]
+    fn two_tool_calls_share_one_rate_limiter_and_one_log() {
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let root = camino::Utf8Path::from_path(td.path()).expect("utf-8");
+        std::env::set_var("DOIGET_LOG_PATH", root.join("log.jsonl").as_str());
+        std::env::set_var("DOIGET_STORE_ROOT", root.join("papers").as_str());
+
+        let server = Server::new(CapabilityProfile::from_env().expect("profile"));
+        let a = server.fetch_context().expect("first context");
+        let b = server.fetch_context().expect("second context");
+
+        assert!(
+            Arc::ptr_eq(&a.rate_limiter, &b.rate_limiter),
+            "a fresh RateLimiter per call has an empty per-source window, so              nothing paces the second request behind the first"
+        );
+        assert!(
+            Arc::ptr_eq(&a.log, &b.log),
+            "a fresh ProvenanceLog per call re-reads the chain state, so two              overlapping appends claim the same ts_seq"
+        );
+        assert_eq!(
+            a.session_id, b.session_id,
+            "PROVENANCE_LOG.md: the session ULID is generated once per PROCESS"
+        );
+
+        std::env::remove_var("DOIGET_LOG_PATH");
+        std::env::remove_var("DOIGET_STORE_ROOT");
+    }
+
     /// #538 on the two batch tools.
     ///
     /// `fetch_paper_fetch_error_envelope` shed a hand-rolled

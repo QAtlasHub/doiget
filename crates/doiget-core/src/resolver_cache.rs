@@ -45,7 +45,20 @@ struct CacheEntry {
 /// The on-disk path for a ref's cache entry:
 /// `<cache_root>/resolver/<safekey>.toml`.
 #[must_use]
-pub fn cache_file(cache_root: &Utf8Path, ref_: &Ref) -> Utf8PathBuf {
+// `pub(crate)`, not `pub`. Nothing outside `doiget-core` calls this module --
+// the orchestrator is the only consumer -- and it is absent from
+// `docs/PUBLIC_API.md`, so every one of these was an accidental semver
+// commitment, including the on-disk cache layout they encode. This cycle
+// added the `_with_options` half and doubled that surface.
+//
+// `#[cfg(test)]` on the remaining plain wrappers is not tidying: making them
+// `pub(crate)` is what revealed that production calls none of them. They
+// default the options for this module's own tests and nothing else, and `pub`
+// had been keeping the dead-code lint quiet about it. Two of the original
+// five, `read` and `write`, turned out to have no caller anywhere -- not even
+// a test -- and are gone.
+#[cfg(test)]
+pub(crate) fn cache_file(cache_root: &Utf8Path, ref_: &Ref) -> Utf8PathBuf {
     cache_file_with_options(cache_root, ref_, MetadataOnlyOptions::default())
 }
 
@@ -69,7 +82,7 @@ pub fn cache_file(cache_root: &Utf8Path, ref_: &Ref) -> Utf8PathBuf {
 /// would both want `doi_10.1234_foo.oa.toml`. A safekey can never contain a
 /// path separator (`/` is replaced with `_`), so a subdirectory cannot.
 #[must_use]
-pub fn cache_file_with_options(
+pub(crate) fn cache_file_with_options(
     cache_root: &Utf8Path,
     ref_: &Ref,
     opts: MetadataOnlyOptions,
@@ -89,7 +102,8 @@ pub fn cache_file_with_options(
 /// expired, or a `response` blob that no longer deserializes. `now` is
 /// injected so tests can pin expiry without touching the clock.
 #[must_use]
-pub fn read_at(
+#[cfg(test)]
+pub(crate) fn read_at(
     cache_root: &Utf8Path,
     ref_: &Ref,
     now: DateTime<Utc>,
@@ -100,7 +114,7 @@ pub fn read_at(
 /// [`read_at`], reading the entry keyed by `opts`. See
 /// [`cache_file_with_options`] for why the options are part of the key.
 #[must_use]
-pub fn read_at_with_options(
+pub(crate) fn read_at_with_options(
     cache_root: &Utf8Path,
     ref_: &Ref,
     now: DateTime<Utc>,
@@ -119,15 +133,9 @@ pub fn read_at_with_options(
     serde_json::from_str(&entry.response).ok()
 }
 
-/// Read using the current wall clock. See [`read_at`].
-#[must_use]
-pub fn read(cache_root: &Utf8Path, ref_: &Ref) -> Option<MetadataOnlyOutcome> {
-    read_at(cache_root, ref_, Utc::now())
-}
-
 /// [`read`], reading the entry keyed by `opts`.
 #[must_use]
-pub fn read_with_options(
+pub(crate) fn read_with_options(
     cache_root: &Utf8Path,
     ref_: &Ref,
     opts: MetadataOnlyOptions,
@@ -138,7 +146,8 @@ pub fn read_with_options(
 /// Write `outcome` to the cache for `ref_`. Best-effort: returns `false`
 /// (after a `tracing::debug!`) on any I/O or serialization failure rather
 /// than propagating, since a cache write must never fail a resolve.
-pub fn write_at(
+#[cfg(test)]
+pub(crate) fn write_at(
     cache_root: &Utf8Path,
     ref_: &Ref,
     outcome: &MetadataOnlyOutcome,
@@ -154,7 +163,7 @@ pub fn write_at(
 }
 
 /// [`write_at`], writing the entry keyed by `opts`.
-pub fn write_at_with_options(
+pub(crate) fn write_at_with_options(
     cache_root: &Utf8Path,
     ref_: &Ref,
     outcome: &MetadataOnlyOutcome,
@@ -189,20 +198,20 @@ pub fn write_at_with_options(
             return false;
         }
     }
-    if let Err(e) = std::fs::write(&path, toml_text) {
+    // tmp + rename, not a plain write. A reader racing a plain write sees a
+    // half-written file, `toml::from_str` fails, and the entry degrades to a
+    // miss -- safe, per this module's best-effort contract, but it is a
+    // re-fetch nobody asked for and a `debug!` line that looks like
+    // corruption. The store next door already had the helper.
+    if let Err(e) = crate::store::atomic_write(&path, toml_text.as_bytes()) {
         tracing::debug!(error = %e, path = %path, "resolver cache: write failed");
         return false;
     }
     true
 }
 
-/// Write using the current wall clock. See [`write_at`].
-pub fn write(cache_root: &Utf8Path, ref_: &Ref, outcome: &MetadataOnlyOutcome) -> bool {
-    write_at(cache_root, ref_, outcome, Utc::now())
-}
-
 /// [`write()`], writing the entry keyed by `opts`.
-pub fn write_with_options(
+pub(crate) fn write_with_options(
     cache_root: &Utf8Path,
     ref_: &Ref,
     outcome: &MetadataOnlyOutcome,
