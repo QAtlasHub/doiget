@@ -180,9 +180,15 @@ async fn paper_text_max_chars_truncates() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[serial_test::serial]
-async fn paper_text_doi_maps_to_no_oa_available() -> anyhow::Result<()> {
-    // A DOI has no full-text source in this slice (ADR-0032 D5): the tool
-    // must return a structured NO_OA_AVAILABLE envelope, no network touched.
+async fn paper_text_doi_is_terminal_not_a_config_problem() -> anyhow::Result<()> {
+    // A DOI has no full-text source in this slice (ADR-0032 D5). The code says
+    // WHICH kind of "no": `NO_OA_AVAILABLE` carries disposition `needs_config`
+    // -- "a named change makes it" -- and sends an agent looking for a config
+    // knob that does not exist, because the missing piece is DOI-to-arXiv
+    // linking (#281 item 5), not a grant. `NOT_IMPLEMENTED` is terminal and
+    // is the code `verify` / `batch_from_bibliography` already give the same
+    // situation for PMIDs (#500): valid input, absent support.
+    // No network touched either way.
     let env = EnvGuard::new(ENV_KEYS);
 
     let (client, server_handle) = boot_in_memory_server().await?;
@@ -196,7 +202,10 @@ async fn paper_text_doi_maps_to_no_oa_available() -> anyhow::Result<()> {
     let s = result.structured_content.as_ref().expect("structured");
 
     assert_eq!(s["ok"], serde_json::json!(false), "envelope: {s:?}");
-    assert_eq!(s["error"]["code"], serde_json::json!("NO_OA_AVAILABLE"));
+    assert_eq!(s["error"]["code"], serde_json::json!("NOT_IMPLEMENTED"));
+    // The code is only half the answer; the disposition is what an agent
+    // branches on, and it is the half that was wrong.
+    assert_eq!(s["error"]["disposition"], serde_json::json!("terminal"));
     // MCP_TOOLS.md §5: an ok:false envelope echoes the input `ref`.
     assert_eq!(s["ref"], serde_json::json!("10.1234/example"));
 
@@ -247,5 +256,34 @@ async fn paper_text_unconverted_paper_maps_to_text_unavailable() -> anyhow::Resu
     server_handle.await??;
     drop(env);
     drop(td);
+    Ok(())
+}
+
+/// The sibling tool got the same re-code and had no test of its own, so the
+/// two could have drifted the moment one was edited -- which is the failure
+/// this release is about.
+#[tokio::test]
+#[serial_test::serial]
+async fn paper_tex_source_doi_is_terminal_not_a_config_problem() -> anyhow::Result<()> {
+    let env = EnvGuard::new(ENV_KEYS);
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/example"));
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_paper_tex_source").with_arguments(args))
+        .await?;
+    let s = result.structured_content.as_ref().expect("structured");
+
+    assert_eq!(s["ok"], serde_json::json!(false), "envelope: {s:?}");
+    assert_eq!(s["error"]["code"], serde_json::json!("NOT_IMPLEMENTED"));
+    assert_eq!(s["error"]["disposition"], serde_json::json!("terminal"));
+    assert_eq!(s["ref"], serde_json::json!("10.1234/example"));
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
     Ok(())
 }

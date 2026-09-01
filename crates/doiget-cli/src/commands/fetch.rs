@@ -233,6 +233,14 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
     // mirroring `DOIGET_ARXIV_BASE`.
     let ar5iv_base = std::env::var("DOIGET_AR5IV_BASE").ok();
 
+    #[cfg(feature = "tdm-aps")]
+    let tdm_aps = std::env::var("DOIGET_APS_BASE").ok();
+    #[cfg(feature = "tdm-elsevier")]
+    let tdm_elsevier = std::env::var("DOIGET_ELSEVIER_BASE").ok();
+    #[cfg(feature = "tdm-springer")]
+    let tdm_springer = std::env::var("DOIGET_SPRINGER_BASE").ok();
+    #[cfg(feature = "tdm-ieee")]
+    let tdm_ieee = std::env::var("DOIGET_IEEE_BASE").ok();
     if arxiv.is_none()
         && crossref.is_none()
         && unpaywall.is_none()
@@ -345,8 +353,25 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
 
     // Test-base mode: build a relaxed client per overridden source.
     let mut owned: Vec<(String, String)> = Vec::new();
+    // Tier-3 test bases, mirroring the MCP builder. Without these a wiremock
+    // e2e cannot reach the TDM-fetched route on this surface either: the
+    // override branch's table held only Tier-1/2 keys, so `tdm-aps` was absent
+    // from the client's map and the attempt died as `no allowlist registered
+    // for source tdm-aps` -- a harness gap that read like #454 coming back.
+    //
+    // Deliberately NOT part of the production-branch test above: setting only
+    // `DOIGET_APS_BASE` to replay a recorded fixture must not silently switch
+    // the process to the allow-http test client.
     for (source, base) in [
         ("arxiv", arxiv.as_deref()),
+        #[cfg(feature = "tdm-aps")]
+        ("tdm-aps", tdm_aps.as_deref()),
+        #[cfg(feature = "tdm-elsevier")]
+        ("tdm-elsevier", tdm_elsevier.as_deref()),
+        #[cfg(feature = "tdm-springer")]
+        ("tdm-springer", tdm_springer.as_deref()),
+        #[cfg(feature = "tdm-ieee")]
+        ("tdm-ieee", tdm_ieee.as_deref()),
         ("crossref", crossref.as_deref()),
         ("unpaywall", unpaywall.as_deref()),
         ("oa-publisher", oa_publisher.as_deref()),
@@ -579,7 +604,9 @@ impl FetchHarness {
 /// Pulled out so both `run_with_options` and `commands::batch` agree on
 /// the failure boundary.
 pub(crate) fn outcome_is_clean_success(outcome: &FetchPaperOutcome) -> bool {
-    !matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. })
+    // The rule lives in `doiget-core` now, because the MCP surface needs the
+    // same boundary and had only half of it.
+    outcome.is_clean_success()
 }
 
 /// CLI-only one-line success message on stderr (ADR-0001 stdio
@@ -680,7 +707,7 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
     // paper landed without a second `doiget info` call. Skipped for the
     // Blocked fail-closed arm (it rendered an `error[CODE]:` line above, not
     // a success).
-    if !matches!(outcome.pdf_leg, PdfLegStatus::Blocked { .. }) {
+    if outcome.is_clean_success() {
         emit_identity_line(outcome);
     }
 }

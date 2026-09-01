@@ -705,7 +705,11 @@ pub enum ErrorCode {
     /// message lists the candidate matches. Wire form: `"AMBIGUOUS"`.
     /// Raised by `doiget search`'s name-filter resolution (ADR-0031 D5).
     Ambiguous,
-    /// Filesystem write failed.
+    /// The local store could not serve the request: a filesystem write
+    /// failed, or a mutating tool was asked to change an entry that has not
+    /// been fetched. Deliberately not [`Self::NotFound`] in the second case --
+    /// that code says a metadata source reported the id does not exist, and a
+    /// caller acting on it would treat a perfectly good reference as dead.
     StoreError,
     /// Provenance log write failed; the fetch was aborted.
     LogError,

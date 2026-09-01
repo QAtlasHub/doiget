@@ -36,11 +36,27 @@ use camino::Utf8PathBuf;
 
 /// How a route is covered.
 #[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "no route is uncovered today; the variant is how the      next one gets recorded instead of silently omitted"
+)]
 enum Coverage {
     /// Asserted by `fn` in the given test file.
     By {
         file: &'static str,
         test_fn: &'static str,
+        /// The Cargo feature the covering test is `#[cfg]`-gated behind, if
+        /// any. `None` means it compiles in the default `oa-only` surface.
+        ///
+        /// This exists because the checks below read the test file as TEXT.
+        /// Text cannot tell "this function is compiled into the binary" from
+        /// "this function's source is present in the repository", so a
+        /// feature-gated test was accepted as unconditional coverage -- and
+        /// the two REQUIRED CI jobs run `--features oa-only`, where that
+        /// function does not exist. The registry vouched for a route with no
+        /// coverage in the builds that gate merges: this file's own stated
+        /// failure class, inside this file.
+        feature: Option<&'static str>,
     },
     /// Not asserted yet, and why. Deliberately not `None`: the reason is the
     /// difference between a known gap and an oversight.
@@ -57,6 +73,7 @@ const ROUTES: &[(&str, Coverage)] = &[
         Coverage::By {
             file: "fetch_paper_e2e.rs",
             test_fn: "fetch_paper_arxiv_happy_path_writes_pdf_and_returns_envelope",
+            feature: None,
         },
     ),
     (
@@ -64,6 +81,7 @@ const ROUTES: &[(&str, Coverage)] = &[
         Coverage::By {
             file: "fetch_paper_e2e.rs",
             test_fn: "fetch_paper_doi_with_no_oa_anywhere_reports_the_no_oa_url_route",
+            feature: None,
         },
     ),
     (
@@ -71,6 +89,7 @@ const ROUTES: &[(&str, Coverage)] = &[
         Coverage::By {
             file: "fetch_paper_e2e.rs",
             test_fn: "fetch_paper_doi_blocked_pdf_includes_suggested_arxiv_id",
+            feature: None,
         },
     ),
     (
@@ -78,12 +97,20 @@ const ROUTES: &[(&str, Coverage)] = &[
         Coverage::By {
             file: "fetch_paper_e2e.rs",
             test_fn: "fetch_paper_doi_falls_back_to_the_arxiv_preprint",
+            feature: None,
         },
     ),
     (
         "tdm_fetched",
-        Coverage::Gap {
-            why: "`fetch_paper_doi_served_by_the_publisher_reports_the_tdm_fetched_route`                   is written and #[ignore]d because it FAILS: the chain fires, and the                   client answers `no allowlist registered for source tdm-aps`. Only                   tdm-aps implements `fetch_content` at all, so that is the whole                   route. #454's shape, reachable again",
+        // Was the file's one `Gap`, on a reproduction that could not pass
+        // because the test harness had no way to register a Tier-3 allowlist
+        // entry -- not, as the reason here claimed, because production had
+        // regressed to #454's shape.
+        Coverage::By {
+            file: "fetch_paper_e2e.rs",
+            test_fn: "fetch_paper_doi_served_by_the_publisher_reports_the_tdm_fetched_route",
+            // Only the `test (tdm features)` CI job compiles this.
+            feature: Some("tdm-aps"),
         },
     ),
 ];
@@ -111,7 +138,12 @@ fn tests_dir() -> Utf8PathBuf {
 fn every_claimed_covering_test_exists_and_asserts_its_route() {
     let mut problems = Vec::new();
     for (route, cov) in ROUTES {
-        let Coverage::By { file, test_fn } = cov else {
+        let Coverage::By {
+            file,
+            test_fn,
+            feature,
+        } = cov
+        else {
             continue;
         };
         let path = tests_dir().join(file);
@@ -131,7 +163,41 @@ fn every_claimed_covering_test_exists_and_asserts_its_route() {
         // not run cannot be evidence that a route is covered.
         let line_start = src[..def].rfind('\n').map_or(0, |i| i + 1);
         let attrs_from = src[..line_start].rfind("\n\n").map_or(0, |i| i + 2);
-        if src[attrs_from..line_start].contains("#[ignore") {
+        // Line-by-line, and only lines that ARE an attribute. A substring search
+        // over the whole block also matches a doc comment that DISCUSSES
+        // `#[ignore]` -- which the corrected write-up of the TDM route now does,
+        // and it made this checker report the very test it was reading about as
+        // skipped. Prose is not an attribute; a checker that cannot tell the
+        // difference is the defect it exists to catch.
+        let is_ignored = src[attrs_from..line_start]
+            .lines()
+            .map(str::trim_start)
+            .filter(|l| l.starts_with("#["))
+            // `#[ignore` catches the plain attribute; `ignore)` catches
+            // `#[cfg_attr(<cond>, ignore)]`, which cargo skips just as
+            // completely and which the first version of this check waved
+            // through -- it only compared the start of the line, so a
+            // conditionally-ignored test could be claimed as coverage.
+            // rustfmt leaves `cfg_attr` on one line, so `cargo fmt` does not
+            // rescue us here the way it does for `#[test] #[ignore]`.
+            .any(|l| l.starts_with("#[ignore") || l.contains("ignore)"));
+        // The registry's feature claim must match the source. A test the
+        // default build does not compile is not unconditional coverage, and
+        // saying so here is the only place a reader learns it: `cargo test`
+        // under `--features oa-only` cannot report a function it never built.
+        let attrs = &src[attrs_from..line_start];
+        let src_feature = attrs.lines().map(str::trim_start).find_map(|l| {
+            let rest = l.strip_prefix("#[cfg(feature = \"")?;
+            rest.split('"').next()
+        });
+        if src_feature != *feature {
+            problems.push(format!(
+                "{route}: registry says feature={feature:?} but `{test_fn}` is gated                  on {src_feature:?}. A feature-gated test is coverage only in a CI                  job that enables it"
+            ));
+            continue;
+        }
+
+        if is_ignored {
             problems.push(format!(
                 "{route}: `{test_fn}` is #[ignore]d, so CI never runs it -- that is a                  Gap with a reason, not coverage"
             ));
@@ -247,7 +313,7 @@ fn every_route_is_either_covered_or_has_a_stated_reason() {
     // might read into a number that has to be updated when it changes.
     assert_eq!(
         uncovered.len(),
-        1,
+        0,
         "known gaps changed: {uncovered:?}. If a route just gained an assertion,          move it from `Gap` to `By` and drop this count by one -- the point is          that closing a gap is a visible edit, not a silent improvement."
     );
 }

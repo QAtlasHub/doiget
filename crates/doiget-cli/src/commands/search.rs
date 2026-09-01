@@ -260,6 +260,14 @@ async fn run_external(
     // year / OA / DOI / title. Tab-separated, `cut(1)`-compatible.
     writeln!(out, "cited_by\tyear\toa\tdoi\ttitle")
         .context("failed to write search header to stdout")?;
+    // #534, human half: a header with no rows under it says "not indexed" just
+    // as flatly as the JSON envelope did. The note goes to stderr so the table
+    // on stdout stays `cut(1)`-clean (ADR-0001).
+    if results.results.is_empty() {
+        if let Some(hint) = doiget_core::discovery::zero_result_hint(query) {
+            print_err(format_args!("  = note: {hint}"));
+        }
+    }
     for hit in &results.results {
         let year = dash_or(hit.year);
         let oa = hit.oa_status.as_deref().unwrap_or("-");
@@ -299,14 +307,25 @@ fn local_envelope(query: &str, entries: &[EntryInfo]) -> serde_json::Value {
 /// `{ ok, scope, query, total_results, count, results }`. Extracted as a pure
 /// function so the wire shape is unit-testable without capturing stdout.
 fn external_envelope(query: &str, results: &PaperSearchResults) -> serde_json::Value {
-    serde_json::json!({
+    let mut envelope = serde_json::json!({
         "ok": true,
         "scope": "external",
         "query": query,
         "total_results": results.total_results,
         "count": results.results.len(),
         "results": results.results,
-    })
+    });
+    // #534. `{"ok": true, "total_results": 0}` is a success envelope, so
+    // nothing in the error machinery reaches it, and a script or agent reading
+    // it takes zero results as a fact about the literature and stops. The fix
+    // first landed on the MCP tool only -- this surface went on emitting the
+    // exact envelope the issue was filed about, byte for byte.
+    if results.results.is_empty() {
+        if let Some(hint) = doiget_core::discovery::zero_result_hint(query) {
+            envelope["hint"] = serde_json::json!(hint);
+        }
+    }
+    envelope
 }
 
 /// Pretty-serialize a JSON value and write it as one line to `out`. Shared
@@ -359,6 +378,52 @@ mod tests {
         assert_eq!(v["count"], 1);
         assert_eq!(v["results"][0]["openalex_id"], "W1");
         assert_eq!(v["results"][0]["abstract"], "abs");
+    }
+
+    /// #534 on THIS surface. The fix landed on the MCP tool first, so
+    /// `doiget search --mode json` went on emitting the exact envelope the
+    /// issue was filed about -- `ok: true`, `total_results: 0`, nothing to
+    /// tell a script that the query, not the literature, was the problem.
+    ///
+    /// Driven through the real `external_envelope`, the function `--mode json`
+    /// prints.
+    #[test]
+    fn a_long_query_that_matched_nothing_carries_the_hint() {
+        let results = PaperSearchResults {
+            results: vec![],
+            total_results: Some(0),
+        };
+        let q = "lithium refractoriness after discontinuation kindling sensitization course of illness Post";
+        let v = external_envelope(q, &results);
+        assert_eq!(v["ok"], true, "still a success envelope: {v}");
+        assert_eq!(v["count"], 0);
+        let hint = v["hint"].as_str().unwrap_or_default();
+        assert!(hint.contains("10 terms"), "names the count: {hint:?}");
+        assert!(hint.contains("3-5"), "says what to do instead: {hint:?}");
+    }
+
+    /// A short query matching nothing may genuinely mean nothing is indexed,
+    /// and a hint on every empty result would train readers to skip it.
+    #[test]
+    fn a_short_query_that_matched_nothing_is_left_alone() {
+        let results = PaperSearchResults {
+            results: vec![],
+            total_results: Some(0),
+        };
+        let v = external_envelope("depersonalization derealization", &results);
+        assert!(v.get("hint").is_none(), "no hint on a short query: {v}");
+    }
+
+    /// And a query that DID match carries no hint, however long it is.
+    #[test]
+    fn a_long_query_with_results_carries_no_hint() {
+        let results = PaperSearchResults {
+            results: vec![hit()],
+            total_results: Some(1),
+        };
+        let q = "a b c d e f g h i j k l";
+        let v = external_envelope(q, &results);
+        assert!(v.get("hint").is_none(), "results present: {v}");
     }
 
     #[test]

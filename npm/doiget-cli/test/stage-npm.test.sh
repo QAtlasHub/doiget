@@ -162,10 +162,19 @@ if command -v npm > /dev/null 2>&1; then
   fi
 
   # The platform list the loop actually iterates, from the same source it reads.
-  looped="$(grep -oE '^doiget-[a-z0-9-]+:' "$ROOT/scripts/stage-npm.sh" | tr -d ':' | sort -u | sed 's#^#./npm-stage/#')"
-  direct="$(grep -oE 'npm publish [^ "$]+' "$WORKFLOW" | awk '{print $3}')"
+  #
+  # `|| true` is load-bearing, not defensive noise. Under `set -euo pipefail` a
+  # bare assignment takes the exit status of its command substitution, so a
+  # `grep` that matches nothing kills the script HERE -- before the `check no`
+  # written two lines down to report exactly that. The diagnostic was
+  # unreachable in the one case it exists for, and CI would show a bare
+  # non-zero exit with none of the ok/FAIL lines around it.
+  looped="$(grep -oE '^doiget-[a-z0-9-]+:' "$ROOT/scripts/stage-npm.sh" | tr -d ':' | sort -u | sed 's#^#./npm-stage/#' || true)"
+  direct="$(grep -oE 'npm publish [^ "$]+' "$WORKFLOW" | awk '{print $3}' || true)"
   if [ -z "$looped" ] || [ -z "$direct" ]; then
     check no "found the npm publish invocations in release-plz.yml"
+  else
+    check ok "found the npm publish invocations in release-plz.yml"
   fi
 
   all_specs="$(printf '%s

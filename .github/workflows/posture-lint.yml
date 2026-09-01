@@ -287,9 +287,77 @@ jobs:
         shell: bash
         # `Formula/doiget.rb` is generated from a release's published `.sha256`
         # assets. #247 was closed as completed while four fifths of it had not
-        # shipped, so the formula is asserted rather than trusted: this fails on
-        # a hand-edit, a bad checksum, or a tag/version confusion.
+        # shipped, so the formula is asserted rather than trusted.
+        #
+        # What this fails on: a hand-edit, a MALFORMED checksum, a `v`-prefixed
+        # version. What it CANNOT fail on, because it re-reads the version and
+        # the checksums from the very file under test: a well-formed checksum
+        # carrying the wrong value, or a version that is simply stale. It said
+        # it caught "a bad checksum" and it does not -- nothing here reaches the
+        # published `.sha256` assets, offline being the point. The stale-version
+        # half is covered by the release-sync check below; a wrong-value
+        # checksum is caught by `brew install` and by nothing before it.
         run: bash scripts/update-homebrew-formula.test.sh
+
+      - name: release-tracking files name one version (#501, #511)
+        shell: bash
+        # Four files record "the last published stable", and a stable release
+        # bumps all four in one maintainer step. Nothing used to hold them
+        # together, which is how `.claude-plugin/*` sat at 0.8.11 while 0.8.12
+        # was the shipped release.
+        #
+        # What this CANNOT catch, stated so the check does not repeat the
+        # overclaim it exists to fix: forgetting the step ENTIRELY leaves all
+        # four at the previous release, mutually consistent, and green.
+        # Nothing in the repository knows which version is currently published.
+        # What it does catch is bumping some and not others, and pinning a
+        # version that was never released -- CHANGELOG.md is the only
+        # independent source of truth available offline.
+        run: |
+          set -euo pipefail
+          # `|| true` on each is load-bearing. Under `set -euo pipefail` a bare
+          # assignment takes the exit status of its command substitution, so a
+          # `grep` that matches nothing -- somebody deletes the `@version` pin from
+          # .mcp.json, or reformats a manifest -- kills the step HERE, before the
+          # `::error::` written to explain it. It failed closed, which is right, and
+          # said nothing, which is the defect this whole job exists to catch. Found
+          # by review of this change; the same shape was fixed one file over in
+          # npm/doiget-cli/test/stage-npm.test.sh.
+          formula=$(grep -oE '^  version "[^"]+"' Formula/doiget.rb | grep -oE '[0-9][^"]*' || true)
+          plugin=$(grep -oE '"version": *"[^"]+"' .claude-plugin/plugin.json | grep -oE '[0-9][^"]*' || true)
+          market=$(grep -oE '"version": *"[^"]+"' .claude-plugin/marketplace.json | grep -oE '[0-9][^"]*' || true)
+          pinned=$(grep -oE '"doiget-cli@[^"]+"' .mcp.json | grep -oE '[0-9][^"]*' || true)
+          for pair in "Formula/doiget.rb:$formula" ".claude-plugin/plugin.json:$plugin" ".claude-plugin/marketplace.json:$market" ".mcp.json:$pinned"; do
+            if [ -z "${pair#*:}" ]; then
+              echo "::error::posture-lint release-sync: no version found in ${pair%%:*} -- the file was reformatted, or .mcp.json lost its doiget-cli@<version> pin"
+              exit 1
+            fi
+          done
+          echo "formula=$formula plugin=$plugin marketplace=$market .mcp.json=$pinned"
+          for v in "$plugin" "$market" "$pinned"; do
+            if [ "$v" != "$formula" ]; then
+              echo "::error::posture-lint release-sync: release-tracking files disagree. Bump Formula/doiget.rb, .claude-plugin/plugin.json, .claude-plugin/marketplace.json and .mcp.json together (CONTRIBUTING.md, 'one step after a stable release')"
+              exit 1
+            fi
+          done
+          # An unpublished pin would send every plugin user to a 404. Any `-`
+          # suffix is a prerelease per SemVer; the first version of this listed
+          # spellings (`*-beta.*|*-rc.*`) and let `0.9.0-alpha.2` straight
+          # through, which is the enumerate-the-known-cases mistake this
+          # release is otherwise about.
+          case "$pinned" in
+            *-*)
+              echo "::error::posture-lint release-sync: .mcp.json pins a prerelease ($pinned); the plugin must point at a published stable"
+              exit 1
+              ;;
+          esac
+          # The one independent check available without a network: a version
+          # these files claim to track must have a released CHANGELOG section.
+          if ! grep -qE "^## \[$formula\]" CHANGELOG.md; then
+            echo "::error::posture-lint release-sync: the tracking files name $formula, which has no '## [$formula]' section in CHANGELOG.md -- they point at a version that was never released"
+            exit 1
+          fi
+          echo "release-tracking files agree on $formula, and CHANGELOG.md has its section"
 
       - name: npm packaging tests (#511)
         shell: bash

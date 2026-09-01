@@ -861,7 +861,12 @@ async fn network_report(cfg: &ResolvedConfig) {
         ("doaj.org", "https://doaj.org/robots.txt"),
     ];
     for (host, url) in PROBES {
-        let verdict = if !allow.matches(host) {
+        // `permits`, not `matches` (#533). This is the fifth adjudication
+        // site, and the one whose whole job is telling a user why a host was
+        // refused: with `matches` it would report a DOI resolver as
+        // `NotAllowlisted` while the real fetch path follows it, which is the
+        // exact wrong answer #533 was about.
+        let verdict = if !allow.permits(host) {
             ProbeVerdict::NotAllowlisted
         } else {
             match url::Url::parse(url) {

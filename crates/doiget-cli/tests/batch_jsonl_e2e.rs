@@ -366,3 +366,61 @@ fn batch_failure_digest_includes_parse_errors() {
         "digest must list the parse failure: {stderr}"
     );
 }
+
+/// #500 on the CLI `batch` surface.
+///
+/// A PubMed-exported `.bib` record carries `pmid = {9659853}` and no DOI. The
+/// entry is fine; doiget cannot resolve that identifier class yet. Reporting
+/// `INVALID_REF` sends the user to edit a bibliography that is correct, which
+/// is the one claim #500 exists to stop doiget making.
+///
+/// It reported `INVALID_REF` anyway, on this surface only: the parser's
+/// verdict was flattened into a placeholder string and handed back to
+/// `Ref::parse`, whose only possible answer is `INVALID_REF`. The MCP tool and
+/// `doiget verify` had said `NOT_IMPLEMENTED` all along.
+#[test]
+fn batch_json_pmid_only_entry_is_not_implemented_not_invalid_ref() {
+    let dir = TempDir::new().expect("tempdir");
+    let bib = dir.path().join("refs.bib");
+    {
+        let mut f = std::fs::File::create(&bib).expect("create bib file");
+        f.write_all(
+            b"@article{Smith2020,
+  title = {A PubMed-only record},
+  pmid = {9659853},
+}
+",
+        )
+        .expect("write bib");
+    }
+
+    let out = doiget(&dir)
+        .args(["batch", bib.to_str().expect("utf-8"), "--mode", "json"])
+        .output()
+        .expect("run batch");
+
+    let stdout = String::from_utf8(out.stdout).expect("utf-8 stdout");
+    let line = stdout
+        .lines()
+        .find(|l| l.contains("\"ok\""))
+        .unwrap_or_else(|| panic!("no JSONL record in: {stdout}"));
+    let v: Value = serde_json::from_str(line).expect("JSONL record parses");
+
+    assert_eq!(v["ok"], serde_json::json!(false), "record: {v}");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("NOT_IMPLEMENTED"),
+        "a PMID entry is unsupported, not malformed: {v}"
+    );
+    // The message must describe the user's entry, not the synthetic
+    // placeholder the old code round-tripped through `Ref::parse`.
+    let message = v["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("PMID") && message.contains("9659853"),
+        "message names the identifier the entry actually carries: {message:?}"
+    );
+    assert!(
+        !message.contains("<unsupported-"),
+        "message must not describe the internal placeholder: {message:?}"
+    );
+}

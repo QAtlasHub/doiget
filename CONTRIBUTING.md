@@ -216,28 +216,65 @@ is the binding spec and full runbook. Summary:
   to the fixed commit (the pipeline runs the workflow/scripts *as of the
   tagged tree*). Do not reintroduce a perpetual "release PR".
 
-### Homebrew: one step after a stable release
+### One step after a stable release
 
-`Formula/doiget.rb` pins the release binaries by `sha256`, and those checksums
-do not exist until the release has published its assets. So the formula lags
-the tag by one commit, on purpose, and closing that gap is a maintainer step:
+Four files record *the last published stable*, and none of them can be written
+before the release exists: `Formula/doiget.rb` pins the binaries by `sha256`,
+and `.mcp.json` pins the npm version the plugin runs. So they lag the tag by
+one commit, on purpose, and closing that gap is a single maintainer step:
 
 ```sh
-scripts/update-homebrew-formula.sh 0.8.12      # reads the release's .sha256 assets
+V=0.8.13   # the version that was just published
+
+bash scripts/update-homebrew-formula.sh "$V"   # reads that release's .sha256 assets
+sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$V\"/" .claude-plugin/plugin.json .claude-plugin/marketplace.json
+sed -i "s/doiget-cli@[^\"]*/doiget-cli@$V/" .mcp.json
+
 bash scripts/update-homebrew-formula.test.sh   # the same check CI runs
-git commit -s Formula/doiget.rb -m "chore(homebrew): formula for 0.8.12"
+git commit -s -m "chore(release): tracking files for $V" -- Formula/doiget.rb .claude-plugin .mcp.json
 ```
 
-Only for **stable** releases. Beta tags are not published to the tap.
+All four edits are commands on purpose. The first version of this block gave
+three of them as `#` comments between two real commands, so copy-pasting it
+bumped the formula, silently skipped the other three, and produced a commit
+whose message said all four had been done.
+
+Only for **stable** releases. Beta tags are not published to the tap, and the
+plugin must never pin a prerelease -- posture-lint fails on both.
 
 It is not automated, and that is a decision rather than an omission: committing
-the formula back from the release workflow needs a token with write access to a
+these back from the release workflow needs a token with write access to a
 protected branch, and that token is exactly what
 [#426](https://github.com/QAtlasHub/doiget/issues/426) says is broken. Building
 the tap's correctness on a known-broken token would be worse than a documented
-step. The generator plus `update-homebrew-formula.test.sh` mean the step cannot
-be done *wrong* -- a hand-edit, a bad checksum, or a `v`-prefixed version all
-fail CI -- only forgotten, which `brew info doiget` makes visible.
+step.
+
+What CI does enforce, so the step cannot be done *wrong* or half-done:
+
+- `update-homebrew-formula.test.sh` fails on a hand-edit, a malformed
+  checksum, or a `v`-prefixed version. It does **not** reach the published
+  `.sha256` assets (it is deliberately offline), so it cannot see a
+  well-formed checksum carrying the wrong value.
+- The `release-tracking files name one version` posture check fails when the
+  four files disagree. Bumping three and forgetting the fourth is red;
+  forgetting all four is not, which is what `brew info doiget` is for.
+
+### Running the MCP server from your working tree
+
+`.mcp.json` is the plugin's server declaration, so it pins the last published
+release. Opening this repo in Claude Code therefore runs *the release*, not
+your checkout -- you can edit `crates/doiget-mcp` and be testing the version
+you shipped last month. Do not edit `.mcp.json` to work around that; a
+local-scoped server of the **same name** shadows the project-scoped one:
+
+```sh
+just mcp-dev        # registers this checkout's build, as `doiget`
+just mcp-dev-off    # removes it; `.mcp.json`'s pinned entry reappears
+```
+
+The name matters. `claude mcp add doiget-dev --scope local` leaves BOTH servers
+connected, so the release-pinned tools stay callable and nothing is shadowed --
+which is how the first version of this section was written.
 
 ### npm: the one-time bootstrap
 
