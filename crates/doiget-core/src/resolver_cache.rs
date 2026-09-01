@@ -198,7 +198,12 @@ pub(crate) fn write_at_with_options(
             return false;
         }
     }
-    if let Err(e) = std::fs::write(&path, toml_text) {
+    // tmp + rename, not a plain write. A reader racing a plain write sees a
+    // half-written file, `toml::from_str` fails, and the entry degrades to a
+    // miss -- safe, per this module's best-effort contract, but it is a
+    // re-fetch nobody asked for and a `debug!` line that looks like
+    // corruption. The store next door already had the helper.
+    if let Err(e) = crate::store::atomic_write(&path, toml_text.as_bytes()) {
         tracing::debug!(error = %e, path = %path, "resolver cache: write failed");
         return false;
     }

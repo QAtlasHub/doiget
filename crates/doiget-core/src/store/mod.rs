@@ -25,6 +25,10 @@ pub mod metadata;
 pub mod render;
 
 pub use fs_store::FsStore;
+
+/// Crash-consistent write (tmp + fsync + rename), shared with the resolver
+/// cache so both write the same way. See `docs/STORE.md` §5.
+pub(crate) use fs_store::atomic_write;
 pub use metadata::{DoigetExtension, Metadata};
 pub use render::{to_bibtex, to_csl_array};
 

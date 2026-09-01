@@ -354,7 +354,19 @@ fn guard_safekey(s: &str) -> Result<(), StoreError> {
 /// list/search results; the safekey we emit here originated as a stored
 /// safekey, so it has already passed `guard_safekey` at write time.
 fn safekey_from_metadata_filename(p: &Utf8Path) -> Safekey {
-    Safekey(p.file_stem().unwrap_or("").to_string())
+    let stem = p.file_stem().unwrap_or("");
+    // The safety argument here is "the filesystem only holds names that
+    // already passed `guard_safekey` at write time" -- true, and a claim
+    // about the world rather than something the type enforces. Every other
+    // `Safekey` in the crate is minted through the guard; this one trusts a
+    // directory listing. Assert it in debug builds so a future write path
+    // that skips the guard is caught by the test suite instead of by whatever
+    // reads the store afterwards.
+    debug_assert!(
+        guard_safekey(stem).is_ok(),
+        "store contains a metadata file whose stem is not a valid safekey: {stem:?}"
+    );
+    Safekey(stem.to_string())
 }
 
 /// Lock mode for [`acquire_lock`].
@@ -745,7 +757,7 @@ fn toml_value_inline(value: &toml::Value) -> Result<String, StoreError> {
 /// A crash mid-write leaves either the old file intact (if before the
 /// rename) or the new file fully written (if after). It never leaves a
 /// partially-visible new file.
-fn atomic_write(dst: &Utf8Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn atomic_write(dst: &Utf8Path, bytes: &[u8]) -> std::io::Result<()> {
     let file_name = dst.file_name().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
