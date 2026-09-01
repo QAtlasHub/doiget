@@ -40,24 +40,18 @@ use super::output::print_err;
 ///
 /// The `map_err` below already decides this per variant, but it does so while
 /// building a user-facing message and an exit code, so the value is not
-/// available to the provenance bookend that runs first. Kept next to it, and
-/// exhaustive, so the two cannot say different things about the same error.
+/// available to the provenance bookend that runs first.
+///
+/// This used to hold its own exhaustive match, above a claim that "the two
+/// cannot say different things about the same error". Two is the wrong count:
+/// the MCP surface held a third copy, which flattened `Source(_)` to
+/// `NETWORK_ERROR`, so an OpenAlex 404 was terminal here and retriable there.
+/// The mapping lives beside the enum in `doiget-core` now.
 fn graph_error_code(e: &GraphError) -> ErrorCode {
-    match e {
-        GraphError::CapabilityDenied => ErrorCode::CapabilityDenied,
-        // An indexing gap upstream: the seed is a valid DOI that OpenAlex does
-        // not hold. `NO_OA_AVAILABLE`, matching what the MCP tool has always
-        // reported for the same condition -- I wrote `NOT_FOUND` here without
-        // checking the sibling surface, which would have had the two disagree
-        // about one error.
-        GraphError::SeedNotIndexed => ErrorCode::NoOaAvailable,
-        // These two already own a mapping; reuse it rather than restate it.
-        GraphError::Source(fe) => ErrorCode::from(fe),
-        GraphError::Log(_) => ErrorCode::LogError,
-        // `GraphError` is `#[non_exhaustive]`, so a wildcard is required from
-        // this crate. Kept last and explicit rather than implied.
-        _ => ErrorCode::InternalError,
-    }
+    // The mapping lives in `doiget_core::citation_graph`, next to the enum, so
+    // this surface and the MCP one cannot drift apart again -- they did, on
+    // `Source(_)`, which the MCP copy flattened to `NETWORK_ERROR`.
+    ErrorCode::from(e)
 }
 
 /// Run the `graph` subcommand against the live source set.

@@ -36,6 +36,10 @@ use camino::Utf8PathBuf;
 
 /// How a route is covered.
 #[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "no route is uncovered today; the variant is how the      next one gets recorded instead of silently omitted"
+)]
 enum Coverage {
     /// Asserted by `fn` in the given test file.
     By {
@@ -82,8 +86,13 @@ const ROUTES: &[(&str, Coverage)] = &[
     ),
     (
         "tdm_fetched",
-        Coverage::Gap {
-            why: "`fetch_paper_doi_served_by_the_publisher_reports_the_tdm_fetched_route`                   is written and #[ignore]d because it FAILS: the chain fires, and the                   client answers `no allowlist registered for source tdm-aps`. Only                   tdm-aps implements `fetch_content` at all, so that is the whole                   route. #454's shape, reachable again",
+        // Was the file's one `Gap`, on a reproduction that could not pass
+        // because the test harness had no way to register a Tier-3 allowlist
+        // entry -- not, as the reason here claimed, because production had
+        // regressed to #454's shape.
+        Coverage::By {
+            file: "fetch_paper_e2e.rs",
+            test_fn: "fetch_paper_doi_served_by_the_publisher_reports_the_tdm_fetched_route",
         },
     ),
 ];
@@ -131,7 +140,18 @@ fn every_claimed_covering_test_exists_and_asserts_its_route() {
         // not run cannot be evidence that a route is covered.
         let line_start = src[..def].rfind('\n').map_or(0, |i| i + 1);
         let attrs_from = src[..line_start].rfind("\n\n").map_or(0, |i| i + 2);
-        if src[attrs_from..line_start].contains("#[ignore") {
+        // Line-by-line, and only lines that ARE an attribute. A substring search
+        // over the whole block also matches a doc comment that DISCUSSES
+        // `#[ignore]` -- which the corrected write-up of the TDM route now does,
+        // and it made this checker report the very test it was reading about as
+        // skipped. Prose is not an attribute; a checker that cannot tell the
+        // difference is the defect it exists to catch.
+        let is_ignored = src[attrs_from..line_start]
+            .lines()
+            .map(str::trim_start)
+            .filter(|l| l.starts_with("#["))
+            .any(|l| l.starts_with("#[ignore"));
+        if is_ignored {
             problems.push(format!(
                 "{route}: `{test_fn}` is #[ignore]d, so CI never runs it -- that is a                  Gap with a reason, not coverage"
             ));
@@ -247,7 +267,7 @@ fn every_route_is_either_covered_or_has_a_stated_reason() {
     // might read into a number that has to be updated when it changes.
     assert_eq!(
         uncovered.len(),
-        1,
+        0,
         "known gaps changed: {uncovered:?}. If a route just gained an assertion,          move it from `Gap` to `By` and drop this count by one -- the point is          that closing a gap is a visible edit, not a silent improvement."
     );
 }

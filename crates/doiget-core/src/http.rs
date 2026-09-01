@@ -185,10 +185,15 @@ impl SourceAllowlist {
     /// means the resolver set is not silently reported as part of any
     /// source's `expected_hosts`.
     ///
-    /// The four adjudication sites (the pre-fetch OA-URL check in
-    /// `orchestrator`, the two redirect-policy closures, and `probe`) all
-    /// route through here so they cannot disagree -- #533 was found because
-    /// only one of them was ever walked end to end.
+    /// The five adjudication sites -- the pre-fetch OA-URL check in
+    /// `orchestrator`, the two redirect-policy closures, `probe`, and the
+    /// pre-check `doiget config doctor --network` runs before calling
+    /// `probe` -- all route through here so they cannot disagree. #533 was
+    /// found because only one of them was ever walked end to end, and the
+    /// doctor's was missed on the first pass at this very doc comment: it
+    /// said "four" while still calling `matches`, which would have had the
+    /// command that explains allowlist refusals reproduce #533 the moment a
+    /// resolver host entered its probe list.
     #[must_use]
     pub fn permits(&self, host: &str) -> bool {
         is_transparent_resolver(host) || self.matches(host)
@@ -215,6 +220,15 @@ impl SourceAllowlist {
 /// remediation, and never counted as the source of the content. The host
 /// that actually serves the bytes is adjudicated exactly as before, so this
 /// is transparent to the invariant rather than an exception to it.
+///
+/// One edge the sentence above does not cover: a chain that TERMINATES at a
+/// resolver -- a `200` straight from `doi.org` rather than the `302` it
+/// exists to send -- is served by a host `permits` allowed and `matches`
+/// would not. The bound still holds in practice because these three hosts are
+/// operated by the DOI Foundation and CNRI and do not serve article bytes,
+/// which is why the set is closed and exact; but the invariant is "the
+/// resolver is trusted to redirect", not "only allowlisted hosts ever send
+/// bytes".
 ///
 /// # Why a closed set and not "the terminal host"
 ///

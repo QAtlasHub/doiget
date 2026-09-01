@@ -51,6 +51,32 @@ use super::fetch::{
 };
 use super::resolve_store_root;
 
+/// One entry of the input file, on its way into the dispatch window.
+///
+/// `Rejected` carries the verdict the bibliography parser already reached.
+/// Before #500's reporting half this was a plain `Vec<String>`: every entry
+/// the parser could not turn into a `Ref` became a synthetic placeholder
+/// (`<unsupported-PMID:...>`, `<no-identifier:...>`) that was handed back to
+/// `Ref::parse`, whose only possible answer is `INVALID_REF`. So a PubMed
+/// `.bib` record with a valid `pmid` field was reported to the operator as a
+/// malformed reference -- the one claim #500 exists to stop doiget making --
+/// and the accompanying message described the placeholder rather than the
+/// entry. The verdict travels as a value now, so it cannot be flattened.
+enum BatchEntry {
+    /// A ref string still to be parsed.
+    Ref(String),
+    /// Unfetchable, with the reason already decided.
+    Rejected {
+        /// What to show in the JSONL `ref` field and the failure digest.
+        display: String,
+        /// The closed-set code the operator should see.
+        code: ErrorCode,
+        /// The parser's own message, about the entry rather than a
+        /// placeholder synthesised from it.
+        message: String,
+    },
+}
+
 /// Run the `doiget batch <path>` subcommand.
 ///
 /// When `dry_run` is `true` (per ADR-0022 §1 + §3): read the input
@@ -116,37 +142,63 @@ pub async fn run_with_options(
     // error rather than a silently-empty batch.
     let path_utf8 = Utf8Path::new(&path);
     let parsed = refs::parse_input(&raw, Format::Auto, Some(path_utf8));
-    let mut inputs: Vec<String> = Vec::with_capacity(parsed.len());
+    let mut inputs: Vec<BatchEntry> = Vec::with_capacity(parsed.len());
     for entry in parsed {
         match entry {
-            Ok(p) => inputs.push(p.ref_.as_input_str().to_string()),
-            Err(ParseError::InvalidRef { raw, .. }) => inputs.push(raw),
-            // #500: a distinct placeholder, so the JSONL line says the entry
-            // HAS an identifier doiget cannot use rather than implying it has
-            // none. Same mechanism as the arm below; different claim.
-            Err(ParseError::UnsupportedIdentifier {
-                kind,
-                value,
-                entry_key,
-            }) => {
-                let placeholder = match entry_key {
+            Ok(p) => inputs.push(BatchEntry::Ref(p.ref_.as_input_str().to_string())),
+            // The raw identifier verbatim, so the downstream `Ref::parse`
+            // reports `INVALID_REF` against the string the user wrote. That
+            // IS the right claim here.
+            Err(ParseError::InvalidRef { raw, .. }) => inputs.push(BatchEntry::Ref(raw)),
+            // #500. The verdict travels as a value. It used to travel as a
+            // placeholder string handed back to `Ref::parse`, and `Ref::parse`
+            // has exactly one thing to say -- `INVALID_REF` -- so this arm and
+            // the `NoIdentifier` arm below reached the user as the SAME claim
+            // ("your bibliography is malformed") despite the comment here
+            // saying they differed, and the message described the synthetic
+            // placeholder rather than the user's entry. That claim is what
+            // #500 exists to stop doiget making about an entry that is fine.
+            Err(err @ ParseError::UnsupportedIdentifier { .. }) => {
+                let message = err.to_string();
+                let ParseError::UnsupportedIdentifier {
+                    kind,
+                    value,
+                    entry_key,
+                } = err
+                else {
+                    unreachable!("guarded by the pattern above")
+                };
+                let display = match entry_key {
                     Some(k) => format!("<unsupported-{kind}:{value}:{k}>"),
                     None => format!("<unsupported-{kind}:{value}>"),
                 };
-                inputs.push(placeholder);
+                inputs.push(BatchEntry::Rejected {
+                    display,
+                    // The input is valid and the support is absent. The same
+                    // code the MCP `batch_from_bibliography` and CLI `verify`
+                    // surfaces already gave this entry.
+                    code: ErrorCode::NotImplemented,
+                    message,
+                });
             }
-            Err(ParseError::NoIdentifier { entry_key }) => {
-                // Synthesise a recognisable placeholder so Step 7's
-                // `Ref::parse` rejects this entry as `INVALID_REF`
-                // with the operator's citation key visible in the
-                // JSONL `ref` field. A future slice will plumb the
-                // structured `entry_key` into a dedicated error
-                // object field (ADR-0030 §6).
-                let placeholder = match entry_key {
+            Err(err @ ParseError::NoIdentifier { .. }) => {
+                let message = err.to_string();
+                let ParseError::NoIdentifier { entry_key } = err else {
+                    unreachable!("guarded by the pattern above")
+                };
+                // The operator's citation key stays visible in the JSONL
+                // `ref` field. A future slice will plumb the structured
+                // `entry_key` into a dedicated error-object field
+                // (ADR-0030 §6).
+                let display = match entry_key {
                     Some(k) => format!("<no-identifier:{k}>"),
                     None => "<no-identifier>".to_string(),
                 };
-                inputs.push(placeholder);
+                inputs.push(BatchEntry::Rejected {
+                    display,
+                    code: ErrorCode::InvalidRef,
+                    message,
+                });
             }
             Err(ParseError::Decode { format, message }) => {
                 return Err(anyhow!("input did not deserialise as {format}: {message}"));
@@ -171,7 +223,11 @@ pub async fn run_with_options(
                     "encountered unknown ParseError variant; batch continues with placeholder \
                      INVALID_REF — this should never happen on a current doiget-core build"
                 );
-                inputs.push(format!("<unhandled parse error: {other}>"));
+                inputs.push(BatchEntry::Rejected {
+                    display: format!("<unhandled parse error: {other}>"),
+                    code: ErrorCode::InvalidRef,
+                    message: other.to_string(),
+                });
             }
         }
     }
@@ -195,7 +251,24 @@ pub async fn run_with_options(
     if dry_run {
         let store_root = resolve_store_root()?;
         let mut parse_errors: usize = 0;
-        for input in &inputs {
+        for entry in &inputs {
+            let input = match entry {
+                BatchEntry::Ref(input) => input,
+                BatchEntry::Rejected {
+                    display: shown,
+                    code,
+                    message,
+                } => {
+                    parse_errors += 1;
+                    tracing::warn!(
+                        input = %shown,
+                        error = %message,
+                        code = code.as_wire(),
+                        "skipping unfetchable batch entry in dry-run mode",
+                    );
+                    continue;
+                }
+            };
             match Ref::parse(input) {
                 Ok(ref_) => {
                     let plan = build_fetch_plan(&ref_, &store_root);
@@ -258,24 +331,40 @@ pub async fn run_with_options(
     // Skip delay before the very first fetch; apply between all subsequent ones.
     let mut is_first_spawn = true;
     loop {
-        let window: Vec<String> = remaining.by_ref().take(MCP_BATCH_MAX_SIZE).collect();
+        let window: Vec<BatchEntry> = remaining.by_ref().take(MCP_BATCH_MAX_SIZE).collect();
         if window.is_empty() {
             break;
         }
 
         let mut joins: tokio::task::JoinSet<TaskOutcome> = tokio::task::JoinSet::new();
-        for input in window {
-            let ref_ = match Ref::parse(&input) {
-                Ok(r) => r,
-                Err(e) => {
+        for entry in window {
+            // Either the parser already reached a verdict about this entry, or
+            // `Ref::parse` reaches one now. Both land in the SAME reporting
+            // block below -- which is the point: a verdict that is not
+            // `INVALID_REF` now survives to the caller instead of being
+            // laundered through a placeholder string.
+            let parsed = match entry {
+                BatchEntry::Ref(input) => match Ref::parse(&input) {
+                    Ok(r) => Ok((input, r)),
+                    Err(e) => Err((input, ErrorCode::InvalidRef, e.to_string())),
+                },
+                BatchEntry::Rejected {
+                    display,
+                    code,
+                    message,
+                } => Err((display, code, message)),
+            };
+            let (input, ref_) = match parsed {
+                Ok(pair) => pair,
+                Err((input, code, message)) => {
                     parse_errors += 1;
-                    failures.push((input.clone(), "INVALID_REF"));
+                    failures.push((input.clone(), code.as_wire()));
                     if json_mode {
-                        // #205: parse failures get an INVALID_REF JSONL line
-                        // with the human message in `error.message`. Per
-                        // ERRORS.md §3.1 there is no `denial_context` on
-                        // INVALID_REF (the input never reached a guard).
-                        emit_jsonl_failure(Some(&input), "INVALID_REF", &e.to_string());
+                        // #205: an unfetchable entry gets a JSONL line with the
+                        // human message in `error.message`. Per ERRORS.md §3.1
+                        // there is no `denial_context` on these -- the input
+                        // never reached a guard.
+                        emit_jsonl_failure(Some(&input), code.as_wire(), &message);
                     }
                     // Best-effort `Resolve` row capturing the parse failure;
                     // we do NOT abort the batch on a single bad line.
@@ -285,7 +374,7 @@ pub async fn run_with_options(
                         capability: Capability::Oa,
                         ref_: Some(&input),
                         source: None,
-                        error_code: Some("INVALID_REF"),
+                        error_code: Some(code.as_wire()),
                         size_bytes: None,
                         license: None,
                         store_path: None,
@@ -296,8 +385,9 @@ pub async fn run_with_options(
                     });
                     tracing::warn!(
                         %input,
-                        error = %e,
-                        "skipping malformed batch entry",
+                        error = %message,
+                        code = code.as_wire(),
+                        "skipping unfetchable batch entry",
                     );
                     continue;
                 }

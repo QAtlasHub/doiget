@@ -255,7 +255,6 @@ impl From<&FetchError> for crate::ErrorCode {
             // is treated as transient.
             FetchError::Http(HttpError::HttpStatus {
                 status: 404 | 410 | 451,
-                retry_after_ms: None,
                 ..
             }) => crate::ErrorCode::NotFound,
             FetchError::Http(HttpError::HttpStatus {
@@ -569,6 +568,31 @@ mod tests {
                 e,
                 ErrorCode::NotFound,
                 "status {status} should map to NotFound"
+            );
+        }
+        // ...and a `Retry-After` on that response does not change it. #506
+        // added `retry_after_ms` to this variant, and the arm above briefly
+        // matched `retry_after_ms: None`, which silently sent a 404 carrying
+        // the header to `NETWORK_ERROR` -- disposition `retry_after` -- so an
+        // agent was told to retry a DOI that will never resolve. The header
+        // says how long to wait IF you retry; it does not make an
+        // authoritative absence provisional.
+        for status in [404u16, 410, 451] {
+            let e: ErrorCode = FetchError::Http(HttpError::HttpStatus {
+                status,
+                retry_after_ms: Some(30_000),
+                url: "https://api.crossref.org/works/10.5555/absent".into(),
+            })
+            .into();
+            assert_eq!(
+                e,
+                ErrorCode::NotFound,
+                "status {status} with Retry-After is still NotFound"
+            );
+            assert_eq!(
+                e.disposition(),
+                crate::Disposition::Terminal,
+                "and stays terminal, so nothing tells the agent to retry it"
             );
         }
         // A non-HTTP authoritative absence (e.g. arXiv's empty Atom feed)

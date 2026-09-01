@@ -865,34 +865,41 @@ async fn fetch_paper_doi_with_no_oa_anywhere_reports_the_no_oa_url_route() -> an
     Ok(())
 }
 
-/// **`#[ignore]`d because it currently fails, and that is the finding.** The
-/// Tier-3 chain DOES fire -- the attempts row shows `tdm-aps` consulted -- and
-/// then:
+/// The Tier-3 TDM-fetched route, asserted end to end over MCP.
+///
+/// Written as an `#[ignore]`d reproduction first, because it failed with:
 ///
 /// ```text
 /// "detail": "network error: no allowlist registered for source tdm-aps"
 /// ```
 ///
-/// which is `HttpError::UnknownSource`: the source key is not in the client's
-/// map at all. `tier_3_allowlists()` is purely `#[cfg]`-gated and the MCP
+/// -- `HttpError::UnknownSource`, the source key absent from the client's map.
+/// That was diagnosed as "`tier_3_allowlists()` is `#[cfg]`-gated and the MCP
 /// server does extend its allowlists with it, so the two disagree somewhere
-/// between construction and use. That is #454's shape -- "Tier-3 allowlists
-/// never registered in the client" -- reachable again, and it is exactly the
-/// class of defect a route assertion exists to surface. Left as a
-/// reproduction rather than muted or worked around.
+/// between construction and use", i.e. #454's shape reachable again, and it was
+/// raised as something to decide before cutting a release.
+///
+/// The diagnosis was wrong, and wrong in this file's own subject matter: a
+/// statement accurate about the code and false about the world. Both client
+/// builders have two branches. The production branch does extend with
+/// `tier_3_allowlists()` and was correct throughout. The test-override branch
+/// -- taken whenever ANY `DOIGET_*_BASE` is set, which every wiremock test
+/// does -- built its allowlist from a fixed table of Tier-1/2 keys with no
+/// Tier-3 entry, so no e2e on either surface could reach this route. The
+/// defect was in the harness. Registering the Tier-3 keys there is what this
+/// test now proves, by passing.
+///
+/// What survives from that diagnosis, and is still true: `fetch_content` is
+/// implemented by APS alone. Elsevier, Springer and IEEE inherit the default
+/// `Ok(None)` and are metadata-only, so three of the four Tier-3 sources
+/// cannot reach the route the tier exists for. Read this as APS coverage, not
+/// as Tier-3 coverage.
 ///
 /// #462: the Tier-3 route, which had no assertion anywhere -- which is how
 /// #458, "the Tier-3 chain is skipped whenever Crossref answers", shipped.
-///
-/// Only `tdm-aps` can produce it. `fetch_content` is implemented by APS alone;
-/// Elsevier, Springer and IEEE inherit the default `Ok(None)` and are
-/// metadata-only, so three of the four Tier-3 sources cannot reach the route
-/// the tier exists for. Worth knowing before reading this as APS-specific
-/// coverage: it is the whole of it.
 #[cfg(feature = "tdm-aps")]
 #[tokio::test]
 #[serial_test::serial]
-#[ignore = "#462: reproduces `no allowlist registered for source tdm-aps` over MCP;             run with --ignored --features tdm-aps"]
 async fn fetch_paper_doi_served_by_the_publisher_reports_the_tdm_fetched_route(
 ) -> anyhow::Result<()> {
     use wiremock::matchers::{header, method, path};

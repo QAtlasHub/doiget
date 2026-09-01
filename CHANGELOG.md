@@ -8,9 +8,179 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `doiget-core` is the only crate with strict semver guarantees during the 0.x line; CLI
 flag changes and `doiget-mcp` tool spec changes will be called out explicitly here.
 
-## [Unreleased]
+## [0.8.13] - 2026-09-01
 
 ### Fixed
+
+- **[mcp] (breaking)** `doiget_batch_fetch` and `doiget_batch_from_bibliography`
+  reported a **refused paper as `INTERNAL_ERROR` and a 404 as `NETWORK_ERROR`**
+  (#538, review of #580).
+
+  `fetch_paper_fetch_error_envelope` shed a hand-rolled copy of
+  `From<&FetchError> for ErrorCode` this cycle -- the one ending in
+  `_ => InternalError`. Two verbatim copies of that match stayed behind in
+  `build_bibliography_envelope` and `batch_fetch_success_envelope`, one screen
+  below the fix. So the headline of this release, "an access refusal is not an
+  internal error", held on `doiget_fetch_paper` and on no other fetch surface:
+  `NotFound`, `Ambiguous` and the brand-new `NotRetrievable` all fell through
+  the wildcard, and every `Http` status collapsed to `NETWORK_ERROR`.
+
+  The last one is the damaging one. `disposition` is derived from the code, so
+  a 404 on a batch entry arrived as `retry_after` -- an agent told to keep
+  retrying a DOI that will never resolve, which is the exact failure
+  [ADR-0055](docs/DECISIONS/0055-error-disposition.md) exists to prevent. Both
+  sites call `ErrorCode::from(err)` now, and a test drives the real envelope
+  builders rather than a re-implementation of them.
+
+- **[cli] (breaking)** `doiget batch` reported a PMID-only bibliography entry as
+  `INVALID_REF` (#500).
+
+  The reporting half of #500 landed on `doiget verify` and the MCP bibliography
+  tool and not here. The verdict the parser reached was flattened into a
+  placeholder string (`<unsupported-PMID:...>`) and handed back to `Ref::parse`,
+  which has exactly one thing to say. So a PubMed-exported `.bib` record with a
+  valid `pmid` field was still reported as malformed -- the one claim #500
+  exists to stop doiget making -- and the message described the placeholder
+  rather than the entry. The verdict travels as a value now
+  (`BatchEntry::Rejected`), so it cannot be flattened, and the comment claiming
+  the two arms made "different claims" is no longer false.
+
+- **[cli/mcp] (breaking)** `GraphError::Source` mapped to `NETWORK_ERROR` on the
+  MCP surface and to the wrapped `FetchError` code on the CLI.
+
+  An OpenAlex 404 during citation-graph expansion was `NOT_FOUND` (terminal) on
+  `doiget graph` and `NETWORK_ERROR` (`retry_after`) on
+  `doiget_expand_citation_graph`. The CLI doc comment said the two "cannot say
+  different things about the same error". `From<&GraphError> for ErrorCode` now
+  lives beside the enum in `doiget-core`, and all three call sites -- the third
+  was an inline copy that did not even call the helper directly above it -- go
+  through it.
+
+- **[core]** A 404/410/451 carrying a `Retry-After` header was classified
+  `NETWORK_ERROR` (follow-up to #506).
+
+  Adding `retry_after_ms` to `HttpError::HttpStatus` also added
+  `retry_after_ms: None` to the arm that maps authoritative absences, narrowing
+  it without comment or test. The header says how long to wait *if* you retry;
+  it does not make a 404 provisional.
+
+- **[mcp] (breaking)** `doiget_paper_text` and `doiget_paper_tex_source` answered
+  a DOI with `NO_OA_AVAILABLE`, whose disposition is `needs_config`.
+
+  There is no config knob: the tools are arXiv-only and DOI-to-arXiv linking is
+  not built. `NOT_IMPLEMENTED` is terminal and is what `verify` and
+  `batch_from_bibliography` already give the same situation for PMIDs -- valid
+  input, absent support.
+
+- **[mcp] (breaking)** `doiget_resolve_citation`, `doiget_batch_resolve_citations`,
+  `doiget_tag` and `doiget_annotate` put a **bare string** in `error`, so a
+  caller had no `code` to branch on and no `disposition` to decide a retry from.
+  All thirteen sites build `error_object` now.
+
+  Section 3 of `docs/ERRORS.md` named `every_bare_string_error_site_is_a_known_one`
+  as the guard that kept that set from growing. **The guard did not exist.** The
+  document was accurate about the four tools and wrong about the mechanism
+  keeping the list honest -- a claim resting on code nobody had written, which
+  is the defect class that document defines. It exists now, the set it pins is
+  empty, and a second test fails if the document and the list ever disagree.
+
+- **[core]** `doiget config doctor --network` still adjudicated hosts with
+  `matches` rather than `permits` (#533).
+
+  The `permits` doc comment said "the four adjudication sites ... all route
+  through here so they cannot disagree". This was a fifth, and the one whose job
+  is explaining allowlist refusals: the moment a resolver host entered its probe
+  list, the command that diagnoses #533 would have reproduced it.
+
+- **[core]** CSL-JSON entries identified only by a PMID or PMCID reported "entry
+  has no DOI / arXiv id" (#500). The BibTeX parser learned the distinction; this
+  format did not, and it is the one a Zotero user is most likely to export.
+
+- **[cli]** `doiget search --mode json` emitted `{"ok": true, "total_results": 0}`
+  with no hint for an over-long query (#534). The fix landed on the MCP tool
+  only, so this surface went on emitting the exact envelope the issue was filed
+  about. `zero_result_hint` moved to `doiget-core`; both surfaces call it, and
+  human mode gets a `= note:` on stderr.
+
+- **[mcp]** `doiget_fetch_paper` logged `SessionEnd` as `result: "ok"` beside a
+  non-null `error_code` for a blocked PDF leg (#507). The clean-success rule of
+  the CLI was ported to the MCP surface in the `error_code` half only, so the
+  row contradicted itself for the one outcome the repeat suppression of #507 has
+  to be able to see. `FetchPaperOutcome::is_clean_success` is the single
+  boundary now.
+
+### Changed
+
+- **[test]** The Tier-3 TDM-fetched route is asserted end to end and no longer
+  `#[ignore]`d (#462).
+
+  It was shipped as a failing reproduction, diagnosed as
+  "`tier_3_allowlists()` is `#[cfg]`-gated and the MCP server does extend its
+  allowlists with it, so the two disagree somewhere between construction and
+  use" -- the shape of #454, reachable again -- and raised as something to
+  decide before cutting this release.
+
+  That diagnosis was wrong, in the subject matter of this very release:
+  accurate about the code, false about the world. Both client builders have two
+  branches. The production branch does extend with `tier_3_allowlists()` and was
+  correct throughout. The test-override branch -- taken whenever any
+  `DOIGET_*_BASE` is set, which every wiremock test does -- built its allowlist
+  from a fixed table of Tier-1/2 keys with no Tier-3 entry, so no e2e on either
+  surface could reach the route. The defect was in the harness. Registering the
+  Tier-3 keys there is what the test now proves by passing, and
+  `route_coverage_e2e` has no remaining `Gap`.
+
+  What survives from that diagnosis, and is still true: `fetch_content` is
+  implemented by APS alone, so three of the four Tier-3 sources cannot reach the
+  route the tier exists for. Read it as APS coverage, not Tier-3 coverage.
+
+- **[docs]** `Formula/doiget.rb` and `scripts/update-homebrew-formula.sh` said
+  the release workflow regenerates the formula "so this file cannot describe a
+  release that does not exist". No workflow calls the generator, and
+  `CONTRIBUTING.md` -- added in the same release -- says outright that it is not
+  automated. The headers describe the real process now.
+
+- **[ci]** The Homebrew posture check said it "fails on a hand-edit, a bad
+  checksum, or a tag/version confusion". It re-reads the version and the
+  checksums from the file under test, so a well-formed checksum carrying the
+  wrong value, and a version that is simply stale, both pass. The step now says
+  what it checks and what it does not.
+
+- **[ci]** New `release-tracking files name one version` posture check.
+  `Formula/doiget.rb`, `.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json` and `.mcp.json` all record the last
+  published stable, nothing held them together, and that is how `.claude-plugin`
+  sat at 0.8.11 while 0.8.12 was shipping. Forgetting one of the four is red;
+  pinning a prerelease is red.
+
+- **[plugin]** `.mcp.json` pins `doiget-cli@0.8.12` instead of resolving the npm
+  `latest` tag on every server start. The unpinned form also meant that opening
+  this repository in Claude Code ran the *published release* rather than the
+  working tree -- editing `crates/doiget-mcp` and testing the build from last
+  month. `just mcp-dev` registers this checkout as a local-scoped server
+  instead, and `CONTRIBUTING.md` says so rather than leaving `.mcp.json` to be
+  edited.
+
+- **[cli]** `verify` and `batch` wrote wire codes as string literals
+  (`"INVALID_REF"`, `"NOT_IMPLEMENTED"`) next to a doc comment rejecting exactly
+  that. They come from `ErrorCode::as_wire` now.
+
+- **[test]** The `#[ignore]` detector in `route_coverage_e2e` matched any text
+  containing `#[ignore` in the block above a test, so a doc comment *discussing*
+  an ignored test made it report that test as skipped. It reads attribute lines.
+
+- **[docs]** In `crates/doiget-mcp/src/lib.rs`, the doc comment for
+  `store_root_env_is_usable` had drifted onto `zero_result_hint`.
+
+- **[scripts]** `scripts/*.sh` are executable, and `CONTRIBUTING.md` no longer
+  documents a command that fails on a fresh Linux or macOS clone.
+
+- **[test]** In `npm/doiget-cli/test/stage-npm.test.sh`, a `grep` matching
+  nothing killed the script under `set -e` *before* the `check no` written to
+  report that case, so the diagnostic was unreachable in the one situation it
+  exists for.
+
+### Fixed (accumulated on `next` since 0.8.12)
 
 - **[store]** A default `metadata_only` re-write **downgraded a known
   `oa_status` and `license` to their not-determined markers**, and said nothing

@@ -1231,9 +1231,73 @@ pub async fn frontier_view(
 // Tests
 // ---------------------------------------------------------------------------
 
+/// Advice to attach to a paper search that matched nothing (#534).
+///
+/// OpenAlex free-text matching degrades sharply as a query lengthens: past
+/// roughly eight terms it returns nothing at all rather than a partial match.
+/// A human reading `0 results` shortens the query and tries again. An agent
+/// reading `ok: true` with an empty array reads it as a fact about the world
+/// and stops -- in the session that produced #534, eleven consecutive searches
+/// returned zero for papers a three-to-five term query then found immediately,
+/// and a known study was written off as unavailable.
+///
+/// Returns `None` for short queries: a zero-result two-term search really may
+/// mean the work is not indexed, and a hint on every empty result would train
+/// readers to skip it.
+///
+/// Lives here rather than on either front end because both surfaces call
+/// [`paper_search`] and both can return the empty envelope. The first fix
+/// landed only on the MCP tool, so `doiget search --mode json` went on
+/// emitting the exact envelope #534 was filed about.
+#[must_use]
+pub fn zero_result_hint(query: &str) -> Option<String> {
+    // Where OpenAlex free-text matching starts failing outright. Not a hard
+    // boundary -- a bound observed from the queries in #534, which is why the
+    // wording says "roughly".
+    const DEGRADES_PAST: usize = 8;
+
+    let terms = query.split_whitespace().count();
+    if terms <= DEGRADES_PAST {
+        return None;
+    }
+    Some(format!(
+        "This query has {terms} terms. OpenAlex free-text matching degrades sharply past roughly {DEGRADES_PAST} and returns nothing rather than a partial match, so zero results here is more likely to be about the query than about the literature. Retry with 3-5 distinctive terms - an author surname, a coined phrase, the distinguishing noun - before concluding the work is not indexed."
+    ))
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
+    /// #534: a long query matching nothing is far more likely to be a
+    /// query-length problem than an absent literature, and the agent reading
+    /// the envelope is the one who cannot tell the difference.
+    #[test]
+    fn a_long_zero_result_query_is_told_why_it_may_be_zero() {
+        let q = "lithium refractoriness after discontinuation kindling sensitization course of illness Post";
+        let hint = zero_result_hint(q).expect("10 terms is past the threshold");
+        assert!(hint.contains("10 terms"), "names the count: {hint}");
+        assert!(
+            hint.contains("3-5"),
+            "says what to do instead, not only what went wrong: {hint}"
+        );
+    }
+
+    /// A short query returning nothing may genuinely mean nothing is indexed.
+    /// Hinting on every empty result would teach readers to skip the hint.
+    #[test]
+    fn a_short_zero_result_query_is_left_alone() {
+        assert!(zero_result_hint("depersonalization derealization").is_none());
+        assert!(zero_result_hint("").is_none());
+    }
+
+    /// The threshold counts terms, not characters: one very long term is still
+    /// one term, and "shorten it" is not the advice to give.
+    #[test]
+    fn the_threshold_counts_terms_not_length() {
+        assert!(zero_result_hint(&"a".repeat(400)).is_none());
+        assert!(zero_result_hint("a b c d e f g h i").is_some());
+    }
+
     use super::*;
 
     use std::sync::Arc;

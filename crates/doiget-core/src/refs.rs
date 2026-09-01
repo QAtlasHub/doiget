@@ -382,7 +382,64 @@ fn parse_csl_entry(
             }
         }
     }
+    // #500, CSL-JSON half. The BibTeX parser learned to say "this entry HAS an
+    // identifier I cannot use" and this one did not, so the same PubMed record
+    // exported as CSL-JSON still got "entry has no DOI / arXiv id" -- the claim
+    // #500 exists to stop doiget making, surviving in the format a Zotero user
+    // is most likely to hand it.
+    if let Some((kind, value)) = csl_unsupported_identifier(entry) {
+        return Err(ParseError::UnsupportedIdentifier {
+            kind,
+            value,
+            entry_key,
+        });
+    }
     Err(ParseError::NoIdentifier { entry_key })
+}
+
+/// The CSL-JSON counterpart of [`unsupported_identifier`]: an identifier
+/// doiget recognises and cannot resolve yet (#500).
+///
+/// CSL-JSON has no standard PMID field, so exporters improvise. Zotero writes
+/// `PMID: 9659853` into `note`; some tools emit a top-level `PMID` key. Both
+/// are checked, and the note scan mirrors the arXiv one directly above it.
+fn csl_unsupported_identifier(entry: &serde_json::Value) -> Option<(&'static str, String)> {
+    let direct = |name: &str| -> Option<String> {
+        let v = entry.get(name)?;
+        let s = match v {
+            serde_json::Value::String(s) => s.trim().to_string(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => return None,
+        };
+        (!s.is_empty()).then_some(s)
+    };
+    for (field, kind) in [
+        ("PMID", "PMID"),
+        ("pmid", "PMID"),
+        ("PMCID", "PMCID"),
+        ("pmcid", "PMCID"),
+    ] {
+        if let Some(v) = direct(field) {
+            return Some((kind, v));
+        }
+    }
+
+    // Zotero's `note` carries `PMID: 9659853` / `PMCID: PMC1234567`.
+    let note = entry.get("note").and_then(|v| v.as_str())?;
+    for (needle, kind) in [("pmcid:", "PMCID"), ("pmid:", "PMID")] {
+        let lower = note.to_ascii_lowercase();
+        if let Some(at) = lower.find(needle) {
+            let value: String = note[at + needle.len()..]
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            if !value.is_empty() {
+                return Some((kind, value));
+            }
+        }
+    }
+    None
 }
 
 /// Parse a BibTeX / BibLaTeX document via the `biblatex` crate
@@ -525,6 +582,61 @@ fn arxiv_eligible(entry: &biblatex::Entry) -> bool {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
+    /// #500, CSL-JSON. The BibTeX parser learned to distinguish "has no
+    /// identifier" from "has one I cannot use"; this format did not, so the
+    /// same PubMed record exported from Zotero still got the claim #500 exists
+    /// to prevent -- in the format a Zotero user is most likely to hand over.
+    #[test]
+    fn a_csl_entry_identified_only_by_a_pmid_is_not_missing_an_identifier() {
+        let doc = r#"[{"id":"Smith2020","type":"article-journal","PMID":"9659853"}]"#;
+        let out = parse_csl_json(doc);
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            Err(ParseError::UnsupportedIdentifier { kind, value, .. }) => {
+                assert_eq!(*kind, "PMID");
+                assert_eq!(value, "9659853");
+            }
+            other => panic!("expected UnsupportedIdentifier, got {other:?}"),
+        }
+    }
+
+    /// Zotero does not emit a top-level `PMID`; it writes it into `note`.
+    /// A checker that only looked at the field would have missed the exporter
+    /// that produces most of these files.
+    #[test]
+    fn a_csl_note_carrying_a_pmid_is_read_the_same_way() {
+        let doc = r#"[{"id":"S","type":"article-journal","note":"PMID: 9659853; see PubMed"}]"#;
+        match &parse_csl_json(doc)[0] {
+            Err(ParseError::UnsupportedIdentifier { kind, value, .. }) => {
+                assert_eq!(*kind, "PMID");
+                assert_eq!(value, "9659853");
+            }
+            other => panic!("expected UnsupportedIdentifier, got {other:?}"),
+        }
+    }
+
+    /// A numeric PMID must not be coerced into anything, and a DOI alongside
+    /// one still wins: the check runs only after every supported identifier
+    /// has been tried.
+    #[test]
+    fn a_csl_doi_still_wins_over_a_pmid() {
+        let doc = r#"[{"id":"S","type":"article-journal","DOI":"10.1234/x","PMID":9659853}]"#;
+        let parsed = parse_csl_json(doc);
+        let entry = parsed[0].as_ref().expect("the DOI must still win");
+        assert_eq!(entry.ref_.as_input_str(), "10.1234/x");
+    }
+
+    /// An entry with genuinely nothing must keep saying so -- the new check
+    /// must not turn every unidentifiable entry into "unsupported".
+    #[test]
+    fn a_csl_entry_with_no_identifier_at_all_still_says_so() {
+        let doc = r#"[{"id":"S","type":"article-journal","title":"No ids here"}]"#;
+        assert!(matches!(
+            &parse_csl_json(doc)[0],
+            Err(ParseError::NoIdentifier { .. })
+        ));
+    }
+
     use super::*;
 
     // ---- detect_format ---------------------------------------------

@@ -287,9 +287,47 @@ jobs:
         shell: bash
         # `Formula/doiget.rb` is generated from a release's published `.sha256`
         # assets. #247 was closed as completed while four fifths of it had not
-        # shipped, so the formula is asserted rather than trusted: this fails on
-        # a hand-edit, a bad checksum, or a tag/version confusion.
+        # shipped, so the formula is asserted rather than trusted.
+        #
+        # What this fails on: a hand-edit, a MALFORMED checksum, a `v`-prefixed
+        # version. What it CANNOT fail on, because it re-reads the version and
+        # the checksums from the very file under test: a well-formed checksum
+        # carrying the wrong value, or a version that is simply stale. It said
+        # it caught "a bad checksum" and it does not -- nothing here reaches the
+        # published `.sha256` assets, offline being the point. The stale-version
+        # half is covered by the release-sync check below; a wrong-value
+        # checksum is caught by `brew install` and by nothing before it.
         run: bash scripts/update-homebrew-formula.test.sh
+
+      - name: release-tracking files name one version (#501, #511)
+        shell: bash
+        # Four files record "the last published stable", and a stable release
+        # bumps all four in one maintainer step. Nothing used to hold them
+        # together, which is how `.claude-plugin/*` sat at 0.8.11 while 0.8.12
+        # was the shipped release. Forgetting the step is the only way the
+        # Homebrew formula or the plugin's pinned server can go stale, so this
+        # makes forgetting it red.
+        run: |
+          set -euo pipefail
+          formula=$(grep -oE '^  version "[^"]+"' Formula/doiget.rb | grep -oE '[0-9][^"]*')
+          plugin=$(grep -oE '"version": *"[^"]+"' .claude-plugin/plugin.json | grep -oE '[0-9][^"]*')
+          market=$(grep -oE '"version": *"[^"]+"' .claude-plugin/marketplace.json | grep -oE '[0-9][^"]*')
+          pinned=$(grep -oE '"doiget-cli@[^"]+"' .mcp.json | grep -oE '[0-9][^"]*')
+          echo "formula=$formula plugin=$plugin marketplace=$market .mcp.json=$pinned"
+          for v in "$plugin" "$market" "$pinned"; do
+            if [ "$v" != "$formula" ]; then
+              echo "::error::posture-lint release-sync: release-tracking files disagree. Bump Formula/doiget.rb, .claude-plugin/plugin.json, .claude-plugin/marketplace.json and .mcp.json together (CONTRIBUTING.md, 'one step after a stable release')"
+              exit 1
+            fi
+          done
+          # An unpublished pin would send every plugin user to a 404.
+          case "$pinned" in
+            *-beta.*|*-rc.*)
+              echo "::error::posture-lint release-sync: .mcp.json pins a prerelease ($pinned); the plugin must point at a published stable"
+              exit 1
+              ;;
+          esac
+          echo "release-tracking files agree on $formula"
 
       - name: npm packaging tests (#511)
         shell: bash

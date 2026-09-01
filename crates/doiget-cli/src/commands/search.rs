@@ -260,6 +260,14 @@ async fn run_external(
     // year / OA / DOI / title. Tab-separated, `cut(1)`-compatible.
     writeln!(out, "cited_by\tyear\toa\tdoi\ttitle")
         .context("failed to write search header to stdout")?;
+    // #534, human half: a header with no rows under it says "not indexed" just
+    // as flatly as the JSON envelope did. The note goes to stderr so the table
+    // on stdout stays `cut(1)`-clean (ADR-0001).
+    if results.results.is_empty() {
+        if let Some(hint) = doiget_core::discovery::zero_result_hint(query) {
+            print_err(format_args!("  = note: {hint}"));
+        }
+    }
     for hit in &results.results {
         let year = dash_or(hit.year);
         let oa = hit.oa_status.as_deref().unwrap_or("-");
@@ -299,14 +307,25 @@ fn local_envelope(query: &str, entries: &[EntryInfo]) -> serde_json::Value {
 /// `{ ok, scope, query, total_results, count, results }`. Extracted as a pure
 /// function so the wire shape is unit-testable without capturing stdout.
 fn external_envelope(query: &str, results: &PaperSearchResults) -> serde_json::Value {
-    serde_json::json!({
+    let mut envelope = serde_json::json!({
         "ok": true,
         "scope": "external",
         "query": query,
         "total_results": results.total_results,
         "count": results.results.len(),
         "results": results.results,
-    })
+    });
+    // #534. `{"ok": true, "total_results": 0}` is a success envelope, so
+    // nothing in the error machinery reaches it, and a script or agent reading
+    // it takes zero results as a fact about the literature and stops. The fix
+    // first landed on the MCP tool only -- this surface went on emitting the
+    // exact envelope the issue was filed about, byte for byte.
+    if results.results.is_empty() {
+        if let Some(hint) = doiget_core::discovery::zero_result_hint(query) {
+            envelope["hint"] = serde_json::json!(hint);
+        }
+    }
+    envelope
 }
 
 /// Pretty-serialize a JSON value and write it as one line to `out`. Shared

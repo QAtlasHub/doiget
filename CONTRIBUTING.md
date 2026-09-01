@@ -216,28 +216,55 @@ is the binding spec and full runbook. Summary:
   to the fixed commit (the pipeline runs the workflow/scripts *as of the
   tagged tree*). Do not reintroduce a perpetual "release PR".
 
-### Homebrew: one step after a stable release
+### One step after a stable release
 
-`Formula/doiget.rb` pins the release binaries by `sha256`, and those checksums
-do not exist until the release has published its assets. So the formula lags
-the tag by one commit, on purpose, and closing that gap is a maintainer step:
+Four files record *the last published stable*, and none of them can be written
+before the release exists: `Formula/doiget.rb` pins the binaries by `sha256`,
+and `.mcp.json` pins the npm version the plugin runs. So they lag the tag by
+one commit, on purpose, and closing that gap is a single maintainer step:
 
 ```sh
-scripts/update-homebrew-formula.sh 0.8.12      # reads the release's .sha256 assets
-bash scripts/update-homebrew-formula.test.sh   # the same check CI runs
-git commit -s Formula/doiget.rb -m "chore(homebrew): formula for 0.8.12"
+bash scripts/update-homebrew-formula.sh 0.8.13   # reads the release's .sha256 assets
+# then set 0.8.13 in all three of:
+#   .claude-plugin/plugin.json        "version"
+#   .claude-plugin/marketplace.json   "version"
+#   .mcp.json                         args: doiget-cli@0.8.13
+bash scripts/update-homebrew-formula.test.sh     # the same check CI runs
+git commit -s -m "chore(release): tracking files for 0.8.13" -- Formula/doiget.rb .claude-plugin .mcp.json
 ```
 
-Only for **stable** releases. Beta tags are not published to the tap.
+Only for **stable** releases. Beta tags are not published to the tap, and the
+plugin must never pin a prerelease -- posture-lint fails on both.
 
 It is not automated, and that is a decision rather than an omission: committing
-the formula back from the release workflow needs a token with write access to a
+these back from the release workflow needs a token with write access to a
 protected branch, and that token is exactly what
 [#426](https://github.com/QAtlasHub/doiget/issues/426) says is broken. Building
 the tap's correctness on a known-broken token would be worse than a documented
-step. The generator plus `update-homebrew-formula.test.sh` mean the step cannot
-be done *wrong* -- a hand-edit, a bad checksum, or a `v`-prefixed version all
-fail CI -- only forgotten, which `brew info doiget` makes visible.
+step.
+
+What CI does enforce, so the step cannot be done *wrong* or half-done:
+
+- `update-homebrew-formula.test.sh` fails on a hand-edit, a malformed
+  checksum, or a `v`-prefixed version. It does **not** reach the published
+  `.sha256` assets (it is deliberately offline), so it cannot see a
+  well-formed checksum carrying the wrong value.
+- The `release-tracking files name one version` posture check fails when the
+  four files disagree. Bumping three and forgetting the fourth is red;
+  forgetting all four is not, which is what `brew info doiget` is for.
+
+### Running the MCP server from your working tree
+
+`.mcp.json` is the plugin's server declaration, so it pins the last published
+release. Opening this repo in Claude Code therefore runs *the release*, not
+your checkout -- you can edit `crates/doiget-mcp` and be testing the version
+you shipped last month. Do not edit `.mcp.json` to work around that; a
+local-scoped server takes precedence over the project-scoped file:
+
+```sh
+just mcp-dev        # registers this checkout's build as `doiget-dev`
+just mcp-dev-off    # removes it again
+```
 
 ### npm: the one-time bootstrap
 

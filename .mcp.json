@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "doiget-cli",
+        "doiget-cli@0.8.12",
         "serve"
       ]
     }

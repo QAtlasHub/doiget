@@ -1165,6 +1165,21 @@ pub struct FetchPaperOutcome {
 }
 
 impl FetchPaperOutcome {
+    /// `true` when this outcome is a success with nothing withheld.
+    ///
+    /// A `Blocked` PDF leg is an `Ok` outcome whose payload was refused, so
+    /// `Result::is_ok` alone calls it a clean success. Both front ends need
+    /// the same boundary and had drifted: the CLI special-cased `Blocked`
+    /// for its exit code and its `SessionEnd` row, the MCP server only for
+    /// the row's `error_code`, so `doiget_fetch_paper` logged
+    /// `result: "ok"` beside a non-null code -- a self-contradictory row for
+    /// the one outcome an agent is most likely to retry, and the outcome
+    /// #507's repeat suppression has to be able to see.
+    #[must_use]
+    pub fn is_clean_success(&self) -> bool {
+        !matches!(self.pdf_leg, PdfLegStatus::Blocked { .. })
+    }
+
     /// Test-only constructor for downstream crates (`doiget-cli`,
     /// `doiget-mcp`) that need to drive classification / rendering
     /// logic without running the full orchestrator. Produces a
@@ -2882,6 +2897,22 @@ pub struct BatchResultEntry {
 pub struct BatchOutcome {
     /// One entry per supplied ref, in input order.
     pub results: Vec<BatchResultEntry>,
+}
+
+impl BatchOutcome {
+    /// Test-only constructor for downstream crates, mirroring
+    /// [`FetchPaperOutcome::for_test_synthetic`].
+    ///
+    /// `BatchOutcome` is `#[non_exhaustive]`, so `doiget-mcp` cannot build one
+    /// to drive its envelope builders -- which is part of why the two batch
+    /// tools' error mapping went untested long enough to drift (#538).
+    ///
+    /// `#[doc(hidden)]`: not a stable public API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn for_test_synthetic(results: Vec<BatchResultEntry>) -> Self {
+        Self { results }
+    }
 }
 
 /// Iterate over `refs` through [`fetch_paper`], collecting one

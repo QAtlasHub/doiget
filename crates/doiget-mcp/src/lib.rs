@@ -658,14 +658,16 @@ impl Server {
 
         let outcome = core_fetch_paper(&ref_, &self.profile, &ctx, &store, &store_root).await;
 
-        let session_ok = outcome.is_ok();
         // #507, second surface. `core_fetch_paper` returns `Ok` with a FAILED
-        // leg when an OA URL was found and refused, so `outcome.err()` is
-        // `None` and the row would say the call succeeded with no error code
-        // -- for the one outcome an agent is most likely to retry. The CLI
-        // sibling special-cases exactly this (`commands/fetch.rs`); the MCP
-        // path did not, so the same fix landed on one surface and not the
-        // other. Found by review of this change.
+        // leg when an OA URL was found and refused, so `Result::is_ok` alone
+        // calls that a clean success -- for the one outcome an agent is most
+        // likely to retry. The CLI sibling special-cases exactly this; the
+        // first pass at this fix ported only the `error_code` half below, so
+        // the row said `result: "ok"` AND carried a code. Both halves now go
+        // through `FetchPaperOutcome::is_clean_success`.
+        let session_ok = outcome
+            .as_ref()
+            .is_ok_and(FetchPaperOutcome::is_clean_success);
         let blocked_code = match outcome.as_ref() {
             Ok(o) => match &o.pdf_leg {
                 doiget_core::orchestrator::PdfLegStatus::Blocked { code, .. } => {
@@ -1478,7 +1480,7 @@ impl Server {
                 // so at the exact point an agent would otherwise conclude
                 // absence.
                 if results.results.is_empty() {
-                    if let Some(hint) = zero_result_hint(&input.query) {
+                    if let Some(hint) = doiget_core::discovery::zero_result_hint(&input.query) {
                         envelope["hint"] = json!(hint);
                     }
                 }
@@ -1525,7 +1527,16 @@ impl Server {
             Ok(doiget_core::Ref::Doi(_)) => {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
-                    ErrorCode::NoOaAvailable,
+                    // Not `NO_OA_AVAILABLE`. That code's disposition is
+                    // `needs_config` -- "a named change makes it" -- and there
+                    // is no config knob here: this tool is arXiv-only and
+                    // DOI to arXiv linking is not built. `NOT_IMPLEMENTED` is
+                    // terminal and says the true thing (ERRORS.md: "wait for
+                    // next minor release; do not retry"), and it is the code
+                    // `verify` / `batch_from_bibliography` already give the
+                    // same situation for PMIDs (#500): valid input, absent
+                    // support.
+                    ErrorCode::NotImplemented,
                     "no full-text source for a DOI — pass the arXiv id if a preprint exists \
                      (DOI→arXiv linking is #281 item 5)",
                 )));
@@ -1644,7 +1655,9 @@ impl Server {
             Ok(doiget_core::Ref::Doi(_)) => {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
-                    ErrorCode::NoOaAvailable,
+                    // Same reasoning as `doiget_paper_text` above: absent
+                    // support, not absent open access.
+                    ErrorCode::NotImplemented,
                     "no TeX source for a DOI — pass the arXiv id if a preprint exists",
                 )));
             }
@@ -2182,21 +2195,11 @@ impl Server {
                     "truncated": graph.truncated,
                     "total_visited": graph.total_visited,
                 }))),
+                // Was a third copy of the same match, inline, which did not
+                // even call the helper directly above it.
                 Err(e) => Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
-                    match &e {
-                        doiget_core::citation_graph::GraphError::CapabilityDenied => {
-                            ErrorCode::CapabilityDenied
-                        }
-                        doiget_core::citation_graph::GraphError::SeedNotIndexed => {
-                            ErrorCode::NoOaAvailable
-                        }
-                        doiget_core::citation_graph::GraphError::Log(_) => ErrorCode::LogError,
-                        doiget_core::citation_graph::GraphError::Source(_) => {
-                            ErrorCode::NetworkError
-                        }
-                        _ => ErrorCode::InternalError,
-                    },
+                    graph_error_code(&e),
                     &format!("citation graph expansion failed: {e}"),
                 ))),
             }
@@ -2281,7 +2284,10 @@ impl Server {
             Err(e) => {
                 return Ok(CallToolResult::structured(serde_json::json!({
                     "ok": false,
-                    "error": format!("context initialization failed: {e}"),
+                    "error": error_object(
+                        ErrorCode::InternalError,
+                        format!("context initialization failed: {e}"),
+                    ),
                 })));
             }
         };
@@ -2291,7 +2297,7 @@ impl Server {
             Err(e) => {
                 return Ok(CallToolResult::structured(serde_json::json!({
                     "ok": false,
-                    "error": e,
+                    "error": error_object(ErrorCode::CapabilityDenied, e),
                 })));
             }
         };
@@ -2307,7 +2313,7 @@ impl Server {
             }))),
             Err(e) => Ok(CallToolResult::structured(serde_json::json!({
                 "ok": false,
-                "error": format!("resolve failed: {e}"),
+                "error": error_object(ErrorCode::from(&e), format!("resolve failed: {e}")),
             }))),
         }
     }
@@ -2334,7 +2340,10 @@ impl Server {
         if input.queries.len() > 50 {
             return Ok(CallToolResult::structured(serde_json::json!({
                 "ok": false,
-                "error": "At most 50 queries per call.",
+                "error": error_object(
+                    ErrorCode::InvalidRef,
+                    "At most 50 queries per call.",
+                ),
             })));
         }
 
@@ -2343,7 +2352,10 @@ impl Server {
             Err(e) => {
                 return Ok(CallToolResult::structured(serde_json::json!({
                     "ok": false,
-                    "error": format!("context initialization failed: {e}"),
+                    "error": error_object(
+                        ErrorCode::InternalError,
+                        format!("context initialization failed: {e}"),
+                    ),
                 })));
             }
         };
@@ -2353,7 +2365,7 @@ impl Server {
             Err(e) => {
                 return Ok(CallToolResult::structured(serde_json::json!({
                     "ok": false,
-                    "error": e,
+                    "error": error_object(ErrorCode::CapabilityDenied, e),
                 })));
             }
         };
@@ -2370,7 +2382,10 @@ impl Server {
                 Err(e) => {
                     results.push(serde_json::json!({
                         "query": query,
-                        "error": format!("resolve failed: {e}"),
+                        "error": error_object(
+                            ErrorCode::from(&e),
+                            format!("resolve failed: {e}"),
+                        ),
                     }));
                 }
             }
@@ -2444,7 +2459,10 @@ impl Server {
             Ok(None) => {
                 return Ok(CallToolResult::structured(json!({
                     "ok": false,
-                    "error": format!("no store entry for {}; fetch the paper first", input.ref_),
+                    "error": error_object(
+                        ErrorCode::NotFound,
+                        format!("no store entry for {}; fetch the paper first", input.ref_),
+                    ),
                 })));
             }
             Err(e) => {
@@ -2461,7 +2479,10 @@ impl Server {
             None => {
                 return Ok(CallToolResult::structured(json!({
                     "ok": false,
-                    "error": format!("entry {} has no [doiget] table; fetch it first", input.ref_),
+                    "error": error_object(
+                        ErrorCode::NotFound,
+                        format!("entry {} has no [doiget] table; fetch it first", input.ref_),
+                    ),
                 })));
             }
         };
@@ -2562,7 +2583,10 @@ impl Server {
             Ok(None) => {
                 return Ok(CallToolResult::structured(json!({
                     "ok": false,
-                    "error": format!("no store entry for {}; fetch the paper first", input.ref_),
+                    "error": error_object(
+                        ErrorCode::NotFound,
+                        format!("no store entry for {}; fetch the paper first", input.ref_),
+                    ),
                 })));
             }
             Err(e) => {
@@ -2579,7 +2603,10 @@ impl Server {
             None => {
                 return Ok(CallToolResult::structured(json!({
                     "ok": false,
-                    "error": format!("entry {} has no [doiget] table; fetch it first", input.ref_),
+                    "error": error_object(
+                        ErrorCode::NotFound,
+                        format!("entry {} has no [doiget] table; fetch it first", input.ref_),
+                    ),
                 })));
             }
         };
@@ -2590,14 +2617,20 @@ impl Server {
             if text.is_empty() {
                 return Ok(CallToolResult::structured(json!({
                     "ok": false,
-                    "error": "annotation text must not be empty; set clear:true to remove it",
+                    "error": error_object(
+                        ErrorCode::InvalidRef,
+                        "annotation text must not be empty; set clear:true to remove it",
+                    ),
                 })));
             }
             ext.annotation = Some(text.clone());
         } else {
             return Ok(CallToolResult::structured(json!({
                 "ok": false,
-                "error": "provide 'text' to set an annotation, or 'clear: true' to remove it",
+                "error": error_object(
+                    ErrorCode::InvalidRef,
+                    "provide 'text' to set an annotation, or 'clear: true' to remove it",
+                ),
             })));
         }
 
@@ -3231,14 +3264,11 @@ fn entry_info_to_json(entry: &EntryInfo) -> Value {
 /// cannot say different things about the same error.
 #[cfg(feature = "citation")]
 fn graph_error_code(e: &doiget_core::citation_graph::GraphError) -> ErrorCode {
-    use doiget_core::citation_graph::GraphError;
-    match e {
-        GraphError::CapabilityDenied => ErrorCode::CapabilityDenied,
-        GraphError::SeedNotIndexed => ErrorCode::NoOaAvailable,
-        GraphError::Log(_) => ErrorCode::LogError,
-        GraphError::Source(_) => ErrorCode::NetworkError,
-        _ => ErrorCode::InternalError,
-    }
+    // Delegate. This copy flattened `Source(_)` to `NETWORK_ERROR`, so an
+    // OpenAlex 404 during expansion arrived here as `retry_after` while the
+    // CLI called the same condition `NOT_FOUND` -- one error, two answers,
+    // and the retriable one was wrong.
+    ErrorCode::from(e)
 }
 
 /// The `error` object every failure envelope carries (#506).
@@ -3695,16 +3725,16 @@ fn build_bibliography_envelope(
                 "pdf":              pdf_leg_json(&outcome.pdf_leg),
             }),
             Err(err) => {
-                let code: ErrorCode = match err {
-                    FetchError::NotEligible { .. } => ErrorCode::CapabilityDenied,
-                    FetchError::NoOaAvailable => ErrorCode::NoOaAvailable,
-                    FetchError::Http(_) => ErrorCode::NetworkError,
-                    FetchError::Log(_) => ErrorCode::LogError,
-                    FetchError::InvalidRef(_) => ErrorCode::InvalidRef,
-                    FetchError::SourceSchema { .. } => ErrorCode::InternalError,
-                    FetchError::TooManyRefs { .. } => ErrorCode::InvalidRef,
-                    _ => ErrorCode::InternalError,
-                };
+                // Delegate, do not re-implement (#538). This was the same
+                // hand-rolled copy `fetch_paper_fetch_error_envelope` shed one
+                // screen up, left behind on the two batch tools: ending in
+                // `_ => InternalError` it reported `NotFound`, `Ambiguous` and
+                // -- once #538 landed -- `NotRetrievable` as internal errors,
+                // and collapsed every `Http` status to `NETWORK_ERROR`, so a
+                // 404 told an agent to retry a DOI that will never resolve.
+                // `disposition` is derived from this code below, so a wrong
+                // code was also a wrong disposition.
+                let code: ErrorCode = ErrorCode::from(err);
                 let denial: Option<DenialContext> = err.into();
                 let mut error_obj = serde_json::Map::new();
                 error_obj.insert("code".into(), json!(code));
@@ -3803,16 +3833,16 @@ fn batch_fetch_success_envelope(
                 "pdf": pdf_leg_json(&outcome.pdf_leg),
             }),
             Err(err) => {
-                let code: ErrorCode = match err {
-                    FetchError::NotEligible { .. } => ErrorCode::CapabilityDenied,
-                    FetchError::NoOaAvailable => ErrorCode::NoOaAvailable,
-                    FetchError::Http(_) => ErrorCode::NetworkError,
-                    FetchError::Log(_) => ErrorCode::LogError,
-                    FetchError::InvalidRef(_) => ErrorCode::InvalidRef,
-                    FetchError::SourceSchema { .. } => ErrorCode::InternalError,
-                    FetchError::TooManyRefs { .. } => ErrorCode::InvalidRef,
-                    _ => ErrorCode::InternalError,
-                };
+                // Delegate, do not re-implement (#538). This was the same
+                // hand-rolled copy `fetch_paper_fetch_error_envelope` shed one
+                // screen up, left behind on the two batch tools: ending in
+                // `_ => InternalError` it reported `NotFound`, `Ambiguous` and
+                // -- once #538 landed -- `NotRetrievable` as internal errors,
+                // and collapsed every `Http` status to `NETWORK_ERROR`, so a
+                // 404 told an agent to retry a DOI that will never resolve.
+                // `disposition` is derived from this code below, so a wrong
+                // code was also a wrong disposition.
+                let code: ErrorCode = ErrorCode::from(err);
                 let denial: Option<DenialContext> = err.into();
                 let mut error_obj = serde_json::Map::new();
                 error_obj.insert("code".into(), json!(code));
@@ -4031,6 +4061,14 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     // `DOIGET_ARXIV_BASE` is absent.
     let arxiv_src = std::env::var("DOIGET_ARXIV_SRC_BASE").ok();
 
+    #[cfg(feature = "tdm-aps")]
+    let tdm_aps = std::env::var("DOIGET_APS_BASE").ok();
+    #[cfg(feature = "tdm-elsevier")]
+    let tdm_elsevier = std::env::var("DOIGET_ELSEVIER_BASE").ok();
+    #[cfg(feature = "tdm-springer")]
+    let tdm_springer = std::env::var("DOIGET_SPRINGER_BASE").ok();
+    #[cfg(feature = "tdm-ieee")]
+    let tdm_ieee = std::env::var("DOIGET_IEEE_BASE").ok();
     if arxiv.is_none()
         && arxiv_src.is_none()
         && crossref.is_none()
@@ -4122,8 +4160,30 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     // When DOIGET_ARXIV_BASE is set use it; otherwise fall back to
     // DOIGET_ARXIV_SRC_BASE (they share the "arxiv" HTTP source key).
     let arxiv_entry = arxiv.as_deref().or(arxiv_src.as_deref());
+    // Tier-3 test bases. A wiremock e2e could not reach the TDM-fetched
+    // route at all before this: the override branch built its allowlist
+    // from a fixed table of Tier-1/2 keys, so `tdm-aps` was simply not in
+    // the client's map and every attempt died as
+    // `no allowlist registered for source tdm-aps`. That was read as
+    // "#454's shape, reachable again" and filed as a possible production
+    // regression -- the production branch above extends with
+    // `tier_3_allowlists()` and was correct all along. The defect was
+    // here, in the harness, which is why only a route assertion found it.
+    //
+    // Not added to the production-branch test above on purpose: setting
+    // only `DOIGET_APS_BASE` (which `tdm_ieee.rs` documents as a way to
+    // replay a recorded fixture) must NOT drop the process into the
+    // allow-http test client.
     for (source, base) in [
         ("arxiv", arxiv_entry),
+        #[cfg(feature = "tdm-aps")]
+        ("tdm-aps", tdm_aps.as_deref()),
+        #[cfg(feature = "tdm-elsevier")]
+        ("tdm-elsevier", tdm_elsevier.as_deref()),
+        #[cfg(feature = "tdm-springer")]
+        ("tdm-springer", tdm_springer.as_deref()),
+        #[cfg(feature = "tdm-ieee")]
+        ("tdm-ieee", tdm_ieee.as_deref()),
         ("crossref", crossref.as_deref()),
         ("unpaywall", unpaywall.as_deref()),
         ("oa-publisher", oa_publisher.as_deref()),
@@ -4253,34 +4313,6 @@ impl ServerHandler for Server {
 /// an unexpanded `${...}` placeholder. A Desktop-Extension config left blank
 /// passes the literal `${user_config.store_root}`, which must never become a
 /// filesystem path (it produced `os error 5` access-denied). See #369.
-/// Advice to attach to a `doiget_paper_search` that matched nothing (#534).
-///
-/// OpenAlex free-text matching degrades sharply as a query lengthens: past
-/// roughly eight terms it returns nothing at all rather than a partial match.
-/// A human reading `0 results` shortens the query and tries again. An agent
-/// reading `ok: true` with an empty array reads it as a fact about the world
-/// and stops -- in the session that produced #534, eleven consecutive searches
-/// returned zero for papers a three-to-five term query then found immediately,
-/// and a known study was written off as unavailable.
-///
-/// Returns `None` for short queries: a zero-result two-term search really may
-/// mean the work is not indexed, and a hint on every empty result would train
-/// readers to skip it.
-fn zero_result_hint(query: &str) -> Option<String> {
-    // Where OpenAlex free-text matching starts failing outright. Not a hard
-    // boundary -- a bound observed from the queries in #534, which is why the
-    // wording says "roughly".
-    const DEGRADES_PAST: usize = 8;
-
-    let terms = query.split_whitespace().count();
-    if terms <= DEGRADES_PAST {
-        return None;
-    }
-    Some(format!(
-        "This query has {terms} terms. OpenAlex free-text matching degrades sharply past roughly {DEGRADES_PAST} and returns nothing rather than a partial match, so zero results here is more likely to be about the query than about the literature. Retry with 3-5 distinctive terms - an author surname, a coined phrase, the distinguishing noun - before concluding the work is not indexed."
-    ))
-}
-
 fn store_root_env_is_usable(value: &str) -> bool {
     let v = value.trim();
     !v.is_empty() && !v.contains("${")
@@ -4460,37 +4492,94 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
+    /// #538 on the two batch tools.
+    ///
+    /// `fetch_paper_fetch_error_envelope` shed a hand-rolled
+    /// `From<&FetchError>` copy ending in `_ => InternalError`. Two verbatim
+    /// copies of that match stayed behind in `build_bibliography_envelope` and
+    /// `batch_fetch_success_envelope`, so on those two surfaces a refused
+    /// paper was an INTERNAL_ERROR and -- worse -- a 404 was a NETWORK_ERROR
+    /// with disposition `retry_after`, telling an agent to keep retrying a DOI
+    /// that will never resolve. `disposition` is derived from the code, so the
+    /// wrong code was also the wrong advice.
+    ///
+    /// Driven through the real envelope builders, not a re-implementation.
+    #[test]
+    fn a_batch_entry_gets_the_canonical_code_not_internal_error() {
+        use doiget_core::http::HttpError;
+        use doiget_core::orchestrator::{BatchOutcome, BatchResultEntry};
+        use doiget_core::source::FetchError;
+
+        let cases: Vec<(FetchError, &str, &str)> = vec![
+            (
+                FetchError::NotRetrievable {
+                    source_key: "europepmc".into(),
+                    detail: "record has no open-access full text".into(),
+                },
+                "NO_OA_AVAILABLE",
+                "needs_config",
+            ),
+            (
+                FetchError::Http(HttpError::HttpStatus {
+                    status: 404,
+                    url: "https://api.crossref.org/works/10.5555/absent".into(),
+                    retry_after_ms: None,
+                }),
+                "NOT_FOUND",
+                "terminal",
+            ),
+        ];
+
+        for (err, want_code, want_disposition) in cases {
+            let ref_ = Ref::parse("10.1234/x").expect("valid doi");
+            let batch = BatchOutcome::for_test_synthetic(vec![BatchResultEntry {
+                ref_: ref_.clone(),
+                outcome: Err(err),
+            }]);
+
+            let bib = build_bibliography_envelope(
+                &batch,
+                std::slice::from_ref(&ref_),
+                &[None],
+                Vec::new(),
+            );
+            let e = &bib["results"][0]["error"];
+            assert_eq!(
+                e["code"],
+                json!(want_code),
+                "batch_from_bibliography: {bib:?}"
+            );
+            assert_eq!(e["disposition"], json!(want_disposition), "{bib:?}");
+
+            let raw = vec![ref_.as_input_str().to_string()];
+            let bf = batch_fetch_success_envelope(&batch, &raw);
+            let e = &bf["results"][0]["error"];
+            assert_eq!(e["code"], json!(want_code), "batch_fetch: {bf:?}");
+            assert_eq!(e["disposition"], json!(want_disposition), "{bf:?}");
+        }
+    }
+
+    /// One error, one answer, on both front ends. The CLI delegated
+    /// `GraphError::Source` to `From<&FetchError>` and this crate flattened it
+    /// to `NETWORK_ERROR`, so an OpenAlex 404 during expansion was terminal on
+    /// one surface and retriable on the other.
+    #[cfg(feature = "citation")]
+    #[test]
+    fn a_graph_source_error_keeps_the_wrapped_code() {
+        use doiget_core::citation_graph::GraphError;
+        use doiget_core::http::HttpError;
+        use doiget_core::source::FetchError;
+
+        let e = GraphError::Source(FetchError::Http(HttpError::HttpStatus {
+            status: 404,
+            url: "https://api.openalex.org/works/doi:10.5555/absent".into(),
+            retry_after_ms: None,
+        }));
+        assert_eq!(graph_error_code(&e), ErrorCode::NotFound);
+        assert_eq!(graph_error_code(&e).disposition().as_wire(), "terminal");
+    }
+
     use super::*;
-
-    /// #534: a long query matching nothing is far more likely to be a
-    /// query-length problem than an absent literature, and the agent reading
-    /// the envelope is the one who cannot tell the difference.
-    #[test]
-    fn a_long_zero_result_query_is_told_why_it_may_be_zero() {
-        let q = "lithium refractoriness after discontinuation kindling sensitization course of illness Post";
-        let hint = zero_result_hint(q).expect("10 terms is past the threshold");
-        assert!(hint.contains("10 terms"), "names the count: {hint}");
-        assert!(
-            hint.contains("3-5"),
-            "says what to do instead, not only what went wrong: {hint}"
-        );
-    }
-
-    /// A short query returning nothing may genuinely mean nothing is indexed.
-    /// Hinting on every empty result would teach readers to skip the hint.
-    #[test]
-    fn a_short_zero_result_query_is_left_alone() {
-        assert!(zero_result_hint("depersonalization derealization").is_none());
-        assert!(zero_result_hint("").is_none());
-    }
-
-    /// The threshold counts terms, not characters: one very long term is still
-    /// one term, and "shorten it" is not the advice to give.
-    #[test]
-    fn the_threshold_counts_terms_not_length() {
-        assert!(zero_result_hint(&"a".repeat(400)).is_none());
-        assert!(zero_result_hint("a b c d e f g h i").is_some());
-    }
 
     /// #406: the store-writability probe MUST NOT create anything.
     /// `doiget_health` is annotated `read_only_hint = true`, and the old

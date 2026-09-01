@@ -170,6 +170,31 @@ pub enum GraphError {
     CapabilityDenied,
 }
 
+/// Collapse a [`GraphError`] to the closed wire code, in one place.
+///
+/// The CLI and the MCP tool each grew their own copy of this match. They
+/// disagreed on exactly one arm -- `Source(_)`, which the CLI delegated to
+/// `From<&FetchError>` and the MCP surface flattened to `NETWORK_ERROR` -- so
+/// an OpenAlex 404 during expansion was `NOT_FOUND` (terminal) on one surface
+/// and `NETWORK_ERROR` (retry_after) on the other, telling an agent to retry a
+/// seed that will never resolve. Defined here, in the crate that owns the
+/// error, so the wildcard `#[non_exhaustive]` forces on downstream crates
+/// cannot silently absorb a new variant again.
+impl From<&GraphError> for crate::ErrorCode {
+    fn from(e: &GraphError) -> crate::ErrorCode {
+        match e {
+            GraphError::CapabilityDenied => crate::ErrorCode::CapabilityDenied,
+            // An indexing gap upstream: the seed is a valid DOI that OpenAlex
+            // does not hold.
+            GraphError::SeedNotIndexed => crate::ErrorCode::NoOaAvailable,
+            // Already owns an exhaustive mapping; reuse it rather than
+            // restate it.
+            GraphError::Source(fe) => crate::ErrorCode::from(fe),
+            GraphError::Log(_) => crate::ErrorCode::LogError,
+        }
+    }
+}
+
 /// Expand the citation graph for `seed_doi` via OpenAlex.
 pub async fn expand(
     seed_doi: &Doi,
