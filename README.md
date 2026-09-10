@@ -12,8 +12,8 @@
 [![issues](https://img.shields.io/github/issues/QAtlasHub/doiget)](https://github.com/QAtlasHub/doiget/issues)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[![docs (stable)](https://img.shields.io/badge/docs-stable-blue)](https://codes.sota-shimozono.com/doiget/)
-[![docs (dev/next)](https://img.shields.io/badge/docs-dev%20%28next%29-orange)](https://codes.sota-shimozono.com/doiget/dev/)
+[![docs (stable)](https://img.shields.io/badge/docs-stable-blue)](https://qatlashub.github.io/doiget/)
+[![docs (dev/next)](https://img.shields.io/badge/docs-dev%20%28next%29-orange)](https://qatlashub.github.io/doiget/dev/)
 [![API (docs.rs)](https://img.shields.io/badge/API-docs.rs-blue)](https://docs.rs/doiget-core)
 
 **Docs:** stable = the Zola site (built from `main`); dev = rustdoc built from `next`; API = `docs.rs` (latest published release).
