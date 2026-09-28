@@ -270,6 +270,9 @@ pub struct KeyOptions {
     pub file_field: Option<String>,
     /// `--file-field-always`: add `file` even when the path does not exist.
     pub file_field_always: bool,
+    /// `--journal-abbrev iso4`: add biblatex `shortjournal` from the
+    /// record's own abbreviation (#611). `journal` keeps the full title.
+    pub journal_abbrev: bool,
 }
 
 impl KeyOptions {
@@ -342,11 +345,37 @@ impl KeyOptions {
             let path = pattern.replace("{key}", &key).replace("{safekey}", safekey);
             (self.file_field_always || camino::Utf8Path::new(&path).exists()).then_some(path)
         });
-        let extra: Vec<(&str, &str)> = file.iter().map(|f| ("file", f.as_str())).collect();
+        let short = if self.journal_abbrev {
+            short_journal(m, &key)
+        } else {
+            None
+        };
+        let extra: Vec<(&str, &str)> = short
+            .iter()
+            .map(|s| ("shortjournal", s.as_str()))
+            .chain(file.iter().map(|f| ("file", f.as_str())))
+            .collect();
         Ok(doiget_core::store::render::to_bibtex_with_fields(
             &key, m, &extra,
         ))
     }
+}
+
+/// The ISO 4 abbreviation for `m`'s venue, as its Crossref record gave it,
+/// or `None` with a note naming the venue -- never a guessed abbreviation
+/// (#611). `key` names the entry in the note.
+pub(crate) fn short_journal(m: &doiget_core::store::Metadata, key: &str) -> Option<String> {
+    let short = m.doiget.as_ref().and_then(|d| d.short_venue.clone());
+    if short.is_none() {
+        if let Some(venue) = m.venue.as_deref().filter(|v| !v.is_empty()) {
+            output::print_err(format_args!(
+                "note: {key}: no abbreviation for {venue:?} in its Crossref record \
+                 (short-container-title), so no shortjournal; an entry stored before \
+                 0.9 has none recorded until it is re-fetched"
+            ));
+        }
+    }
+    short
 }
 
 /// The stderr lines for a #608 metadata-quality result: one `note:` per

@@ -79,6 +79,7 @@ fn fixture(doi_suffix: &str, title: &str, year: i32, fetched_year: i32) -> (Safe
             collections: Vec::new(),
             annotation: None,
             repaired_fields: Default::default(),
+            short_venue: None,
         }),
         other: BTreeMap::new(),
     };

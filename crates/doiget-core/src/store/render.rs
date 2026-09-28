@@ -187,7 +187,22 @@ fn strip_bibtex_unsafe(key: &str, value: &str) -> String {
 /// Empty optional fields are omitted from the JSON.
 #[must_use]
 pub fn to_csl_array(citation_key: &str, m: &Metadata) -> serde_json::Value {
-    let item = build_csl_item(citation_key, m);
+    to_csl_array_with(citation_key, m, false)
+}
+
+/// [`to_csl_array`], adding `container-title-short` from
+/// `[doiget].short_venue` when `short_container` is set and the record
+/// carried an abbreviation (#611).
+#[must_use]
+pub fn to_csl_array_with(
+    citation_key: &str,
+    m: &Metadata,
+    short_container: bool,
+) -> serde_json::Value {
+    let mut item = build_csl_item(citation_key, m);
+    if short_container {
+        item.container_title_short = m.doiget.as_ref().and_then(|d| d.short_venue.clone());
+    }
     // `CslItem` is all-`Serialize` over owned/borrowed primitives, so
     // `to_value` cannot fail; fall back to an empty array rather than
     // panicking if a future field breaks that invariant.
@@ -212,6 +227,11 @@ struct CslItem<'a> {
     doi: Option<&'a str>,
     #[serde(rename = "container-title", skip_serializing_if = "Option::is_none")]
     container_title: Option<String>,
+    #[serde(
+        rename = "container-title-short",
+        skip_serializing_if = "Option::is_none"
+    )]
+    container_title_short: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     volume: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -256,6 +276,7 @@ fn build_csl_item<'a>(citation_key: &'a str, m: &'a Metadata) -> CslItem<'a> {
         }),
         doi: m.doi.as_ref().map(|d| d.as_str()),
         container_title: m.venue.as_deref().map(crate::markup::plain_title),
+        container_title_short: None,
         volume: m.volume.as_deref(),
         issue: m.issue.as_deref(),
         page: m.pages.as_deref(),
@@ -342,6 +363,7 @@ mod tests {
                 collections: Vec::new(),
                 annotation: None,
                 repaired_fields: Default::default(),
+                short_venue: None,
             }),
             other: BTreeMap::new(),
         }
@@ -478,6 +500,22 @@ mod tests {
         let v = to_csl_array("k", &m);
         assert_eq!(v[0]["title"], "Spin-S chains");
         assert_eq!(v[0]["container-title"], "J. Chem. Phys.");
+    }
+
+    #[test]
+    fn csl_container_title_short_only_on_request_and_only_when_known() {
+        let mut m = fixture(Some("journal-article"));
+        assert!(to_csl_array_with("k", &m, true)[0]
+            .get("container-title-short")
+            .is_none());
+        m.doiget.as_mut().expect("ext").short_venue = Some("Phys. Rev. X".into());
+        assert!(to_csl_array("k", &m)[0]
+            .get("container-title-short")
+            .is_none());
+        assert_eq!(
+            to_csl_array_with("k", &m, true)[0]["container-title-short"],
+            "Phys. Rev. X"
+        );
     }
 
     #[test]

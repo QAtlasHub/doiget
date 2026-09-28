@@ -504,6 +504,7 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
             collections: Vec::new(),
             annotation: None,
             repaired_fields: Default::default(),
+            short_venue: None,
         }),
         other: BTreeMap::new(),
     }
@@ -536,6 +537,9 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
         }
         m.year = f.year;
         m.venue = f.venue;
+        if let Some(d) = m.doiget.as_mut() {
+            d.short_venue = f.short_venue;
+        }
         m.volume = f.volume;
         m.issue = f.issue;
         m.pages = f.pages;
@@ -1441,6 +1445,7 @@ async fn fetch_paper_arxiv(
             collections: Vec::new(),
             annotation: None,
             repaired_fields: Default::default(),
+            short_venue: None,
         }),
         other: BTreeMap::new(),
     };
@@ -1906,6 +1911,7 @@ async fn fetch_paper_doi(
             collections: Vec::new(),
             annotation: None,
             repaired_fields: Default::default(),
+            short_venue: extracted.short_venue.clone(),
         }),
         other: BTreeMap::new(),
     };
@@ -2673,6 +2679,9 @@ pub(crate) struct CrossrefFields {
     pub(crate) issue: Option<String>,
     pub(crate) pages: Option<String>,
     pub(crate) type_: Option<String>,
+    /// Crossref `short-container-title[0]` (#611). `None` for sources that
+    /// report no abbreviation.
+    pub(crate) short_venue: Option<String>,
 }
 
 /// Map a DataCite `data.attributes` object onto [`CrossrefFields`].
@@ -2739,6 +2748,7 @@ pub(crate) fn extract_datacite_fields(attributes: &Value) -> CrossrefFields {
         issue: None,
         pages: None,
         type_,
+        short_venue: None,
     }
 }
 
@@ -2811,6 +2821,14 @@ pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
         .and_then(|v| v.as_str())
         .map(normalize_page_range);
 
+    let short_venue = msg
+        .get("short-container-title")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.as_str())
+        .map(|s| crate::markup::plain_title(s.trim()))
+        .filter(|s| !s.is_empty());
+
     CrossrefFields {
         title,
         authors,
@@ -2820,6 +2838,7 @@ pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
         issue,
         pages,
         type_,
+        short_venue,
     }
 }
 
