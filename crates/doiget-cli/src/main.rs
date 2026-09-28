@@ -126,6 +126,20 @@ struct KeyArgs {
     /// With --file-field, add the field even when the file does not exist.
     #[arg(long)]
     file_field_always: bool,
+    /// Add `shortjournal` with the ISO 4 abbreviation from the record's own
+    /// Crossref `short-container-title` (e.g. `Phys. Rev. B`); `journal`
+    /// keeps the full title. Never guessed: a venue with no abbreviation
+    /// on record is named on stderr instead.
+    #[arg(long, value_name = "STYLE", value_enum)]
+    journal_abbrev: Option<JournalAbbrev>,
+}
+
+/// `--journal-abbrev` styles. ISO 4 is the only one; the argument is a value
+/// rather than a switch so another style does not need a new flag.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum JournalAbbrev {
+    /// ISO 4, as Crossref's `short-container-title` records it.
+    Iso4,
 }
 
 impl From<KeyArgs> for doiget_cli::commands::KeyOptions {
@@ -135,6 +149,8 @@ impl From<KeyArgs> for doiget_cli::commands::KeyOptions {
             template: a.key_template,
             file_field: a.file_field,
             file_field_always: a.file_field_always,
+            journal_abbrev: a.journal_abbrev.is_some(),
+            ..Self::default()
         }
     }
 }
@@ -460,6 +476,10 @@ enum Command {
         /// skipped (and counted toward the exit code).
         #[arg(long, value_name = "FILE", value_parser = parse_utf8_path)]
         from_file: Option<camino::Utf8PathBuf>,
+        /// Add CSL `container-title-short` from the record's own Crossref
+        /// `short-container-title` (#611); never guessed.
+        #[arg(long, value_name = "STYLE", value_enum)]
+        journal_abbrev: Option<JournalAbbrev>,
     },
     /// Extract a paper's full text from ar5iv as sectioned plain text
     /// (the #281 "read" step; ADR-0032). Takes an arXiv id; the PDF blob
@@ -669,8 +689,27 @@ enum Command {
     },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// Stack for the thread that runs the CLI. Windows gives the main thread
+/// 1 MiB, and an unoptimised build's `Cli::parse` plus the dispatch future
+/// outgrew it (#611's flags tipped `capabilities` over on windows-latest);
+/// Linux and macOS give 8 MiB, which this matches everywhere.
+const MAIN_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+fn main() -> anyhow::Result<()> {
+    std::thread::Builder::new()
+        .name("doiget-main".into())
+        .stack_size(MAIN_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?
+                .block_on(real_main())
+        })?
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+async fn real_main() -> anyhow::Result<()> {
     // Logging — strictly to stderr. See docs/SECURITY.md §3 / ADR-0001.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -753,7 +792,7 @@ fn forced_implicit_for(command: &Option<Command>) -> Option<OutputMode> {
 /// follow-up.
 ///
 /// We invoke this from `run_dispatch` (see call site below) before
-/// any `.await` in the function. The `#[tokio::main]` runtime has
+/// any `.await` in the function. The runtime `main` builds has
 /// already constructed its multi-thread worker pool by that point,
 /// but the workers are parked on the work queue and do not read
 /// `environ`; the active thread is the binary's startup thread. The
@@ -761,7 +800,7 @@ fn forced_implicit_for(command: &Option<Command>) -> Option<OutputMode> {
 /// If a future change introduces an async background task that reads
 /// `DOIGET_STORE_ROOT` (or any other key this function writes), the
 /// application of overrides must move ahead of the runtime
-/// construction (i.e. above the `#[tokio::main]` boundary).
+/// construction (i.e. above the runtime `main` builds).
 ///
 /// The function intentionally has no error path: each flag value has
 /// already passed `parse_utf8_path` (empty and NUL rejected) or
@@ -951,7 +990,8 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             ref_,
             all,
             from_file,
-        }) => doiget_cli::commands::csl::run(ref_, all, from_file, mode),
+            journal_abbrev,
+        }) => doiget_cli::commands::csl::run(ref_, all, from_file, journal_abbrev.is_some(), mode),
         Some(Command::Text {
             ref_,
             max_chars,

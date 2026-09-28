@@ -78,6 +78,7 @@ fn fixture(type_: Option<&str>) -> Metadata {
             collections: Vec::new(),
             annotation: None,
             repaired_fields: Default::default(),
+            short_venue: None,
         }),
         other: BTreeMap::new(),
     }
@@ -499,4 +500,85 @@ fn bib_config_file_field_is_the_default_and_a_broken_config_is_named() {
     run(&work)
         .stdout(predicate::str::contains("file ").not())
         .stderr(predicate::str::contains("could not be read"));
+}
+
+/// #611: the stored abbreviation becomes biblatex `shortjournal` on request,
+/// alongside the full `journal`; a venue without one is named, not guessed.
+#[test]
+fn bib_journal_abbrev_adds_shortjournal_from_the_record_only() {
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8_path(&dir).join("papers");
+    let store = FsStore::new(root.clone()).expect("FsStore::new");
+    let mut with = fixture(Some("journal-article"));
+    with.venue = Some("Physical Review B".into());
+    with.doiget.as_mut().expect("ext").short_venue = Some("Phys. Rev. B".into());
+    let with_ref = Ref::Doi(Doi::parse("10.1103/PhysRevB.48.10345").expect("doi"));
+    with.doi = Some(Doi::parse("10.1103/PhysRevB.48.10345").expect("doi"));
+    store.write(&with_ref.safekey(), &with, None).expect("seed");
+    let mut without = fixture(Some("journal-article"));
+    without.venue = Some("The Journal of Chemical Physics".into());
+    let without_ref = Ref::Doi(Doi::parse("10.1063/1.1672392").expect("doi"));
+    without.doi = Some(Doi::parse("10.1063/1.1672392").expect("doi"));
+    store
+        .write(&without_ref.safekey(), &without, None)
+        .expect("seed");
+
+    doiget(&root)
+        .args([
+            "bib",
+            "10.1103/PhysRevB.48.10345",
+            "--journal-abbrev",
+            "iso4",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "journal    = {Physical Review B},",
+        ))
+        .stdout(predicate::str::contains("shortjournal = {Phys. Rev. B},"));
+    doiget(&root)
+        .args(["bib", "10.1063/1.1672392", "--journal-abbrev", "iso4"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("shortjournal").not())
+        .stderr(predicate::str::contains(
+            "no abbreviation for \"The Journal of Chemical Physics\"",
+        ));
+    doiget(&root)
+        .args(["bib", "10.1103/PhysRevB.48.10345"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("shortjournal").not());
+    doiget(&root)
+        .args([
+            "csl",
+            "10.1103/PhysRevB.48.10345",
+            "--journal-abbrev",
+            "iso4",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"container-title-short\": \"Phys. Rev. B\"",
+        ));
+}
+
+/// Review of #623: `bib --all --journal-abbrev` reports the entries with
+/// no abbreviation on record ONCE, not one line per entry.
+#[test]
+fn bib_all_journal_abbrev_summarises_what_it_could_not_abbreviate() {
+    let (_dir, root) = seeded_store_for_keys();
+    let out = doiget(&root)
+        .args(["bib", "--all", "--journal-abbrev", "iso4"])
+        .assert()
+        .success()
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(out).expect("utf-8");
+    assert_eq!(err.matches("note:").count(), 1, "{err}");
+    assert!(
+        err.contains("2 entries have no abbreviation on record"),
+        "{err}"
+    );
 }

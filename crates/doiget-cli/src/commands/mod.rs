@@ -270,6 +270,12 @@ pub struct KeyOptions {
     pub file_field: Option<String>,
     /// `--file-field-always`: add `file` even when the path does not exist.
     pub file_field_always: bool,
+    /// `--journal-abbrev iso4`: add biblatex `shortjournal` from the
+    /// record's own abbreviation (#611). `journal` keeps the full title.
+    pub journal_abbrev: bool,
+    /// Entries that got no `shortjournal`, reported once by
+    /// [`KeyOptions::report`].
+    pub missing_abbrev: MissingAbbrev,
 }
 
 impl KeyOptions {
@@ -318,6 +324,12 @@ impl KeyOptions {
         Ok(self)
     }
 
+    /// Report, once, what the render could not do (entries without an
+    /// abbreviation on record). Call after the last entry.
+    pub fn report(&self) {
+        report_missing_abbrev(&self.missing_abbrev);
+    }
+
     /// Render `m` as BibTeX under the chosen key, recording it in `used` and
     /// suffixing it `a`, `b`, ... on a collision.
     ///
@@ -342,10 +354,81 @@ impl KeyOptions {
             let path = pattern.replace("{key}", &key).replace("{safekey}", safekey);
             (self.file_field_always || camino::Utf8Path::new(&path).exists()).then_some(path)
         });
-        let extra: Vec<(&str, &str)> = file.iter().map(|f| ("file", f.as_str())).collect();
+        let short = if self.journal_abbrev {
+            short_journal(m, &key, &self.missing_abbrev)
+        } else {
+            None
+        };
+        let extra: Vec<(&str, &str)> = short
+            .iter()
+            .map(|s| ("shortjournal", s.as_str()))
+            .chain(file.iter().map(|f| ("file", f.as_str())))
+            .collect();
         Ok(doiget_core::store::render::to_bibtex_with_fields(
             &key, m, &extra,
         ))
+    }
+}
+
+/// Entries rendered with `--journal-abbrev` whose record carries no
+/// abbreviation: `(key, venue, source)`. Collected so a multi-entry export
+/// reports them once rather than one line per entry (review of #623).
+pub type MissingAbbrev = std::cell::RefCell<Vec<(String, String, String)>>;
+
+/// The ISO 4 abbreviation for `m`'s venue as its record gave it, or `None`
+/// -- recorded in `missing` when the entry has a venue -- never a guessed
+/// abbreviation (#611).
+pub(crate) fn short_journal(
+    m: &doiget_core::store::Metadata,
+    key: &str,
+    missing: &MissingAbbrev,
+) -> Option<String> {
+    let short = m.doiget.as_ref().and_then(|d| d.short_venue.clone());
+    if short.is_none() {
+        if let Some(venue) = m.venue.as_deref().filter(|v| !v.is_empty()) {
+            let source = m
+                .doiget
+                .as_ref()
+                .map_or("its", |d| d.source.as_str())
+                .to_string();
+            missing
+                .borrow_mut()
+                .push((key.to_string(), venue.to_string(), source));
+        }
+    }
+    short
+}
+
+/// Say, once, which entries got no `shortjournal` and why.
+pub(crate) fn report_missing_abbrev(missing: &MissingAbbrev) {
+    let list = missing.borrow();
+    let why = "an abbreviation is only what the record itself carries (Crossref \
+               short-container-title), never a guess; an entry stored before 0.9 has none \
+               recorded until it is re-fetched";
+    match list.as_slice() {
+        [] => {}
+        [(key, venue, source)] => output::print_err(format_args!(
+            "note: {key}: no abbreviation for {venue:?} in its {source} record, so no \
+             shortjournal; {why}"
+        )),
+        many => {
+            let shown: Vec<String> = many
+                .iter()
+                .take(5)
+                .map(|(k, v, _)| format!("{k} ({v:?})"))
+                .collect();
+            let more = many.len().saturating_sub(shown.len());
+            output::print_err(format_args!(
+                "note: {} entries have no abbreviation on record, so no shortjournal: {}{}; {why}",
+                many.len(),
+                shown.join(", "),
+                if more > 0 {
+                    format!(", and {more} more")
+                } else {
+                    String::new()
+                }
+            ));
+        }
     }
 }
 

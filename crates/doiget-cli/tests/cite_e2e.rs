@@ -297,3 +297,25 @@ async fn cite_arxiv_published_doi_resolve_failure_notes_and_falls_back() {
         "the degradation must be visible: {stderr}"
     );
 }
+
+/// #611 (review of #623): the live path -- Crossref's own
+/// `short-container-title` becomes `shortjournal` next to the full title.
+#[tokio::test]
+async fn cite_journal_abbrev_takes_the_abbreviation_from_the_live_record() {
+    let server = MockServer::start().await;
+    let mut body = crossref_body();
+    body["message"]["short-container-title"] = serde_json::json!(["Synth. J. Phys."]);
+    Mock::given(method("GET"))
+        .and(path(format!("/works/{TEST_DOI}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .args(["cite", TEST_DOI, "--journal-abbrev", "iso4"])
+        .env("DOIGET_CROSSREF_BASE", server.uri())
+        .assert()
+        .success()
+        .stdout(contains("journal    = {Synthetic Journal of Physics},"))
+        .stdout(contains("shortjournal = {Synth. J. Phys.},"));
+}

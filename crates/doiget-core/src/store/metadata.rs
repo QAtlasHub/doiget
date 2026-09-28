@@ -148,4 +148,10 @@ pub struct DoigetExtension {
     /// e.g. `repaired_fields = { title = "semantic_scholar" }`. Additive.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty", default)]
     pub repaired_fields: std::collections::BTreeMap<String, String>,
+    /// The venue's abbreviation as the resolver reported it -- Crossref's
+    /// `short-container-title`, e.g. `Phys. Rev. B` (#611). Rendered as
+    /// biblatex `shortjournal` / CSL `container-title-short` on request.
+    /// Absent when the record carries none; never guessed. Additive.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub short_venue: Option<String>,
 }

@@ -74,7 +74,11 @@ pub fn run(
     let ref_ = super::parse_ref_or_exit(&input)?;
     let safekey = ref_.safekey();
     match store.read(&safekey)? {
-        Some(m) => write_all(&keys.bibtex(&m, safekey.as_str(), &mut HashSet::new())?),
+        Some(m) => {
+            let bib = keys.bibtex(&m, safekey.as_str(), &mut HashSet::new())?;
+            keys.report();
+            write_all(&bib)
+        }
         None => bail!("no entry for {input}"),
     }
 }
@@ -121,6 +125,7 @@ fn run_all(store: &FsStore, keys: &KeyOptions) -> Result<()> {
     }
 
     write_all(&out)?;
+    keys.report();
     print_err(format_args!("bib --all: exported {rendered} entries"));
     Ok(())
 }
@@ -185,6 +190,7 @@ fn run_from_file(store: &FsStore, path: &Utf8Path, keys: &KeyOptions) -> Result<
     }
 
     write_all(&out)?;
+    keys.report();
     print_err(format_args!(
         "bib --from-file: exported {rendered} entries, {missing} missing"
     ));

@@ -609,6 +609,21 @@ fn merge_metadata(existing: Metadata, incoming: Metadata, user_fields: UserField
             if incoming_d.license == LICENSE_UNDETERMINED {
                 incoming_d.license = existing_d.license;
             }
+            // Same rule for the two fields a minimal metadata-only write
+            // never looks for (ADR-0056): no abbreviation in the incoming
+            // record is not news that the venue has none (#611), and no
+            // repair this time does not undo an earlier one whose repaired
+            // title §6 kept on disk (#608).
+            // ...and the abbreviation follows the venue it abbreviates: when
+            // §6 kept the stored `venue` over a different incoming one, the
+            // incoming `short_venue` belongs to the journal that lost, so the
+            // stored pair stays together (review of #623).
+            if incoming_d.short_venue.is_none() || out.venue != incoming.venue {
+                incoming_d.short_venue = existing_d.short_venue.clone();
+            }
+            if incoming_d.repaired_fields.is_empty() {
+                incoming_d.repaired_fields = existing_d.repaired_fields.clone();
+            }
             // `tags` / `collections` / `annotation` are USER-AUTHORED. A
             // fetch never writes them -- all three orchestrator construction
             // sites hard-code `Vec::new()` / `None` -- so letting the
@@ -955,6 +970,7 @@ mod tests {
                 collections: Vec::new(),
                 annotation: None,
                 repaired_fields: Default::default(),
+                short_venue: None,
             }),
             other: BTreeMap::new(),
         }
@@ -1015,6 +1031,41 @@ mod tests {
         incoming.title = "Resistivity for THc2".into();
         let out = merge_metadata(existing.clone(), incoming, UserFields::Preserve);
         assert_eq!(out.title, existing.title);
+    }
+
+    #[test]
+    fn a_write_that_did_not_look_keeps_the_recorded_abbreviation_and_repairs() {
+        let mut existing = sample_metadata();
+        let d = existing.doiget.as_mut().expect("ext");
+        d.short_venue = Some("Phys. Rev. B".into());
+        d.repaired_fields
+            .insert("title".into(), "semantic_scholar".into());
+        let mut incoming = existing.clone();
+        let d = incoming.doiget.as_mut().expect("ext");
+        d.short_venue = None;
+        d.repaired_fields.clear();
+        let out = merge_metadata(existing.clone(), incoming, UserFields::Preserve);
+        let (out_d, want) = (out.doiget.expect("ext"), existing.doiget.expect("ext"));
+        assert_eq!(out_d.short_venue, want.short_venue);
+        assert_eq!(out_d.repaired_fields, want.repaired_fields);
+    }
+
+    #[test]
+    fn an_abbreviation_stays_with_the_venue_it_abbreviates() {
+        // Review of #623: §6 keeps a stored venue over a different incoming
+        // one; the incoming abbreviation must not be paired with it.
+        let mut existing = sample_metadata();
+        existing.venue = Some("Physical Review B".into());
+        existing.doiget.as_mut().expect("ext").short_venue = Some("Phys. Rev. B".into());
+        let mut incoming = existing.clone();
+        incoming.venue = Some("Physical Review Letters".into());
+        incoming.doiget.as_mut().expect("ext").short_venue = Some("Phys. Rev. Lett.".into());
+        let out = merge_metadata(existing, incoming, UserFields::Preserve);
+        assert_eq!(out.venue.as_deref(), Some("Physical Review B"));
+        assert_eq!(
+            out.doiget.expect("ext").short_venue.as_deref(),
+            Some("Phys. Rev. B")
+        );
     }
 
     #[test]

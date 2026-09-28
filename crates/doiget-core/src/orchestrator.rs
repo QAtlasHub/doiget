@@ -504,6 +504,7 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
             collections: Vec::new(),
             annotation: None,
             repaired_fields: Default::default(),
+            short_venue: None,
         }),
         other: BTreeMap::new(),
     }
@@ -536,6 +537,9 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
         }
         m.year = f.year;
         m.venue = f.venue;
+        if let Some(d) = m.doiget.as_mut() {
+            d.short_venue = f.short_venue;
+        }
         m.volume = f.volume;
         m.issue = f.issue;
         m.pages = f.pages;
@@ -1441,6 +1445,7 @@ async fn fetch_paper_arxiv(
             collections: Vec::new(),
             annotation: None,
             repaired_fields: Default::default(),
+            short_venue: None,
         }),
         other: BTreeMap::new(),
     };
@@ -1906,6 +1911,7 @@ async fn fetch_paper_doi(
             collections: Vec::new(),
             annotation: None,
             repaired_fields: Default::default(),
+            short_venue: extracted.short_venue.clone(),
         }),
         other: BTreeMap::new(),
     };
@@ -2673,6 +2679,9 @@ pub(crate) struct CrossrefFields {
     pub(crate) issue: Option<String>,
     pub(crate) pages: Option<String>,
     pub(crate) type_: Option<String>,
+    /// Crossref `short-container-title[0]` (#611). `None` for sources that
+    /// report no abbreviation.
+    pub(crate) short_venue: Option<String>,
 }
 
 /// Map a DataCite `data.attributes` object onto [`CrossrefFields`].
@@ -2739,6 +2748,7 @@ pub(crate) fn extract_datacite_fields(attributes: &Value) -> CrossrefFields {
         issue: None,
         pages: None,
         type_,
+        short_venue: None,
     }
 }
 
@@ -2811,6 +2821,14 @@ pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
         .and_then(|v| v.as_str())
         .map(normalize_page_range);
 
+    let short_venue = msg
+        .get("short-container-title")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.as_str())
+        .map(|s| crate::markup::plain_title(s.trim()))
+        .filter(|s| !s.is_empty());
+
     CrossrefFields {
         title,
         authors,
@@ -2820,6 +2838,7 @@ pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
         issue,
         pages,
         type_,
+        short_venue,
     }
 }
 
@@ -4210,6 +4229,47 @@ mod tests {
             body.contains('\u{FFFD}'),
             "nothing enabled, so nothing repaired: {body}"
         );
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+    }
+
+    #[test]
+    fn short_container_title_is_read_cleaned_and_absent_when_empty_611() {
+        let f = extract_crossref_fields(
+            &serde_json::json!({"short-container-title": ["Phys. Rev. <i>B</i>"]}),
+        );
+        assert_eq!(f.short_venue.as_deref(), Some("Phys. Rev. B"));
+        for empty in [
+            serde_json::json!({"short-container-title": []}),
+            serde_json::json!({"short-container-title": [""]}),
+            serde_json::json!({}),
+        ] {
+            assert!(
+                extract_crossref_fields(&empty).short_venue.is_none(),
+                "{empty}"
+            );
+        }
+    }
+
+    /// #611 (review of #623): the fetch path stores the abbreviation, so a
+    /// later offline `bib --journal-abbrev` has it.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn the_fetch_path_stores_the_crossref_abbreviation_611() {
+        let body = serde_json::json!({"status": "ok", "message": {
+            "title": ["Density-matrix algorithms"],
+            "container-title": ["Physical Review B"],
+            "short-container-title": ["Phys. Rev. B"]
+        }})
+        .to_string();
+        let (_server, ctx, store, store_root, _td) = md139_harness_with(&body).await;
+        let profile = CapabilityProfile::from_env().expect("clean env");
+        let ref_ = Ref::Doi(Doi("10.1103/PhysRevB.48.10345".to_string()));
+        let _ = fetch_paper(&ref_, &profile, &ctx, &store, &store_root).await;
+        let toml = std::fs::read_to_string(
+            store_root.join(".metadata/doi_10.1103_PhysRevB.48.10345.toml"),
+        )
+        .expect("the fetch wrote metadata");
+        assert!(toml.contains("short_venue = \"Phys. Rev. B\""), "{toml}");
         std::env::remove_var("DOIGET_CROSSREF_BASE");
     }
 

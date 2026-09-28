@@ -351,6 +351,7 @@ mod tests {
                 collections: Vec::new(),
                 annotation: None,
                 repaired_fields: BTreeMap::new(),
+                short_venue: None,
             }),
             ..Metadata::default()
         };
