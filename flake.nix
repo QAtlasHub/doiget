@@ -16,10 +16,16 @@
         overlays = [ (import rust-overlay) ];
         pkgs     = import nixpkgs { inherit system overlays; };
 
-        # Pin to the workspace MSRV declared in Cargo.toml.
-        rustToolchain = pkgs.rust-bin.stable."1.86.0".default.override {
+        # Latest stable, as rust-toolchain.toml does. Pinning the declared
+        # MSRV (1.86) could not build the tree: dependencies such as rmcp 3.x
+        # declare rust-version 1.88, and cargo refuses them (#501).
+        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" "rust-analyzer" ];
         };
+
+        # One version, read from the workspace: a hand-kept copy here had
+        # drifted to 0.7.2-beta.1.
+        cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
 
         nativeBuildInputs = with pkgs; [
           rustToolchain
@@ -27,15 +33,13 @@
           perl          # ring crate's build script needs perl
         ];
 
-        buildInputs = with pkgs; lib.optionals stdenv.isDarwin [
-          darwin.apple_sdk.frameworks.Security
-          darwin.apple_sdk.frameworks.SystemConfiguration
-        ];
+        # Darwin needs no explicit framework inputs: current nixpkgs puts the
+        # SDK in the default stdenv, and `darwin.apple_sdk.frameworks` is gone.
+        buildInputs = [ ];
 
         doiget = pkgs.rustPlatform.buildRustPackage {
           pname   = "doiget";
-          # Keep in sync with [workspace.package] version in Cargo.toml.
-          version = "0.7.2-beta.1";
+          version = cargoToml.workspace.package.version;
 
           src = pkgs.lib.cleanSource ./.;
 

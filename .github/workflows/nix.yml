@@ -1,0 +1,40 @@
+# Build the flake's package (#501): `nix profile install github:QAtlasHub/doiget`
+# is advertised in the README, and until this job nothing had ever built it --
+# it had pinned a toolchain the dependency tree no longer accepts.
+#
+# Off the PR path except when the inputs it depends on change; weekly otherwise,
+# because nixpkgs-unstable moves under it.
+name: nix
+
+on:
+  pull_request:
+    paths:
+      - flake.nix
+      - flake.lock
+      - Cargo.lock
+      - Cargo.toml
+      - .github/workflows/nix.yml
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: nix build .#doiget
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24   # v31.11.1
+      - name: build
+        run: nix build .#doiget --print-build-logs
+      - name: the built binary runs and reports the workspace version
+        run: |
+          set -euo pipefail
+          want="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
+          got="$(./result/bin/doiget --version | awk '{print $NF}')"
+          echo "want=$want got=$got"
+          [ "$want" = "$got" ]

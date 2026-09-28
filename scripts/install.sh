@@ -30,7 +30,7 @@ case "$os" in
   Linux)
     case "$arch" in
       x86_64 | amd64) asset="doiget-linux-x86_64" ;;
-      aarch64 | arm64) err "linux-aarch64 is not published yet — use 'cargo binstall doiget' or 'cargo install doiget' (target tracked in #247)" ;;
+      aarch64 | arm64) err "linux-aarch64 is not published yet — build it with 'cargo install doiget-cli' (the crate is doiget-cli; there is no crate named doiget)" ;;
       *) err "unsupported Linux architecture: $arch" ;;
     esac
     ;;

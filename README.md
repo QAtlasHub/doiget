@@ -183,12 +183,13 @@ why it is now submittable.
 | Shell / PowerShell installer | shipping |
 | GitHub Release binaries (signed, SBOM) | shipping |
 | `cargo install doiget-cli` | shipping (needs a C linker) |
+| `cargo binstall doiget-cli` | metadata ships from 0.9.0: fetches the release binary instead of compiling (Linux x86_64, macOS, Windows x86_64). It does **not** check the `.sha256` sidecars or cosign bundles; the shell installers do |
 | `.mcpb` Claude Desktop extension | shipping since 0.8.4 |
 | MCP Registry | listed |
 | npm / npx | `doiget-cli` (installs the `doiget` command); see below for what is published |
 | Claude Code plugin | self-hosted marketplace, as above |
 | Homebrew | `Formula/doiget.rb` in this repo; see above for the tap line |
-| Nix | `flake.nix` exposes `packages.default` / `packages.doiget`, not only a dev shell. The outputs exist; `nix profile install` has not been exercised |
+| Nix | `nix profile install github:QAtlasHub/doiget` builds `packages.doiget` from source. The flake could not build before 0.9.0: it pinned Rust 1.86 below what the dependencies require, and its version string was stale. The `nix` workflow now builds it when the flake or lockfile changes, and weekly |
 | `.deb` | **not built** — low value; most Linux users take the binary or Nix |
 | Docker | **not planned** — see below |
 

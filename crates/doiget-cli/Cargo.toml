@@ -95,3 +95,27 @@ serial_test = { workspace = true }
 flate2      = { workspace = true }
 # tex_source_e2e: build synthetic tar+gzip payloads for the arXiv src mock.
 tar         = { workspace = true }
+
+# `cargo binstall doiget-cli` (#501): the prebuilt release binaries, instead of
+# compiling. The asset names are the release matrix's own (not binstall's
+# `{ target }` default), so each supported target is mapped explicitly;
+# any other target falls back to `cargo install`. binstall downloads over
+# HTTPS from GitHub Releases but does not check the `.sha256` sidecars or the
+# cosign bundles -- `scripts/install.sh` / `install.ps1` do (README).
+[package.metadata.binstall]
+pkg-fmt = "bin"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/doiget-linux-x86_64"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-musl]
+pkg-url = "{ repo }/releases/download/v{ version }/doiget-linux-x86_64"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/doiget-macos-aarch64"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/doiget-macos-x86_64"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/doiget-windows-x86_64.exe"
