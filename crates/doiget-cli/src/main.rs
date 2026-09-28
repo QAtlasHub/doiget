@@ -150,6 +150,7 @@ impl From<KeyArgs> for doiget_cli::commands::KeyOptions {
             file_field: a.file_field,
             file_field_always: a.file_field_always,
             journal_abbrev: a.journal_abbrev.is_some(),
+            ..Self::default()
         }
     }
 }

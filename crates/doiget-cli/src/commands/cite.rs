@@ -127,6 +127,7 @@ pub async fn run(
                 ref_.safekey().as_str(),
                 &mut std::collections::HashSet::new(),
             )?;
+            keys.report();
             write_bib(&bib)
         }
         Err(e) => {

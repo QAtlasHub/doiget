@@ -562,3 +562,23 @@ fn bib_journal_abbrev_adds_shortjournal_from_the_record_only() {
             "\"container-title-short\": \"Phys. Rev. B\"",
         ));
 }
+
+/// Review of #623: `bib --all --journal-abbrev` reports the entries with
+/// no abbreviation on record ONCE, not one line per entry.
+#[test]
+fn bib_all_journal_abbrev_summarises_what_it_could_not_abbreviate() {
+    let (_dir, root) = seeded_store_for_keys();
+    let out = doiget(&root)
+        .args(["bib", "--all", "--journal-abbrev", "iso4"])
+        .assert()
+        .success()
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(out).expect("utf-8");
+    assert_eq!(err.matches("note:").count(), 1, "{err}");
+    assert!(
+        err.contains("2 entries have no abbreviation on record"),
+        "{err}"
+    );
+}

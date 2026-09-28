@@ -142,8 +142,9 @@ fn bibtex_entry_type(type_: Option<&str>) -> &'static str {
 }
 
 /// Append a single `  <key>      = {<value>},\n` line, padded so the `=`
-/// columns line up across the seven-field Phase 2 surface (width 10 is
-/// wide enough for `publisher`, the longest key).
+/// columns line up for the standard fields (width 10 fits `publisher`).
+/// A longer optional key -- `shortjournal` (#611), `archivePrefix` --
+/// overruns the column rather than re-indenting every entry's output.
 fn push_field(out: &mut String, key: &str, value: &str) {
     let escaped = strip_bibtex_unsafe(key, value);
     out.push_str(&format!("  {key:<10} = {{{escaped}}},\n"));

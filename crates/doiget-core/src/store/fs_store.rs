@@ -614,7 +614,11 @@ fn merge_metadata(existing: Metadata, incoming: Metadata, user_fields: UserField
             // record is not news that the venue has none (#611), and no
             // repair this time does not undo an earlier one whose repaired
             // title §6 kept on disk (#608).
-            if incoming_d.short_venue.is_none() {
+            // ...and the abbreviation follows the venue it abbreviates: when
+            // §6 kept the stored `venue` over a different incoming one, the
+            // incoming `short_venue` belongs to the journal that lost, so the
+            // stored pair stays together (review of #623).
+            if incoming_d.short_venue.is_none() || out.venue != incoming.venue {
                 incoming_d.short_venue = existing_d.short_venue.clone();
             }
             if incoming_d.repaired_fields.is_empty() {
@@ -1044,6 +1048,24 @@ mod tests {
         let (out_d, want) = (out.doiget.expect("ext"), existing.doiget.expect("ext"));
         assert_eq!(out_d.short_venue, want.short_venue);
         assert_eq!(out_d.repaired_fields, want.repaired_fields);
+    }
+
+    #[test]
+    fn an_abbreviation_stays_with_the_venue_it_abbreviates() {
+        // Review of #623: §6 keeps a stored venue over a different incoming
+        // one; the incoming abbreviation must not be paired with it.
+        let mut existing = sample_metadata();
+        existing.venue = Some("Physical Review B".into());
+        existing.doiget.as_mut().expect("ext").short_venue = Some("Phys. Rev. B".into());
+        let mut incoming = existing.clone();
+        incoming.venue = Some("Physical Review Letters".into());
+        incoming.doiget.as_mut().expect("ext").short_venue = Some("Phys. Rev. Lett.".into());
+        let out = merge_metadata(existing, incoming, UserFields::Preserve);
+        assert_eq!(out.venue.as_deref(), Some("Physical Review B"));
+        assert_eq!(
+            out.doiget.expect("ext").short_venue.as_deref(),
+            Some("Phys. Rev. B")
+        );
     }
 
     #[test]

@@ -71,7 +71,9 @@ pub fn run(
     match store.read(&safekey)? {
         Some(m) => {
             if short_container {
-                super::short_journal(&m, safekey.as_str());
+                let no_abbrev = super::MissingAbbrev::default();
+                super::short_journal(&m, safekey.as_str(), &no_abbrev);
+                super::report_missing_abbrev(&no_abbrev);
             }
             write_array(&render::to_csl_array_with(
                 safekey.as_str(),
@@ -86,6 +88,7 @@ pub fn run(
 /// `--all`: every store entry as one deduplicated CSL JSON array. An empty
 /// store emits `[]` with a stderr note (exit 0 — no ref was requested).
 fn run_all(store: &FsStore, short_container: bool) -> Result<()> {
+    let no_abbrev = super::MissingAbbrev::default();
     let entries = store
         .list_recent(usize::MAX)
         .context("failed to enumerate the store")?;
@@ -94,7 +97,14 @@ fn run_all(store: &FsStore, short_container: bool) -> Result<()> {
     let mut seen: Vec<String> = Vec::new();
     for e in &entries {
         match store.read(&e.safekey) {
-            Ok(Some(m)) => push_item(&mut items, &mut seen, &e.safekey, &m, short_container),
+            Ok(Some(m)) => push_item(
+                &mut items,
+                &mut seen,
+                &e.safekey,
+                &m,
+                short_container,
+                &no_abbrev,
+            ),
             Ok(None) => {}
             Err(err) => print_err(format_args!(
                 "csl --all: skipping {} (read failed: {err})",
@@ -104,6 +114,7 @@ fn run_all(store: &FsStore, short_container: bool) -> Result<()> {
     }
 
     write_array(&Value::Array(items))?;
+    super::report_missing_abbrev(&no_abbrev);
     print_err(format_args!("csl --all: exported {} entries", seen.len()));
     Ok(())
 }
@@ -113,6 +124,7 @@ fn run_all(store: &FsStore, short_container: bool) -> Result<()> {
 /// non-zero (failure count, capped at 255 — same convention as `batch` /
 /// `bib`) when any requested ref could not be rendered.
 fn run_from_file(store: &FsStore, path: &Utf8Path, short_container: bool) -> Result<()> {
+    let no_abbrev = super::MissingAbbrev::default();
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("reading --from-file list: {path}"))?;
     // Same bibliography adapter `batch` / `bib` use: plain refs / CSL-JSON
@@ -138,7 +150,14 @@ fn run_from_file(store: &FsStore, path: &Utf8Path, short_container: bool) -> Res
         // `run_all` — it must NOT abort the whole export and lose every
         // remaining ref (review #318).
         match store.read(&safekey) {
-            Ok(Some(m)) => push_item(&mut items, &mut seen, &safekey, &m, short_container),
+            Ok(Some(m)) => push_item(
+                &mut items,
+                &mut seen,
+                &safekey,
+                &m,
+                short_container,
+                &no_abbrev,
+            ),
             Ok(None) => {
                 missing += 1;
                 print_err(format_args!(
@@ -157,6 +176,7 @@ fn run_from_file(store: &FsStore, path: &Utf8Path, short_container: bool) -> Res
     }
 
     write_array(&Value::Array(items))?;
+    super::report_missing_abbrev(&no_abbrev);
     print_err(format_args!(
         "csl --from-file: exported {} entries, {missing} missing",
         seen.len()
@@ -178,6 +198,7 @@ fn push_item(
     safekey: &Safekey,
     m: &Metadata,
     short_container: bool,
+    no_abbrev: &super::MissingAbbrev,
 ) {
     let key = safekey.as_str();
     if seen.iter().any(|k| k == key) {
@@ -185,7 +206,7 @@ fn push_item(
     }
     seen.push(key.to_string());
     if short_container {
-        super::short_journal(m, key);
+        super::short_journal(m, key, no_abbrev);
     }
     match render::to_csl_array_with(key, m, short_container) {
         Value::Array(rendered) if !rendered.is_empty() => items.extend(rendered),
