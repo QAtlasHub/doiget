@@ -228,6 +228,8 @@ mod tests {
 
     fn outcome() -> MetadataOnlyOutcome {
         MetadataOnlyOutcome {
+            metadata_quality: Vec::new(),
+            repaired_fields: std::collections::BTreeMap::new(),
             source: "crossref".to_string(),
             resolver_profile: "crossref".to_string(),
             license: Some("cc-by".to_string()),

@@ -371,7 +371,14 @@ type MetadataOnlyResult =
       oa_url: string | null,
       // gold / green / hybrid / bronze / closed, or null when not determined.
       oa_status: string | null,
+      // The resolver's payload as received -- NOT the stored entry.
       metadata: object,
+      // #608: the stored entry's fields that still carry U+FFFD, as
+      // "replacement_char:<field>", and the fields repaired from another
+      // enabled source before the write (field -> source key). The two are
+      // how a caller learns the stored entry differs from `metadata`.
+      metadata_quality: string[],
+      repaired_fields: { [field: string]: string },
       schema_version: string,
     }
   | { ok: true, dry_run: true, ref: RefShape, plan: FetchPlan,

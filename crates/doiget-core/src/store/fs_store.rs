@@ -483,9 +483,15 @@ fn parse_schema_version(s: &str) -> Result<(u32, u32), StoreError> {
 fn is_cleaned_form(existing: &str, incoming: &str) -> bool {
     // Only when `existing` really carries markup: plain_title must never be
     // the reason a markup-free stored value is replaced (review of #618).
-    existing != incoming
-        && crate::markup::has_inline_markup(existing)
-        && crate::markup::plain_title(existing) == incoming
+    let markup = crate::markup::has_inline_markup(existing)
+        && crate::markup::plain_title(existing) == incoming;
+    // #608: likewise a stored value that lost characters to U+FFFD yields
+    // to one that restores exactly those characters -- the repair a later
+    // fetch made once a repair source was enabled. Review of #619: without
+    // this the repaired title was discarded while `repaired_fields` said
+    // it had been applied.
+    let restored = crate::metadata_quality::restores(existing, incoming);
+    existing != incoming && (markup || restored)
 }
 
 /// Apply the `docs/STORE.md` §6 merge rule: doiget MUST NOT modify reserved
@@ -977,6 +983,25 @@ mod tests {
         incoming.venue = Some("Another journal".into());
         let out = merge_metadata(existing.clone(), incoming, UserFields::Preserve);
         assert_eq!(out.title, existing.title);
+        assert_eq!(out.venue, existing.venue);
+    }
+
+    #[test]
+    fn a_later_repair_replaces_a_stored_title_that_lost_characters() {
+        // Review of #619: fetched once with no repair source, then again with
+        // S2 enabled. The repair must reach the store.
+        let mut existing = sample_metadata();
+        existing.title = "N\u{FFFD}herungsmethode zur L\u{FFFD}sung".into();
+        existing.venue = Some("Zeitschrift f\u{FFFD}r Physik".into());
+        let mut incoming = existing.clone();
+        incoming.title = "Näherungsmethode zur Lösung".into();
+        incoming.venue = Some("Zeitschrift für Physik".into());
+        let out = merge_metadata(existing.clone(), incoming.clone(), UserFields::Preserve);
+        assert_eq!(out.title, incoming.title);
+        assert_eq!(out.venue, incoming.venue);
+        // A different fact is still preserved.
+        incoming.venue = Some("The European Physical Journal A".into());
+        let out = merge_metadata(existing.clone(), incoming, UserFields::Preserve);
         assert_eq!(out.venue, existing.venue);
     }
 

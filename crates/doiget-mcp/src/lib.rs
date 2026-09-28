@@ -3457,6 +3457,12 @@ fn metadata_only_success_envelope(outcome: &MetadataOnlyOutcome, ref_str: &str) 
         // or null when not determined (e.g. the Crossref-first path).
         "oa_status": outcome.oa_status,
         "metadata": outcome.metadata,
+        // #608: `metadata` is the resolver's payload as received. When the
+        // store write repaired a U+FFFD field from an enabled source, or
+        // could not, these say so -- the only channel an agent has, since
+        // tracing goes to stderr, which the stdio transport never surfaces.
+        "metadata_quality": outcome.metadata_quality,
+        "repaired_fields": outcome.repaired_fields,
         "schema_version": SCHEMA_VERSION,
     })
 }
