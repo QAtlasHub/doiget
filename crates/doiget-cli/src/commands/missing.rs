@@ -135,7 +135,21 @@ pub async fn run(
         let parsed = match entry {
             Ok(p) => p,
             Err(e) => {
-                rows.push(unparsed_row(e));
+                let mut row = unparsed_row(e);
+                // `{key}` needs only the entry key, so a hand-saved PDF for
+                // an entry with no DOI is still found; `{safekey}` needs an
+                // identifier this entry does not have.
+                if let (Some(p), Some(k)) = (&path_pattern, row.entry_key.as_deref()) {
+                    if !p.contains("{safekey}") {
+                        let path = p.replace("{key}", k);
+                        if Utf8PathBuf::from(&path).exists() {
+                            row.status = "local_file";
+                            row.detail = None;
+                        }
+                        row.expected_path = Some(path);
+                    }
+                }
+                rows.push(row);
                 continue;
             }
         };
@@ -183,12 +197,17 @@ pub async fn run(
         let count = |s: &str| rows.iter().filter(|r| r.status == s).count();
         print_err(format_args!(
             "missing: {missing} of {} entries have no local PDF (in store: {}, local file: {}, \
-             OA available: {}, no OA copy: {})",
+             OA available: {}, no OA copy: {}, OA unknown: {}, not looked up: {}, \
+             unresolved: {}, unsupported: {})",
             rows.len(),
             count("in_store"),
             count("local_file"),
             count("oa_available"),
             count("no_oa"),
+            count("oa_unknown"),
+            count("not_in_store"),
+            count("unresolved"),
+            count("unsupported"),
         ));
     }
     if missing > 0 {
@@ -213,22 +232,12 @@ async fn look_up(
                 fill_identity(row, &m);
             }
             row.landing_url = landing_url(ref_, &outcome.metadata);
-            match (&outcome.oa_url, outcome.oa_status.as_deref(), ref_) {
-                (Some(url), _, _) => {
-                    row.status = "oa_available";
-                    row.oa_url = Some(url.clone());
-                }
-                // arXiv is open by construction; the id is the location.
-                (None, _, Ref::Arxiv(id)) => {
-                    row.status = "oa_available";
-                    row.oa_url = Some(format!("https://arxiv.org/pdf/{}", id.as_str()));
-                }
-                (None, Some(_), _) => row.status = "no_oa",
-                (None, None, _) => {
-                    row.status = "oa_unknown";
-                    row.detail = Some("the Unpaywall lookup did not complete".into());
-                }
-            }
+            classify_oa(
+                row,
+                outcome.oa_url.as_deref(),
+                outcome.oa_status.as_deref(),
+                ref_,
+            );
         }
         Err(e) => {
             let code: ErrorCode = (&e).into();
@@ -242,6 +251,27 @@ async fn look_up(
         }
     }
     Ok(())
+}
+
+/// The OA half of a lookup: a location, a status with no location, or
+/// neither (Unpaywall did not answer).
+fn classify_oa(row: &mut Row, oa_url: Option<&str>, oa_status: Option<&str>, ref_: &Ref) {
+    match (oa_url, oa_status, ref_) {
+        (Some(url), _, _) => {
+            row.status = "oa_available";
+            row.oa_url = Some(url.to_string());
+        }
+        // arXiv is open by construction; the id is the location.
+        (None, _, Ref::Arxiv(id)) => {
+            row.status = "oa_available";
+            row.oa_url = Some(format!("https://arxiv.org/pdf/{}", id.as_str()));
+        }
+        (None, Some(_), _) => row.status = "no_oa",
+        (None, None, _) => {
+            row.status = "oa_unknown";
+            row.detail = Some("the Unpaywall lookup did not complete".into());
+        }
+    }
 }
 
 fn fill_identity(row: &mut Row, m: &Metadata) {
@@ -362,6 +392,34 @@ mod tests {
             };
             assert_eq!(r.is_missing(), missing, "{status}");
         }
+    }
+
+    #[test]
+    fn a_lookup_is_classified_by_location_then_status_and_arxiv_is_always_open() {
+        let doi = Ref::parse("10.1007/BF01340294").expect("doi");
+        let arxiv = Ref::parse("arXiv:cond-mat/0409292").expect("arxiv");
+        let classify = |url, status, r: &Ref| {
+            let mut row = Row::default();
+            classify_oa(&mut row, url, status, r);
+            row
+        };
+        let r = classify(Some("https://oa.example/x.pdf"), Some("green"), &doi);
+        assert_eq!(r.status, "oa_available");
+        assert_eq!(r.oa_url.as_deref(), Some("https://oa.example/x.pdf"));
+
+        let r = classify(None, Some("closed"), &doi);
+        assert_eq!((r.status, r.oa_url), ("no_oa", None));
+
+        let r = classify(None, None, &doi);
+        assert_eq!(r.status, "oa_unknown");
+        assert!(r.detail.expect("detail").contains("did not complete"));
+
+        let r = classify(None, None, &arxiv);
+        assert_eq!(r.status, "oa_available");
+        assert_eq!(
+            r.oa_url.as_deref(),
+            Some("https://arxiv.org/pdf/cond-mat/0409292")
+        );
     }
 
     #[test]

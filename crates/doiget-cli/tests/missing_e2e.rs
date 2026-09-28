@@ -1,6 +1,6 @@
 //! `doiget missing` (#607), offline: the store and local-file halves need
-//! no network, so they are pinned here; the lookup half is exercised by the
-//! resolver's own tests.
+//! no network, so they are pinned here; how a lookup's answer becomes a
+//! status is `commands::missing::tests`, and the lookup itself the resolver's.
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use assert_cmd::Command;
@@ -105,4 +105,77 @@ fn missing_with_nothing_missing_exits_zero() {
         .args(["missing", "one.bib", "--offline"])
         .assert()
         .success();
+}
+
+fn json_rows(out: &[u8]) -> Vec<serde_json::Value> {
+    String::from_utf8(out.to_vec())
+        .expect("utf-8")
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("json line"))
+        .collect()
+}
+
+#[test]
+fn an_entry_with_no_identifier_is_found_by_its_key_on_disk() {
+    let (_dir, base) = setup();
+    std::fs::write(base.join("refs/nokey.pdf"), b"%PDF-1.4\n").expect("local");
+    let out = doiget(&base)
+        .args(["--mode", "json", "missing", "refs.bib", "--offline"])
+        .args(["--path-pattern", "refs/{key}.pdf"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let rows = json_rows(&out);
+    let nokey = rows.iter().find(|r| r["entry_key"] == "nokey").unwrap();
+    assert_eq!(nokey["status"], "local_file");
+    assert_eq!(nokey["expected_path"], "refs/nokey.pdf");
+}
+
+#[test]
+fn the_safekey_placeholder_names_the_store_key() {
+    let (_dir, base) = setup();
+    let out = doiget(&base)
+        .args(["--mode", "json", "missing", "refs.bib", "--offline"])
+        .args(["--path-pattern", "dl/{safekey}.pdf"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let rows = json_rows(&out);
+    let fock = rows.iter().find(|r| r["entry_key"] == "fock1930").unwrap();
+    let safekey = Ref::parse("10.1007/BF01340294").unwrap().safekey();
+    assert_eq!(
+        fock["expected_path"],
+        format!("dl/{}.pdf", safekey.as_str())
+    );
+    // No identifier, no safekey: the pattern cannot name that entry's file.
+    let nokey = rows.iter().find(|r| r["entry_key"] == "nokey").unwrap();
+    assert!(nokey.get("expected_path").is_none());
+}
+
+#[test]
+fn an_unreadable_reference_file_exits_2() {
+    let (_dir, base) = setup();
+    doiget(&base)
+        .args(["missing", "absent.bib", "--offline"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("failed to read reference file"));
+}
+
+#[test]
+fn the_exit_code_is_capped_at_255() {
+    let (_dir, base) = setup();
+    let bib: String = (0..300)
+        .map(|i| format!("@article{{e{i}, title={{t}}, year={{2000}}}}\n"))
+        .collect();
+    std::fs::write(base.join("many.bib"), bib).expect("bib");
+    doiget(&base)
+        .args(["missing", "many.bib", "--offline"])
+        .assert()
+        .code(255)
+        .stderr(predicate::str::contains("missing: 300 of 300"));
 }
