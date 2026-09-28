@@ -151,9 +151,11 @@ fn verdict(ref_: &Ref, oa_url: Option<&str>, rows: &[(&SourceInfo, Availability)
         });
     }
     // Sources that could look but were not asked, because of this build or
-    // this configuration. Listed, never ranked: whether one of them holds a
-    // copy is exactly what is not known (#505).
-    let could_look: Vec<Value> = rows
+    // this configuration, in `fetch`'s #505 order: OpenAlex first (it lists
+    // every location a work has -- a lookup, not a guess), CORE last (the
+    // broadest index, never the first try), and the rest in NO order, since
+    // nothing here distinguishes them. An invented order reads as information.
+    let mut could_look: Vec<(&SourceInfo, &Availability)> = rows
         .iter()
         .filter(|(s, a)| {
             matches!(s.role, Role::OaLocation | Role::Content)
@@ -163,11 +165,24 @@ fn verdict(ref_: &Ref, oa_url: Option<&str>, rows: &[(&SourceInfo, Availability)
                 )
                 && doiget_core::source_catalog::covers(s, ref_)
         })
+        .map(|(s, a)| (*s, a))
+        .collect();
+    could_look.sort_by_key(|(s, _)| {
+        let place = match s.name {
+            "openalex" => 0,
+            "core" => 2,
+            _ => 1,
+        };
+        (place, s.name)
+    });
+    let not_asked: Vec<Value> = could_look
+        .iter()
         .map(|(s, a)| json!({ "source": s.name, "enable": a.remedy() }))
         .collect();
     json!({
         "summary": "nothing this doiget asked has an open copy on record; download it from the publisher's page if you have access",
-        "not_asked": could_look,
+        "not_asked": not_asked,
+        "order": "openalex first (a lookup of every location), core last (the broadest index); the rest in no particular order -- nothing here distinguishes them",
     })
 }
 
@@ -216,7 +231,10 @@ fn render_coverage(r: &Value) -> String {
     let v = &r["verdict"];
     out.push_str(&format!("\n{}\n", v["summary"].as_str().unwrap_or("")));
     if let Some(list) = v["not_asked"].as_array().filter(|l| !l.is_empty()) {
-        out.push_str("  not asked (listed, not ranked -- whether one holds a copy is unknown):\n");
+        out.push_str(&format!(
+            "  not asked -- whether one holds a copy is unknown; {}:\n",
+            v["order"].as_str().unwrap_or("")
+        ));
         for x in list {
             out.push_str(&format!(
                 "    {:<14} {}\n",
@@ -282,6 +300,52 @@ mod tests {
 
     fn rows(p: &CapabilityProfile, r: &Ref) -> Vec<(&'static SourceInfo, Availability)> {
         CATALOG.iter().map(|s| (s, availability(s, p, r))).collect()
+    }
+
+    #[test]
+    fn not_asked_puts_openalex_first_and_core_last_like_fetch() {
+        let r = Ref::parse("10.1103/PhysRevB.48.10345").unwrap();
+        let p = CapabilityProfile::from_env().expect("profile");
+        let v = verdict(&r, None, &rows(&p, &r));
+        let names: Vec<&str> = v["not_asked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["source"].as_str().unwrap())
+            .collect();
+        if let Some(i) = names.iter().position(|n| *n == "openalex") {
+            assert_eq!(i, 0, "{names:?}");
+        }
+        if let Some(i) = names.iter().position(|n| *n == "core") {
+            assert_eq!(i, names.len() - 1, "{names:?}");
+        }
+        assert!(v["order"].as_str().unwrap().contains("no particular order"));
+    }
+
+    #[test]
+    fn a_ready_publisher_source_is_the_verdict_when_nothing_is_open() {
+        static APS: SourceInfo = SourceInfo {
+            name: "tdm-aps",
+            tier: 3,
+            role: Role::Content,
+            covers: doiget_core::source_catalog::Covers::Prefixes(&["10.1103"]),
+            publisher: Some("American Physical Society (APS)"),
+            feature: Some("tdm-aps"),
+            enable: &[],
+            compiled: true,
+        };
+        let r = Ref::parse("10.1103/PhysRevB.48.10345").unwrap();
+        let v = verdict(&r, None, &[(&APS, Availability::Ready)]);
+        assert!(v["summary"].as_str().unwrap().contains("entitled"));
+        assert_eq!(v["sources"], json!(["tdm-aps"]));
+    }
+
+    #[test]
+    fn an_arxiv_id_is_served_by_arxiv() {
+        let r = Ref::parse("arXiv:cond-mat/0409292").unwrap();
+        let p = CapabilityProfile::from_env().expect("profile");
+        let v = verdict(&r, None, &rows(&p, &r));
+        assert!(v["summary"].as_str().unwrap().contains("arXiv"));
     }
 
     #[test]

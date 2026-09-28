@@ -151,6 +151,12 @@ pub const CATALOG: &[SourceInfo] = &[
         Covers::AnyDoi,
         &["DOIGET_ENABLE_S2"],
     ),
+    t2(
+        "doaj",
+        Role::Metadata,
+        Covers::AnyDoi,
+        &["DOIGET_ENABLE_DOAJ"],
+    ),
     SourceInfo {
         name: "tdm-aps",
         tier: 3,
@@ -242,9 +248,11 @@ impl Availability {
 #[must_use]
 pub fn covers(info: &SourceInfo, ref_: &Ref) -> bool {
     match (info.covers, ref_) {
-        // The arXiv source also serves a DOI through the preprint fallback.
-        (Covers::Arxiv, _) => true,
-        (_, Ref::Arxiv(_)) => false,
+        // A DOI reaches arXiv only through the preprint fallback (#325), and
+        // only when Unpaywall named the arXiv copy -- which `coverage`
+        // already reports as the open copy. On its own it does not cover one.
+        (Covers::Arxiv, Ref::Arxiv(_)) => true,
+        (Covers::Arxiv, Ref::Doi(_)) | (_, Ref::Arxiv(_)) => false,
         (Covers::AnyDoi | Covers::DataCiteDois, Ref::Doi(_)) => true,
         (Covers::Prefixes(p), Ref::Doi(d)) => {
             let prefix = d.as_str().split('/').next().unwrap_or("");
@@ -290,6 +298,7 @@ fn enabled(name: &str, p: &CapabilityProfile) -> bool {
         "core" => m.core,
         "openalex" => m.openalex,
         "semantic_scholar" => m.semantic_scholar,
+        "doaj" => m.doaj,
         "tdm-aps" => p.tdm_aps.is_some(),
         "tdm-elsevier" => p.tdm_elsevier.is_some(),
         "tdm-springer" => p.tdm_springer.is_some(),
@@ -390,6 +399,35 @@ mod tests {
         for (name, own) in pairs {
             let row = CATALOG.iter().find(|s| s.name == name).expect("row");
             assert_eq!(row.covers, Covers::Prefixes(own), "{name}");
+        }
+    }
+
+    #[test]
+    fn arxiv_covers_arxiv_ids_and_not_dois() {
+        let arxiv = CATALOG.iter().find(|s| s.name == "arxiv").unwrap();
+        assert!(covers(arxiv, &doi("arXiv:cond-mat/0409292")));
+        assert!(!covers(arxiv, &doi("10.1038/nphys1170")));
+    }
+
+    /// Every module under `src/sources/` has a catalog row, so a new source
+    /// cannot ship invisible to `doiget sources` (DOAJ once did).
+    #[test]
+    fn every_source_module_has_a_catalog_row() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/sources");
+        for entry in std::fs::read_dir(dir).expect("sources dir") {
+            let file = entry.expect("entry").file_name();
+            let stem = file.to_str().unwrap().trim_end_matches(".rs");
+            let name = match stem {
+                "mod" => continue,
+                "core_oa" => "core",
+                "europepmc" => "europe-pmc",
+                "s2" => "semantic_scholar",
+                other => &other.replace('_', "-"),
+            };
+            assert!(
+                CATALOG.iter().any(|s| s.name == name),
+                "src/sources/{stem}.rs has no CATALOG row named {name:?}"
+            );
         }
     }
 }

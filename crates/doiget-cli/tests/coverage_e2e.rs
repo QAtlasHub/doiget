@@ -2,6 +2,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use assert_cmd::Command;
+use predicates::prelude::*;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -52,6 +53,15 @@ fn sources_names_every_source_and_scopes_by_publisher_offline() {
         .map(|s| s["source"].as_str().unwrap())
         .collect();
     assert_eq!(tdm, vec!["tdm-aps"]);
+    let springer = json(doiget(&td).args(["--mode", "json", "sources", "--publisher", "springer"]));
+    let tdm: Vec<&str> = springer["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["tier"] == 3)
+        .map(|s| s["source"].as_str().unwrap())
+        .collect();
+    assert_eq!(tdm, vec!["tdm-springer"], "matched by publisher name");
     // A default build has no Tier-3 code (ADR-0002) and says how to get it.
     let row = &aps["sources"]
         .as_array()
@@ -113,4 +123,16 @@ async fn coverage_with_no_open_copy_gives_the_landing_page_and_what_was_not_aske
         .collect();
     assert!(not_asked.contains(&"tdm-aps"), "{not_asked:?}");
     assert!(!not_asked.contains(&"tdm-springer"), "{not_asked:?}");
+}
+
+#[test]
+fn sources_prints_a_table_by_default_on_a_non_tty() {
+    let td = TempDir::new().unwrap();
+    doiget(&td)
+        .args(["sources"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("crossref"))
+        .stdout(predicates::str::contains("tdm-aps"))
+        .stdout(predicates::str::contains("{").not());
 }
