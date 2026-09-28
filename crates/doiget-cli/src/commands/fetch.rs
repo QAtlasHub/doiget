@@ -219,179 +219,111 @@ pub(crate) fn build_resolve_context() -> Result<FetchContext> {
 /// under `tests/fetch_doi_oa_pdf_e2e.rs` exercise the full PDF leg without
 /// touching the real network.
 pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> {
-    let arxiv = std::env::var("DOIGET_ARXIV_BASE").ok();
-    let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
-    let unpaywall = std::env::var("DOIGET_UNPAYWALL_BASE").ok();
-    let oa_publisher = std::env::var("DOIGET_OA_PUBLISHER_BASE").ok();
-    // Slice 16: `DOIGET_OPENALEX_BASE` selects a wiremock host for the
-    // citation-graph BFS. Only meaningful with `--features citation`,
-    // but reading the env unconditionally keeps the branch logic
-    // simple and is harmless for default builds.
-    let openalex_base = std::env::var("DOIGET_OPENALEX_BASE").ok();
-    // ADR-0032: `DOIGET_AR5IV_BASE` selects a wiremock host for the
-    // full-text extraction path (`doiget text`). Test-only override,
-    // mirroring `DOIGET_ARXIV_BASE`.
-    let ar5iv_base = std::env::var("DOIGET_AR5IV_BASE").ok();
-
-    #[cfg(feature = "tdm-aps")]
-    let tdm_aps = std::env::var("DOIGET_APS_BASE").ok();
-    #[cfg(feature = "tdm-elsevier")]
-    let tdm_elsevier = std::env::var("DOIGET_ELSEVIER_BASE").ok();
-    #[cfg(feature = "tdm-springer")]
-    let tdm_springer = std::env::var("DOIGET_SPRINGER_BASE").ok();
-    #[cfg(feature = "tdm-ieee")]
-    let tdm_ieee = std::env::var("DOIGET_IEEE_BASE").ok();
-    if arxiv.is_none()
-        && crossref.is_none()
-        && unpaywall.is_none()
-        && oa_publisher.is_none()
-        && openalex_base.is_none()
-        && ar5iv_base.is_none()
+    // #587: one table in doiget-core decides test mode and what the test
+    // client registers, for this builder and its twin alike.
+    if let Some(client) = doiget_core::base_override::test_client_from_env()
+        .context("building the DOIGET_*_BASE test client")?
     {
-        let mut allowlists = tier_1_allowlist();
-        allowlists.extend(oa_publisher_allowlist());
-        // ADR-0031: discovery search (`doiget search`) is Tier-1 OA
-        // metadata, always-on, and ships in the default `oa-only` binary.
-        // Register `api.openalex.org` under the `"openalex"` source key
-        // UNCONDITIONALLY so `discovery::paper_search` can reach the
-        // `/works?search=` endpoint without `--features citation`. In
-        // citation builds the Tier-2 extend below re-registers the same
-        // host under the same key (idempotent HashMap overwrite).
-        allowlists.extend(discovery_allowlist());
-        // ADR-0032: full-text extraction (`doiget text`) is Tier-1 OA
-        // metadata, always-on. Register `ar5iv.labs.arxiv.org` under the
-        // `"ar5iv"` source key unconditionally so `paper_text::paper_text`
-        // can reach ar5iv in `oa-only` builds.
-        allowlists.extend(fulltext_allowlist());
-        // The Tier-2 transport gate. The sources it serves — OpenAlex,
-        // Semantic Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE and
-        // Europe PMC — are compiled under `metadata`, and
-        // `resolve_optional_chain` is `#[cfg(feature = "metadata")]`,
-        // so this extend MUST be gated on `metadata` too. It was gated
-        // on `citation` for six releases: in a `--features metadata`
-        // build (which CI's clippy matrix builds explicitly) the chain
-        // ran, `can_serve` passed, and the request died at
-        // `UnknownSource` because no allowlist entry existed for the
-        // key (#516). CapabilityProfile.metadata.* is the runtime gate;
-        // this is the transport gate, and the two must agree.
-        #[cfg(feature = "metadata")]
-        allowlists.extend(tier_2_allowlist());
-        // #454: the Tier-3 transport gate. #444 made the orchestrator
-        // reach these sources; without this line the fetch it then issues
-        // under `tdm-aps` / `tdm-elsevier` / `tdm-springer` dies at
-        // `UnknownSource`. Empty in a default build (ADR-0002 — no Tier-3
-        // feature is compiled into published binaries), so this is a
-        // no-op for the shipped surface.
-        allowlists.extend(tier_3_allowlists());
+        return Ok(client);
+    }
+    let mut allowlists = tier_1_allowlist();
+    allowlists.extend(oa_publisher_allowlist());
+    // ADR-0031: discovery search (`doiget search`) is Tier-1 OA
+    // metadata, always-on, and ships in the default `oa-only` binary.
+    // Register `api.openalex.org` under the `"openalex"` source key
+    // UNCONDITIONALLY so `discovery::paper_search` can reach the
+    // `/works?search=` endpoint without `--features citation`. In
+    // citation builds the Tier-2 extend below re-registers the same
+    // host under the same key (idempotent HashMap overwrite).
+    allowlists.extend(discovery_allowlist());
+    // ADR-0032: full-text extraction (`doiget text`) is Tier-1 OA
+    // metadata, always-on. Register `ar5iv.labs.arxiv.org` under the
+    // `"ar5iv"` source key unconditionally so `paper_text::paper_text`
+    // can reach ar5iv in `oa-only` builds.
+    allowlists.extend(fulltext_allowlist());
+    // The Tier-2 transport gate. The sources it serves — OpenAlex,
+    // Semantic Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE and
+    // Europe PMC — are compiled under `metadata`, and
+    // `resolve_optional_chain` is `#[cfg(feature = "metadata")]`,
+    // so this extend MUST be gated on `metadata` too. It was gated
+    // on `citation` for six releases: in a `--features metadata`
+    // build (which CI's clippy matrix builds explicitly) the chain
+    // ran, `can_serve` passed, and the request died at
+    // `UnknownSource` because no allowlist entry existed for the
+    // key (#516). CapabilityProfile.metadata.* is the runtime gate;
+    // this is the transport gate, and the two must agree.
+    #[cfg(feature = "metadata")]
+    allowlists.extend(tier_2_allowlist());
+    // #454: the Tier-3 transport gate. #444 made the orchestrator
+    // reach these sources; without this line the fetch it then issues
+    // under `tdm-aps` / `tdm-elsevier` / `tdm-springer` dies at
+    // `UnknownSource`. Empty in a default build (ADR-0002 — no Tier-3
+    // feature is compiled into published binaries), so this is a
+    // no-op for the shipped surface.
+    allowlists.extend(tier_3_allowlists());
 
-        // ADR-0028 D2: merge user-extension hosts from
-        // `<config_dir>/doiget/config.toml`. See
-        // `doiget_core::user_extension` for the wire contract and
-        // the (deferred) S3b provenance / doctor / capabilities
-        // surfaces.
-        //
-        // Failure handling is opt-in-convenience: a missing config
-        // is silent (Ok-empty), a malformed config emits
-        // `tracing::warn!` and continues with the curated allowlist,
-        // and an unresolvable config dir emits `tracing::debug!`
-        // (only happens in stripped envs with no HOME / XDG /
-        // APPDATA — review pass I3 / A1).
-        match config_dir_utf8() {
-            Ok(cfg_dir) => {
-                let path = cfg_dir.join("doiget").join("config.toml");
-                match doiget_core::user_extension::load(&path) {
-                    Ok(cfg) => {
-                        let mut hosts = cfg.additional_hosts;
-                        if cfg.trust_academic_repos {
-                            hosts.extend(doiget_core::user_extension::academic_repo_hosts());
-                        }
-                        // Issue #405: the Gold-OA counterpart. Separate flag
-                        // because the trust argument is different — see
-                        // `oa_registry_hosts`.
-                        if cfg.trust_oa_registries {
-                            hosts.extend(doiget_core::user_extension::oa_registry_hosts());
-                        }
-                        if !hosts.is_empty() {
-                            tracing::info!(
-                                count = hosts.len(),
-                                trust_academic_repos = cfg.trust_academic_repos,
-                                trust_oa_registries = cfg.trust_oa_registries,
-                                path = %path,
-                                "merging user-extension allowlist hosts (ADR-0028 D2)"
-                            );
-                            doiget_core::user_extension::merge_into_allowlists(
-                                &mut allowlists,
-                                &hosts,
-                            );
-                        }
+    // ADR-0028 D2: merge user-extension hosts from
+    // `<config_dir>/doiget/config.toml`. See
+    // `doiget_core::user_extension` for the wire contract and
+    // the (deferred) S3b provenance / doctor / capabilities
+    // surfaces.
+    //
+    // Failure handling is opt-in-convenience: a missing config
+    // is silent (Ok-empty), a malformed config emits
+    // `tracing::warn!` and continues with the curated allowlist,
+    // and an unresolvable config dir emits `tracing::debug!`
+    // (only happens in stripped envs with no HOME / XDG /
+    // APPDATA — review pass I3 / A1).
+    match config_dir_utf8() {
+        Ok(cfg_dir) => {
+            let path = cfg_dir.join("doiget").join("config.toml");
+            match doiget_core::user_extension::load(&path) {
+                Ok(cfg) => {
+                    let mut hosts = cfg.additional_hosts;
+                    if cfg.trust_academic_repos {
+                        hosts.extend(doiget_core::user_extension::academic_repo_hosts());
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
+                    // Issue #405: the Gold-OA counterpart. Separate flag
+                    // because the trust argument is different — see
+                    // `oa_registry_hosts`.
+                    if cfg.trust_oa_registries {
+                        hosts.extend(doiget_core::user_extension::oa_registry_hosts());
+                    }
+                    if !hosts.is_empty() {
+                        tracing::info!(
+                            count = hosts.len(),
+                            trust_academic_repos = cfg.trust_academic_repos,
+                            trust_oa_registries = cfg.trust_oa_registries,
                             path = %path,
-                            "failed to load user-extension allowlist; \
-                             falling back to curated set only"
+                            "merging user-extension allowlist hosts (ADR-0028 D2)"
                         );
+                        doiget_core::user_extension::merge_into_allowlists(&mut allowlists, &hosts);
                     }
                 }
-            }
-            Err(e) => {
-                tracing::debug!(
-                    error = %e,
-                    "config dir unresolvable; \
-                     user-extension allowlist disabled (curated set only)"
-                );
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %path,
+                        "failed to load user-extension allowlist; \
+                         falling back to curated set only"
+                    );
+                }
             }
         }
-
-        return match user_agent {
-            Some(ua) => HttpClient::new_with_user_agent(allowlists, ua),
-            None => HttpClient::new(allowlists),
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                "config dir unresolvable; \
+                 user-extension allowlist disabled (curated set only)"
+            );
         }
-        .context("building HTTP client");
     }
 
-    // Test-base mode: build a relaxed client per overridden source.
-    let mut owned: Vec<(String, String)> = Vec::new();
-    // Tier-3 test bases, mirroring the MCP builder. Without these a wiremock
-    // e2e cannot reach the TDM-fetched route on this surface either: the
-    // override branch's table held only Tier-1/2 keys, so `tdm-aps` was absent
-    // from the client's map and the attempt died as `no allowlist registered
-    // for source tdm-aps` -- a harness gap that read like #454 coming back.
-    //
-    // Deliberately NOT part of the production-branch test above: setting only
-    // `DOIGET_APS_BASE` to replay a recorded fixture must not silently switch
-    // the process to the allow-http test client.
-    for (source, base) in [
-        ("arxiv", arxiv.as_deref()),
-        #[cfg(feature = "tdm-aps")]
-        ("tdm-aps", tdm_aps.as_deref()),
-        #[cfg(feature = "tdm-elsevier")]
-        ("tdm-elsevier", tdm_elsevier.as_deref()),
-        #[cfg(feature = "tdm-springer")]
-        ("tdm-springer", tdm_springer.as_deref()),
-        #[cfg(feature = "tdm-ieee")]
-        ("tdm-ieee", tdm_ieee.as_deref()),
-        ("crossref", crossref.as_deref()),
-        ("unpaywall", unpaywall.as_deref()),
-        ("oa-publisher", oa_publisher.as_deref()),
-        ("openalex", openalex_base.as_deref()),
-        ("ar5iv", ar5iv_base.as_deref()),
-    ] {
-        if let Some(b) = base {
-            let url = url::Url::parse(b)
-                .with_context(|| format!("DOIGET_*_BASE for {source} is not a URL: {b}"))?;
-            let host = url
-                .host_str()
-                .ok_or_else(|| anyhow!("base URL has no host: {b}"))?;
-            owned.push((source.to_string(), host.to_string()));
-        }
+    match user_agent {
+        Some(ua) => HttpClient::new_with_user_agent(allowlists, ua),
+        None => HttpClient::new(allowlists),
     }
-    let entries: Vec<(&str, &str)> = owned
-        .iter()
-        .map(|(s, h)| (s.as_str(), h.as_str()))
-        .collect();
-    Ok(HttpClient::new_for_tests_allow_http_multi(&entries))
+    .context("building HTTP client")
 }
 
 // Slice 2: the per-source env-aware constructors that used to live here

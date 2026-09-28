@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 // --- Modules ---
+pub mod base_override;
 pub mod canonical;
 pub mod credentials;
 pub mod discovery;
