@@ -2761,7 +2761,11 @@ pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        // #609: every consumer of this extractor -- cite, verify, missing,
+        // resolve_citation -- gets the title the author wrote, not the
+        // deposit's pretty-printed JATS. Render-time cleaning hid that this
+        // path was not covered.
+        .map(crate::markup::plain_title);
 
     let authors = msg
         .get("author")
@@ -2797,7 +2801,7 @@ pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(crate::markup::plain_title);
 
     let type_ = msg
         .get("type")

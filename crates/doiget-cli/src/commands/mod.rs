@@ -88,6 +88,7 @@ pub mod info;
 pub mod link;
 pub mod lint;
 pub mod list_recent;
+pub mod missing;
 pub mod output;
 pub mod provenance;
 pub mod resolve_citation;
