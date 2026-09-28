@@ -105,6 +105,40 @@ fn parse_store_root(raw: &str) -> Result<Utf8PathBuf, String> {
     parse_utf8_path(raw)
 }
 
+/// Citation-key and `file`-field options shared by `cite` and `bib` (#610).
+/// The default is unchanged: the safekey, and no `file` field.
+#[derive(clap::Args, Debug, Default)]
+struct KeyArgs {
+    /// Use KEY as the citation key (a single ref only).
+    #[arg(long, value_name = "KEY", conflicts_with = "key_template")]
+    key: Option<String>,
+    /// Build the key from a template: {author} (first author's family name),
+    /// {year}, {title_word} (first significant title word) and {safekey},
+    /// lower-cased and ASCII-folded, e.g. '{author}{year}{title_word}'.
+    /// Default: `[cite] key_template` in config.toml, else the safekey.
+    #[arg(long, value_name = "TEMPLATE")]
+    key_template: Option<String>,
+    /// Add `file = {...}` from PATTERN ({key}, {safekey}), e.g.
+    /// 'refs/{key}.pdf' -- only when that path exists, unless
+    /// --file-field-always. Default: `[cite] file_field` in config.toml.
+    #[arg(long, value_name = "PATTERN")]
+    file_field: Option<String>,
+    /// With --file-field, add the field even when the file does not exist.
+    #[arg(long)]
+    file_field_always: bool,
+}
+
+impl From<KeyArgs> for doiget_cli::commands::KeyOptions {
+    fn from(a: KeyArgs) -> Self {
+        Self {
+            key: a.key,
+            template: a.key_template,
+            file_field: a.file_field,
+            file_field_always: a.file_field_always,
+        }
+    }
+}
+
 /// `doiget provenance ...` action selector. Ships only the v1→v2
 /// migration in Slice 4 (ADR-0024); further actions (e.g. `compact`,
 /// `rotate`) land in later slices.
@@ -396,6 +430,8 @@ enum Command {
         /// skipped (and counted toward the exit code).
         #[arg(long, value_name = "FILE", value_parser = parse_utf8_path)]
         from_file: Option<camino::Utf8PathBuf>,
+        #[command(flatten)]
+        keys: KeyArgs,
     },
     /// Resolve a ref live and print a clean BibTeX entry (doi2bib-style).
     /// Falls back to the local store when the live resolve fails, so an
@@ -407,6 +443,8 @@ enum Command {
         /// (errors if the ref was never fetched).
         #[arg(long)]
         offline: bool,
+        #[command(flatten)]
+        keys: KeyArgs,
     },
     /// Export stored entries as CSL JSON. A single ref, the whole store
     /// (`--all`), or a ref list (`--from-file`) — all rendered offline
@@ -902,10 +940,13 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             ref_,
             all,
             from_file,
-        }) => doiget_cli::commands::bib::run(ref_, all, from_file, mode),
-        Some(Command::Cite { ref_, offline }) => {
-            doiget_cli::commands::cite::run(ref_, offline, mode).await
-        }
+            keys,
+        }) => doiget_cli::commands::bib::run(ref_, all, from_file, keys.into(), mode),
+        Some(Command::Cite {
+            ref_,
+            offline,
+            keys,
+        }) => doiget_cli::commands::cite::run(ref_, offline, keys.into(), mode).await,
         Some(Command::Csl {
             ref_,
             all,

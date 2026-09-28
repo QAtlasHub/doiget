@@ -255,6 +255,100 @@ fn store_root_from_config() -> Option<Utf8PathBuf> {
     Some(doiget_core::user_extension::expand_store_root(&raw))
 }
 
+/// How `cite` / `bib` key an entry and which extra fields they add (#610).
+///
+/// Every field is opt-in; the default is the safekey and no `file`, as
+/// before. Unset options fall back to `[cite] key_template` /
+/// `[cite] file_field` in `config.toml`.
+#[derive(Debug, Clone, Default)]
+pub struct KeyOptions {
+    /// `--key`: an explicit key, single-ref only.
+    pub key: Option<String>,
+    /// `--key-template`, e.g. `{author}{year}{title_word}`.
+    pub template: Option<String>,
+    /// `--file-field`, e.g. `refs/{key}.pdf`: a `file = {...}` field.
+    pub file_field: Option<String>,
+    /// `--file-field-always`: add `file` even when the path does not exist.
+    pub file_field_always: bool,
+}
+
+impl KeyOptions {
+    /// Fill unset options from `[cite]` in `config.toml` and validate the
+    /// template, so a typo fails before any network work.
+    ///
+    /// # Errors
+    ///
+    /// A template with an unknown placeholder or an unclosed `{`, naming
+    /// where it came from.
+    pub fn with_config_defaults(mut self) -> Result<Self> {
+        if let Some(k) = &self.key {
+            if !doiget_core::store::citekey::is_valid_key(k) {
+                anyhow::bail!(
+                    "--key {k:?} cannot be a BibTeX key: use only letters, digits and - _ : . + /"
+                );
+            }
+        }
+        if self.template.is_none() || self.file_field.is_none() {
+            if let Some(path) = user_config_path() {
+                // A config that does not parse must not make `[cite]` vanish
+                // silently -- TOML fails the whole document, so a typo under
+                // `[network]` would otherwise drop the key template with no
+                // word said (the #468 lesson, review of #622).
+                match doiget_core::user_extension::load(&path) {
+                    Ok(cfg) => {
+                        if self.template.is_none() && self.key.is_none() {
+                            self.template = cfg.cite_key_template;
+                        }
+                        if self.file_field.is_none() {
+                            self.file_field = cfg.cite_file_field;
+                        }
+                    }
+                    Err(e) => output::print_err(format_args!(
+                        "warning: {path} could not be read ({e}); its [cite] defaults are not \
+                         applied. Run `doiget config doctor`."
+                    )),
+                }
+            }
+        }
+        if let Some(t) = &self.template {
+            doiget_core::store::citekey::validate_template(t).with_context(|| {
+                format!("key template {t:?} (--key-template or [cite] key_template)")
+            })?;
+        }
+        Ok(self)
+    }
+
+    /// Render `m` as BibTeX under the chosen key, recording it in `used` and
+    /// suffixing it `a`, `b`, ... on a collision.
+    ///
+    /// # Errors
+    ///
+    /// Only an invalid template, which [`KeyOptions::with_config_defaults`]
+    /// already refused.
+    pub fn bibtex(
+        &self,
+        m: &doiget_core::store::Metadata,
+        safekey: &str,
+        used: &mut std::collections::HashSet<String>,
+    ) -> Result<String> {
+        use doiget_core::store::citekey;
+        let key = match (&self.key, &self.template) {
+            (Some(k), _) => k.clone(),
+            (None, Some(t)) => citekey::render_key(t, m, safekey)?,
+            (None, None) => safekey.to_string(),
+        };
+        let key = citekey::disambiguate(key, used);
+        let file = self.file_field.as_ref().and_then(|pattern| {
+            let path = pattern.replace("{key}", &key).replace("{safekey}", safekey);
+            (self.file_field_always || camino::Utf8Path::new(&path).exists()).then_some(path)
+        });
+        let extra: Vec<(&str, &str)> = file.iter().map(|f| ("file", f.as_str())).collect();
+        Ok(doiget_core::store::render::to_bibtex_with_fields(
+            &key, m, &extra,
+        ))
+    }
+}
+
 /// The stderr lines for a #608 metadata-quality result: one `note:` per
 /// field repaired from another source, and one `warning:` naming the fields
 /// that still carry a U+FFFD. `repair_enabled` says whether any repair

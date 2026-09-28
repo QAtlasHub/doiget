@@ -20,6 +20,7 @@
 //! atomic-write sequence in §5. Per §6, doiget MUST NOT overwrite reserved
 //! top-level fields previously written by another tool — see [`FsStore::write`].
 
+pub mod citekey;
 mod fs_store;
 pub mod metadata;
 pub mod render;

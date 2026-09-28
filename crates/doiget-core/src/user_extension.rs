@@ -284,6 +284,19 @@ struct RawConfig {
     network: Option<RawNetwork>,
     #[serde(default)]
     store: Option<RawStore>,
+    #[serde(default)]
+    cite: Option<RawCite>,
+    #[serde(flatten)]
+    _other: serde::de::IgnoredAny,
+}
+
+/// `[cite]` -- defaults for `doiget cite` / `doiget bib` keys (#610).
+#[derive(Debug, Default, Deserialize)]
+struct RawCite {
+    #[serde(default)]
+    key_template: Option<String>,
+    #[serde(default)]
+    file_field: Option<String>,
     #[serde(flatten)]
     _other: serde::de::IgnoredAny,
 }
@@ -372,6 +385,11 @@ pub struct UserExtensionConfig {
     /// (#504). Rung below `DOIGET_UNPAYWALL_EMAIL`, itself above
     /// [`Self::contact_email`].
     pub unpaywall_email: Option<String>,
+    /// `[cite] key_template` -- the default `--key-template` (#610). Blank
+    /// is absent.
+    pub cite_key_template: Option<String>,
+    /// `[cite] file_field` -- the default `--file-field` pattern (#610).
+    pub cite_file_field: Option<String>,
 }
 
 /// Returns the built-in curated set of academic institution host patterns.
@@ -521,6 +539,12 @@ fn parse_str(
         .map(|r| r.trim().to_string())
         .filter(|r| !r.is_empty());
 
+    let nonblank = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let (cite_key_template, cite_file_field) = match raw.cite {
+        Some(c) => (nonblank(c.key_template), nonblank(c.file_field)),
+        None => (None, None),
+    };
+
     Ok(UserExtensionConfig {
         additional_hosts: validated,
         trust_academic_repos,
@@ -528,6 +552,8 @@ fn parse_str(
         store_root,
         contact_email,
         unpaywall_email,
+        cite_key_template,
+        cite_file_field,
     })
 }
 
@@ -1356,6 +1382,20 @@ host = "*.uj.edu.pl"
 
     /// A blank value is "unset", not the empty path — which would resolve
     /// to the filesystem root.
+    #[test]
+    fn cite_section_parses_and_blank_values_are_absent() {
+        // #610 (review of #622).
+        let cfg = parse_str(
+            "[cite]\nkey_template = \"{author}{year}\"\nfile_field = \"  \"\n",
+            Utf8Path::new("t.toml"),
+        )
+        .expect("parses");
+        assert_eq!(cfg.cite_key_template.as_deref(), Some("{author}{year}"));
+        assert_eq!(cfg.cite_file_field, None, "a blank value is absent");
+        let cfg = parse_str("", Utf8Path::new("t.toml")).expect("parses");
+        assert_eq!((cfg.cite_key_template, cfg.cite_file_field), (None, None));
+    }
+
     #[test]
     fn blank_store_root_parses_as_absent() {
         let cfg =

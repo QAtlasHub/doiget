@@ -96,6 +96,15 @@ color = "auto"          # auto | always | never
 progress = false
 emoji = false
 
+[cite]                   # consumed by `doiget cite` and `doiget bib` (#610)
+# Default key template; --key-template / --key override it. Placeholders:
+# {author} {year} {title_word} {safekey}, lower-cased and ASCII-folded.
+# Unset = the safekey (doi_10.1007_BF01340294), which is collision-free.
+key_template = "{author}{year}{title_word}"   # -> fock1930naherungsmethode
+# Add `file = {...}` when this path exists ({key}, {safekey}); relative paths
+# resolve against the directory the command runs in.
+file_field = "refs/{key}.pdf"
+
 [verify]                 # consumed by `doiget verify`
 on_missing_id = "warn"   # warn | error | skip — policy for id-less entries
 strict = false           # also fail on unreachable (transient) ids; absent (404/410) ids fail regardless
