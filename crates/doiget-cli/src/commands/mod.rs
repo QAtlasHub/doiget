@@ -81,6 +81,7 @@ pub mod bib;
 pub mod capabilities;
 pub mod cite;
 pub mod config;
+pub mod coverage;
 pub mod csl;
 pub mod fetch;
 pub mod frontier;
