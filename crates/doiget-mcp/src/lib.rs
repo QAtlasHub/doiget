@@ -1294,7 +1294,7 @@ impl Server {
                 )));
             }
         };
-        match store.read(&safekey) {
+        match doiget_core::store::blocking_section(|| store.read(&safekey)) {
             Ok(Some(m)) => {
                 let payload = match serde_json::to_value(&m) {
                     Ok(v) => v,
@@ -1378,7 +1378,7 @@ impl Server {
                 )));
             }
         };
-        match store.search(&input.query, limit) {
+        match doiget_core::store::blocking_section(|| store.search(&input.query, limit)) {
             Ok(entries) => Ok(CallToolResult::structured(json!({
                 "ok": true,
                 "scope": "local",
@@ -1999,7 +1999,7 @@ impl Server {
                 )));
             }
         };
-        match store.list_recent(limit) {
+        match doiget_core::store::blocking_section(|| store.list_recent(limit)) {
             Ok(entries) => Ok(CallToolResult::structured(json!({
                 "ok": true,
                 "count": entries.len(),
@@ -2071,7 +2071,7 @@ impl Server {
                 )));
             }
         };
-        match store.read(&safekey) {
+        match doiget_core::store::blocking_section(|| store.read(&safekey)) {
             Ok(Some(_)) => {
                 let pdf_path = store_root.join(format!("{}.pdf", safekey.as_str()));
                 let exists = pdf_path.exists();
@@ -2526,7 +2526,7 @@ impl Server {
             }
         };
 
-        let mut metadata = match store.read(&safekey) {
+        let mut metadata = match doiget_core::store::blocking_section(|| store.read(&safekey)) {
             Ok(Some(m)) => m,
             Ok(None) => {
                 return Ok(CallToolResult::structured(json!({
@@ -2598,7 +2598,9 @@ impl Server {
         let tags = ext.tags.clone();
         let collections = ext.collections.clone();
 
-        match store.write_user_authored(&safekey, &metadata, None) {
+        match doiget_core::store::blocking_section(|| {
+            store.write_user_authored(&safekey, &metadata, None)
+        }) {
             Ok(()) => Ok(CallToolResult::structured(json!({
                 "ok": true,
                 "ref": input.ref_,
@@ -2669,7 +2671,7 @@ impl Server {
             }
         };
 
-        let mut metadata = match store.read(&safekey) {
+        let mut metadata = match doiget_core::store::blocking_section(|| store.read(&safekey)) {
             Ok(Some(m)) => m,
             Ok(None) => {
                 return Ok(CallToolResult::structured(json!({
@@ -2746,7 +2748,9 @@ impl Server {
 
         let annotation = ext.annotation.clone();
 
-        match store.write_user_authored(&safekey, &metadata, None) {
+        match doiget_core::store::blocking_section(|| {
+            store.write_user_authored(&safekey, &metadata, None)
+        }) {
             Ok(()) => Ok(CallToolResult::structured(json!({
                 "ok": true,
                 "ref": input.ref_,
@@ -3281,7 +3285,7 @@ impl Server {
                 }
             };
             let safekey = ref_.safekey();
-            match store.read(&safekey) {
+            match doiget_core::store::blocking_section(|| store.read(&safekey)) {
                 Ok(Some(m)) => {
                     let payload = match fmt {
                         CiteFmt::Bibtex => {
@@ -5449,5 +5453,32 @@ mod tests {
 
         let got = resolve_store_root().expect("resolves");
         assert_eq!(got.as_str(), "/from/env");
+    }
+
+    /// #590: no MCP handler calls a `Store` method except through
+    /// `doiget_core::store::blocking_section`, so a lock poll or an fsync on
+    /// a synced folder cannot hold a tokio worker.
+    #[test]
+    fn every_store_call_in_a_handler_goes_through_blocking_section() {
+        let src = include_str!("lib.rs");
+        let body = src.split("\nmod tests {").next().expect("non-test part");
+        // Whitespace-collapsed, so a call rustfmt wraps across lines still
+        // reads as `blocking_section(|| store.write(...`.
+        let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        for m in [
+            "read(",
+            "write(",
+            "write_user_authored(",
+            "list_recent(",
+            "search(",
+        ] {
+            let calls = flat.matches(&format!("store.{m}")).count();
+            let wrapped = ["blocking_section(|| store.", "blocking_section(|| { store."]
+                .iter()
+                .map(|w| flat.matches(&format!("{w}{m}")).count())
+                .sum::<usize>();
+            assert_eq!(calls, wrapped, "store.{m} called outside blocking_section");
+        }
+        assert_eq!(flat.matches("blocking_section(||").count(), 9);
     }
 }

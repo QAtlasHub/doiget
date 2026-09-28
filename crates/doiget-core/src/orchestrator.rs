@@ -2442,7 +2442,7 @@ fn write_metadata_and_pdf(
         (None, None) => None,
     };
 
-    match store.write(safekey, metadata, pdf_src) {
+    match crate::store::blocking_section(|| store.write(safekey, metadata, pdf_src)) {
         Ok(()) => {
             ctx.log.append(RowInput {
                 event: LogEvent::StoreWrite,

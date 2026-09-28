@@ -32,6 +32,34 @@ pub(crate) use fs_store::atomic_write;
 pub use metadata::{DoigetExtension, Metadata};
 pub use render::{to_bibtex, to_csl_array};
 
+/// Run a synchronous [`Store`] call from async code without stalling the
+/// runtime (#590).
+///
+/// Every `Store` method does blocking filesystem I/O: `write` can poll the
+/// advisory lock for up to 5 s (`LOCK_TIMEOUT`, `std::thread::sleep` in
+/// 50 ms steps) and then `fsync`s, which on a Dropbox / OneDrive / SMB store
+/// root costs hundreds of milliseconds uncontended. Called directly from an
+/// `async fn`, that holds a tokio worker for the whole duration, delaying
+/// every other task on it -- including the rate limiter's timers and other
+/// in-flight MCP tool calls.
+///
+/// On a multi-thread runtime (`#[tokio::main]`, `doiget serve`) this runs
+/// `f` under [`tokio::task::block_in_place`], which hands the worker's other
+/// tasks to another thread first. Elsewhere -- no runtime, or a
+/// current-thread runtime, where `block_in_place` would panic -- `f` runs
+/// inline, as before.
+///
+/// `block_in_place` rather than `spawn_blocking` because the orchestrator
+/// holds the store as `&dyn Store` (`docs/PUBLIC_API.md` §2): moving it into
+/// a `'static` closure would change the public signature of `fetch_paper`,
+/// which is the cost the issue ruled out for making the trait async.
+pub fn blocking_section<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()) {
+        Ok(tokio::runtime::RuntimeFlavor::MultiThread) => tokio::task::block_in_place(f),
+        _ => f(),
+    }
+}
+
 use camino::Utf8Path;
 use serde::Serialize;
 use thiserror::Error;
@@ -209,4 +237,97 @@ pub trait Store: Send + Sync {
     /// Return up to `limit` entries whose title / authors / venue / publisher
     /// case-insensitively contain `query`.
     fn search(&self, query: &str, limit: usize) -> Result<Vec<EntryInfo>, StoreError>;
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// Ticks a spawned task managed during `hold` of blocking work, run on
+    /// the ONLY worker of a one-worker multi-thread runtime.
+    async fn ticks_during(hold: Duration, through_helper: bool) -> usize {
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (t, r) = (Arc::clone(&ticks), Arc::clone(&running));
+        let ticker = tokio::spawn(async move {
+            while r.load(Ordering::SeqCst) {
+                t.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+        // Let the ticker start, then measure only the blocked window.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let before = ticks.load(Ordering::SeqCst);
+        let blocker = tokio::spawn(async move {
+            if through_helper {
+                super::blocking_section(|| std::thread::sleep(hold));
+            } else {
+                std::thread::sleep(hold);
+            }
+        });
+        blocker.await.expect("blocker");
+        let during = ticks.load(Ordering::SeqCst) - before;
+        running.store(false, Ordering::SeqCst);
+        ticker.await.expect("ticker");
+        during
+    }
+
+    /// #590: a store call that blocks (lock poll, fsync on a synced
+    /// folder) must not stall the other tasks on its worker.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_blocking_store_call_leaves_the_runtime_responsive() {
+        let hold = Duration::from_millis(300);
+        // Control: the same wait called directly starves the ticker, so the
+        // assertion below measures the helper and not the scheduler's luck.
+        let direct = ticks_during(hold, false).await;
+        let wrapped = ticks_during(hold, true).await;
+        assert!(
+            direct <= 3,
+            "control: direct blocking let {direct} ticks through"
+        );
+        assert!(
+            wrapped >= 20,
+            "blocking_section let only {wrapped} ticks through"
+        );
+    }
+
+    #[test]
+    fn blocking_section_runs_inline_without_a_multi_thread_runtime() {
+        assert_eq!(super::blocking_section(|| 7), 7);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        assert_eq!(rt.block_on(async { super::blocking_section(|| 8) }), 8);
+    }
+
+    /// The call sites cannot express the convention in the type system
+    /// (the trait is sync on purpose), so this pins it in the source: no
+    /// `Store` method is called from the orchestrator except through
+    /// `blocking_section`.
+    #[test]
+    fn every_orchestrator_store_call_goes_through_blocking_section() {
+        let src = include_str!("../orchestrator.rs");
+        let body = src.split("\nmod tests {").next().expect("non-test part");
+        // Whitespace-collapsed, so a call rustfmt wraps across lines still
+        // reads as `blocking_section(|| store.write(...`.
+        let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        for m in [
+            "read(",
+            "write(",
+            "write_user_authored(",
+            "list_recent(",
+            "search(",
+        ] {
+            let calls = flat.matches(&format!("store.{m}")).count();
+            let wrapped = ["blocking_section(|| store.", "blocking_section(|| { store."]
+                .iter()
+                .map(|w| flat.matches(&format!("{w}{m}")).count())
+                .sum::<usize>();
+            assert_eq!(calls, wrapped, "store.{m} called outside blocking_section");
+        }
+        assert!(flat.contains("blocking_section(|| store.write("));
+    }
 }
