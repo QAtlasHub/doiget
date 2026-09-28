@@ -1594,6 +1594,53 @@ mod tests {
         }
     }
 
+    /// #587 (review of #621), the proxy case through the real builder: a
+    /// Tier-2 / Tier-3 base alone keeps the production client, so Crossref
+    /// and every other source keep their curated allowlists. Setting a
+    /// Tier-1 base as well switches to the test client, which then holds
+    /// exactly the overridden keys -- the Tier-2 one included.
+    #[test]
+    #[serial]
+    fn a_proxy_base_alone_keeps_the_production_client() {
+        let _g: Vec<EnvGuard> = doiget_core::base_override::BASE_OVERRIDES
+            .iter()
+            .map(|o| {
+                let g = EnvGuard::save(o.env);
+                std::env::remove_var(o.env);
+                g
+            })
+            .collect();
+        std::env::set_var("DOIGET_APS_BASE", "https://proxy.example.edu");
+        std::env::set_var("DOIGET_DATACITE_BASE", "https://proxy.example.edu");
+
+        let client = build_http_client(None).expect("production client builds");
+        let crossref = client
+            .source_allowlist("crossref")
+            .expect("production registers crossref");
+        assert!(
+            crossref
+                .redirect_hosts
+                .iter()
+                .any(|h| h == "api.crossref.org"),
+            "a proxy base must not swap in the test client: {:?}",
+            crossref.redirect_hosts
+        );
+
+        std::env::set_var("DOIGET_CROSSREF_BASE", "http://127.0.0.1:9");
+        let client = build_http_client(None).expect("test client builds");
+        assert!(client
+            .source_allowlist("crossref")
+            .is_some_and(|a| a.redirect_hosts.iter().any(|h| h == "127.0.0.1")));
+        assert!(
+            client.source_allowlist("datacite").is_some(),
+            "in test mode the Tier-2 override is registered, not dropped"
+        );
+        assert!(
+            client.source_allowlist("unpaywall").is_none(),
+            "and a source nobody overrode is absent, so a test cannot reach it"
+        );
+    }
+
     #[test]
     fn new_session_id_is_26_chars() {
         // ULID textual form is fixed-width 26 chars (Crockford base32).

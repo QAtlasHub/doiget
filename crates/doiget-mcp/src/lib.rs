@@ -4956,6 +4956,28 @@ mod tests {
     /// `oa_publisher_allowlist_hosts` — the same helper the CLI test
     /// uses (review pass M3). The function exposes the merged host
     /// list without leaking client internals.
+    /// #587 (review of #621): the MCP twin of the CLI proxy-case test,
+    /// through `build_http_client_for_fetch` itself.
+    #[test]
+    #[serial_test::serial]
+    fn a_proxy_base_alone_keeps_the_production_client() {
+        let _g: Vec<EnvGuard> = doiget_core::base_override::BASE_OVERRIDES
+            .iter()
+            .map(|o| EnvGuard::unset(o.env))
+            .collect();
+        let _aps = EnvGuard::set("DOIGET_APS_BASE", "https://proxy.example.edu");
+        let _dc = EnvGuard::set("DOIGET_DATACITE_BASE", "https://proxy.example.edu");
+        let client = build_http_client_for_fetch().expect("production client");
+        assert!(client
+            .source_allowlist("crossref")
+            .is_some_and(|a| a.redirect_hosts.iter().any(|h| h == "api.crossref.org")));
+
+        let _cr = EnvGuard::set("DOIGET_CROSSREF_BASE", "http://127.0.0.1:9");
+        let client = build_http_client_for_fetch().expect("test client");
+        assert!(client.source_allowlist("datacite").is_some());
+        assert!(client.source_allowlist("unpaywall").is_none());
+    }
+
     #[test]
     #[serial_test::serial]
     fn build_http_client_for_fetch_merges_user_extension_hosts() {

@@ -1813,7 +1813,13 @@ async fn fetch_paper_doi(
     // mask a total failure and violate the "explain why" promise.
     // Surface the Crossref error so the caller reports a real reason.
     if let Some(e) = crossref_err {
-        if pdf_bytes.is_none() {
+        // ...unless another source DID resolve the DOI. DataCite exists for
+        // exactly the DOIs Crossref has no record of (#414); returning
+        // NotFound here threw its answer away whenever no PDF also landed,
+        // with a note saying "datacite consulted: resolved" under a message
+        // saying the sources "did not resolve it" (found by the #587 e2e,
+        // review of #621).
+        if pdf_bytes.is_none() && optional_meta.is_none() {
             // #413: attach the resolution trace. Returning the bare
             // Crossref error was the whole problem — it said nothing about
             // whether the optional chain had been consulted and come up
