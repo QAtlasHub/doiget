@@ -402,7 +402,19 @@ pub async fn metadata_only_to_store_with_options(
 ) -> Result<MetadataOnlyOutcome, FetchError> {
     let outcome = metadata_only_with_options(ref_, profile, ctx, opts).await?;
     let safekey = ref_.safekey();
-    let metadata = build_metadata_only_metadata(ref_, &outcome);
+    let mut metadata = build_metadata_only_metadata(ref_, &outcome);
+    // #608: same repair as the fetch path, so the store never holds a
+    // U+FFFD an enabled source could have supplied. Recorded in
+    // `[doiget].repaired_fields`; what is left is warned about here, since
+    // this outcome type carries the resolver payload, not the stored entry.
+    let quality = crate::metadata_quality::repair(&mut metadata, profile, ctx).await;
+    if !quality.remaining.is_empty() {
+        tracing::warn!(
+            safekey = safekey.as_str(),
+            fields = ?quality.remaining,
+            "stored metadata carries U+FFFD where the publisher's deposit lost a character"
+        );
+    }
     // `pdf_src = None` => writes `<root>/.metadata/<safekey>.toml` and
     // appends the `StoreWrite` row (the exact path `fetch_paper` uses
     // for its DOI metadata-only fallback).
@@ -481,6 +493,7 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
             tags: Vec::new(),
             collections: Vec::new(),
             annotation: None,
+            repaired_fields: Default::default(),
         }),
         other: BTreeMap::new(),
     }
@@ -683,7 +696,7 @@ fn env_nonempty(key: &str) -> Option<String> {
 /// doctor` and the tests must all see an edit to the file or the
 /// environment, and one small read is free next to the network legs it
 /// precedes.
-fn resolve_contact_email() -> String {
+pub(crate) fn resolve_contact_email() -> String {
     contact_email_or_placeholder()
 }
 
@@ -1162,6 +1175,13 @@ pub struct FetchPaperOutcome {
     ///
     /// Empty for an arXiv ref, which has no optional chain.
     pub attempts: Vec<SourceAttempt>,
+    /// Quality flags on the stored metadata, e.g. `replacement_char:venue`
+    /// for a field whose resolver value carries a U+FFFD that no enabled
+    /// source could repair (#608). Empty when the metadata is clean.
+    pub metadata_quality: Vec<String>,
+    /// Fields repaired from another source, field → source key (#608).
+    /// Also recorded in the store as `[doiget].repaired_fields`.
+    pub repaired_fields: BTreeMap<String, String>,
 }
 
 impl FetchPaperOutcome {
@@ -1216,6 +1236,8 @@ impl FetchPaperOutcome {
             authors: Vec::new(),
             year: None,
             attempts: Vec::new(),
+            metadata_quality: Vec::new(),
+            repaired_fields: BTreeMap::new(),
         }
     }
 
@@ -1404,6 +1426,7 @@ async fn fetch_paper_arxiv(
             tags: Vec::new(),
             collections: Vec::new(),
             annotation: None,
+            repaired_fields: Default::default(),
         }),
         other: BTreeMap::new(),
     };
@@ -1438,6 +1461,14 @@ async fn fetch_paper_arxiv(
         year: metadata.year,
         // arXiv resolves directly; the optional chain is a DOI concept.
         attempts: Vec::new(),
+        // arXiv's own Atom feed is UTF-8 end to end; the U+FFFD loss #608
+        // describes is a Crossref deposit problem. Still reported if seen.
+        metadata_quality: crate::metadata_quality::QualityReport {
+            remaining: crate::metadata_quality::replacement_char_fields(&metadata),
+            ..Default::default()
+        }
+        .flags(),
+        repaired_fields: BTreeMap::new(),
     })
 }
 
@@ -1815,7 +1846,7 @@ async fn fetch_paper_doi(
         None => (source_label, 0u64, None, None),
     };
 
-    let metadata = Metadata {
+    let mut metadata = Metadata {
         schema_version: SCHEMA_VERSION.to_string(),
         // #609: publishers deposit inline JATS / MathML pretty-printed onto
         // lines of their own; the store holds the title the author wrote.
@@ -1854,9 +1885,13 @@ async fn fetch_paper_doi(
             tags: Vec::new(),
             collections: Vec::new(),
             annotation: None,
+            repaired_fields: Default::default(),
         }),
         other: BTreeMap::new(),
     };
+    // #608: a Crossref record that lost characters to U+FFFD is repaired
+    // from an enabled source when one matches, and flagged when none does.
+    let quality = crate::metadata_quality::repair(&mut metadata, profile, ctx).await;
 
     let pdf_src_path = pdf_staged
         .as_ref()
@@ -1893,6 +1928,8 @@ async fn fetch_paper_doi(
         authors: metadata.authors.clone(),
         year: metadata.year,
         attempts,
+        metadata_quality: quality.flags(),
+        repaired_fields: quality.repaired,
     })
 }
 

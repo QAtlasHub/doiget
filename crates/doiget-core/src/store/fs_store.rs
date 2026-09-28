@@ -948,6 +948,7 @@ mod tests {
                 tags: Vec::new(),
                 collections: Vec::new(),
                 annotation: None,
+                repaired_fields: Default::default(),
             }),
             other: BTreeMap::new(),
         }

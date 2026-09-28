@@ -29,6 +29,12 @@
 //!   for publishers that deposit pretty-printed markup. BibTeX then renders
 //!   `P y SCF` for `PySCF`. Re-run `doiget cite` for a clean title.
 //!
+//! - `replacement_char` (**warning**) — a field carries U+FFFD, the
+//!   character a decoder substitutes for one it could not read. Some
+//!   Crossref records carry it where the publisher's deposit lost an umlaut
+//!   (`Zeitschrift f\u{FFFD}r Physik`, #608); the entry compiles and the damage
+//!   shows only in the rendered bibliography.
+//!
 //! Exit code = number of `error` findings (capped at 255). `--strict`
 //! promotes warnings so that ANY finding fails the run.
 
@@ -168,6 +174,21 @@ pub fn run(path: String, strict: bool, mode: OutputMode) -> Result<()> {
                 }
 
                 for (name, chunks) in &entry.fields {
+                    if doiget_core::metadata_quality::has_replacement_char(
+                        &chunks.format_verbatim(),
+                    ) {
+                        emit(
+                            &key,
+                            &et,
+                            "replacement_char",
+                            Severity::Warning,
+                            format!(
+                                "field `{name}` carries U+FFFD where a character was lost \
+                                 (e.g. a Crossref record's umlauts); restore it by hand, or \
+                                 re-run `doiget cite` with DOIGET_ENABLE_S2=1 to try a repair"
+                            ),
+                        );
+                    }
                     if chunks.format_verbatim().trim().is_empty() {
                         emit(
                             &key,

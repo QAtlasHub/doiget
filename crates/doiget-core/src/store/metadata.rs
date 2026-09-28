@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// through the `other` field, so reading-and-rewriting an entry produced
 /// by a future minor revision (or by BiblioFetch.jl) does not silently
 /// drop data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Metadata {
     /// Schema version of the form `<MAJOR>.<MINOR>`. See `docs/STORE.md` §3.
     pub schema_version: String,
@@ -143,4 +143,9 @@ pub struct DoigetExtension {
     /// Additive optional field. Set via `doiget annotate` (#294).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub annotation: Option<String>,
+    /// Fields whose resolver value carried a U+FFFD and was replaced by
+    /// another source's matching value: field name → source key (#608),
+    /// e.g. `repaired_fields = { title = "semantic_scholar" }`. Additive.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty", default)]
+    pub repaired_fields: std::collections::BTreeMap<String, String>,
 }

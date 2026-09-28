@@ -710,6 +710,16 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
     if outcome.is_clean_success() {
         emit_identity_line(outcome);
     }
+    let repair_enabled = CapabilityProfile::from_env()
+        .map(|p| p.metadata.semantic_scholar || p.metadata.openalex)
+        .unwrap_or(false);
+    for line in super::metadata_quality_lines(
+        &outcome.repaired_fields,
+        &outcome.metadata_quality,
+        repair_enabled,
+    ) {
+        print_err(format_args!("     {line}"));
+    }
 }
 
 /// Render the #344 identity line on stderr:

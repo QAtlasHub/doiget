@@ -3683,6 +3683,12 @@ fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> V
         // when there is no trace, so "unavailable" stays distinguishable
         // from "empty".
         "attempts": attempts_json(&outcome.attempts),
+        // #608: a stored field that still carries a U+FFFD (a character
+        // the publisher's deposit lost), e.g. `replacement_char:venue`, and
+        // the fields repaired from another enabled source. Both empty for
+        // clean metadata; always present so an agent can rely on the key.
+        "metadata_quality": outcome.metadata_quality,
+        "repaired_fields": outcome.repaired_fields,
     })
 }
 

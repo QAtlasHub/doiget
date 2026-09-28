@@ -39,6 +39,7 @@ use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
 
+use doiget_core::metadata_quality::repair;
 use doiget_core::orchestrator::{cite_metadata, resolve_only, MetadataOnlyOutcome};
 use doiget_core::store::{render, FsStore, Metadata, Store};
 use doiget_core::{CapabilityProfile, Ref};
@@ -99,6 +100,19 @@ pub async fn run(input: String, offline: bool, _mode: super::output::OutputMode)
                         "note: published-version DOI resolve failed ({e}); citing the arXiv preprint"
                     )),
                 }
+            }
+            // #608: a Crossref record that lost characters to U+FFFD is
+            // repaired from an enabled source when one matches it, and the
+            // rest is named on stderr -- the entry compiles either way, so
+            // this is the only place the damage is visible before the
+            // bibliography is rendered.
+            let quality = repair(&mut metadata, &profile, &ctx).await;
+            for line in super::metadata_quality_lines(
+                &quality.repaired,
+                &quality.flags(),
+                profile.metadata.semantic_scholar || profile.metadata.openalex,
+            ) {
+                print_err(format_args!("{line}"));
             }
             let bib = render::to_bibtex(ref_.safekey().as_str(), &metadata);
             write_bib(&bib)
