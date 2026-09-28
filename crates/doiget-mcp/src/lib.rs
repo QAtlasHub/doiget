@@ -2072,15 +2072,23 @@ impl Server {
             }
         };
         match doiget_core::store::blocking_section(|| store.read(&safekey)) {
-            Ok(Some(_)) => {
+            Ok(Some(m)) => {
                 let pdf_path = store_root.join(format!("{}.pdf", safekey.as_str()));
                 let exists = pdf_path.exists();
+                let d = m.doiget.as_ref();
                 Ok(CallToolResult::structured(json!({
                     "ok": true,
                     "ref": input.ref_,
                     "safekey": safekey.as_str(),
                     "path": if exists { Value::String(pdf_path.to_string()) } else { Value::Null },
                     "pdf_exists": exists,
+                    // #606: where the PDF came from, so an agent does not
+                    // read a user's licensed download as an open copy.
+                    // `user-supplied` (added with `doiget add`, no licence
+                    // claim) or null (fetched by doiget); `license` is the
+                    // stored claim, `unknown` when none was determined.
+                    "origin": d.and_then(|d| d.origin.clone()),
+                    "license": d.map(|d| d.license.clone()),
                 })))
             }
             Ok(None) => Ok(CallToolResult::structured(json!({

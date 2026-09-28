@@ -90,6 +90,7 @@ fn fixture(doi_suffix: &str, title: &str, authors: Vec<String>) -> (Safekey, Met
             annotation: None,
             repaired_fields: Default::default(),
             short_venue: None,
+            origin: None,
         }),
         other: BTreeMap::new(),
     };

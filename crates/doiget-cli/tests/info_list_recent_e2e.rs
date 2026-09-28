@@ -80,6 +80,7 @@ fn fixture(doi_suffix: &str, title: &str, year: i32, fetched_year: i32) -> (Safe
             annotation: None,
             repaired_fields: Default::default(),
             short_venue: None,
+            origin: None,
         }),
         other: BTreeMap::new(),
     };

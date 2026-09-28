@@ -218,6 +218,9 @@ pub enum Capability {
     TdmSpringer,
     /// IEEE TDM (Tier 3, opt-in build).
     TdmIeee,
+    /// A PDF the user supplied with `doiget add` (#606): not fetched under
+    /// any capability, and recorded as such rather than as `oa`.
+    UserSupplied,
 }
 
 /// Errors emitted by the provenance log writer. Callers MUST treat any

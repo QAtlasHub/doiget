@@ -154,4 +154,14 @@ pub struct DoigetExtension {
     /// Absent when the record carries none; never guessed. Additive.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub short_venue: Option<String>,
+    /// Where the PDF came from when doiget did not fetch it:
+    /// `"user-supplied"` for a file added with `doiget add` (#606). A stored
+    /// PDF is otherwise one doiget fetched from an OA or entitled source; a
+    /// user-supplied one carries no licence claim (`license = "unknown"`)
+    /// and must not be read as free to use. Absent for fetched entries.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub origin: Option<String>,
 }
+
+/// [`DoigetExtension::origin`] for a PDF added by hand (#606).
+pub const ORIGIN_USER_SUPPLIED: &str = "user-supplied";
