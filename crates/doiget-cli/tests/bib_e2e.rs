@@ -412,3 +412,91 @@ fn bib_default_key_is_still_the_safekey() {
         ))
         .stdout(predicate::str::contains("file ").not());
 }
+
+/// Review of #622: `cite`, not only `bib`, honours the key options -- here
+/// on its --offline store path.
+#[test]
+fn cite_offline_with_a_key_template_and_a_file_field() {
+    let (dir, root) = seeded_store_for_keys();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(work.join("refs")).expect("mkdir");
+    std::fs::write(work.join("refs/hartree1928wave.pdf"), b"%PDF-1.4\n").expect("pdf");
+    doiget(&root)
+        .current_dir(&work)
+        .args(["cite", "--offline", "10.1017/S0305004100011919"])
+        .args(["--key-template", "{author}{year}{title_word}"])
+        .args(["--file-field", "refs/{key}.pdf"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("@article{hartree1928wave,"))
+        .stdout(predicate::str::contains(
+            "file       = {refs/hartree1928wave.pdf}",
+        ));
+    doiget(&root)
+        .args([
+            "cite",
+            "--offline",
+            "10.1017/S0305004100011919",
+            "--key",
+            "h28",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("@article{h28,"));
+}
+
+/// Review of #622: an explicit key BibTeX cannot carry is refused, not
+/// emitted as `@article{smith, 2020,`.
+#[test]
+fn an_explicit_key_bibtex_cannot_carry_is_refused() {
+    let (_dir, root) = seeded_store_for_keys();
+    doiget(&root)
+        .args([
+            "cite",
+            "--offline",
+            "10.1017/S0305004100011919",
+            "--key",
+            "smith, 2020",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be a BibTeX key"));
+}
+
+/// Review of #622: `[cite] file_field` is the default, and a config that
+/// does not parse is reported instead of silently dropping `[cite]`.
+#[test]
+fn bib_config_file_field_is_the_default_and_a_broken_config_is_named() {
+    let (dir, root) = seeded_store_for_keys();
+    let cfg = dir.path().join("cfg");
+    std::fs::create_dir_all(cfg.join("doiget")).expect("mkdir");
+    std::fs::write(
+        cfg.join("doiget/config.toml"),
+        "[cite]\nfile_field = \"refs/{safekey}.pdf\"\n",
+    )
+    .expect("config");
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(work.join("refs")).expect("mkdir");
+    std::fs::write(
+        work.join("refs/doi_10.1017_S0305004100011919.pdf"),
+        b"%PDF-1.4\n",
+    )
+    .expect("pdf");
+    let run = |dir: &std::path::Path| {
+        doiget(&root)
+            .current_dir(dir)
+            .env("XDG_CONFIG_HOME", &cfg)
+            .env("APPDATA", &cfg)
+            .args(["bib", "10.1017/S0305004100011919"])
+            .assert()
+            .success()
+    };
+    run(&work).stdout(predicate::str::contains(
+        "file       = {refs/doi_10.1017_S0305004100011919.pdf}",
+    ));
+
+    std::fs::write(cfg.join("doiget/config.toml"), "[cite\nbroken").expect("config");
+    run(&work)
+        .stdout(predicate::str::contains("file ").not())
+        .stderr(predicate::str::contains("could not be read"));
+}

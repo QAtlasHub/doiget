@@ -1383,6 +1383,20 @@ host = "*.uj.edu.pl"
     /// A blank value is "unset", not the empty path — which would resolve
     /// to the filesystem root.
     #[test]
+    fn cite_section_parses_and_blank_values_are_absent() {
+        // #610 (review of #622).
+        let cfg = parse_str(
+            "[cite]\nkey_template = \"{author}{year}\"\nfile_field = \"  \"\n",
+            Utf8Path::new("t.toml"),
+        )
+        .expect("parses");
+        assert_eq!(cfg.cite_key_template.as_deref(), Some("{author}{year}"));
+        assert_eq!(cfg.cite_file_field, None, "a blank value is absent");
+        let cfg = parse_str("", Utf8Path::new("t.toml")).expect("parses");
+        assert_eq!((cfg.cite_key_template, cfg.cite_file_field), (None, None));
+    }
+
+    #[test]
     fn blank_store_root_parses_as_absent() {
         let cfg =
             parse_str("[store]\nroot = \"  \"\n", Utf8Path::new("test.toml")).expect("parses");

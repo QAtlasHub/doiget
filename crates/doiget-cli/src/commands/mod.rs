@@ -281,15 +281,32 @@ impl KeyOptions {
     /// A template with an unknown placeholder or an unclosed `{`, naming
     /// where it came from.
     pub fn with_config_defaults(mut self) -> Result<Self> {
+        if let Some(k) = &self.key {
+            if !doiget_core::store::citekey::is_valid_key(k) {
+                anyhow::bail!(
+                    "--key {k:?} cannot be a BibTeX key: use only letters, digits and - _ : . + /"
+                );
+            }
+        }
         if self.template.is_none() || self.file_field.is_none() {
-            if let Some(cfg) =
-                user_config_path().and_then(|p| doiget_core::user_extension::load(&p).ok())
-            {
-                if self.template.is_none() && self.key.is_none() {
-                    self.template = cfg.cite_key_template;
-                }
-                if self.file_field.is_none() {
-                    self.file_field = cfg.cite_file_field;
+            if let Some(path) = user_config_path() {
+                // A config that does not parse must not make `[cite]` vanish
+                // silently -- TOML fails the whole document, so a typo under
+                // `[network]` would otherwise drop the key template with no
+                // word said (the #468 lesson, review of #622).
+                match doiget_core::user_extension::load(&path) {
+                    Ok(cfg) => {
+                        if self.template.is_none() && self.key.is_none() {
+                            self.template = cfg.cite_key_template;
+                        }
+                        if self.file_field.is_none() {
+                            self.file_field = cfg.cite_file_field;
+                        }
+                    }
+                    Err(e) => output::print_err(format_args!(
+                        "warning: {path} could not be read ({e}); its [cite] defaults are not \
+                         applied. Run `doiget config doctor`."
+                    )),
                 }
             }
         }

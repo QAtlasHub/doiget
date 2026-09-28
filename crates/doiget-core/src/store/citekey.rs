@@ -132,6 +132,16 @@ fn fold(s: &str) -> String {
     out
 }
 
+/// Whether `key` is usable as-is as a BibTeX / biblatex citation key: non-empty
+/// and made only of letters, digits and `-_:.+/`. An explicit `--key` is
+/// checked with this and refused otherwise, rather than silently rewritten:
+/// `smith, 2020` would otherwise end the key at the comma and shift every
+/// field after it (review of #622).
+#[must_use]
+pub fn is_valid_key(key: &str) -> bool {
+    !key.is_empty() && sanitize(key) == key
+}
+
 /// Drop what a BibTeX / biblatex key cannot carry. Letters, digits and
 /// `-_:.+/` survive; whitespace, braces, commas, quotes and `%` do not.
 fn sanitize(key: &str) -> String {
@@ -264,6 +274,15 @@ mod tests {
             Err(KeyTemplateError::Unclosed(_))
         ));
         assert!(validate_template(T).is_ok());
+    }
+
+    #[test]
+    fn an_explicit_key_is_valid_only_if_bibtex_can_carry_it() {
+        assert!(is_valid_key("fock1930"));
+        assert!(is_valid_key("Fock:1930-a"));
+        assert!(!is_valid_key("smith, 2020"));
+        assert!(!is_valid_key("a}b"));
+        assert!(!is_valid_key(""));
     }
 
     #[test]
