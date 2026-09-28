@@ -294,9 +294,11 @@ look beyond that list: when Crossref resolved the DOI, the optional sources
 were skipped entirely, so a rate limit on the single publisher URL ended a run
 with other indexes switched on (#445).
 
-If the content leg is still blocked after the arXiv preprint fallback
-(#325), doiget now asks the **enabled** optional sources whether anyone else
-holds a copy, and tries the document URL they report. Three of them publish
+If the content leg still has no PDF after the arXiv preprint fallback
+(#325) -- whether a location refused it (blocked) or Unpaywall had no OA
+location at all (`closed`, #547) -- doiget asks the **enabled** optional
+sources whether anyone else holds a copy, and tries the document URL they
+report. Three of them publish
 one: CORE (`downloadUrl`), HAL (`fileMain_s`, gated on `openAccess_bool`) and
 Europe PMC (`fullTextUrlList`). OpenAIRE and DataCite report a DOI resolver or
 a landing page rather than a file, so they contribute no URL — their outcome
@@ -304,6 +306,14 @@ still appears in the attempt trace.
 
 The fetch itself stays on the `oa-publisher` leg, with its allowlist and its
 ADR-0023 denial context, exactly as each source's own docs describe.
+
+OpenAlex lists every location it knows, including ones it cannot point at a
+file. When a named location's landing page is a listing (an EPrints
+`/view/author/` page) or a malformed URL, the attempt trace names the
+location and says so, e.g. *"Strathprints ... URL .../view/author/70486.html>
+is malformed ... a listing page rather than an item; search that repository
+for the title"*. That points the reader at the repository rather than at
+giving up. Following the repository's own search is not done (#547 part 2).
 
 This costs a request only when the content leg has **already** failed and the
 user has switched a source on. With no flags set, behaviour is unchanged.
