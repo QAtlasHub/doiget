@@ -199,6 +199,30 @@ To make `bib` / `csl` / TOML output diff-stable across implementations:
 A reference normalizer is provided by `doiget-core::store::normalize_toml(&Metadata)
 -> String`. CI uses it to detect drift.
 
+### 7a. Calling convention: the trait is synchronous and may block
+
+Every `Store` method does blocking filesystem I/O. `write` can poll the
+advisory lock for up to 5 s (§4) and then `fsync`s (§5), which on a store
+root in a synced or network folder (Dropbox, OneDrive, SMB) costs hundreds
+of milliseconds even uncontended. The trait stays synchronous — an async
+trait would be a `docs/PUBLIC_API.md` §2 break and would still leave the
+`fsync` blocking — so the convention is carried by the caller:
+
+- **From async code, call a `Store` method through
+  `doiget_core::store::blocking_section(|| store.write(..))`.** On a
+  multi-thread tokio runtime (`doiget serve`, the CLI) it runs the call under
+  `tokio::task::block_in_place`, handing the worker's other tasks — the rate
+  limiter's timers, other in-flight tool calls — to another thread first.
+  Elsewhere it runs inline.
+- Synchronous callers (`doiget bib`, `csl`, `tag`, …) call the store
+  directly.
+
+doiget's own async call sites -- the orchestrator's store write, every MCP
+handler, and every CLI command file that contains async code -- are pinned to
+this by source-scan tests (#590). The CLI scan walks `src/commands/` at test
+time, so a new command file is covered without being listed. The scans match
+calls on a receiver named `store`; the call sites keep that name.
+
 ## 8. Reading
 
 Both implementations MUST tolerate:

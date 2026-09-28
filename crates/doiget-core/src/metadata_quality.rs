@@ -33,7 +33,8 @@ pub const REPLACEMENT_CHAR: char = '\u{FFFD}';
 /// Metadata fields a U+FFFD is looked for in, by their `docs/STORE.md` name.
 const CHECKED_FIELDS: &[&str] = &["title", "authors", "venue", "publisher", "abstract"];
 
-/// The fields of `m` that carry a U+FFFD, in [`CHECKED_FIELDS`] order.
+/// The fields of `m` that carry a U+FFFD: title, authors, venue,
+/// publisher, abstract, in that order.
 #[must_use]
 pub fn replacement_char_fields(m: &Metadata) -> Vec<&'static str> {
     CHECKED_FIELDS
@@ -275,7 +276,7 @@ mod tests {
     #[test]
     fn every_checked_field_is_detected() {
         let m = Metadata {
-            title: format!("hom{F}opolare Bindung"),
+            title: format!("Wechselwirkung neutraler Atome und {F} Bindung"),
             authors: vec!["London, F.".into(), format!("M{F}ller, A.")],
             venue: Some(format!("Zeitschrift f{F}r Physik")),
             publisher: Some("Springer".into()),
