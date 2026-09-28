@@ -221,6 +221,19 @@ pub enum FetchError {
         /// Which representation was requested: `"source bundle"` or `"figures"`.
         kind: &'static str,
     },
+    /// This session already asked about the ref and got an answer no retry
+    /// can change yet (#507, ADR-0057), so it was not asked again. Carries
+    /// the code the caller was given then -- or `RATE_LIMITED` when the
+    /// earlier answer was `retry_after` and its wait has not elapsed.
+    #[error("{message}")]
+    Replayed {
+        /// The code to report: the earlier answer's, or `RATE_LIMITED`.
+        code: crate::ErrorCode,
+        /// What happened and how to ask anyway.
+        message: String,
+        /// For a wait still running: seconds until a retry is let through.
+        retry_after_secs: Option<u64>,
+    },
 }
 
 /// Map [`FetchError`] to the closed [`crate::ErrorCode`] set surfaced at
@@ -311,6 +324,9 @@ impl From<&FetchError> for crate::ErrorCode {
             // is absent. Same wire code as TextUnavailable (representation
             // missing → fetch the PDF), distinct variant for a correct message.
             FetchError::SourceUnavailable { .. } => crate::ErrorCode::TextUnavailable,
+            // A replay reports the answer it replays, so an agent reads the
+            // same disposition it was given the first time (#507).
+            FetchError::Replayed { code, .. } => *code,
         }
     }
 }
@@ -336,8 +352,20 @@ impl From<&FetchError> for crate::ErrorCode {
 pub fn retry_after_ms(e: &FetchError) -> Option<u64> {
     match e {
         FetchError::Http(HttpError::HttpStatus { retry_after_ms, .. }) => *retry_after_ms,
+        // #507: not a guess either -- the wait repeat suppression enforces,
+        // measured from the answer it is enforcing.
+        FetchError::Replayed {
+            retry_after_secs, ..
+        } => retry_after_secs.map(|s| s * 1000),
         _ => None,
     }
+}
+
+/// Whether `e` is a replay of an answer this session already gave (#507),
+/// which the envelopes mark with `replayed: true`.
+#[must_use]
+pub fn is_replayed(e: &FetchError) -> bool {
+    matches!(e, FetchError::Replayed { .. })
 }
 
 impl From<&FetchError> for Option<crate::DenialContext> {
@@ -375,7 +403,8 @@ impl From<&FetchError> for Option<crate::DenialContext> {
             | FetchError::SourceSchema { .. }
             | FetchError::TooManyRefs { .. }
             | FetchError::TextUnavailable { .. }
-            | FetchError::SourceUnavailable { .. } => None,
+            | FetchError::SourceUnavailable { .. }
+            | FetchError::Replayed { .. } => None,
         }
     }
 }

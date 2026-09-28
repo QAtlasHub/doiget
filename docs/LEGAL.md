@@ -61,8 +61,9 @@ This is enforced structurally rather than only by documentation:
   user-provided API key. Both must be present, otherwise the source is unavailable at
   runtime. See [`CAPABILITY.md`](CAPABILITY.md).
 - A hard-coded rate limit (5 concurrent fetches, 5/second — stricter still for
-  sources whose terms say so, e.g. arXiv at 1 request / 3 s) prevents bulk-scraping
-  patterns and cannot be overridden by configuration.
+  sources whose terms say so, e.g. arXiv at 1 request / 3 s) bounds how fast
+  doiget asks, and repeat suppression bounds how often it asks the same thing
+  (§6a.5). Neither can be overridden by configuration.
 
 ## 2a. Access ceiling (binding constraint)
 
@@ -307,6 +308,30 @@ them requires changing source files that are gated by branch protection.
    `rate_limiter.rs::tests` — including one that fails the build if a table
    entry is looser than the global cap and would therefore be silently
    ignored.
+
+   **Rate is not persistence** (#507, ADR-0057). A cap on requests per second
+   does not bound how often the *same* request is made: an agent retrying 500
+   refused DOIs ten times each sends 5,000 requests without exceeding 5/s. So
+   within a session (one `doiget serve` process, or one CLI run), a ref already
+   answered with something a retry cannot change is not asked again:
+
+   - a `terminal` or `needs_config` answer (ADR-0055) is replayed for 10 minutes,
+     as `ok:false` with `replayed: true` and the original code, without a
+     request;
+   - a `retry_after` answer is let through after 30 s, and refused before that
+     with `RATE_LIMITED` and the true remaining time.
+
+   The answers come from the provenance log's `session_end` rows as they are
+   written (§6 of `PROVENANCE_LOG.md`). A change to `config.toml` lifts a replay,
+   because it is the one input that can change within a session. The window and
+   the gap are library constants, like `RateLimits`: **nothing in configuration
+   turns suppression off.** A caller that needs a fresh answer asks for it per
+   request (`force` on the MCP tools, `--refetch` on the CLI). That request goes
+   out, and a `repeat_forced` log row records the override. *Enforced by:*
+   `doiget_core::repeat` (constants; `observe` fed only by durably written
+   rows), `orchestrator::fetch_paper_with` (checked before any network), and
+   the tests `a_terminal_answer_is_replayed_and_force_asks_again_507` and
+   `a_repeated_terminal_answer_is_a_replay_until_forced`.
 
 ### 6b. Policy commitments (3)
 

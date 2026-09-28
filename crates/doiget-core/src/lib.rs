@@ -31,6 +31,7 @@ pub mod provenance;
 pub mod rate_limiter;
 pub mod refs;
 pub mod remediation;
+pub mod repeat;
 pub mod resolver_cache;
 pub mod source;
 pub mod source_catalog;
@@ -845,6 +846,32 @@ impl ErrorCode {
 }
 
 impl ErrorCode {
+    /// Every code, for [`ErrorCode::from_wire`].
+    pub const ALL: &'static [ErrorCode] = &[
+        ErrorCode::InvalidRef,
+        ErrorCode::NoOaAvailable,
+        ErrorCode::RateLimited,
+        ErrorCode::NetworkError,
+        ErrorCode::NotFound,
+        ErrorCode::Ambiguous,
+        ErrorCode::StoreError,
+        ErrorCode::LogError,
+        ErrorCode::CapabilityDenied,
+        ErrorCode::FetchTimeout,
+        ErrorCode::SchemaTooNew,
+        ErrorCode::LockTimeout,
+        ErrorCode::InternalError,
+        ErrorCode::NotImplemented,
+        ErrorCode::TextUnavailable,
+    ];
+
+    /// The code whose [`ErrorCode::as_wire`] is `s`, e.g. read back from the
+    /// provenance log's `error_code` column (#507).
+    #[must_use]
+    pub fn from_wire(s: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|c| c.as_wire() == s)
+    }
+
     /// The `SCREAMING_SNAKE_CASE` wire token for this code, as a
     /// `&'static str`. Identical to the serde representation but
     /// allocation-free and usable where a borrowed string with a

@@ -52,9 +52,7 @@ use doiget_core::http::{
     discovery_allowlist, fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist,
     tier_3_allowlists, HttpClient,
 };
-use doiget_core::orchestrator::{
-    fetch_paper as core_fetch_paper, FetchPaperOutcome, PdfLegStatus, SourceAttempt,
-};
+use doiget_core::orchestrator::{FetchPaperOutcome, PdfLegStatus, SourceAttempt};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
 use doiget_core::source::{FetchContext, FetchError};
@@ -383,6 +381,17 @@ impl OrchestratorConfig {
 /// orchestration runs through [`FetchHarness::fetch_one`]; bookend rows go
 /// via [`FetchHarness::log_session_start`] / [`FetchHarness::log_session_end`]
 /// so the orchestrator can frame either one fetch or many.
+/// `--refetch` for this CLI invocation (#507): ask even where this session
+/// already has an answer repeat suppression would replay. A process flag,
+/// not a parameter, because one invocation is one request and every command
+/// that fetches builds its harness through [`FetchHarness::from_env`].
+static REFETCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Set `--refetch` for the rest of this process (`main` does, from the flag).
+pub fn set_refetch(on: bool) {
+    REFETCH.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
 pub(crate) struct FetchHarness {
     pub(crate) http: Arc<HttpClient>,
     pub(crate) rate_limiter: Arc<RateLimiter>,
@@ -396,6 +405,8 @@ pub(crate) struct FetchHarness {
     /// re-reads contact email from env directly).
     #[allow(dead_code)]
     pub(crate) cfg: OrchestratorConfig,
+    /// `--refetch` (#507), captured when the harness is built.
+    pub(crate) force: bool,
 }
 
 impl FetchHarness {
@@ -435,6 +446,7 @@ impl FetchHarness {
             profile,
             session_id,
             cfg,
+            force: REFETCH.load(std::sync::atomic::Ordering::SeqCst),
         })
     }
 
@@ -525,7 +537,15 @@ impl FetchHarness {
         // was unreachable through the previous `Result<()>`
         // signature).
         let ctx = self.fetch_context();
-        core_fetch_paper(ref_, &self.profile, &ctx, &self.store, self.store.root()).await
+        doiget_core::orchestrator::fetch_paper_with(
+            ref_,
+            &self.profile,
+            &ctx,
+            &self.store,
+            self.store.root(),
+            doiget_core::orchestrator::FetchOptions::default().with_force(self.force),
+        )
+        .await
     }
 }
 
@@ -758,12 +778,11 @@ pub async fn run_with_options(
     // an unclean session, and the leg carries the closed-set code -- recording
     // `None` there would log the one outcome an agent is most likely to retry
     // as having no reason at all.
+    // The EFFECTIVE code (a policy refusal is CAPABILITY_DENIED), the same
+    // one this command prints and repeat suppression reads back.
     let session_err = match &result {
         Err(e) => Some(doiget_core::ErrorCode::from(e).as_wire()),
-        Ok(o) => match &o.pdf_leg {
-            PdfLegStatus::Blocked { code, .. } => Some(code.as_wire()),
-            _ => None,
-        },
+        Ok(o) => o.reported_error_code().map(|c| c.as_wire()),
     };
     harness.log_session_end(session_ok, Some(ref_.as_input_str()), session_err);
 

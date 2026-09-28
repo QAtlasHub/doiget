@@ -1184,3 +1184,72 @@ async fn fetch_paper_reaches_datacite_through_the_override_client() -> anyhow::R
     drop(td);
     Ok(())
 }
+
+/// #507 over MCP: asking again about a DOI this server was just told does
+/// not exist is answered as a replay (same code, `replayed: true`) without a
+/// request, and `force: true` asks anyway.
+#[tokio::test]
+#[serial_test::serial]
+async fn a_repeated_terminal_answer_is_a_replay_until_forced() -> anyhow::Result<()> {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let root = camino::Utf8Path::from_path(td.path())
+        .expect("utf-8")
+        .to_path_buf();
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", root.join("papers").as_str());
+    env.set("DOIGET_LOG_PATH", root.join("log.jsonl").as_str());
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", server.uri()));
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+    let call = |force: bool| {
+        let mut args = serde_json::Map::new();
+        args.insert("ref".into(), serde_json::json!("10.1234/nowhere"));
+        if force {
+            args.insert("force".into(), serde_json::json!(true));
+        }
+        client
+            .peer()
+            .call_tool(CallToolRequestParams::new("doiget_fetch_paper").with_arguments(args))
+    };
+    let requests = || async { server.received_requests().await.unwrap_or_default().len() };
+
+    let first = call(false).await?;
+    let first = first.structured_content.expect("structured");
+    assert_eq!(first["error"]["code"], "NOT_FOUND", "{first:?}");
+    assert!(first["error"].get("replayed").is_none());
+    let sent = requests().await;
+
+    let second = call(false).await?;
+    let second = second.structured_content.expect("structured");
+    assert_eq!(second["ok"], false);
+    assert_eq!(
+        second["error"]["code"], "NOT_FOUND",
+        "same answer: {second:?}"
+    );
+    assert_eq!(second["error"]["replayed"], true, "{second:?}");
+    assert_eq!(
+        requests().await,
+        sent,
+        "a replay must not reach the network"
+    );
+
+    let forced = call(true).await?;
+    let forced = forced.structured_content.expect("structured");
+    assert!(forced["error"].get("replayed").is_none(), "{forced:?}");
+    assert!(requests().await > sent, "force asks again");
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}

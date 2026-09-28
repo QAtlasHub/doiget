@@ -450,6 +450,17 @@ pub async fn run_with_options(
                     }
                 };
                 let result = harness_task.fetch_one(&ref_).await;
+                // #507: this run's bookend covers the whole batch, so each
+                // entry's answer is recorded as it lands -- a DOI listed twice
+                // is then replayed, not fetched twice. A replay itself is
+                // skipped by the index, so it cannot restart a wait.
+                harness_task.log.repeat().observe(
+                    ref_.as_input_str(),
+                    match &result {
+                        Ok(o) => o.reported_error_code(),
+                        Err(e) => Some(doiget_core::ErrorCode::from(e)),
+                    },
+                );
                 TaskOutcome { input, result }
             });
         }

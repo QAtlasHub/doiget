@@ -319,6 +319,11 @@ enum Command {
         /// metadata is absent. Metadata-only fetches (no PDF) are skipped. (#344)
         #[arg(long, value_name = "DIR", value_parser = parse_utf8_path)]
         link: Option<Utf8PathBuf>,
+        /// Ask again even if this run already has an answer a retry cannot
+        /// change yet (#507). Without it such a repeat reports the earlier
+        /// answer, marked as a replay, without a network request.
+        #[arg(long)]
+        refetch: bool,
     },
     /// Fetch many refs from a newline-separated text file.
     ///
@@ -336,6 +341,9 @@ enum Command {
         /// exit so a malformed batch is visible.
         #[arg(long)]
         dry_run: bool,
+        /// Ask again for entries this run already has an answer for (#507).
+        #[arg(long)]
+        refetch: bool,
         /// Skip refs that already have a PDF in the store
         /// (`<store>/<safekey>.pdf` exists). Metadata-only entries are
         /// NOT skipped — they may now succeed via the preprint fallback
@@ -1049,14 +1057,20 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             ref_,
             dry_run,
             link,
-        }) => doiget_cli::commands::fetch::run_with_options(ref_, dry_run, link, mode).await,
+            refetch,
+        }) => {
+            doiget_cli::commands::fetch::set_refetch(refetch);
+            doiget_cli::commands::fetch::run_with_options(ref_, dry_run, link, mode).await
+        }
         Some(Command::Batch {
             path,
             dry_run,
             only_failed,
             delay,
             user_agent,
+            refetch,
         }) => {
+            doiget_cli::commands::fetch::set_refetch(refetch);
             doiget_cli::commands::batch::run_with_options(
                 path,
                 dry_run,
