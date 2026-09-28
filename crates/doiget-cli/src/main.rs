@@ -87,6 +87,24 @@ fn parse_utf8_path(raw: &str) -> Result<Utf8PathBuf, String> {
     Ok(Utf8PathBuf::from(raw))
 }
 
+/// `--store-root`: [`parse_utf8_path`], plus the two values the store-root
+/// resolver treats as unset — whitespace only, or an unexpanded `${...}`
+/// placeholder (#369 / #613). A flag the user typed must not be silently
+/// dropped for the cwd default, and rejecting it here also means a store
+/// root that `config doctor` reports as ignored can only have come from the
+/// environment, which is what its note says.
+fn parse_store_root(raw: &str) -> Result<Utf8PathBuf, String> {
+    if !raw.is_empty() && raw.trim().is_empty() {
+        return Err("path must not be only whitespace".to_string());
+    }
+    if raw.contains("${") {
+        return Err(format!(
+            "{raw:?} contains an unexpanded `${{...}}` placeholder; pass the expanded path"
+        ));
+    }
+    parse_utf8_path(raw)
+}
+
 /// `doiget provenance ...` action selector. Ships only the v1→v2
 /// migration in Slice 4 (ADR-0024); further actions (e.g. `compact`,
 /// `rotate`) land in later slices.
@@ -161,10 +179,10 @@ struct Cli {
     /// Precedence: this flag > `DOIGET_STORE_ROOT` env > default
     /// (`./papers` — `papers/` under the current working directory; ADR-0036).
     /// Wins by overwriting `DOIGET_STORE_ROOT` for the lifetime of
-    /// this process before any command resolver reads it. Empty
-    /// strings and NUL bytes are rejected at parse time by
-    /// `parse_utf8_path`.
-    #[arg(long, global = true, value_name = "PATH", value_parser = parse_utf8_path)]
+    /// this process before any command resolver reads it. Empty,
+    /// whitespace-only and `${...}`-placeholder values and NUL bytes are
+    /// rejected at parse time by `parse_store_root`.
+    #[arg(long, global = true, value_name = "PATH", value_parser = parse_store_root)]
     store_root: Option<Utf8PathBuf>,
 
     /// Override the provenance-log file path. CONFIG.md §5 / #211.
