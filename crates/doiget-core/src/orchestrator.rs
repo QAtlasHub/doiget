@@ -606,7 +606,7 @@ fn extract_metadata_title(meta: &Value) -> Option<String> {
     if s.is_empty() {
         None
     } else {
-        Some(s)
+        Some(crate::markup::plain_title(&s))
     }
 }
 
@@ -1817,7 +1817,12 @@ async fn fetch_paper_doi(
 
     let metadata = Metadata {
         schema_version: SCHEMA_VERSION.to_string(),
-        title: extracted.title.unwrap_or_else(|| doi.as_str().to_string()),
+        // #609: publishers deposit inline JATS / MathML pretty-printed onto
+        // lines of their own; the store holds the title the author wrote.
+        title: extracted
+            .title
+            .map(|t| crate::markup::plain_title(&t))
+            .unwrap_or_else(|| doi.as_str().to_string()),
         authors: extracted.authors,
         year: extracted.year,
         doi: Some(doi.clone()),
@@ -1825,7 +1830,7 @@ async fn fetch_paper_doi(
         // DOI-fetch path: no arXiv id, so no arXiv categories.
         arxiv_categories: Vec::new(),
         abstract_: None,
-        venue: extracted.venue,
+        venue: extracted.venue.map(|v| crate::markup::plain_title(&v)),
         volume: extracted.volume,
         issue: extracted.issue,
         pages: extracted.pages,

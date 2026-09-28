@@ -141,15 +141,15 @@ fn push_field(out: &mut String, key: &str, value: &str) {
 /// Strip BibTeX-unsafe `{` / `}` from `value`, warning once per field so
 /// the dropped characters are visible in stderr / structured logs.
 ///
-/// Crossref embeds HTML / MathML markup in titles and venues (`<i>`,
-/// `<sub>`, `<mml:math>…</mml:math>`); those `<…>` tags are removed first
-/// (their inner text is kept) so the rendered BibTeX is clean enough to
-/// paste into a `.bib`. This is the same pragmatic trade-off doi2bib
-/// makes — it is a tag scrubber, not a TeX-aware math translator, so a
-/// title's math markup collapses to its plain-text content rather than to
-/// `$…$`.
+/// Crossref embeds JATS / HTML / MathML markup in titles and venues (`<i>`,
+/// `<sub>`, `<mml:math>…</mml:math>`), often pretty-printed onto lines of
+/// their own. [`crate::markup::plain_title`] reduces that to the text the
+/// author wrote first (#609), so the rendered BibTeX is clean enough to
+/// paste into a `.bib`. It is a markup scrubber, not a TeX-aware math
+/// translator: a title's math markup collapses to its plain-text content
+/// rather than to `$…$`.
 fn strip_bibtex_unsafe(key: &str, value: &str) -> String {
-    let detagged = strip_markup_tags(value);
+    let detagged = crate::markup::plain_title(value);
     if detagged.contains('{') || detagged.contains('}') {
         tracing::warn!(
             field = key,
@@ -161,34 +161,6 @@ fn strip_bibtex_unsafe(key: &str, value: &str) -> String {
         .chars()
         .filter(|c| !matches!(c, '{' | '}'))
         .collect()
-}
-
-/// Remove HTML / MathML markup tags (`<i>`, `<sub>`, `<mml:math>`, …),
-/// keeping the text between them. Equivalent to deleting every `<…>`
-/// run: a deliberately simple angle-bracket scanner, not an HTML parser.
-///
-/// A `<` with no matching `>` (e.g. genuine inline math `a < b` that
-/// Crossref left unescaped) leaves the remainder verbatim — only
-/// well-formed tag runs are dropped. Strings with no markup return
-/// unchanged without allocating a scan buffer.
-fn strip_markup_tags(value: &str) -> String {
-    if !(value.contains('<') && value.contains('>')) {
-        return value.to_string();
-    }
-    let mut out = String::with_capacity(value.len());
-    let mut rest = value;
-    while let Some(lt) = rest.find('<') {
-        match rest[lt..].find('>') {
-            Some(gt_rel) => {
-                out.push_str(&rest[..lt]);
-                rest = &rest[lt + gt_rel + 1..];
-            }
-            // No closing '>' for this '<': keep the remainder as-is.
-            None => break,
-        }
-    }
-    out.push_str(rest);
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +192,7 @@ struct CslItem<'a> {
     id: &'a str,
     #[serde(rename = "type")]
     type_: &'static str,
-    title: &'a str,
+    title: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     author: Vec<CslName>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -228,7 +200,7 @@ struct CslItem<'a> {
     #[serde(rename = "DOI", skip_serializing_if = "Option::is_none")]
     doi: Option<&'a str>,
     #[serde(rename = "container-title", skip_serializing_if = "Option::is_none")]
-    container_title: Option<&'a str>,
+    container_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     volume: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -266,13 +238,13 @@ fn build_csl_item<'a>(citation_key: &'a str, m: &'a Metadata) -> CslItem<'a> {
             Some("journal-article") => "article-journal",
             _ => "manuscript",
         },
-        title: &m.title,
+        title: crate::markup::plain_title(&m.title),
         author: m.authors.iter().map(|s| parse_author(s)).collect(),
         issued: m.year.map(|y| CslIssued {
             date_parts: vec![vec![y]],
         }),
         doi: m.doi.as_ref().map(|d| d.as_str()),
-        container_title: m.venue.as_deref(),
+        container_title: m.venue.as_deref().map(crate::markup::plain_title),
         volume: m.volume.as_deref(),
         issue: m.issue.as_deref(),
         page: m.pages.as_deref(),

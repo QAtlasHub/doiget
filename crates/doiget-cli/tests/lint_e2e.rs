@@ -100,6 +100,33 @@ fn lint_flags_display_math_title_but_not_inline_math() {
 }
 
 #[test]
+fn lint_flags_a_title_pasted_with_pretty_printed_markup() {
+    // #609: the shape `doiget cite` emitted for AIP's `P<scp>y</scp>SCF`
+    // before titles were reduced to plain text.
+    let dir = TempDir::new().expect("tempdir");
+    let broken = write_bib(
+        &dir,
+        "@article{pyscf, author={A}, title={Recent developments in the P\n    <scp>y</scp>\n    SCF program package}, journal={J}, year={2020}}",
+    );
+    doiget()
+        .args(["lint", &broken])
+        .assert()
+        .success()
+        .stdout(contains("\"rule\":\"title_markup\""));
+
+    let dir2 = TempDir::new().expect("tempdir");
+    let clean = write_bib(
+        &dir2,
+        "@article{ok, author={A}, title={Recent developments in the PySCF program package}, journal={J}, year={2020}}",
+    );
+    doiget()
+        .args(["lint", &clean])
+        .assert()
+        .success()
+        .stdout(contains("title_markup").not());
+}
+
+#[test]
 fn lint_unparsable_file_is_a_parse_error() {
     // The biblatex parser rejects duplicate keys, which surfaces as a
     // `parse_error` (error severity) and fails the run.
