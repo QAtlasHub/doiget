@@ -24,6 +24,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use assert_cmd::Command;
+use predicates::prelude::*;
 use tempfile::TempDir;
 
 fn doiget(dir: &TempDir) -> Command {
@@ -128,6 +129,46 @@ fn store_root_empty_value_is_rejected_at_parse_time() {
         .assert()
         .failure()
         .code(2);
+}
+
+#[test]
+fn store_root_whitespace_or_placeholder_value_is_rejected_at_parse_time() {
+    // #613: the store-root resolver treats these as unset. A flag the user
+    // typed must fail loudly instead of falling back to the cwd default.
+    for value in ["   ", "${HOME}/papers"] {
+        let dir = TempDir::new().expect("tempdir");
+        doiget(&dir)
+            .args(["--store-root", value, "capabilities"])
+            .assert()
+            .failure()
+            .code(2);
+    }
+}
+
+#[test]
+fn config_doctor_names_an_empty_store_root_env_it_ignored() {
+    // #613: `export DOIGET_STORE_ROOT=${DOIGET_STORE_ROOT:-}` exports "",
+    // which is treated as unset; doctor must say so rather than report the
+    // fallback as though nothing had been set.
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .current_dir(dir.path())
+        .env("DOIGET_STORE_ROOT", "")
+        .env("DOIGET_CONTACT_EMAIL", "alice@example.org")
+        .args(["config", "doctor"])
+        .assert()
+        .stderr(predicates::str::contains(
+            "note: DOIGET_STORE_ROOT is set to \"\", which is empty",
+        ));
+
+    let dir = TempDir::new().expect("tempdir");
+    doiget(&dir)
+        .current_dir(dir.path())
+        .env_remove("DOIGET_STORE_ROOT")
+        .env("DOIGET_CONTACT_EMAIL", "alice@example.org")
+        .args(["config", "doctor"])
+        .assert()
+        .stderr(predicates::str::contains("DOIGET_STORE_ROOT is set to").not());
 }
 
 #[test]
