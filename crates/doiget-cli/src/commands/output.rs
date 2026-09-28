@@ -188,6 +188,8 @@ pub fn is_artifact_command(name: &str) -> bool {
             | "info"
             | "list-recent"
             | "missing"
+            | "coverage"
+            | "sources"
             | "search"
             | "link"
             | "text"

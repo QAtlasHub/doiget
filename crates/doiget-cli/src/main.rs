@@ -585,6 +585,23 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
+    /// Which source, if any, can deliver a DOI's PDF -- before fetching (#605).
+    /// Reports the publisher, the OA status Unpaywall records, and for every
+    /// source whether this doiget can ask it (ready / not built / not
+    /// enabled / publisher not covered) with the switch that changes it.
+    /// Read-only: two metadata requests, no publisher contact, no store write.
+    Coverage {
+        /// DOI or arXiv id.
+        ref_: String,
+    },
+    /// List every source doiget knows -- built into this binary or not -- with
+    /// what it covers and what enables it (#605).
+    Sources {
+        /// Only sources relevant to this publisher: a DOI prefix (10.1103)
+        /// or part of its name (springer).
+        #[arg(long, value_name = "NAME|PREFIX")]
+        publisher: Option<String>,
+    },
     /// Which works a bibliography cites still have no local PDF, and where
     /// to get each: the OA copy to fetch, or the publisher's landing page and
     /// the path to save a hand download under (#607). Read-only; never
@@ -940,6 +957,12 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 .await
         }
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
+        Some(Command::Coverage { ref_ }) => {
+            doiget_cli::commands::coverage::run_coverage(ref_, mode, out.quiet_was_explicit).await
+        }
+        Some(Command::Sources { publisher }) => {
+            doiget_cli::commands::coverage::run_sources(publisher, mode, out.quiet_was_explicit)
+        }
         Some(Command::Missing {
             path,
             format,

@@ -32,6 +32,7 @@ pub mod refs;
 pub mod remediation;
 pub mod resolver_cache;
 pub mod source;
+pub mod source_catalog;
 pub mod sources;
 pub mod store;
 pub mod user_extension;
