@@ -476,6 +476,18 @@ fn parse_schema_version(s: &str) -> Result<(u32, u32), StoreError> {
     Ok((maj, min))
 }
 
+/// Whether `incoming` is `existing` with its inline markup reduced to plain
+/// text (#609). A stored title carrying the pretty-printed JATS an older
+/// doiget kept is not another tool's authored value to preserve under
+/// STORE.md §6: the incoming side is the same text, cleaned, so it wins.
+fn is_cleaned_form(existing: &str, incoming: &str) -> bool {
+    // Only when `existing` really carries markup: plain_title must never be
+    // the reason a markup-free stored value is replaced (review of #618).
+    existing != incoming
+        && crate::markup::has_inline_markup(existing)
+        && crate::markup::plain_title(existing) == incoming
+}
+
 /// Apply the `docs/STORE.md` §6 merge rule: doiget MUST NOT modify reserved
 /// top-level fields written by another tool. Concretely: if `existing` has a
 /// reserved field set to a value different from `incoming`, KEEP existing.
@@ -500,7 +512,10 @@ fn merge_metadata(existing: Metadata, incoming: Metadata, user_fields: UserField
 
     // Reserved fields with non-Option String types: prefer existing if it
     // differs from incoming (and is non-empty).
-    if !existing.title.is_empty() && existing.title != incoming.title {
+    if !existing.title.is_empty()
+        && existing.title != incoming.title
+        && !is_cleaned_form(&existing.title, &incoming.title)
+    {
         warn!(
             field = "title",
             existing = existing.title.as_str(),
@@ -532,7 +547,11 @@ fn merge_metadata(existing: Metadata, incoming: Metadata, user_fields: UserField
     merge_opt!(doi);
     merge_opt!(arxiv_id);
     merge_opt!(abstract_);
-    merge_opt!(venue);
+    // #609: a venue stored with raw markup yields to its own cleaned form,
+    // like the title above; any other difference is preserved.
+    if !matches!((&existing.venue, &incoming.venue), (Some(e), Some(i)) if is_cleaned_form(e, i)) {
+        merge_opt!(venue);
+    }
     merge_opt!(volume);
     merge_opt!(issue);
     merge_opt!(pages);
@@ -937,6 +956,39 @@ mod tests {
     fn fresh_store(dir: &TempDir) -> FsStore {
         let root = tmp_dir_utf8(dir).join("papers");
         FsStore::new(root).expect("FsStore::new")
+    }
+
+    #[test]
+    fn a_rewrite_replaces_a_stored_title_that_only_differs_by_markup() {
+        // #609: an entry stored before titles were reduced to plain text.
+        let mut existing = sample_metadata();
+        existing.title = "Recent developments in the P\n    <scp>y</scp>\n    SCF package".into();
+        existing.venue = Some("J. <i>Chem</i>. Phys.".into());
+        let mut incoming = existing.clone();
+        incoming.title = "Recent developments in the PySCF package".into();
+        incoming.venue = Some("J. Chem. Phys.".into());
+        let out = merge_metadata(existing.clone(), incoming.clone(), UserFields::Preserve);
+        assert_eq!(out.title, incoming.title);
+        assert_eq!(out.venue, incoming.venue);
+
+        // A genuinely different title or venue is still another tool's to keep.
+        incoming.title = "Something else entirely".into();
+        incoming.venue = Some("Another journal".into());
+        let out = merge_metadata(existing.clone(), incoming, UserFields::Preserve);
+        assert_eq!(out.title, existing.title);
+        assert_eq!(out.venue, existing.venue);
+    }
+
+    #[test]
+    fn a_markup_free_stored_title_is_never_replaced_through_the_cleaning_rule() {
+        // Review of #618: `plain_title` must not be the reason a stored value
+        // without markup is overwritten, whatever it returns for it.
+        let mut existing = sample_metadata();
+        existing.title = "Resistivity for T<Tc in field H>Hc2".into();
+        let mut incoming = existing.clone();
+        incoming.title = "Resistivity for THc2".into();
+        let out = merge_metadata(existing.clone(), incoming, UserFields::Preserve);
+        assert_eq!(out.title, existing.title);
     }
 
     #[test]

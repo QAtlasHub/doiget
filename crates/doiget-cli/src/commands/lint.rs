@@ -24,6 +24,11 @@
 //!   math, which some downstream renderers (e.g. DocumenterCitations)
 //!   cannot process; inline `$...$` is fine. Best-effort, advisory.
 //!
+//! - `title_markup` (**warning**) — a `title` carries a line break or an
+//!   inline JATS / HTML / MathML tag, as `doiget cite` emitted before #609
+//!   for publishers that deposit pretty-printed markup. BibTeX then renders
+//!   `P y SCF` for `PySCF`. Re-run `doiget cite` for a clean title.
+//!
 //! Exit code = number of `error` findings (capped at 255). `--strict`
 //! promotes warnings so that ANY finding fails the run.
 
@@ -179,6 +184,18 @@ pub fn run(path: String, strict: bool, mode: OutputMode) -> Result<()> {
                 // Best-effort: inspect the re-serialised title.
                 if let Some(chunks) = entry.fields.get("title") {
                     let rendered = chunks.to_biblatex_string(false);
+                    if doiget_core::markup::has_inline_markup(&rendered) {
+                        emit(
+                            &key,
+                            &et,
+                            "title_markup",
+                            Severity::Warning,
+                            "title carries a line break or inline markup tag (e.g. JATS `<scp>`), \
+                             which BibTeX renders with stray spaces; re-run `doiget cite` for a \
+                             clean title"
+                                .to_string(),
+                        );
+                    }
                     let dollars = rendered.matches('$').count();
                     if rendered.contains("$$") || dollars % 2 == 1 {
                         emit(
