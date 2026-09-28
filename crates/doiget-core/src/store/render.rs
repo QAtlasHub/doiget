@@ -458,6 +458,26 @@ mod tests {
     }
 
     #[test]
+    fn csl_title_and_container_markup_is_reduced_to_text() {
+        // #609: CSL is the other render; it borrowed the raw string before.
+        let mut m = fixture(Some("journal-article"));
+        m.title = "Spin-<i>S</i> chains".to_string();
+        m.venue = Some("J. <i>Chem</i>. Phys.".to_string());
+        let v = to_csl_array("k", &m);
+        assert_eq!(v[0]["title"], "Spin-S chains");
+        assert_eq!(v[0]["container-title"], "J. Chem. Phys.");
+    }
+
+    #[test]
+    fn bibtex_an_inequality_in_a_title_is_not_a_tag() {
+        // Review of #618: the old scrubber (and the first cut of the new
+        // one) read `T<Tc ... H>` as a tag and dropped the text between.
+        let mut m = fixture(Some("journal-article"));
+        m.title = "Resistivity for T<Tc in field H>Hc2".to_string();
+        assert!(to_bibtex("k", &m).contains("title      = {Resistivity for T<Tc in field H>Hc2},"));
+    }
+
+    #[test]
     fn bibtex_unescaped_lt_without_close_is_preserved() {
         // A bare `<` with no closing `>` is genuine math, not a tag:
         // keep the remainder verbatim rather than swallowing it.

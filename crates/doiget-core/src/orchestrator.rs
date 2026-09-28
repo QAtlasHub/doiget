@@ -3981,6 +3981,22 @@ mod tests {
         Utf8PathBuf,
         tempfile::TempDir,
     ) {
+        md139_harness_with(
+            r#"{"status":"ok","message":{"title":["Example Paper"],"author":[{"given":"Ada","family":"Lovelace"}]}}"#,
+        )
+        .await
+    }
+
+    /// [`md139_harness`] answering every request with `crossref_body`.
+    async fn md139_harness_with(
+        crossref_body: &str,
+    ) -> (
+        wiremock::MockServer,
+        FetchContext,
+        crate::store::FsStore,
+        Utf8PathBuf,
+        tempfile::TempDir,
+    ) {
         use crate::http::HttpClient;
         use crate::provenance::ProvenanceLog;
         use crate::rate_limiter::RateLimiter;
@@ -3992,9 +4008,7 @@ mod tests {
 
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"status":"ok","message":{"title":["Example Paper"],"author":[{"given":"Ada","family":"Lovelace"}]}}"#,
-            ))
+            .respond_with(ResponseTemplate::new(200).set_body_string(crossref_body))
             .mount(&server)
             .await;
         std::env::set_var("DOIGET_CROSSREF_BASE", server.uri());
@@ -4072,6 +4086,34 @@ mod tests {
         assert_eq!(ext.source, "crossref");
         assert_eq!(ext.size_bytes, 0, "metadata-only entry has no PDF");
 
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+    }
+
+    /// #609, through the real resolver and store rather than the pure
+    /// function: AIP's pretty-printed `P<scp>y</scp>SCF` is stored as the
+    /// title the author wrote. Render-time cleaning would hide a regression
+    /// here, so this reads the TOML back.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_pretty_printed_crossref_title_is_stored_as_plain_text_609() {
+        let body = serde_json::json!({"status": "ok", "message": {
+            "title": ["Recent developments in the P\n                    <scp>y</scp>\n                    SCF program package"],
+            "author": [{"given": "Qiming", "family": "Sun"}]
+        }})
+        .to_string();
+        let (_server, ctx, store, store_root, _td) = md139_harness_with(&body).await;
+        let profile = CapabilityProfile::from_env().expect("clean env");
+        let ref_ = Ref::Doi(Doi("10.1063/5.0006074".to_string()));
+        metadata_only_to_store(&ref_, &profile, &ctx, &store)
+            .await
+            .expect("metadata_only_to_store ok");
+        let tomls = metadata_dir_tomls(&store_root);
+        let body = std::fs::read_to_string(&tomls[0]).expect("read metadata toml");
+        let meta: crate::store::Metadata = toml::from_str(&body).expect("parse metadata toml");
+        assert_eq!(
+            meta.title,
+            "Recent developments in the PySCF program package"
+        );
         std::env::remove_var("DOIGET_CROSSREF_BASE");
     }
 

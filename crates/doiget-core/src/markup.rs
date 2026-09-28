@@ -134,15 +134,107 @@ fn split_on_tags(raw: &str) -> Vec<Chunk<'_>> {
     chunks
 }
 
-/// Length of the tag at the start of `s`, if it is one: `<name ...>`,
-/// `</name>` or `<name/>`, with a name starting with an ASCII letter.
+/// Inline elements publishers deposit in titles. An opening tag with one of
+/// these names is markup even when its closing tag is elsewhere; any other
+/// name counts only if a matching `</name` follows (see [`tag_len`]).
+const INLINE_ELEMENTS: &[&str] = &[
+    "b",
+    "bold",
+    "br",
+    "em",
+    "i",
+    "inline-formula",
+    "italic",
+    "math",
+    "monospace",
+    "sc",
+    "scp",
+    "small",
+    "span",
+    "strong",
+    "sub",
+    "sup",
+    "tex-math",
+    "tt",
+    "u",
+    "underline",
+];
+
+/// Length of the tag at the start of `s`, if it is one.
+///
+/// A real grammar rather than "`<` up to the next `>`": the name is
+/// `[A-Za-z][A-Za-z0-9:._-]*` and anything before `>` must be
+/// `name="value"` attributes. The loose rule treated `T<Tc in samples with
+/// applied field H>Hc2` as one tag and stored `THc2` (review of #618). An
+/// opening tag must also be plausible as markup: a known inline element, a
+/// namespaced one (`mml:mi`, `jats:italic`), or one whose `</name` follows --
+/// so `x<y>z` stays text.
 fn tag_len(s: &str) -> Option<usize> {
-    let rest = s.strip_prefix('<')?;
-    let rest = rest.strip_prefix('/').unwrap_or(rest);
-    if !rest.starts_with(|c: char| c.is_ascii_alphabetic()) {
+    let bytes = s.as_bytes();
+    let mut i = 1; // past '<'
+    let closing = bytes.get(i) == Some(&b'/');
+    if closing {
+        i += 1;
+    }
+    let name_start = i;
+    if !bytes.get(i)?.is_ascii_alphabetic() {
         return None;
     }
-    s.find('>').map(|end| end + 1)
+    while bytes
+        .get(i)
+        .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'.' | b'_' | b'-'))
+    {
+        i += 1;
+    }
+    let name = &s[name_start..i];
+    let mut self_closing = false;
+    loop {
+        while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        match bytes.get(i)? {
+            b'>' => {
+                i += 1;
+                break;
+            }
+            b'/' if !closing && bytes.get(i + 1) == Some(&b'>') => {
+                self_closing = true;
+                i += 2;
+                break;
+            }
+            b if !closing && (b.is_ascii_alphabetic() || *b == b'_') => {
+                // attribute: name = "value" | 'value'
+                while bytes.get(i).is_some_and(|b| {
+                    b.is_ascii_alphanumeric() || matches!(b, b':' | b'.' | b'_' | b'-')
+                }) {
+                    i += 1;
+                }
+                while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+                    i += 1;
+                }
+                if bytes.get(i) != Some(&b'=') {
+                    return None;
+                }
+                i += 1;
+                while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+                    i += 1;
+                }
+                let quote = *bytes.get(i)?;
+                if !matches!(quote, b'"' | b'\'') {
+                    return None;
+                }
+                let close = s[i + 1..].find(quote as char)?;
+                if s[i + 1..i + 1 + close].contains('<') {
+                    return None;
+                }
+                i += close + 2;
+            }
+            _ => return None,
+        }
+    }
+    let known = INLINE_ELEMENTS.contains(&name.to_ascii_lowercase().as_str()) || name.contains(':');
+    let plausible = closing || self_closing || known || s[i..].contains(&format!("</{name}"));
+    plausible.then_some(i)
 }
 
 fn collapse(s: &str) -> String {
@@ -331,6 +423,30 @@ mod tests {
         for (raw, want) in cases {
             assert_eq!(plain_title(&raw), want, "raw: {raw:?}");
         }
+    }
+
+    /// Review of #618: a letter after `<` is an inequality in a physics
+    /// title far more often than a tag, and the text up to some later `>`
+    /// must never be taken for one.
+    #[test]
+    fn an_inequality_is_not_mistaken_for_a_tag() {
+        for s in [
+            "Resistivity anomaly for T<Tc in samples with applied field H>Hc2",
+            "Comparing groups where n<N states and m>M bands coexist",
+            "a<b and c>d",
+            "the regime x<y>z",
+            "for L<M, the <unclosed",
+        ] {
+            assert_eq!(plain_title(s), s);
+            assert!(!super::has_inline_markup(s), "{s}");
+        }
+        // Real markup next to an inequality is still reduced.
+        assert_eq!(
+            plain_title("T<Tc for <i>x</i> > 0 and <span class=\"x\">y</span>"),
+            "T<Tc for x > 0 and y"
+        );
+        assert_eq!(plain_title("a <jats:italic>b</jats:italic> c"), "a b c");
+        assert_eq!(plain_title("an <unknown-el>x</unknown-el> y"), "an x y");
     }
 
     #[test]
