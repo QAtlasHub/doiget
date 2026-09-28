@@ -82,6 +82,10 @@ criteria = "safe-to-deploy"
 version = "0.40.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.base64]]
+version = "0.23.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.biblatex]]
 version = "0.12.0"
 criteria = "safe-to-deploy"
@@ -103,7 +107,7 @@ version = "1.12.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.camino]]
-version = "1.2.5"
+version = "1.2.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.cc]]
@@ -119,15 +123,15 @@ version = "0.4.45"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap]]
-version = "4.6.6"
+version = "4.6.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_builder]]
-version = "4.6.6"
+version = "4.6.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_derive]]
-version = "4.6.4"
+version = "4.6.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_lex]]
@@ -243,11 +247,11 @@ version = "0.3.32"
 criteria = "safe-to-deploy"
 
 [[exemptions.futures-channel]]
-version = "0.3.32"
+version = "0.3.34"
 criteria = "safe-to-deploy"
 
 [[exemptions.futures-core]]
-version = "0.3.32"
+version = "0.3.34"
 criteria = "safe-to-deploy"
 
 [[exemptions.futures-executor]]
@@ -255,23 +259,23 @@ version = "0.3.32"
 criteria = "safe-to-deploy"
 
 [[exemptions.futures-io]]
-version = "0.3.32"
+version = "0.3.34"
 criteria = "safe-to-deploy"
 
 [[exemptions.futures-macro]]
-version = "0.3.32"
+version = "0.3.34"
 criteria = "safe-to-deploy"
 
 [[exemptions.futures-sink]]
-version = "0.3.32"
+version = "0.3.34"
 criteria = "safe-to-deploy"
 
 [[exemptions.futures-task]]
-version = "0.3.32"
+version = "0.3.34"
 criteria = "safe-to-deploy"
 
 [[exemptions.futures-util]]
-version = "0.3.32"
+version = "0.3.34"
 criteria = "safe-to-deploy"
 
 [[exemptions.getrandom]]
@@ -559,7 +563,7 @@ version = "0.8.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.reqwest]]
-version = "0.13.4"
+version = "0.13.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.ring]]
@@ -567,19 +571,19 @@ version = "0.17.14"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmcp]]
-version = "1.6.0"
+version = "3.1.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmcp]]
-version = "3.1.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.rmcp-macros]]
-version = "1.6.0"
+version = "3.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmcp-macros]]
 version = "3.1.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.rmcp-macros]]
+version = "3.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.roman-numerals-rs]]
@@ -595,7 +599,7 @@ version = "1.1.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls]]
-version = "0.23.43"
+version = "0.23.45"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-native-certs]]
@@ -615,7 +619,7 @@ version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-webpki]]
-version = "0.103.13"
+version = "0.103.15"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty-fork]]
@@ -664,6 +668,18 @@ criteria = "safe-to-deploy"
 
 [[exemptions.semver]]
 version = "1.0.28"
+criteria = "safe-to-deploy"
+
+[[exemptions.serde]]
+version = "1.0.229"
+criteria = "safe-to-deploy"
+
+[[exemptions.serde_core]]
+version = "1.0.229"
+criteria = "safe-to-deploy"
+
+[[exemptions.serde_derive]]
+version = "1.0.229"
 criteria = "safe-to-deploy"
 
 [[exemptions.serde_derive_internals]]
@@ -747,11 +763,11 @@ version = "3.27.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.thiserror]]
-version = "2.0.20"
+version = "2.0.21"
 criteria = "safe-to-deploy"
 
 [[exemptions.thiserror-impl]]
-version = "2.0.20"
+version = "2.0.21"
 criteria = "safe-to-deploy"
 
 [[exemptions.tinystr]]
@@ -879,7 +895,7 @@ version = "2.5.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.uuid]]
-version = "1.26.0"
+version = "1.26.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.walkdir]]
