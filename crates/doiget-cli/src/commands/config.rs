@@ -325,6 +325,15 @@ pub async fn run(
             // distinguish "your setting worked" from "your setting was
             // ignored and you happen to be standing in it".
             eprintln!("       from: {}", cfg.store_root_source);
+            if let Some(raw) = super::ignored_store_root_env() {
+                // #613: set-but-unusable reads exactly like unset in the line
+                // above, and a script that exported an empty value expects
+                // it to have taken effect.
+                eprintln!(
+                    "       note: DOIGET_STORE_ROOT is set to {raw:?}, which is empty or an \
+                     unexpanded placeholder, so it was ignored"
+                );
+            }
             if cfg.store_root_source == super::StoreRootSource::CwdDefault.label() {
                 eprintln!(
                     "       note: relative to the current directory (ADR-0036). Set DOIGET_STORE_ROOT"

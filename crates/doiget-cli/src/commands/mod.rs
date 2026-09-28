@@ -184,12 +184,8 @@ pub(crate) fn resolve_store_root() -> Result<Utf8PathBuf> {
 /// [`resolve_store_root`] plus which rung answered.
 pub(crate) fn resolve_store_root_with_source() -> Result<(Utf8PathBuf, StoreRootSource)> {
     if let Ok(s) = std::env::var("DOIGET_STORE_ROOT") {
-        // Ignore an empty value or an unexpanded "${...}" placeholder — a
-        // Desktop-Extension config left blank can pass the literal
-        // "${user_config.store_root}", which must not become a path (#369).
-        let s = s.trim();
-        if !s.is_empty() && !s.contains("${") {
-            return Ok((Utf8PathBuf::from(s), StoreRootSource::Env));
+        if let Some(root) = usable_store_root_env(&s) {
+            return Ok((Utf8PathBuf::from(root), StoreRootSource::Env));
         }
     }
     if let Some(root) = store_root_from_config() {
@@ -202,6 +198,25 @@ pub(crate) fn resolve_store_root_with_source() -> Result<(Utf8PathBuf, StoreRoot
     Utf8PathBuf::from_path_buf(cwd)
         .map(|d| (d.join("papers"), StoreRootSource::CwdDefault))
         .map_err(|p| anyhow::anyhow!("current directory path is not UTF-8: {}", p.display()))
+}
+
+/// The path a `DOIGET_STORE_ROOT` value names, or `None` when the value must
+/// be treated as unset: empty, whitespace, or an unexpanded `${...}`
+/// placeholder. A Desktop-Extension config left blank can pass the literal
+/// `${user_config.store_root}` (#369), and `export DOIGET_STORE_ROOT=${X:-}`
+/// in a script exports an empty string (#613); neither may become a path.
+fn usable_store_root_env(raw: &str) -> Option<&str> {
+    let s = raw.trim();
+    (!s.is_empty() && !s.contains("${")).then_some(s)
+}
+
+/// `DOIGET_STORE_ROOT` when it is set but ignored by
+/// [`resolve_store_root_with_source`], so `config doctor` can say so instead
+/// of reporting the fallback as though nothing had been set (#613).
+pub(crate) fn ignored_store_root_env() -> Option<String> {
+    std::env::var("DOIGET_STORE_ROOT")
+        .ok()
+        .filter(|raw| usable_store_root_env(raw).is_none())
 }
 
 /// `[store] root` from the user's `config.toml`, if any.
@@ -238,4 +253,20 @@ fn store_root_from_config() -> Option<Utf8PathBuf> {
     };
     let raw = cfg.store_root?;
     Some(doiget_core::user_extension::expand_store_root(&raw))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::usable_store_root_env;
+
+    /// #613: an exported-but-empty `DOIGET_STORE_ROOT` (e.g. from
+    /// `export DOIGET_STORE_ROOT=${DOIGET_STORE_ROOT:-}`) is unset, not the
+    /// store root `""`.
+    #[test]
+    fn empty_or_placeholder_store_root_env_is_treated_as_unset() {
+        assert_eq!(usable_store_root_env(""), None);
+        assert_eq!(usable_store_root_env("   "), None);
+        assert_eq!(usable_store_root_env("${user_config.store_root}"), None);
+        assert_eq!(usable_store_root_env(" /srv/papers "), Some("/srv/papers"));
+    }
 }
