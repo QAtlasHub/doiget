@@ -5473,12 +5473,12 @@ mod tests {
             "search",
             "search_by_tag",
         ] {
-            let calls = flat.matches(&format!("store.{m}(")).count();
+            let calls = flat.match_indices(&*format!("store.{m}(")).count();
             let wrapped = flat
-                .matches(&format!("blocking_section(||store.{m}("))
+                .match_indices(&*format!("blocking_section(||store.{m}("))
                 .count()
                 + flat
-                    .matches(&format!("blocking_section(||{{store.{m}("))
+                    .match_indices(&*format!("blocking_section(||{{store.{m}("))
                     .count();
             assert_eq!(calls, wrapped, "store.{m} called outside blocking_section");
         }

@@ -327,12 +327,12 @@ mod tests {
         let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         let mut out = Vec::new();
         for m in STORE_METHODS {
-            let calls = flat.matches(&format!("store.{m}(")).count();
+            let calls = flat.match_indices(&*format!("store.{m}(")).count();
             let wrapped = flat
-                .matches(&format!("blocking_section(||store.{m}("))
+                .match_indices(&*format!("blocking_section(||store.{m}("))
                 .count()
                 + flat
-                    .matches(&format!("blocking_section(||{{store.{m}("))
+                    .match_indices(&*format!("blocking_section(||{{store.{m}("))
                     .count();
             if calls != wrapped {
                 out.push(format!("store.{m}: {calls} calls, {wrapped} wrapped"));
