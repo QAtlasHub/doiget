@@ -78,6 +78,18 @@ pub struct MetadataOnlyOutcome {
     /// parsed Atom-feed JSON (see
     /// `crate::sources::arxiv::parse_atom_feed`).
     pub metadata: Value,
+    /// Quality flags on what [`metadata_only_to_store`] wrote, e.g.
+    /// `replacement_char:venue` for a field that still carries a U+FFFD
+    /// (#608). `metadata` above stays the resolver's payload as received, so
+    /// this -- with `repaired_fields` -- is how a caller learns the stored
+    /// entry differs from it. Empty from the pure resolvers, which store
+    /// nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metadata_quality: Vec<String>,
+    /// Fields [`metadata_only_to_store`] repaired from another enabled
+    /// source before writing, field -> source key (#608).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub repaired_fields: std::collections::BTreeMap<String, String>,
 }
 
 /// Resolve a [`Ref`] to metadata WITHOUT triggering a publisher PDF
@@ -251,6 +263,8 @@ pub async fn metadata_only_with_options(
             // Pure resolver — no store write here (see fn doc); the
             // store-write side effect lives in `metadata_only_to_store`.
             MetadataOnlyOutcome {
+                metadata_quality: Vec::new(),
+                repaired_fields: std::collections::BTreeMap::new(),
                 source: arxiv.name().to_string(),
                 resolver_profile: arxiv.name().to_string(),
                 license: Some("arxiv-default".to_string()),
@@ -402,7 +416,15 @@ pub async fn metadata_only_to_store_with_options(
 ) -> Result<MetadataOnlyOutcome, FetchError> {
     let outcome = metadata_only_with_options(ref_, profile, ctx, opts).await?;
     let safekey = ref_.safekey();
-    let metadata = build_metadata_only_metadata(ref_, &outcome);
+    let mut metadata = build_metadata_only_metadata(ref_, &outcome);
+    // #608: same repair as the fetch path, so the store never holds a
+    // U+FFFD an enabled source could have supplied. Recorded in
+    // `[doiget].repaired_fields`; what is left is warned about here, since
+    // this outcome type carries the resolver payload, not the stored entry.
+    let quality = crate::metadata_quality::repair(&mut metadata, profile, ctx).await;
+    let mut outcome = outcome;
+    outcome.metadata_quality = quality.flags();
+    outcome.repaired_fields = quality.repaired;
     // `pdf_src = None` => writes `<root>/.metadata/<safekey>.toml` and
     // appends the `StoreWrite` row (the exact path `fetch_paper` uses
     // for its DOI metadata-only fallback).
@@ -481,6 +503,7 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
             tags: Vec::new(),
             collections: Vec::new(),
             annotation: None,
+            repaired_fields: Default::default(),
         }),
         other: BTreeMap::new(),
     }
@@ -683,7 +706,7 @@ fn env_nonempty(key: &str) -> Option<String> {
 /// doctor` and the tests must all see an edit to the file or the
 /// environment, and one small read is free next to the network legs it
 /// precedes.
-fn resolve_contact_email() -> String {
+pub(crate) fn resolve_contact_email() -> String {
     contact_email_or_placeholder()
 }
 
@@ -868,6 +891,8 @@ async fn metadata_only_doi(
             // Pure resolver -- no store write here (see `metadata_only`
             // doc); persistence is `metadata_only_to_store`'s job.
             Ok(MetadataOnlyOutcome {
+                metadata_quality: Vec::new(),
+                repaired_fields: std::collections::BTreeMap::new(),
                 source: crossref.name().to_string(),
                 resolver_profile: crossref.name().to_string(),
                 license,
@@ -891,6 +916,8 @@ async fn metadata_only_doi(
                         Some(res.license)
                     };
                     Ok(MetadataOnlyOutcome {
+                        metadata_quality: Vec::new(),
+                        repaired_fields: std::collections::BTreeMap::new(),
                         source: unpaywall.name().to_string(),
                         resolver_profile: unpaywall.name().to_string(),
                         license,
@@ -1162,6 +1189,13 @@ pub struct FetchPaperOutcome {
     ///
     /// Empty for an arXiv ref, which has no optional chain.
     pub attempts: Vec<SourceAttempt>,
+    /// Quality flags on the stored metadata, e.g. `replacement_char:venue`
+    /// for a field whose resolver value carries a U+FFFD that no enabled
+    /// source could repair (#608). Empty when the metadata is clean.
+    pub metadata_quality: Vec<String>,
+    /// Fields repaired from another source, field → source key (#608).
+    /// Also recorded in the store as `[doiget].repaired_fields`.
+    pub repaired_fields: BTreeMap<String, String>,
 }
 
 impl FetchPaperOutcome {
@@ -1216,6 +1250,8 @@ impl FetchPaperOutcome {
             authors: Vec::new(),
             year: None,
             attempts: Vec::new(),
+            metadata_quality: Vec::new(),
+            repaired_fields: BTreeMap::new(),
         }
     }
 
@@ -1404,6 +1440,7 @@ async fn fetch_paper_arxiv(
             tags: Vec::new(),
             collections: Vec::new(),
             annotation: None,
+            repaired_fields: Default::default(),
         }),
         other: BTreeMap::new(),
     };
@@ -1438,6 +1475,14 @@ async fn fetch_paper_arxiv(
         year: metadata.year,
         // arXiv resolves directly; the optional chain is a DOI concept.
         attempts: Vec::new(),
+        // arXiv's own Atom feed is UTF-8 end to end; the U+FFFD loss #608
+        // describes is a Crossref deposit problem. Still reported if seen.
+        metadata_quality: crate::metadata_quality::QualityReport {
+            remaining: crate::metadata_quality::replacement_char_fields(&metadata),
+            ..Default::default()
+        }
+        .flags(),
+        repaired_fields: BTreeMap::new(),
     })
 }
 
@@ -1815,7 +1860,7 @@ async fn fetch_paper_doi(
         None => (source_label, 0u64, None, None),
     };
 
-    let metadata = Metadata {
+    let mut metadata = Metadata {
         schema_version: SCHEMA_VERSION.to_string(),
         // #609: publishers deposit inline JATS / MathML pretty-printed onto
         // lines of their own; the store holds the title the author wrote.
@@ -1854,9 +1899,13 @@ async fn fetch_paper_doi(
             tags: Vec::new(),
             collections: Vec::new(),
             annotation: None,
+            repaired_fields: Default::default(),
         }),
         other: BTreeMap::new(),
     };
+    // #608: a Crossref record that lost characters to U+FFFD is repaired
+    // from an enabled source when one matches, and flagged when none does.
+    let quality = crate::metadata_quality::repair(&mut metadata, profile, ctx).await;
 
     let pdf_src_path = pdf_staged
         .as_ref()
@@ -1893,6 +1942,8 @@ async fn fetch_paper_doi(
         authors: metadata.authors.clone(),
         year: metadata.year,
         attempts,
+        metadata_quality: quality.flags(),
+        repaired_fields: quality.repaired,
     })
 }
 
@@ -3130,6 +3181,8 @@ mod tests {
     /// `envelope.message`, not the outer `{status, message}` wrapper).
     fn crossref_outcome() -> MetadataOnlyOutcome {
         MetadataOnlyOutcome {
+            metadata_quality: Vec::new(),
+            repaired_fields: std::collections::BTreeMap::new(),
             source: "crossref".to_string(),
             resolver_profile: "crossref".to_string(),
             license: None,
@@ -3178,6 +3231,8 @@ mod tests {
         // rather than being fabricated.
         let ref_ = Ref::parse("arxiv:2401.12345").unwrap();
         let outcome = MetadataOnlyOutcome {
+            metadata_quality: Vec::new(),
+            repaired_fields: std::collections::BTreeMap::new(),
             source: "arxiv".to_string(),
             resolver_profile: "arxiv".to_string(),
             license: Some("arxiv-default".to_string()),
@@ -3201,6 +3256,8 @@ mod tests {
         // (not the Crossref extractor). Review #318: this path was untested.
         let ref_ = Ref::parse("arxiv:2401.12345").unwrap();
         let outcome = MetadataOnlyOutcome {
+            metadata_quality: Vec::new(),
+            repaired_fields: std::collections::BTreeMap::new(),
             source: "arxiv".to_string(),
             resolver_profile: "arxiv".to_string(),
             license: Some("arxiv-default".to_string()),
@@ -3221,6 +3278,8 @@ mod tests {
 
         // A malformed `published` omits the year rather than fabricating one.
         let bad = MetadataOnlyOutcome {
+            metadata_quality: Vec::new(),
+            repaired_fields: std::collections::BTreeMap::new(),
             metadata: serde_json::json!({ "title": "x", "published": "not-a-date" }),
             ..outcome
         };
@@ -4113,6 +4172,37 @@ mod tests {
         assert_eq!(
             meta.title,
             "Recent developments in the PySCF program package"
+        );
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+    }
+
+    /// #608 (review of #619): the metadata-only store path must tell its
+    /// caller what it could not repair; `metadata` is the raw payload, so
+    /// without these fields an MCP agent had no signal at all.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn metadata_only_to_store_reports_an_unrepaired_replacement_char_608() {
+        let body = serde_json::json!({"status": "ok", "message": {
+            "title": ["N\u{FFFD}herungsmethode zur L\u{FFFD}sung"],
+            "author": [{"given": "V.", "family": "Fock"}]
+        }})
+        .to_string();
+        let (_server, ctx, store, store_root, _td) = md139_harness_with(&body).await;
+        let profile = CapabilityProfile::from_env().expect("clean env");
+        let ref_ = Ref::Doi(Doi("10.1007/BF01340294".to_string()));
+        let outcome = metadata_only_to_store(&ref_, &profile, &ctx, &store)
+            .await
+            .expect("metadata_only_to_store ok");
+        assert_eq!(
+            outcome.metadata_quality,
+            vec!["replacement_char:title".to_string()]
+        );
+        assert!(outcome.repaired_fields.is_empty());
+        let tomls = metadata_dir_tomls(&store_root);
+        let body = std::fs::read_to_string(&tomls[0]).expect("read metadata toml");
+        assert!(
+            body.contains('\u{FFFD}'),
+            "nothing enabled, so nothing repaired: {body}"
         );
         std::env::remove_var("DOIGET_CROSSREF_BASE");
     }

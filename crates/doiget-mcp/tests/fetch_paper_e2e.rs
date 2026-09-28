@@ -857,6 +857,119 @@ async fn fetch_paper_doi_with_no_oa_anywhere_reports_the_no_oa_url_route() -> an
         serde_json::json!("closed"),
         "and the envelope says WHY there was nowhere to go: {structured:?}"
     );
+    // #608: always present, so an agent can rely on the keys; empty here.
+    assert_eq!(structured["metadata_quality"], serde_json::json!([]));
+    assert_eq!(structured["repaired_fields"], serde_json::json!({}));
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn fetch_paper_doi_flags_a_title_that_lost_characters_to_u_fffd() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+
+    // Crossref metadata — minimal envelope.
+    // Crossref uses `Url::join("/works/<doi>")` which does NOT percent-encode
+    // the `/` inside the DOI suffix, so wiremock matches the raw path.
+    Mock::given(method("GET"))
+        .and(path("/works/10.1234/suggest-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "ok",
+            "message": {
+                "title": ["N\u{FFFD}herungsmethode zur L\u{FFFD}sung"],
+                "author": [{"family": "Doe", "given": "Jane"}],
+                "issued": {"date-parts": [[2024, 1, 1]]}
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // Unpaywall metadata — `best_oa_location` points to a versioned arXiv URL.
+    // The arXiv host is off the `oa-publisher` allowlist (which only permits
+    // the wiremock host), so the PDF leg will be denied at the pre-fetch
+    // allowlist check, triggering PdfLegStatus::Blocked with a suggestion.
+    // Unpaywall uses `path_segments_mut().push()` which percent-encodes `/`.
+    Mock::given(method("GET"))
+        .and(path("/v2/10.1234%2Fsuggest-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "doi": "10.1234/suggest-test",
+            "is_oa": false,
+            "oa_status": "closed",
+            // No `best_oa_location` and no `oa_locations`: Unpaywall knows the
+            // work and has nothing free for it.
+            "best_oa_location": serde_json::Value::Null,
+            "oa_locations": []
+        })))
+        .mount(&server)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let temp_root = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .to_path_buf();
+    let store_root = temp_root.join("papers");
+    let log_path = temp_root.join("log.jsonl");
+
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", store_root.as_str());
+    env.set("DOIGET_LOG_PATH", log_path.as_str());
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", server.uri()));
+    // Register only the wiremock host for oa-publisher. arxiv.org is absent
+    // so the arXiv OA candidate is denied → PdfLegStatus::Blocked.
+    env.set("DOIGET_OA_PUBLISHER_BASE", &server.uri());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/suggest-test"));
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_fetch_paper").with_arguments(args))
+        .await?;
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_fetch_paper uses CallToolResult::structured");
+
+    // Metadata fetch succeeds (ok:true) but PDF leg is blocked.
+    assert_eq!(
+        structured["ok"],
+        serde_json::json!(true),
+        "envelope should be ok:true (metadata was written); got: {structured:?}"
+    );
+    assert_eq!(
+        structured["pdf"]["status"],
+        serde_json::json!("no_oa_url"),
+        "#462: nowhere to fetch FROM is a different route than being refused          AT somewhere, and this one had no assertion anywhere: {structured:?}"
+    );
+    assert_eq!(
+        structured["ok"],
+        serde_json::json!(true),
+        "metadata-only is a success, not a failure: {structured:?}"
+    );
+    assert_eq!(
+        structured["oa_status"],
+        serde_json::json!("closed"),
+        "and the envelope says WHY there was nowhere to go: {structured:?}"
+    );
+    // #608: always present, so an agent can rely on the keys; empty here.
+    // #608: no repair source is enabled, so the flag is the whole answer.
+    assert_eq!(
+        structured["metadata_quality"],
+        serde_json::json!(["replacement_char:title"]),
+        "{structured:?}"
+    );
+    assert_eq!(structured["repaired_fields"], serde_json::json!({}));
 
     client.cancel().await?;
     server_handle.await??;

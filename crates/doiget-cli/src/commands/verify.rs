@@ -22,6 +22,11 @@
 //! - **unverifiable** — the entry carried no DOI / arXiv id at all.
 //!   Warning by default; fails under `--strict` / `on_missing_id="error"`.
 //!
+//! A **valid** record also carries `metadata_quality` (e.g.
+//! `["replacement_char:venue"]`) when the resolved metadata has lost
+//! characters to U+FFFD (#608). Informational: the reference is real, so it
+//! never counts toward the exit code; `doiget cite` can try a repair.
+//!
 //! The split between **absent** and **unreachable** is the load-bearing
 //! distinction: it lets the default mode catch a genuinely dead DOI while
 //! still passing when the network merely hiccuped on a real id.
@@ -203,15 +208,28 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                 let ref_ = parsed.ref_;
                 let entry_key = parsed.entry_key;
                 match resolve_only(&ref_, &profile, &ctx).await {
-                    Ok(_) => (
-                        VerifyStatus::Valid,
-                        serde_json::json!({
+                    Ok(outcome) => {
+                        // #608: the id resolves, but the record it resolves
+                        // to may have lost characters to U+FFFD. Reported,
+                        // not repaired -- verify reads, it does not rewrite
+                        // -- and not a failure: the reference is real.
+                        let resolved = doiget_core::orchestrator::cite_metadata(&ref_, &outcome);
+                        let quality: Vec<String> =
+                            doiget_core::metadata_quality::replacement_char_fields(&resolved)
+                                .iter()
+                                .map(|f| format!("replacement_char:{f}"))
+                                .collect();
+                        let mut record = serde_json::json!({
                             "ok": true,
                             "ref": ref_.as_input_str(),
                             "status": VerifyStatus::Valid.as_wire(),
                             "entry_key": entry_key,
-                        }),
-                    ),
+                        });
+                        if !quality.is_empty() {
+                            record["metadata_quality"] = serde_json::json!(quality);
+                        }
+                        (VerifyStatus::Valid, record)
+                    }
                     Err(e) => {
                         let code: doiget_core::ErrorCode = (&e).into();
                         // A provenance-log write failure is fail-closed

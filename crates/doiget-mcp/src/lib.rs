@@ -3457,6 +3457,12 @@ fn metadata_only_success_envelope(outcome: &MetadataOnlyOutcome, ref_str: &str) 
         // or null when not determined (e.g. the Crossref-first path).
         "oa_status": outcome.oa_status,
         "metadata": outcome.metadata,
+        // #608: `metadata` is the resolver's payload as received. When the
+        // store write repaired a U+FFFD field from an enabled source, or
+        // could not, these say so -- the only channel an agent has, since
+        // tracing goes to stderr, which the stdio transport never surfaces.
+        "metadata_quality": outcome.metadata_quality,
+        "repaired_fields": outcome.repaired_fields,
         "schema_version": SCHEMA_VERSION,
     })
 }
@@ -3683,6 +3689,12 @@ fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> V
         // when there is no trace, so "unavailable" stays distinguishable
         // from "empty".
         "attempts": attempts_json(&outcome.attempts),
+        // #608: a stored field that still carries a U+FFFD (a character
+        // the publisher's deposit lost), e.g. `replacement_char:venue`, and
+        // the fields repaired from another enabled source. Both empty for
+        // clean metadata; always present so an agent can rely on the key.
+        "metadata_quality": outcome.metadata_quality,
+        "repaired_fields": outcome.repaired_fields,
     })
 }
 

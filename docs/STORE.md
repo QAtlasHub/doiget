@@ -59,6 +59,9 @@ oa_status   = "gold"                  # optional: gold/green/hybrid/bronze/close
                                       #   or "green" (arXiv); omitted when not determined (#281)
 size_bytes  = 1234567
 mcp_call_id = "01JCKZ7Q..."           # optional, ULID, present if fetched via MCP
+repaired_fields = { title = "semantic_scholar" }  # optional (#608): fields whose resolver
+                                      #   value carried U+FFFD, replaced by a character-for-
+                                      #   character match from another enabled source
 ```
 
 ### Reserved top-level field list

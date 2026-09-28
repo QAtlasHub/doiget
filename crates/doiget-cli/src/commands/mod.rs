@@ -255,9 +255,65 @@ fn store_root_from_config() -> Option<Utf8PathBuf> {
     Some(doiget_core::user_extension::expand_store_root(&raw))
 }
 
+/// The stderr lines for a #608 metadata-quality result: one `note:` per
+/// field repaired from another source, and one `warning:` naming the fields
+/// that still carry a U+FFFD. `repair_enabled` says whether any repair
+/// source was enabled, so the warning either explains that none matched or
+/// names the switch that would let doiget try.
+pub(crate) fn metadata_quality_lines(
+    repaired: &std::collections::BTreeMap<String, String>,
+    remaining: &[String],
+    repair_enabled: bool,
+) -> Vec<String> {
+    let mut lines: Vec<String> = repaired
+        .iter()
+        .map(|(field, source)| {
+            format!(
+                "note: repaired {field} from {source}: the Crossref record carries U+FFFD where \
+                 the publisher's deposit lost a character"
+            )
+        })
+        .collect();
+    let fields: Vec<&str> = remaining
+        .iter()
+        .filter_map(|f| f.strip_prefix("replacement_char:"))
+        .collect();
+    if !fields.is_empty() {
+        let hint = if repair_enabled {
+            "no enabled source had a copy that matches it character for character"
+        } else {
+            "set DOIGET_ENABLE_S2=1 to try a repair from Semantic Scholar"
+        };
+        lines.push(format!(
+            "warning: {} still carr{} U+FFFD where the publisher's deposit lost a character; {hint}",
+            fields.join(", "),
+            if fields.len() == 1 { "ies" } else { "y" },
+        ));
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::usable_store_root_env;
+
+    #[test]
+    fn metadata_quality_lines_name_the_repair_and_what_is_left() {
+        let repaired = std::collections::BTreeMap::from([(
+            "title".to_string(),
+            "semantic_scholar".to_string(),
+        )]);
+        let lines = super::metadata_quality_lines(
+            &repaired,
+            &["replacement_char:venue".to_string()],
+            false,
+        );
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("note: repaired title from semantic_scholar"));
+        assert!(lines[1].starts_with("warning: venue still carries U+FFFD"));
+        assert!(lines[1].ends_with("set DOIGET_ENABLE_S2=1 to try a repair from Semantic Scholar"));
+        assert!(super::metadata_quality_lines(&Default::default(), &[], true).is_empty());
+    }
 
     /// #613: an exported-but-empty `DOIGET_STORE_ROOT` (e.g. from
     /// `export DOIGET_STORE_ROOT=${DOIGET_STORE_ROOT:-}`) is unset, not the

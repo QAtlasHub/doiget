@@ -107,6 +107,14 @@ type FetchResult =
       schema_version: string,
       // Issue #118 / #243: PDF leg status. Always present on ok:true responses.
       pdf: PdfLeg,
+      // #608: fields of the stored metadata that still carry U+FFFD (a
+      // character the publisher's deposit lost), as "replacement_char:<field>".
+      // [] for clean metadata. Always present.
+      metadata_quality: string[],
+      // #608: fields replaced by a matching value from another *enabled*
+      // source (DOIGET_ENABLE_S2 / DOIGET_ENABLE_OPENALEX), field -> source
+      // key, e.g. { title: "semantic_scholar" }. {} when nothing was repaired.
+      repaired_fields: { [field: string]: string },
     }
   | { ok: true, dry_run: true, ref: RefShape, plan: FetchPlan,
       rate_limit_budget: { global_per_sec: number, per_source_min_gap_ms: number } }
@@ -363,7 +371,14 @@ type MetadataOnlyResult =
       oa_url: string | null,
       // gold / green / hybrid / bronze / closed, or null when not determined.
       oa_status: string | null,
+      // The resolver's payload as received -- NOT the stored entry.
       metadata: object,
+      // #608: the stored entry's fields that still carry U+FFFD, as
+      // "replacement_char:<field>", and the fields repaired from another
+      // enabled source before the write (field -> source key). The two are
+      // how a caller learns the stored entry differs from `metadata`.
+      metadata_quality: string[],
+      repaired_fields: { [field: string]: string },
       schema_version: string,
     }
   | { ok: true, dry_run: true, ref: RefShape, plan: FetchPlan,
