@@ -66,7 +66,7 @@ use doiget_core::{
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
+    model::{CallToolResult, Implementation, ProtocolVersion, ServerCapabilities, ServerConfig},
     schemars::{self, JsonSchema},
     tool, tool_handler, tool_router,
     transport::stdio,
@@ -4360,11 +4360,11 @@ fn resolve_log_path() -> anyhow::Result<Utf8PathBuf> {
 // capability-aware `instructions`.
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Server {
-    fn get_info(&self) -> ServerInfo {
-        // Both `ServerInfo` and `Implementation` are `#[non_exhaustive]`
+    fn get_info(&self) -> ServerConfig {
+        // Both `ServerConfig` and `Implementation` are `#[non_exhaustive]`
         // (since rmcp 1.6, still so in 3.x), so we go through the public
         // builders rather than struct-literal construction.
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_server_info(Implementation::new("doiget", VERSION))
             .with_instructions(format!(
