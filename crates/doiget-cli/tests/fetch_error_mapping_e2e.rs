@@ -79,6 +79,8 @@ fn ref_taking_commands() -> Vec<Vec<String>> {
         "provenance",
         "audit-log",
         "lint",
+        // Takes a bibliography path, like `verify` / `lint` (#607).
+        "missing",
         "capabilities",
         "help",
     ];

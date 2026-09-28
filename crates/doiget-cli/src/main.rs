@@ -585,6 +585,25 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
+    /// Which works a bibliography cites still have no local PDF, and where
+    /// to get each: the OA copy to fetch, or the publisher's landing page and
+    /// the path to save a hand download under (#607). Read-only; never
+    /// fetches a PDF. Exit code = entries still missing (capped at 255).
+    Missing {
+        /// The bibliography: BibTeX, CSL-JSON, or one ref per line.
+        path: String,
+        /// Input format; auto-detected from extension / content by default.
+        #[arg(long, default_value = "auto")]
+        format: String,
+        /// Where each PDF is expected locally, e.g. 'refs/{key}.pdf'
+        /// ({key} = the entry key, {safekey}). An existing file counts as
+        /// present; for a missing one it is the path to save the download as.
+        #[arg(long, value_name = "PATTERN")]
+        path_pattern: Option<String>,
+        /// Check the store and local files only; no metadata or OA lookup.
+        #[arg(long)]
+        offline: bool,
+    },
     /// Structurally validate a BibTeX bibliography (duplicate keys,
     /// missing fields, blank entries, `$$` title math) WITHOUT resolving
     /// DOIs or touching the network. Read-only; emits one JSON-Lines
@@ -921,6 +940,22 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 .await
         }
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
+        Some(Command::Missing {
+            path,
+            format,
+            path_pattern,
+            offline,
+        }) => {
+            doiget_cli::commands::missing::run(
+                path,
+                format,
+                path_pattern,
+                offline,
+                mode,
+                out.quiet_was_explicit,
+            )
+            .await
+        }
         Some(Command::Verify {
             path,
             format,

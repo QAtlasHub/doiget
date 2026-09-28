@@ -71,7 +71,7 @@ fn load_verify_config() -> verify_config::VerifyConfig {
 }
 
 /// Map the `--format` flag token to a [`Format`].
-fn parse_format(s: &str) -> Result<Format> {
+pub(crate) fn parse_format(s: &str) -> Result<Format> {
     match s {
         "auto" => Ok(Format::Auto),
         "refs" => Ok(Format::Refs),
