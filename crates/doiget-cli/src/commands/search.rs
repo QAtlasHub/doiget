@@ -143,13 +143,14 @@ fn run_local(
 ) -> Result<()> {
     let store_root = resolve_store_root()?;
     let store = FsStore::new(store_root)?;
+    // `run_local` is reached from the async `search::run` (#590).
     let entries = if let Some(tag) = tag_filter {
-        store
-            .search_by_tag(tag, query, LOCAL_DEFAULT_LIMIT)
-            .with_context(|| format!("tag search failed for tag {tag:?}"))?
+        doiget_core::store::blocking_section(|| {
+            store.search_by_tag(tag, query, LOCAL_DEFAULT_LIMIT)
+        })
+        .with_context(|| format!("tag search failed for tag {tag:?}"))?
     } else {
-        store
-            .search(query, LOCAL_DEFAULT_LIMIT)
+        doiget_core::store::blocking_section(|| store.search(query, LOCAL_DEFAULT_LIMIT))
             .with_context(|| format!("search failed for query {query:?}"))?
     };
 

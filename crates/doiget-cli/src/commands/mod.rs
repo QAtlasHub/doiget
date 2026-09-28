@@ -294,8 +294,57 @@ pub(crate) fn metadata_quality_lines(
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::usable_store_root_env;
+
+    /// #590 (review of #620): every command file with async code calls the
+    /// store only through `blocking_section`. Walks the directory at test
+    /// time, so a new command file is covered without being listed; files
+    /// with no `async fn` are synchronous and exempt.
+    #[test]
+    fn async_command_files_call_the_store_only_through_blocking_section() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands");
+        let mut offenders = Vec::new();
+        let mut scanned = 0;
+        for entry in std::fs::read_dir(&dir).expect("commands dir") {
+            let path = entry.expect("entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).expect("read");
+            let body = src.split("\nmod tests {").next().unwrap_or(&src);
+            if !body.contains("async fn") {
+                continue;
+            }
+            scanned += 1;
+            let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+            for m in [
+                "read",
+                "write",
+                "write_user_authored",
+                "list_recent",
+                "search",
+                "search_by_tag",
+            ] {
+                let calls = flat.matches(&format!("store.{m}(")).count();
+                let wrapped = flat
+                    .matches(&format!("blocking_section(||store.{m}("))
+                    .count()
+                    + flat
+                        .matches(&format!("blocking_section(||{{store.{m}("))
+                        .count();
+                if calls != wrapped {
+                    offenders.push(format!("{}: store.{m}", path.display()));
+                }
+            }
+        }
+        assert!(scanned >= 10, "scanned only {scanned} async command files");
+        assert!(
+            offenders.is_empty(),
+            "store calls outside blocking_section: {offenders:#?}"
+        );
+    }
 
     #[test]
     fn metadata_quality_lines_name_the_repair_and_what_is_left() {

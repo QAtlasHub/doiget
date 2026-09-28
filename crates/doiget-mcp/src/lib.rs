@@ -5462,21 +5462,24 @@ mod tests {
     fn every_store_call_in_a_handler_goes_through_blocking_section() {
         let src = include_str!("lib.rs");
         let body = src.split("\nmod tests {").next().expect("non-test part");
-        // Whitespace-collapsed, so a call rustfmt wraps across lines still
-        // reads as `blocking_section(|| store.write(...`.
-        let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        // Whitespace stripped: neither rustfmt nor a method chain split
+        // across lines (`store\n    .read(`) can hide a call (review of #620).
+        let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         for m in [
-            "read(",
-            "write(",
-            "write_user_authored(",
-            "list_recent(",
-            "search(",
+            "read",
+            "write",
+            "write_user_authored",
+            "list_recent",
+            "search",
+            "search_by_tag",
         ] {
-            let calls = flat.matches(&format!("store.{m}")).count();
-            let wrapped = ["blocking_section(|| store.", "blocking_section(|| { store."]
-                .iter()
-                .map(|w| flat.matches(&format!("{w}{m}")).count())
-                .sum::<usize>();
+            let calls = flat.matches(&format!("store.{m}(")).count();
+            let wrapped = flat
+                .matches(&format!("blocking_section(||store.{m}("))
+                .count()
+                + flat
+                    .matches(&format!("blocking_section(||{{store.{m}("))
+                    .count();
             assert_eq!(calls, wrapped, "store.{m} called outside blocking_section");
         }
         assert_eq!(flat.matches("blocking_section(||").count(), 9);

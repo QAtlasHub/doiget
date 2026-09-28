@@ -217,8 +217,11 @@ trait would be a `docs/PUBLIC_API.md` §2 break and would still leave the
 - Synchronous callers (`doiget bib`, `csl`, `tag`, …) call the store
   directly.
 
-doiget's own async call sites (the orchestrator's store write and every MCP
-handler) are pinned to this by source-scan tests (#590).
+doiget's own async call sites -- the orchestrator's store write, every MCP
+handler, and every CLI command file that contains async code -- are pinned to
+this by source-scan tests (#590). The CLI scan walks `src/commands/` at test
+time, so a new command file is covered without being listed. The scans match
+calls on a receiver named `store`; the call sites keep that name.
 
 ## 8. Reading
 

@@ -172,9 +172,10 @@ fn merge_published(mut article: Metadata, arxiv: Metadata) -> Metadata {
 fn bib_from_store(ref_: &Ref) -> Result<Option<String>> {
     let store = FsStore::new(resolve_store_root()?)?;
     let safekey = ref_.safekey();
-    Ok(store
-        .read(&safekey)?
-        .map(|m| render::to_bibtex(safekey.as_str(), &m)))
+    Ok(
+        doiget_core::store::blocking_section(|| store.read(&safekey))?
+            .map(|m| render::to_bibtex(safekey.as_str(), &m)),
+    )
 }
 
 /// Write a rendered BibTeX entry to stdout. `to_bibtex` already terminates

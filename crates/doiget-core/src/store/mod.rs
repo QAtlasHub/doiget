@@ -279,7 +279,7 @@ mod tests {
     /// folder) must not stall the other tasks on its worker.
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn a_blocking_store_call_leaves_the_runtime_responsive() {
-        let hold = Duration::from_millis(300);
+        let hold = Duration::from_millis(500);
         // Control: the same wait called directly starves the ticker, so the
         // assertion below measures the helper and not the scheduler's luck.
         let direct = ticks_during(hold, false).await;
@@ -288,8 +288,11 @@ mod tests {
             direct <= 3,
             "control: direct blocking let {direct} ticks through"
         );
+        // Loose on purpose: Windows' default timer granularity (~15.6 ms)
+        // caps a 5 ms ticker near 32 ticks in 500 ms, before CI load. The
+        // control above is what makes the bound meaningful.
         assert!(
-            wrapped >= 20,
+            wrapped >= 8,
             "blocking_section let only {wrapped} ticks through"
         );
     }
@@ -310,24 +313,41 @@ mod tests {
     #[test]
     fn every_orchestrator_store_call_goes_through_blocking_section() {
         let src = include_str!("../orchestrator.rs");
-        let body = src.split("\nmod tests {").next().expect("non-test part");
-        // Whitespace-collapsed, so a call rustfmt wraps across lines still
-        // reads as `blocking_section(|| store.write(...`.
-        let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        for m in [
-            "read(",
-            "write(",
-            "write_user_authored(",
-            "list_recent(",
-            "search(",
-        ] {
-            let calls = flat.matches(&format!("store.{m}")).count();
-            let wrapped = ["blocking_section(|| store.", "blocking_section(|| { store."]
-                .iter()
-                .map(|w| flat.matches(&format!("{w}{m}")).count())
-                .sum::<usize>();
-            assert_eq!(calls, wrapped, "store.{m} called outside blocking_section");
-        }
-        assert!(flat.contains("blocking_section(|| store.write("));
+        assert_eq!(unwrapped_store_calls(src), Vec::<String>::new());
+        assert!(src.contains("blocking_section(|| store.write("));
     }
+
+    /// Every `store.<method>(` in the non-test part of `src` that is not the
+    /// body of a `blocking_section` closure. Whitespace is stripped first, so
+    /// neither rustfmt re-wrapping a call nor a method chain split across
+    /// lines (`store\n    .read(`) hides one. Calls on a receiver not named
+    /// `store` are out of its reach; the call sites keep that name.
+    pub(crate) fn unwrapped_store_calls(src: &str) -> Vec<String> {
+        let body = src.split("\nmod tests {").next().unwrap_or(src);
+        let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        let mut out = Vec::new();
+        for m in STORE_METHODS {
+            let calls = flat.matches(&format!("store.{m}(")).count();
+            let wrapped = flat
+                .matches(&format!("blocking_section(||store.{m}("))
+                .count()
+                + flat
+                    .matches(&format!("blocking_section(||{{store.{m}("))
+                    .count();
+            if calls != wrapped {
+                out.push(format!("store.{m}: {calls} calls, {wrapped} wrapped"));
+            }
+        }
+        out
+    }
+
+    /// The `Store` trait's methods and `FsStore`'s inherent search.
+    pub(crate) const STORE_METHODS: &[&str] = &[
+        "read",
+        "write",
+        "write_user_authored",
+        "list_recent",
+        "search",
+        "search_by_tag",
+    ];
 }
