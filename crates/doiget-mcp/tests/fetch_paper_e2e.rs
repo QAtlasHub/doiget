@@ -59,6 +59,9 @@ const ENV_KEYS: &[&str] = &[
     "DOIGET_APS_BASE",
     "DOIGET_KEY_APS",
     "DOIGET_AGREE_TDM_APS",
+    // #587: the Tier-2 reachability case.
+    "DOIGET_DATACITE_BASE",
+    "DOIGET_ENABLE_DATACITE",
 ];
 
 async fn boot_in_memory_server() -> anyhow::Result<(
@@ -1093,6 +1096,87 @@ async fn fetch_paper_doi_served_by_the_publisher_reports_the_tdm_fetched_route(
         structured["size_bytes"].as_u64().unwrap_or(0) > 0,
         "bytes, not a metadata-only stand-in: {structured:?}"
     );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+/// #587 (review of #621): a Tier-2 source is reached THROUGH the rewired
+/// `build_http_client_for_fetch`, end to end. Before one table drove both
+/// builders, `DOIGET_DATACITE_BASE` was absent from the override client, so
+/// this request died at `UnknownSource` and DataCite could not be mocked.
+///
+/// Crossref has no record (a DataCite-registered DOI), so the optional chain
+/// runs and DataCite answers.
+#[cfg(feature = "citation")]
+#[tokio::test]
+#[serial_test::serial]
+async fn fetch_paper_reaches_datacite_through_the_override_client() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works/10.5281/zenodo.22053902"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/dois/10.5281/zenodo.22053902"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "id": "10.5281/zenodo.22053902",
+                "type": "dois",
+                "attributes": {
+                    "doi": "10.5281/zenodo.22053902",
+                    "titles": [{"title": "An Example Deposit"}],
+                    "creators": [{"name": "Researcher, Alice"}],
+                    "publicationYear": 2024,
+                    "publisher": "Zenodo",
+                    "types": {"resourceTypeGeneral": "Dataset"}
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let root = camino::Utf8Path::from_path(td.path())
+        .expect("utf-8")
+        .to_path_buf();
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", root.join("papers").as_str());
+    env.set("DOIGET_LOG_PATH", root.join("log.jsonl").as_str());
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", server.uri()));
+    env.set("DOIGET_DATACITE_BASE", &server.uri());
+    env.set("DOIGET_ENABLE_DATACITE", "1");
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+    let mut args = serde_json::Map::new();
+    args.insert("ref".into(), serde_json::json!("10.5281/zenodo.22053902"));
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_fetch_paper").with_arguments(args))
+        .await?;
+    let structured = result.structured_content.as_ref().expect("structured");
+
+    let datacite_hits = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|r| r.url.path().starts_with("/dois/"))
+        .count();
+    assert_eq!(datacite_hits, 1, "DataCite was never asked: {structured:?}");
+    assert_eq!(structured["title"], "An Example Deposit", "{structured:?}");
 
     client.cancel().await?;
     server_handle.await??;

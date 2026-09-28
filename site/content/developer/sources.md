@@ -275,6 +275,17 @@ asked" and from "wrong publisher".
 `DOIGET_SPRINGER_BASE` and `DOIGET_IEEE_BASE` override the API base, mirroring `DOIGET_CROSSREF_BASE`.
 Intended for tests and for institutional proxies.
 
+Every `DOIGET_*_BASE` is listed once, in `doiget_core::base_override::BASE_OVERRIDES` (#587).
+Two kinds behave differently:
+
+- **The Tier-1 bases switch to test mode.** These are `ARXIV`, `ARXIV_SRC`, `CROSSREF`,
+  `UNPAYWALL`, `OA_PUBLISHER`, `OPENALEX` and `AR5IV`. Setting any one of them rebuilds the HTTP
+  client as the allow-http test client, containing only the overridden sources. A source you did
+  not mock is absent, so a test that reaches it fails offline instead of calling the real API.
+- **The Tier-2 and Tier-3 bases do not.** They are honoured inside test mode. On their own they
+  keep the production client, which is `https_only` and applies its allowlists to redirects.
+  `DOIGET_APS_BASE=https://proxy.example.edu` therefore works with every other source intact.
+
 ### When the publisher refuses the content
 
 The OA chain already tries every location Unpaywall returned, advancing past
