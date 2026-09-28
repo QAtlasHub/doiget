@@ -90,9 +90,35 @@ info "checksum OK ($actual)"
 
 # --- install -------------------------------------------------------------
 mkdir -p "$INSTALL_DIR"
+# #594: say what is being replaced. A re-run is the upgrade path, and an
+# install that silently overwrote (or silently kept) an old binary is how
+# an agent ended up four releases behind with nothing to notice.
+chmod +x "$tmp/$asset"
+new_version="$("$tmp/$asset" --version 2>/dev/null | awk '{print $NF}')" || new_version=""
+if [ -x "$INSTALL_DIR/doiget" ]; then
+  old_version="$("$INSTALL_DIR/doiget" --version 2>/dev/null | awk '{print $NF}')" || old_version=""
+  if [ -n "$old_version" ] && [ "$old_version" = "$new_version" ]; then
+    info "reinstalling doiget $new_version (same version) at $INSTALL_DIR/doiget"
+  else
+    info "replacing doiget ${old_version:-(unknown version)} with ${new_version:-$VERSION} at $INSTALL_DIR/doiget"
+  fi
+fi
 mv "$tmp/$asset" "$INSTALL_DIR/doiget"
 chmod +x "$INSTALL_DIR/doiget"
-info "installed to $INSTALL_DIR/doiget"
+info "installed doiget ${new_version:-$VERSION} to $INSTALL_DIR/doiget"
+
+# The manifest `doiget_health` / `doiget capabilities` read to report how
+# this binary was installed and how to update it (#594). Plain JSON, no
+# secrets; a later manual copy over the binary shows up as a version mismatch.
+cat > "$INSTALL_DIR/doiget.install.json" <<EOF_MANIFEST
+{
+  "installer": "install.sh",
+  "version": "${new_version:-$VERSION}",
+  "asset": "$asset",
+  "sha256": "$actual",
+  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF_MANIFEST
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;

@@ -21,6 +21,7 @@ pub mod credentials;
 pub mod discovery;
 pub mod dry_run;
 pub mod http;
+pub mod install_info;
 pub mod markup;
 pub mod metadata_quality;
 pub mod orchestrator;

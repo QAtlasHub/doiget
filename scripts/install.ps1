@@ -53,8 +53,33 @@ try {
 
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
     $dest = Join-Path $installDir 'doiget.exe'
+    # #594: say what is being replaced. A re-run is the upgrade path; this
+    # default destination is the one an MCP config names by path, where an
+    # agent once ran a build four releases old with nothing to notice.
+    $newVersion = ''
+    try { $newVersion = ((& $binPath --version) -split '\s+')[-1] } catch { $newVersion = '' }
+    if (Test-Path $dest) {
+        $oldVersion = ''
+        try { $oldVersion = ((& $dest --version) -split '\s+')[-1] } catch { $oldVersion = '' }
+        if ($oldVersion -and $oldVersion -eq $newVersion) {
+            Write-Host "doiget-install: reinstalling doiget $newVersion (same version) at $dest"
+        } else {
+            $shownOld = if ($oldVersion) { $oldVersion } else { '(unknown version)' }
+            Write-Host "doiget-install: replacing doiget $shownOld with $newVersion at $dest"
+        }
+    }
     Move-Item -Force -Path $binPath -Destination $dest
-    Write-Host "doiget-install: installed to $dest"
+    Write-Host "doiget-install: installed doiget $newVersion to $dest"
+
+    # The manifest doiget_health / doiget capabilities read (#594).
+    $manifest = [ordered]@{
+        installer    = 'install.ps1'
+        version      = $(if ($newVersion) { $newVersion } else { $version })
+        asset        = $asset
+        sha256       = $actual
+        installed_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    }
+    $manifest | ConvertTo-Json | Set-Content -Encoding UTF8 -Path (Join-Path $installDir 'doiget.install.json')
 
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if (-not $userPath -or ($userPath -split ';') -notcontains $installDir) {
