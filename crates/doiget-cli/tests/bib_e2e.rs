@@ -294,3 +294,121 @@ fn cite_auto_falls_back_to_store_when_live_resolve_fails() {
         .stdout(predicate::str::contains("@article{doi_10.1234_example,"))
         .stderr(predicate::str::contains("note: live resolve failed"));
 }
+
+/// Two papers by the same first author in the same year, plus a store the
+/// `--file-field` pattern half-matches.
+fn seeded_store_for_keys() -> (TempDir, Utf8PathBuf) {
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8_path(&dir).join("papers");
+    let store = FsStore::new(root.clone()).expect("FsStore::new");
+    for (doi, title) in [
+        (
+            "10.1017/S0305004100011919",
+            "The Wave Mechanics of an Atom with a Non-Coulomb Central Field",
+        ),
+        (
+            "10.1017/S0305004100011920",
+            "The Wave Mechanics of an Atom, Part II",
+        ),
+    ] {
+        let mut m = fixture(Some("journal-article"));
+        m.doi = Some(Doi::parse(doi).expect("doi"));
+        m.title = title.to_string();
+        m.authors = vec!["Hartree, D. R.".to_string()];
+        m.year = Some(1928);
+        let ref_ = Ref::Doi(Doi::parse(doi).expect("doi"));
+        store.write(&ref_.safekey(), &m, None).expect("seed");
+    }
+    (dir, root)
+}
+
+/// #610: a template keys every entry, a collision gets the biblatex `a`
+/// suffix, and `file` appears only where the pattern names an existing file.
+#[test]
+fn bib_all_with_a_key_template_disambiguates_and_adds_existing_files() {
+    let (dir, root) = seeded_store_for_keys();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(work.join("refs")).expect("mkdir");
+    std::fs::write(work.join("refs/hartree1928wave.pdf"), b"%PDF-1.4\n").expect("pdf");
+    let out = doiget(&root)
+        .current_dir(&work)
+        .args([
+            "bib",
+            "--all",
+            "--key-template",
+            "{author}{year}{title_word}",
+        ])
+        .args(["--file-field", "refs/{key}.pdf"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8(out).expect("utf-8");
+    assert!(out.contains("{hartree1928wave,"), "{out}");
+    assert!(out.contains("{hartree1928wavea,"), "{out}");
+    assert_eq!(
+        out.matches("file       = {refs/hartree1928wave.pdf}")
+            .count(),
+        1,
+        "{out}"
+    );
+    assert!(!out.contains("hartree1928wavea.pdf"), "{out}");
+}
+
+#[test]
+fn bib_config_key_template_is_the_default_and_the_flag_overrides_it() {
+    let (dir, root) = seeded_store_for_keys();
+    let cfg = dir.path().join("cfg");
+    std::fs::create_dir_all(cfg.join("doiget")).expect("mkdir");
+    std::fs::write(
+        cfg.join("doiget/config.toml"),
+        "[cite]\nkey_template = \"{author}{year}\"\n",
+    )
+    .expect("config");
+    let run = |extra: &[&str]| {
+        let out = doiget(&root)
+            .env("XDG_CONFIG_HOME", &cfg)
+            .env("APPDATA", &cfg)
+            .args(["bib", "10.1017/S0305004100011919"])
+            .args(extra)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(out).expect("utf-8")
+    };
+    assert!(run(&[]).starts_with("@article{hartree1928,"));
+    assert!(run(&["--key", "h28"]).starts_with("@article{h28,"));
+    assert!(run(&["--key-template", "{safekey}"])
+        .starts_with("@article{doi_10.1017_S0305004100011919,"));
+}
+
+#[test]
+fn bib_key_template_errors_are_named_and_key_is_single_ref_only() {
+    let (_dir, root) = seeded_store_for_keys();
+    doiget(&root)
+        .args(["bib", "--all", "--key", "x"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("`--key` names one entry"));
+    doiget(&root)
+        .args(["bib", "--all", "--key-template", "{author}{yr}"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown placeholder {yr}"));
+}
+
+#[test]
+fn bib_default_key_is_still_the_safekey() {
+    let (_dir, root) = seeded_store_for_keys();
+    doiget(&root)
+        .args(["bib", "10.1017/S0305004100011919"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(
+            "@article{doi_10.1017_S0305004100011919,",
+        ))
+        .stdout(predicate::str::contains("file ").not());
+}

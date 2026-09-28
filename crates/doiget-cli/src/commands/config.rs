@@ -652,6 +652,18 @@ pub(crate) fn config_template() -> &'static str {
 # color = "auto"     # auto | always | never
 # progress = false
 # emoji = false
+
+[cite]
+# Citation keys for `doiget cite` and `doiget bib`. Unset, every key is the
+# safekey (`doi_10.1007_BF01340294`), which never collides. A template gives
+# human keys instead -- {author} {year} {title_word} {safekey}, lower-cased
+# and ASCII-folded -- and `bib` suffixes a collision `a`, `b`, ...
+# --key-template and --key override this.
+# key_template = "{author}{year}{title_word}"   # fock1930naherungsmethode
+#
+# Add `file = {...}` pointing at the local PDF, when that path exists
+# (--file-field-always adds it regardless). Relative to where you run it.
+# file_field = "refs/{key}.pdf"
 "#
 }
 

@@ -41,7 +41,7 @@ use anyhow::{anyhow, Context, Result};
 
 use doiget_core::metadata_quality::repair;
 use doiget_core::orchestrator::{cite_metadata, resolve_only, MetadataOnlyOutcome};
-use doiget_core::store::{render, FsStore, Metadata, Store};
+use doiget_core::store::{FsStore, Metadata, Store};
 use doiget_core::{CapabilityProfile, Ref};
 
 use super::output::print_err;
@@ -59,12 +59,20 @@ use super::resolve_store_root;
 /// is the requested artifact (product output, not a diagnostic), so
 /// `--quiet` does NOT suppress it. A total miss (no live resolve and no
 /// store entry) returns an error so the CLI exits non-zero.
-pub async fn run(input: String, offline: bool, _mode: super::output::OutputMode) -> Result<()> {
+pub async fn run(
+    input: String,
+    offline: bool,
+    keys: super::KeyOptions,
+    _mode: super::output::OutputMode,
+) -> Result<()> {
     let ref_ = super::parse_ref_or_exit(&input)?;
+    // Validated before any network work, so a template typo is not
+    // reported after a resolve that took seconds (#610).
+    let keys = keys.with_config_defaults()?;
 
     // `--offline`: render straight from the store, no network at all.
     if offline {
-        let bib = bib_from_store(&ref_)?.ok_or_else(|| {
+        let bib = bib_from_store(&ref_, &keys)?.ok_or_else(|| {
             anyhow!(
                 "--offline: no local store entry for {input} (fetch it first with `doiget fetch`)"
             )
@@ -114,7 +122,11 @@ pub async fn run(input: String, offline: bool, _mode: super::output::OutputMode)
             ) {
                 print_err(format_args!("{line}"));
             }
-            let bib = render::to_bibtex(ref_.safekey().as_str(), &metadata);
+            let bib = keys.bibtex(
+                &metadata,
+                ref_.safekey().as_str(),
+                &mut std::collections::HashSet::new(),
+            )?;
             write_bib(&bib)
         }
         Err(e) => {
@@ -122,7 +134,7 @@ pub async fn run(input: String, offline: bool, _mode: super::output::OutputMode)
             // already-fetched ref still cites (issue #305) — but never a
             // silent empty stdout: a ref that is in neither place is a
             // non-zero error carrying the original resolve failure.
-            match bib_from_store(&ref_)? {
+            match bib_from_store(&ref_, &keys)? {
                 Some(bib) => {
                     print_err(format_args!(
                         "note: live resolve failed ({e}); citing offline from the local store"
@@ -169,13 +181,12 @@ fn merge_published(mut article: Metadata, arxiv: Metadata) -> Metadata {
 
 /// Render the stored BibTeX for `ref_`, or `None` when the store has no
 /// entry. The citation key is the entry's safekey, matching `bib`.
-fn bib_from_store(ref_: &Ref) -> Result<Option<String>> {
+fn bib_from_store(ref_: &Ref, keys: &super::KeyOptions) -> Result<Option<String>> {
     let store = FsStore::new(resolve_store_root()?)?;
     let safekey = ref_.safekey();
-    Ok(
-        doiget_core::store::blocking_section(|| store.read(&safekey))?
-            .map(|m| render::to_bibtex(safekey.as_str(), &m)),
-    )
+    doiget_core::store::blocking_section(|| store.read(&safekey))?
+        .map(|m| keys.bibtex(&m, safekey.as_str(), &mut std::collections::HashSet::new()))
+        .transpose()
 }
 
 /// Write a rendered BibTeX entry to stdout. `to_bibtex` already terminates

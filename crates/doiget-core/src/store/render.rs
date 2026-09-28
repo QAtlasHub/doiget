@@ -36,6 +36,14 @@ use super::Metadata;
 /// bare braces, so this is safe-by-default for the Phase 2 starter.
 #[must_use]
 pub fn to_bibtex(citation_key: &str, m: &Metadata) -> String {
+    to_bibtex_with_fields(citation_key, m, &[])
+}
+
+/// [`to_bibtex`] with `extra` fields appended after the ones the metadata
+/// supplies, in order -- e.g. `("file", "refs/fock1930.pdf")` (#610).
+/// Values get the same brace and markup scrubbing as every other field.
+#[must_use]
+pub fn to_bibtex_with_fields(citation_key: &str, m: &Metadata, extra: &[(&str, &str)]) -> String {
     let mut out = String::new();
     let entry_type = bibtex_entry_type(m.type_.as_deref());
     out.push_str(&format!("@{entry_type}{{{citation_key},\n"));
@@ -95,6 +103,9 @@ pub fn to_bibtex(citation_key: &str, m: &Metadata) -> String {
         if let Some(class) = arxiv_primary_class(m) {
             push_field(&mut out, "primaryClass", &class);
         }
+    }
+    for (name, value) in extra {
+        push_field(&mut out, name, value);
     }
 
     out.push_str("}\n");
