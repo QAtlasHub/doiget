@@ -75,6 +75,10 @@ minor bump. Every item links its issue; the ADRs named are in `docs/DECISIONS/`.
   writes over it; it stops and names the entry. Its exit codes follow `docs/ERRORS.md`
   §4: a failed resolve exits as `fetch` would, and 4 is the store's I/O failure. They
   had been swapped (#649 review).
+- **[batch]** A DOI listed twice in one `doiget batch` run, both copies in the same
+  concurrent window, was fetched twice: repeat suppression records an answer only once
+  it lands. Entries for the same ref now run one after the other, so the second is a
+  replay, as in the MCP batch tools (#649 review).
 - **[cite]** A GitHub tag with `..`, `%`, `?`, `#` or whitespace is refused, whether it
   came from the URL or from GitHub's latest-release answer, so it cannot leave the
   `repos/{owner}/{repo}` API path (#649 review).

@@ -1,8 +1,8 @@
 //! #507 through the real binary: one `doiget batch` run that lists a DOI
 //! twice sends it once -- the second entry is a replay of the first answer --
-//! and `--refetch` sends both. Spawns are spaced (`--delay`) so the first
-//! answer exists when the second entry starts; two copies of a DOI in the
-//! same concurrent window can both still go out.
+//! and `--refetch` sends both. With spaced spawns (`--delay`) and without:
+//! two copies of a DOI in the same concurrent window run one after the
+//! other, so the second is still a replay (#649 review).
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use assert_cmd::Command;
@@ -10,11 +10,13 @@ use tempfile::TempDir;
 use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-async fn run(refetch: bool) -> (usize, Vec<serde_json::Value>) {
+async fn run(refetch: bool, spaced: bool) -> (usize, Vec<serde_json::Value>) {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path_regex("^/works/"))
-        .respond_with(ResponseTemplate::new(404))
+        // Slow enough that an unspaced duplicate starts while the first
+        // copy is still waiting for its answer.
+        .respond_with(ResponseTemplate::new(404).set_delay(std::time::Duration::from_millis(300)))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -37,7 +39,10 @@ async fn run(refetch: bool) -> (usize, Vec<serde_json::Value>) {
         .env("DOIGET_CONTACT_EMAIL", "test@example.org")
         .env("DOIGET_CROSSREF_BASE", server.uri())
         .env("DOIGET_UNPAYWALL_BASE", format!("{}/v2", server.uri()))
-        .args(["--mode", "json", "batch", "refs.txt", "--delay", "1"]);
+        .args(["--mode", "json", "batch", "refs.txt"]);
+    if spaced {
+        cmd.args(["--delay", "1"]);
+    }
     if refetch {
         cmd.arg("--refetch");
     }
@@ -61,7 +66,7 @@ async fn run(refetch: bool) -> (usize, Vec<serde_json::Value>) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_doi_listed_twice_in_one_batch_is_asked_once() {
-    let (asked, rows) = run(false).await;
+    let (asked, rows) = run(false, true).await;
     assert_eq!(asked, 1, "the repeat must not reach the network: {rows:?}");
     assert_eq!(rows.len(), 2, "{rows:?}");
     assert!(
@@ -79,6 +84,13 @@ async fn a_doi_listed_twice_in_one_batch_is_asked_once() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn refetch_asks_every_time() {
-    let (asked, _rows) = run(true).await;
+    let (asked, _rows) = run(true, true).await;
     assert_eq!(asked, 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_duplicate_in_the_same_concurrent_window_is_still_asked_once() {
+    let (asked, rows) = run(false, false).await;
+    assert_eq!(asked, 1, "both copies went out at once: {rows:?}");
+    assert_eq!(rows.len(), 2, "{rows:?}");
 }

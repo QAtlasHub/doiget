@@ -212,7 +212,7 @@ Neither ever renders "no trace" as `[]`.
 | `4` | I/O failure (store / log unwritable). |
 | `64..=78` | `sysexits.h` mapping for select cases. |
 | `124` | Timeout (matches GNU `timeout`). |
-| `255` | Capped failure count for `batch`. |
+| `255` | Capped failure count for `batch` and `add --from-dir --apply`. |
 
 ## 5. Error wrapping
 

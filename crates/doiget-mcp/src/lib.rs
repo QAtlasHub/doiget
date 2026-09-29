@@ -2168,7 +2168,7 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: Locate the local PDF file for a stored entry (returns a path, NOT the PDF bytes).\n\
                        INPUTS: ref (DOI or arXiv id).\n\
-                       OUTPUTS: { ok: true, ref, safekey, path: string|null, pdf_exists: bool } OR { ok:false, ref, error }.\n\
+                       OUTPUTS: { ok: true, ref, safekey, path: string|null, pdf_exists: bool, origin: string|null (\"user-supplied\" for a PDF added with doiget add; null when doiget fetched it), license: string|null } OR { ok:false, ref, error }.\n\
                        COSTS: <10 ms local read.\n\
                        SIDE EFFECTS: none. NEVER reads or transmits PDF bytes.\n\
                        LIMITS: Both 'no metadata entry' and 'metadata exists but PDF file missing' surface as { ok: true, path: null, pdf_exists: false } — call doiget_info to distinguish the two cases. Returns an ok:false envelope only on invalid ref / store-open failure.",
