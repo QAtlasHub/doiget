@@ -25,6 +25,7 @@ weight = 200
 | GitHub (software citations) | 1 (metadata) | 0.9 | none (60 requests/hour unauthenticated) | <https://docs.github.com/en/site-policy/github-terms/github-terms-of-service> | always-on, asked only by `cite` / `verify` on a GitHub URL (ADR-0058) |
 | OpenAlex | 2 (metadata) | 4 | none | <https://help.openalex.org/how-to/> | `--features metadata` + `DOIGET_ENABLE_OPENALEX` |
 | Semantic Scholar | 2 (metadata) | 4 | API key (optional) | <https://www.semanticscholar.org/product/api> | `--features metadata` + `DOIGET_ENABLE_S2` |
+| bioRxiv / medRxiv `pubs` | 2 (preprint of a published DOI) | 0.9 | none (no published rate limit; paced at 1/s) | <https://www.biorxiv.org/about-biorxiv> | `--features metadata` + `DOIGET_ENABLE_BIORXIV` (#640, ADR-0063) |
 | DOAJ | 2 (metadata) | 4 | none | <https://doaj.org/terms/> | `--features metadata` + `DOIGET_ENABLE_DOAJ` |
 | DataCite | 2 (resolution) | 4 | none | <https://datacite.org/terms-and-conditions/> | `--features metadata` + `DOIGET_ENABLE_DATACITE` |
 | HAL | 2 (metadata) | 4 | none | <https://api.archives-ouvertes.fr/docs> | `--features metadata` + `DOIGET_ENABLE_HAL` |

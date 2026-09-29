@@ -42,6 +42,11 @@ tdm-elsevier = ["doiget-core/tdm-elsevier", "doiget-mcp/tdm-elsevier"]
 tdm-aps      = ["doiget-core/tdm-aps", "doiget-mcp/tdm-aps"]
 tdm-springer = ["doiget-core/tdm-springer", "doiget-mcp/tdm-springer"]
 tdm-ieee     = ["doiget-core/tdm-ieee", "doiget-mcp/tdm-ieee"]
+# Compiles `tests/live_routes.rs`, the live use-case suite (#462). Only
+# `.github/workflows/live.yml` turns it on: the suite reaches the real
+# services, and `#[ignore]` alone did not keep it off the PR path -- the
+# `test (slow)` job runs every ignored test.
+live-tests = []
 
 [dependencies]
 doiget-core        = { workspace = true }

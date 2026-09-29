@@ -14,6 +14,8 @@
 # (store/citekey.rs, #610) -- words in their own languages, not typos.
 ein = "ein"
 flate = "flate"
+# Creative Commons licence tokens: `cc-by-nc-nd` ("NoDerivatives").
+nd = "nd"
 # `rquest`: actively-maintained reqwest fork
 # (https://crates.io/crates/rquest); referenced in ADR-0028 (D3)
 # as one of the impersonation libraries explicitly out-of-scope.

@@ -3820,6 +3820,22 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             // `crossref_relation`, `openalex_location` or `arxiv_title_search`.
             "found_by": found_by,
         }),
+        // #640: a non-arXiv preprint, fetched through its own DOI.
+        PdfLegStatus::PreprintDoiFallback {
+            preprint_doi,
+            platform,
+            original_block,
+            found_by,
+        } => json!({
+            // Its own status, not `preprint_fallback`: an arXiv preprint and
+            // a bioRxiv one are different routes, and the route registry
+            // (route_coverage_e2e) holds each to its own test.
+            "status": "preprint_doi_fallback",
+            "preprint_doi": preprint_doi,
+            "platform": platform,
+            "original_block": original_block,
+            "found_by": found_by,
+        }),
         // `PdfLegStatus` is `#[non_exhaustive]`; a future variant
         // surfaces as a forward-compatible neutral status rather than
         // failing the build in this downstream crate.
@@ -4372,6 +4388,8 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     allowlists.extend(oa_publisher_allowlist());
     // ADR-0061: PMID / PMCID -> DOI for `doiget_batch_from_bibliography`.
     allowlists.extend(doiget_core::http::pubmed_allowlist());
+    // #640: bioRxiv / medRxiv `pubs`, gated at runtime on DOIGET_ENABLE_BIORXIV.
+    allowlists.extend(doiget_core::http::preprint_allowlist());
     // Slice 15: Tier 2 allowlist is unioned in unconditionally —
     // the runtime `metadata.openalex` / `.semantic_scholar` /
     // `.doaj` capability flags gate whether the source impls
@@ -4678,16 +4696,25 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
 
     // `metadata_sources` (spec §7) == the enabled Tier-2 metadata
     // sources. Order is deterministic (declaration order).
-    let mut metadata_sources: Vec<&str> = Vec::new();
-    if profile.metadata.openalex {
-        metadata_sources.push("openalex");
-    }
-    if profile.metadata.semantic_scholar {
-        metadata_sources.push("semantic_scholar");
-    }
-    if profile.metadata.doaj {
-        metadata_sources.push("doaj");
-    }
+    //
+    // Every opt-in flag, named as `doiget sources` names it. It listed three
+    // of them, so an agent that enabled DataCite, HAL, OpenAIRE, CORE,
+    // Europe PMC or bioRxiv (#640) was told they were off.
+    let m = &profile.metadata;
+    let metadata_sources: Vec<&str> = [
+        ("openalex", m.openalex),
+        ("semantic_scholar", m.semantic_scholar),
+        ("doaj", m.doaj),
+        ("biorxiv", m.biorxiv),
+        ("datacite", m.datacite),
+        ("hal", m.hal),
+        ("openaire", m.openaire),
+        ("core", m.core),
+        ("europe-pmc", m.europe_pmc),
+    ]
+    .into_iter()
+    .filter_map(|(name, on)| on.then_some(name))
+    .collect();
     // Additive alias kept for back-compat with pre-#141 consumers.
     let tier_2 = metadata_sources.clone();
 
@@ -5047,6 +5074,23 @@ mod tests {
         // Additive back-compat fields.
         assert_eq!(v["ok"], true);
         assert_eq!(v["tier_1"], json!(["arxiv", "crossref", "unpaywall"]));
+    }
+
+    /// #641 review: every enabled opt-in source is reported, not the first
+    /// three -- bioRxiv (#640) and DataCite among them.
+    #[cfg(feature = "citation")]
+    #[test]
+    #[serial_test::serial]
+    fn capability_profile_lists_every_enabled_opt_in_source() {
+        std::env::set_var("DOIGET_ENABLE_BIORXIV", "1");
+        std::env::set_var("DOIGET_ENABLE_DATACITE", "1");
+        let profile = CapabilityProfile::from_env().expect("profile");
+        std::env::remove_var("DOIGET_ENABLE_BIORXIV");
+        std::env::remove_var("DOIGET_ENABLE_DATACITE");
+        let v = capability_profile_to_json(&profile);
+        let sources = v["metadata_sources"].as_array().expect("array");
+        assert!(sources.contains(&json!("biorxiv")), "{v}");
+        assert!(sources.contains(&json!("datacite")), "{v}");
     }
 
     // ---- ADR-0030 D6: doiget_batch_from_bibliography helpers ------

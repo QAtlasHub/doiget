@@ -37,6 +37,8 @@ pub enum FoundBy {
     OpenAlexLocation,
     /// arXiv's search, by title and first author.
     ArxivTitleSearch,
+    /// bioRxiv / medRxiv's `pubs` endpoint (#640).
+    BiorxivPubs,
 }
 
 impl FoundBy {
@@ -47,6 +49,7 @@ impl FoundBy {
             Self::CrossrefRelation => "crossref_relation",
             Self::OpenAlexLocation => "openalex_location",
             Self::ArxivTitleSearch => "arxiv_title_search",
+            Self::BiorxivPubs => "biorxiv_pubs",
         }
     }
 }
@@ -79,6 +82,96 @@ pub fn from_crossref(crossref_message: &Value) -> Option<ArxivId> {
             _ => None,
         }
     })
+}
+
+/// A non-arXiv preprint found for a DOI (#640): its own DOI, fetched through
+/// the ordinary OA route (the location Unpaywall reports for it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundDoi {
+    /// The preprint's DOI.
+    pub doi: Doi,
+    /// The platform, when the finder named one (`bioRxiv`, `medRxiv`).
+    pub platform: Option<String>,
+    /// How it was found.
+    pub found_by: FoundBy,
+}
+
+/// A non-arXiv preprint DOI Crossref's `relation.has-preprint` names: any
+/// DOI but an arXiv one (`10.48550`), which [`from_crossref`] handles.
+#[must_use]
+pub fn preprint_doi_from_crossref(crossref_message: &Value) -> Option<Doi> {
+    let rels = crossref_message
+        .pointer("/relation/has-preprint")?
+        .as_array()?;
+    rels.iter().find_map(|r| {
+        (r.get("id-type").and_then(Value::as_str)? == "doi")
+            .then(|| r.get("id").and_then(Value::as_str))
+            .flatten()
+            .map(str::trim)
+            .filter(|id| !id.to_ascii_lowercase().starts_with("10.48550/"))
+            .and_then(|id| Doi::parse(id).ok())
+    })
+}
+
+/// The preprint DOI a bioRxiv / medRxiv `pubs` answer names.
+fn from_pubs(answer: &Value) -> Option<(Doi, Option<String>)> {
+    let first = answer.get("collection")?.as_array()?.first()?;
+    let doi = Doi::parse(first.get("preprint_doi")?.as_str()?.trim()).ok()?;
+    let platform = first
+        .get("preprint_platform")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some((doi, platform))
+}
+
+/// Look for a non-arXiv preprint of `doi` (#640): Crossref's relation, then
+/// bioRxiv and medRxiv `pubs` when `biorxiv_enabled`.
+///
+/// # Errors
+///
+/// A provenance-log failure only; a request that fails is a finder that
+/// found nothing.
+pub async fn find_preprint_doi(
+    doi: &Doi,
+    crossref_message: &Value,
+    biorxiv_enabled: bool,
+    ctx: &FetchContext,
+) -> Result<Option<FoundDoi>, FetchError> {
+    if let Some(found) = preprint_doi_from_crossref(crossref_message) {
+        return Ok(Some(FoundDoi {
+            doi: found,
+            platform: None,
+            found_by: FoundBy::CrossrefRelation,
+        }));
+    }
+    if !biorxiv_enabled {
+        return Ok(None);
+    }
+    for server in ["biorxiv", "medrxiv"] {
+        let mut url = base("DOIGET_BIORXIV_BASE", "https://api.biorxiv.org")?;
+        url.set_path(&format!("/pubs/{server}/{}/na/json", doi.as_str()));
+        match logged_get(doi, "biorxiv", url, ctx).await {
+            Ok(Some(body)) => {
+                if let Some((found, platform)) = serde_json::from_slice::<Value>(&body)
+                    .ok()
+                    .as_ref()
+                    .and_then(from_pubs)
+                {
+                    return Ok(Some(FoundDoi {
+                        doi: found,
+                        platform,
+                        found_by: FoundBy::BiorxivPubs,
+                    }));
+                }
+            }
+            Ok(None) => {}
+            Err(FetchError::Log(e)) => return Err(FetchError::Log(e)),
+            Err(e) => {
+                tracing::info!(error = %e, server, "preprint lookup: bioRxiv pubs did not answer")
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// The arXiv id of an OpenAlex work's arXiv location, if any.
@@ -550,6 +643,62 @@ mod tests {
             assert!(log.contains("\"source\":\"arxiv\""), "logged: {log}");
         }
 
+        /// #640: `pubs` is asked only when enabled -- bioRxiv first, then
+        /// medRxiv -- and its preprint DOI is the answer.
+        #[tokio::test]
+        #[serial_test::serial]
+        async fn biorxiv_pubs_is_asked_only_when_enabled_and_names_the_preprint() {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/pubs/biorxiv/10.1371/journal.pone.0256482/na/json"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"messages": [{"status": "no posts found"}], "collection": []}),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/pubs/medrxiv/10.1371/journal.pone.0256482/na/json"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "collection": [{"preprint_doi": "10.1101/2021.04.29.21256344",
+                                    "preprint_platform": "medRxiv"}]
+                })))
+                .mount(&server)
+                .await;
+            let host = server.address().to_string();
+            let td = tempfile::TempDir::new().expect("tempdir");
+            let log = camino::Utf8PathBuf::try_from(td.path().join("log.jsonl")).expect("utf-8");
+            std::env::set_var("DOIGET_BIORXIV_BASE", server.uri());
+            let sid = "01J0000000000000000000BX40".to_string();
+            let ctx = FetchContext {
+                http: Arc::new(crate::http::HttpClient::new_for_tests_allow_http_multi(&[
+                    ("biorxiv", host.as_str()),
+                ])),
+                rate_limiter: Arc::new(crate::rate_limiter::RateLimiter::new(
+                    crate::RateLimits::HARD_CODED,
+                )),
+                log: Arc::new(
+                    crate::provenance::ProvenanceLog::open(log, sid.clone()).expect("log"),
+                ),
+                session_id: sid,
+                cache_root: None,
+            };
+            let doi = Doi::parse("10.1371/journal.pone.0256482").unwrap();
+            let off = find_preprint_doi(&doi, &serde_json::json!({}), false, &ctx)
+                .await
+                .unwrap();
+            let asked_when_off = paths(&server).await;
+            let on = find_preprint_doi(&doi, &serde_json::json!({}), true, &ctx)
+                .await
+                .unwrap()
+                .unwrap();
+            std::env::remove_var("DOIGET_BIORXIV_BASE");
+            assert!(off.is_none());
+            assert!(asked_when_off.is_empty(), "{asked_when_off:?}");
+            assert_eq!(on.doi.as_str(), "10.1101/2021.04.29.21256344");
+            assert_eq!(on.platform.as_deref(), Some("medRxiv"));
+            assert_eq!(on.found_by, FoundBy::BiorxivPubs);
+        }
+
         #[tokio::test]
         #[serial_test::serial]
         async fn a_generic_title_is_not_searched_at_all() {
@@ -564,5 +713,29 @@ mod tests {
             assert!(found.is_none());
             assert!(seen.is_empty(), "{seen:?}");
         }
+    }
+
+    /// #640: shapes from a live Crossref sample and a live `pubs` answer.
+    #[test]
+    fn a_non_arxiv_preprint_doi_is_read_from_crossref_or_pubs() {
+        let rel = serde_json::json!({"relation": {"has-preprint": [
+            {"id-type": "doi", "id": "10.48550/arXiv.2512.07923"},
+            {"id-type": "doi", "id": "10.1101/2021.04.29.21256344"}]}});
+        assert_eq!(
+            preprint_doi_from_crossref(&rel).unwrap().as_str(),
+            "10.1101/2021.04.29.21256344",
+            "the arXiv DOI is from_crossref's; this is the other one"
+        );
+        let arxiv_only = serde_json::json!({"relation": {"has-preprint": [
+            {"id-type": "arxiv", "id": "2302.04668v2"}]}});
+        assert!(preprint_doi_from_crossref(&arxiv_only).is_none());
+        let pubs = serde_json::json!({"messages": [{"status": "ok"}], "collection": [{
+            "preprint_doi": "10.1101/2021.04.29.21256344",
+            "published_doi": "10.1371/journal.pone.0256482",
+            "preprint_platform": "medRxiv"}]});
+        let (found, platform) = from_pubs(&pubs).unwrap();
+        assert_eq!(found.as_str(), "10.1101/2021.04.29.21256344");
+        assert_eq!(platform.as_deref(), Some("medRxiv"));
+        assert!(from_pubs(&serde_json::json!({"collection": []})).is_none());
     }
 }

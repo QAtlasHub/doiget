@@ -1128,6 +1128,19 @@ pub enum PdfLegStatus {
         /// (ADR-0062).
         found_by: String,
     },
+    /// Nothing open for the DOI itself, and no arXiv preprint: a non-arXiv
+    /// preprint (bioRxiv, medRxiv, Research Square, OSF, ...) was found and
+    /// fetched through the OA location its own DOI reports (#640).
+    PreprintDoiFallback {
+        /// The preprint's DOI.
+        preprint_doi: String,
+        /// The platform, when the finder named one.
+        platform: Option<String>,
+        /// What the DOI's own content leg ended with.
+        original_block: String,
+        /// Who named the preprint ([`crate::preprint::FoundBy`]'s token).
+        found_by: String,
+    },
     /// The OA chain was blocked and a Tier-3 TDM source served the
     /// publisher's own copy under the user's TDM agreement (#458).
     ///
@@ -1964,6 +1977,20 @@ async fn fetch_paper_doi(
     let (pdf_leg, pdf_bytes) =
         try_tdm_content_fallback(doi, pdf_leg, pdf_bytes, profile, ctx, &mut attempts).await;
 
+    // #640: still nothing, and no arXiv preprint -- a non-arXiv preprint
+    // DOI, fetched through the OA location Unpaywall reports for it.
+    let (pdf_leg, pdf_bytes, preprint_license) = try_preprint_doi_fallback(
+        doi,
+        &crossref_meta,
+        pdf_leg,
+        pdf_bytes,
+        &unpaywall_contact,
+        profile,
+        ctx,
+    )
+    .await?;
+    let fallback_license = fallback_license.or(preprint_license);
+
     if let Some(fl) = fallback_license {
         license = fl;
     }
@@ -2092,6 +2119,13 @@ async fn fetch_paper_doi(
         }),
         other: BTreeMap::new(),
     };
+    // #640: an entry holding a preprint says which one.
+    if let PdfLegStatus::PreprintDoiFallback { preprint_doi, .. } = &pdf_leg {
+        metadata.other.insert(
+            "preprint_doi".into(),
+            toml::Value::String(preprint_doi.clone()),
+        );
+    }
     // #608: a Crossref record that lost characters to U+FFFD is repaired
     // from an enabled source when one matches, and flagged when none does.
     let quality = crate::metadata_quality::repair(&mut metadata, profile, ctx).await;
@@ -2609,6 +2643,65 @@ async fn try_arxiv_preprint_fallback(
             (pdf_leg, oa_pdf_bytes, None, None)
         }
     }
+}
+
+/// #640: when the DOI's own content leg found nothing and no arXiv preprint
+/// did either, a non-arXiv preprint DOI ([`crate::preprint::find_preprint_doi`])
+/// is resolved through Unpaywall and fetched from the OA location Unpaywall
+/// reports for it, on the ordinary `oa-publisher` allowlist -- LEGAL §2a (a),
+/// never a constructed URL. Returns the leg, the bytes, and the preprint's
+/// licence.
+async fn try_preprint_doi_fallback(
+    doi: &Doi,
+    crossref_meta: &Value,
+    pdf_leg: PdfLegStatus,
+    pdf_bytes: Option<Vec<u8>>,
+    unpaywall_contact: &str,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+) -> Result<(PdfLegStatus, Option<Vec<u8>>, Option<String>), FetchError> {
+    let original_block = match &pdf_leg {
+        PdfLegStatus::NoOaUrl => "no open copy known to Unpaywall".to_string(),
+        PdfLegStatus::Blocked { message, .. } => message.clone(),
+        _ => return Ok((pdf_leg, pdf_bytes, None)),
+    };
+    let Some(found) =
+        crate::preprint::find_preprint_doi(doi, crossref_meta, profile.metadata.biorxiv, ctx)
+            .await?
+    else {
+        return Ok((pdf_leg, pdf_bytes, None));
+    };
+    let preprint_ref = Ref::Doi(found.doi.clone());
+    let unpaywall = unpaywall_source_from_env(unpaywall_contact);
+    let located = match unpaywall.fetch(&preprint_ref, profile, ctx).await {
+        Ok(r) => r,
+        Err(FetchError::Log(e)) => return Err(FetchError::Log(e)),
+        Err(e) => {
+            tracing::info!(error = %e, preprint = %found.doi.as_str(), "preprint DOI: Unpaywall did not answer");
+            return Ok((pdf_leg, pdf_bytes, None));
+        }
+    };
+    let license = located.license.clone();
+    for candidate in extract_oa_url_chain(located.metadata_json.as_ref()) {
+        match try_fetch_oa_pdf(&found.doi, &candidate, ctx).await {
+            Ok((bytes, _)) => {
+                return Ok((
+                    PdfLegStatus::PreprintDoiFallback {
+                        preprint_doi: found.doi.as_str().to_string(),
+                        platform: found.platform,
+                        original_block,
+                        found_by: found.found_by.as_str().to_string(),
+                    },
+                    Some(bytes),
+                    Some(license),
+                ));
+            }
+            Err(e) => {
+                tracing::info!(error = %e, url = %candidate, "preprint DOI: OA candidate failed")
+            }
+        }
+    }
+    Ok((pdf_leg, pdf_bytes, None))
 }
 
 /// Stage PDF bytes to a tempfile so the existing `Store::write` atomic-
@@ -5839,6 +5932,7 @@ mod chain_tests {
             openalex: false,
             semantic_scholar: false,
             doaj: false,
+            biorxiv: false,
             datacite: false,
             hal: false,
             openaire: false,

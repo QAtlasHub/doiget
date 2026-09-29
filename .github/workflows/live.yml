@@ -36,4 +36,4 @@ jobs:
           # otherwise the suite's placeholder. Crossref, Unpaywall and NCBI
           # all ask for one.
           DOIGET_CONTACT_EMAIL: ${{ vars.DOIGET_LIVE_CONTACT_EMAIL || 'doiget-live@example.org' }}
-        run: cargo test -p doiget-cli --test live_routes -- --ignored --test-threads=1
+        run: cargo test -p doiget-cli --features live-tests --test live_routes -- --ignored --test-threads=1

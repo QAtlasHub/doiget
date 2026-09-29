@@ -16,8 +16,11 @@
 //!
 //! ```sh
 //! DOIGET_CONTACT_EMAIL=you@example.org \
-//!   cargo test -p doiget-cli --test live_routes -- --ignored --test-threads=1
+//!   cargo test -p doiget-cli --features live-tests --test live_routes -- --ignored --test-threads=1
 //! ```
+// Compiled only with `--features live-tests` (live.yml): `#[ignore]` alone put
+// these on the PR path, because the `test (slow)` job runs `-- --ignored`.
+#![cfg(feature = "live-tests")]
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use std::io::{BufRead, BufReader, Read, Write};

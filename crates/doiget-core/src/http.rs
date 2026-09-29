@@ -314,6 +314,17 @@ pub fn pubmed_allowlist() -> Vec<SourceAllowlist> {
     )]
 }
 
+/// Allowlist for **bioRxiv / medRxiv `pubs`** (#640): the preprint behind a
+/// published DOI. Asked only when `DOIGET_ENABLE_BIORXIV` is set and the
+/// content leg found nothing; the preprint itself is then fetched through
+/// its own DOI's reported OA location, never from this host.
+pub fn preprint_allowlist() -> Vec<SourceAllowlist> {
+    vec![SourceAllowlist::new(
+        "biorxiv",
+        vec!["api.biorxiv.org".to_string()],
+    )]
+}
+
 /// Always-compiled allowlist for **software citations** (#614, ADR-0058):
 /// `doiget cite` / `verify` on a GitHub repository or release URL. Kept out
 /// of [`tier_1_allowlist`] because it is not a fetch source -- a fetch
