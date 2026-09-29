@@ -15,6 +15,7 @@
 | Unpaywall | 1 (OA) | 1 | email (polite pool) | <https://unpaywall.org/products/api> | always-on |
 | arXiv | 1 (OA) | 1 | none | <https://info.arxiv.org/help/api/index.html> | always-on |
 | ar5iv (full text) | 1 (OA) | 4 (PR4) | none | <https://ar5iv.labs.arxiv.org/> | always-on |
+| NCBI E-utilities (PubMed id → DOI) | 1 (metadata) | 0.9 | none (3 requests/second without a key; doiget sends none) | <https://www.ncbi.nlm.nih.gov/books/NBK25497/> | always-on, asked only for a PMID / PMCID the caller names (ADR-0061) |
 | GitHub (software citations) | 1 (metadata) | 0.9 | none (60 requests/hour unauthenticated) | <https://docs.github.com/en/site-policy/github-terms/github-terms-of-service> | always-on, asked only by `cite` / `verify` on a GitHub URL (ADR-0058) |
 | OpenAlex | 2 (metadata) | 4 | none | <https://help.openalex.org/how-to/> | `--features metadata` + `DOIGET_ENABLE_OPENALEX` |
 | Semantic Scholar | 2 (metadata) | 4 | API key (optional) | <https://www.semanticscholar.org/product/api> | `--features metadata` + `DOIGET_ENABLE_S2` |

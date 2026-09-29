@@ -47,11 +47,74 @@
 pub fn parse_ref_or_exit(input: &str) -> anyhow::Result<doiget_core::Ref> {
     match doiget_core::Ref::parse(input) {
         Ok(r) => Ok(r),
+        // #500: a PubMed id is not a malformed DOI. Say which commands take
+        // one, rather than calling it invalid.
+        Err(_) if doiget_core::pubmed::PubmedId::parse(input).is_some() => {
+            output::print_err(format_args!(
+                "error[INVALID_REF]: {input} is a PubMed id; `doiget fetch` and `doiget cite` \
+                 resolve it to its DOI -- this command takes the DOI itself"
+            ));
+            Err(anyhow::Error::new(fetch::CliExit(fetch::cli_exit_code(
+                doiget_core::ErrorCode::InvalidRef,
+            ))))
+        }
         Err(e) => {
             render_ref_parse_error(&e);
             Err(anyhow::Error::new(fetch::CliExit(fetch::cli_exit_code(
                 doiget_core::ErrorCode::InvalidRef,
             ))))
+        }
+    }
+}
+
+/// [`parse_ref_or_exit`] that also takes a PubMed id (#500, ADR-0061),
+/// turning it into the DOI PubMed lists for it with one E-utilities lookup.
+/// `network: false` (a dry run) refuses the lookup and says so, rather than
+/// making a request the caller was promised would not happen.
+pub async fn parse_ref_or_pubmed(input: &str, network: bool) -> anyhow::Result<doiget_core::Ref> {
+    use doiget_core::pubmed::{lookup, Lookup, PubmedId};
+    let Some(id) = PubmedId::parse(input) else {
+        return parse_ref_or_exit(input);
+    };
+    let fail = |code: doiget_core::ErrorCode, why: &str| {
+        output::print_err(format_args!("error[{}]: {why}", code.as_wire()));
+        Err(anyhow::Error::new(fetch::CliExit(fetch::cli_exit_code(
+            code,
+        ))))
+    };
+    if !network {
+        return fail(
+            doiget_core::ErrorCode::InvalidRef,
+            &format!(
+                "{} becomes a DOI through one NCBI lookup, and --dry-run makes no request; pass the DOI",
+                id.display()
+            ),
+        );
+    }
+    let ctx = fetch::build_resolve_context()?;
+    match lookup(&id, &ctx).await {
+        Ok(Lookup::Doi(doi)) => {
+            output::print_err(format_args!(
+                "note: {} is DOI {}",
+                id.display(),
+                doi.as_str()
+            ));
+            Ok(doiget_core::Ref::Doi(doi))
+        }
+        Ok(found @ Lookup::NoRecord) => fail(
+            doiget_core::ErrorCode::NotFound,
+            &found.reason(&id).unwrap_or_default(),
+        ),
+        Ok(found) => fail(
+            doiget_core::ErrorCode::NotImplemented,
+            &found.reason(&id).unwrap_or_default(),
+        ),
+        Err(e) => {
+            let code = doiget_core::ErrorCode::from(&e);
+            fail(
+                code,
+                &format!("looking up {} at NCBI failed: {e}", id.display()),
+            )
         }
     }
 }

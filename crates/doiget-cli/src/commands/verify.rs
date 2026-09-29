@@ -238,7 +238,36 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
     // One counter per VerifyStatus, indexed by `VerifyStatus::index`.
     let mut counts = [0u32; VerifyStatus::ALL.len()];
 
-    for entry in entries {
+    // #500 / ADR-0061: a PMID / PMCID entry is verified through the DOI
+    // PubMed lists for it. One with no DOI is a real record doiget cannot
+    // check further (unverifiable); one PubMed has no record of is absent.
+    let resolved = doiget_core::pubmed::resolve_entries(entries, &ctx)
+        .await
+        .map_err(|e| anyhow::anyhow!("provenance log error during verify (aborting): {e}"))?;
+    for item in resolved {
+        let entry = match item {
+            doiget_core::pubmed::Resolved::Entry(entry) => entry,
+            doiget_core::pubmed::Resolved::Unresolved(u) => {
+                let status = match u.code {
+                    ErrorCode::NotFound => VerifyStatus::Absent,
+                    ErrorCode::NotImplemented => VerifyStatus::Unverifiable,
+                    _ => VerifyStatus::Unreachable,
+                };
+                let record = serde_json::json!({
+                    "ok": false,
+                    "ref": u.id.display(),
+                    "status": status.as_wire(),
+                    "entry_key": u.entry_key,
+                    "error": { "code": u.code.as_wire(), "message": u.reason },
+                });
+                counts[status.index()] += 1;
+                #[allow(clippy::print_stdout)]
+                {
+                    println!("{record}");
+                }
+                continue;
+            }
+        };
         // `on_missing_id = "skip"` drops id-less entries entirely —
         // before they are counted or emitted.
         if matches!(&entry, Err(ParseError::NoIdentifier { .. })) && on_missing == OnMissingId::Skip

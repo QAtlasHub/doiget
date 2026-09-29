@@ -14,10 +14,12 @@
 //!   (ADR-0030 D2). One `@entrytype{KEY, …}` per entry; the `doi`
 //!   field is preferred, falling back to an arXiv `eprint`.
 //!
-//! Identifier-pick priority per ADR-0030 D3: `doi` > `arxiv` > `pmid`
-//! (PMID adapter parking until the `Ref::Pmid` variant lands in a
-//! later slice; current code carries the rule through without
-//! producing a `Pmid` ref).
+//! Identifier-pick priority per ADR-0030 D3: `doi` > `arxiv` > `pmid`.
+//! A PMID / PMCID entry is reported here as `UnsupportedIdentifier` and
+//! turned into the DOI PubMed lists for it by
+//! [`crate::pubmed::resolve_entries`] (#500, ADR-0061) -- a request, so
+//! not in this pure parser. There is no `Ref::Pmid`: the DOI is the
+//! identity.
 //!
 //! Parse-error policy per ADR-0030 D5: a single entry's failure is
 //! captured per-entry and does NOT abort the whole batch. The caller
@@ -67,7 +69,8 @@ pub enum ParseError {
         entry_key: Option<String>,
     },
     /// The entry DOES carry an identifier, and it is one doiget recognises
-    /// and cannot resolve yet (#500).
+    /// and resolves only with a request: a PMID / PMCID, through the DOI
+    /// PubMed lists for it (#500, `crate::pubmed::resolve_entries`).
     ///
     /// Distinct from [`Self::NoIdentifier`] because the two send a reader in
     /// opposite directions. "entry has no DOI / arXiv id" is accurate about
@@ -79,7 +82,7 @@ pub enum ParseError {
     /// Surfaces as `NOT_IMPLEMENTED` rather than `INVALID_REF`: the input is
     /// valid and the support is absent, and the two carry different advice --
     /// "wait for a release" versus "correct your input" (ADR-0055).
-    #[error("entry {entry_key:?} is identified only by {kind} {value:?}, which doiget cannot resolve yet (issue #500) -- it is NOT missing an identifier")]
+    #[error("entry {entry_key:?} is identified only by {kind} {value:?}, which doiget resolves through the DOI PubMed lists for it -- a request this run did not make; it is NOT missing an identifier")]
     UnsupportedIdentifier {
         /// Human-facing name of the identifier class, e.g. `"PMID"`.
         kind: &'static str,
@@ -146,7 +149,7 @@ pub enum ParseError {
 /// whitespace into user-facing output before anything asserted the text.
 #[must_use]
 pub fn unsupported_identifier_claim(kind: &str, value: &str) -> String {
-    format!("entry is identified only by {kind} {value:?}, which doiget cannot resolve yet (issue #500); it is NOT missing an identifier")
+    format!("entry is identified only by {kind} {value:?}, which doiget resolves through the DOI PubMed lists for it (#500) -- a request this run did not make (--dry-run / --offline); it is NOT missing an identifier")
 }
 
 /// Input-shape discriminator per ADR-0030 D4.
@@ -275,9 +278,9 @@ pub fn parse_plain_refs(text: &str) -> Vec<Result<ParsedEntry, ParseError>> {
 ///    sometimes emits `doi` lowercase — we accept both).
 /// 2. `archivePrefix == "arXiv"` (case-insensitive) + `eprint`
 ///    (or `note: "arXiv:..."` shape Zotero emits).
-/// 3. (PMID parking — `Ref::Pmid` not yet defined; PMIDs in CSL-JSON
-///    are recorded as parse failures with `NoIdentifier` until the
-///    variant lands.)
+/// 3. A PMID / PMCID (`PMID`, `PMCID`, or Zotero's `note`) is reported as
+///    `UnsupportedIdentifier`, for [`crate::pubmed::resolve_entries`] to
+///    turn into its DOI (#500, ADR-0061).
 ///
 /// `entry_key` is the `id` field verbatim.
 pub fn parse_csl_json(text: &str) -> Vec<Result<ParsedEntry, ParseError>> {

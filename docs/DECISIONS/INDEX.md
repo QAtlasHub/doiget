@@ -77,6 +77,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0058 | Software citations from GitHub, and Zenodo's concept DOI | Accepted | `feat/614-software` | #614 |
 | 0059 | Entitled-network publisher sources: the shape, decided before any source | Accepted (design only) | `docs/593-entitled-network-adr` | #517, #593, #603 |
 | 0060 | Retire BiblioFetch.jl coexistence: the store and safekey specs are doiget's own | Accepted | `docs/retire-bibliofetch` | maintainer decision, 0.9.0 cycle |
+| 0061 | A PubMed id resolves to its DOI; it is not a new store identity | Accepted | `feat/500-pmid` | #500, #576 |
 
 ## Conventions
 

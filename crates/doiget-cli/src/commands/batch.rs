@@ -42,6 +42,7 @@ use camino::Utf8Path;
 
 use doiget_core::orchestrator::{FetchPaperOutcome, PdfLegStatus};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, RowInput};
+use doiget_core::pubmed;
 use doiget_core::refs::{self, Format, ParseError};
 use doiget_core::source::FetchError;
 use doiget_core::{DenialContext, ErrorCode, RateLimits, Ref, MCP_BATCH_MAX_SIZE};
@@ -142,8 +143,33 @@ pub async fn run_with_options(
     // error rather than a silently-empty batch.
     let path_utf8 = Utf8Path::new(&path);
     let parsed = refs::parse_input(&raw, Format::Auto, Some(path_utf8));
-    let mut inputs: Vec<BatchEntry> = Vec::with_capacity(parsed.len());
-    for entry in parsed {
+    // #500 / ADR-0061: a PMID / PMCID entry becomes the DOI PubMed lists
+    // for it -- one NCBI lookup each, so not under --dry-run, which promises
+    // no request.
+    let resolved = if dry_run {
+        parsed.into_iter().map(pubmed::Resolved::Entry).collect()
+    } else {
+        let ctx = super::fetch::build_resolve_context()?;
+        pubmed::resolve_entries(parsed, &ctx)
+            .await
+            .map_err(|e| anyhow!("provenance log error while resolving PubMed ids: {e}"))?
+    };
+    let mut inputs: Vec<BatchEntry> = Vec::with_capacity(resolved.len());
+    for resolved in resolved {
+        let entry = match resolved {
+            pubmed::Resolved::Entry(entry) => entry,
+            pubmed::Resolved::Unresolved(u) => {
+                inputs.push(BatchEntry::Rejected {
+                    display: match &u.entry_key {
+                        Some(k) => format!("{}:{k}", u.id.display()),
+                        None => u.id.display(),
+                    },
+                    code: u.code,
+                    message: u.reason,
+                });
+                continue;
+            }
+        };
         match entry {
             Ok(p) => inputs.push(BatchEntry::Ref(p.ref_.as_input_str().to_string())),
             // The raw identifier verbatim, so the downstream `Ref::parse`

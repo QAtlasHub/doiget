@@ -242,6 +242,8 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
     // ADR-0058: `cite` / `verify` on a GitHub URL. Not a fetch source, so it
     // is not part of tier 1 and never appears in a fetch plan.
     allowlists.extend(doiget_core::http::software_allowlist());
+    // ADR-0061: PMID / PMCID -> DOI. Answers which DOI, never with content.
+    allowlists.extend(doiget_core::http::pubmed_allowlist());
     // The Tier-2 transport gate. The sources it serves — OpenAlex,
     // Semantic Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE and
     // Europe PMC — are compiled under `metadata`, and
@@ -740,7 +742,9 @@ pub async fn run_with_options(
     // `{:?}` dump. Through the shared helper (#492) so a change to the
     // wording or the code reaches every command at once — this and `graph`
     // were the last two hand-inlined copies of its body.
-    let ref_ = super::parse_ref_or_exit(&input)?;
+    // #500: a PubMed id is looked up (never under --dry-run) and fetched
+    // under its DOI.
+    let ref_ = super::parse_ref_or_pubmed(&input, !dry_run).await?;
 
     // Dry-run branch: build the plan and emit it. NO harness, NO network,
     // NO store write, NO provenance row. Posture-lint ADR-0022 §5 will

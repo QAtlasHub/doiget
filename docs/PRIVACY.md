@@ -38,6 +38,10 @@ its use of these APIs polite.
 - **OpenAlex** — literature discovery, identity resolution, and citation graph
   (the search / frontier / link / citation tools).
   <https://docs.openalex.org/how-to-use-the-api/api-overview>
+- **NCBI E-utilities** (`eutils.ncbi.nlm.nih.gov`) -- only for a PMID / PMCID
+  you name or your bibliography carries: the id is sent to learn its DOI, with
+  `tool=doiget` and your contact email if you configured one (ADR-0061).
+  <https://www.ncbi.nlm.nih.gov/home/about/policies/>
 - **GitHub** (`api.github.com`, `raw.githubusercontent.com`) -- only when you
   run `doiget cite` or `doiget verify` on a GitHub repository or release URL:
   the repository, the release, and its `CITATION.cff` (ADR-0058). No token is

@@ -168,6 +168,18 @@ Notes:
   the fetcher observes such a redirect, the response is to add the
   CDN's host suffix here via ADR — NOT to silently widen the allowlist at runtime.
 
+### 3.3b `ncbi` (#500, ADR-0061)
+
+| Field | Value |
+|---|---|
+| `source` | `ncbi` |
+| `redirect_hosts` | `eutils.ncbi.nlm.nih.gov` |
+
+Notes:
+
+- Contacted only to turn a PMID / PMCID the caller names into its DOI; never
+  for content, and never by a fetch plan.
+
 ### 3.3a `github` and `github-raw` (#614, ADR-0058)
 
 | Field | Value |
