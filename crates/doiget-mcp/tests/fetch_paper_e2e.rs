@@ -1846,7 +1846,7 @@ async fn a_crossref_named_medrxiv_preprint_is_fetched_through_its_own_doi_640() 
         .await?
         .structured_content
         .expect("structured");
-    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(v["pdf"]["status"], "preprint_doi_fallback", "{v}");
     assert_eq!(
         v["pdf"]["preprint_doi"], "10.1101/2021.04.29.21256344",
         "{v}"
@@ -2053,7 +2053,7 @@ async fn a_blocked_copy_also_follows_a_non_arxiv_preprint_640() -> anyhow::Resul
         arxiv_hit: false,
     })
     .await?;
-    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(v["pdf"]["status"], "preprint_doi_fallback", "{v}");
     assert_eq!(
         v["pdf"]["preprint_doi"], "10.1101/2021.04.29.21256344",
         "{v}"
@@ -2082,7 +2082,7 @@ async fn biorxiv_pubs_names_the_preprint_end_to_end_640() -> anyhow::Result<()> 
         arxiv_hit: false,
     })
     .await?;
-    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(v["pdf"]["status"], "preprint_doi_fallback", "{v}");
     assert_eq!(v["pdf"]["found_by"], "biorxiv_pubs", "{v}");
     assert_eq!(v["pdf"]["platform"], "bioRxiv", "{v}");
     assert!(

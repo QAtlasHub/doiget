@@ -101,6 +101,16 @@ const ROUTES: &[(&str, Coverage)] = &[
         },
     ),
     (
+        // #640: a non-arXiv preprint (bioRxiv / medRxiv / ...), fetched
+        // through the OA location its own DOI reports.
+        "preprint_doi_fallback",
+        Coverage::By {
+            file: "fetch_paper_e2e.rs",
+            test_fn: "a_crossref_named_medrxiv_preprint_is_fetched_through_its_own_doi_640",
+            feature: None,
+        },
+    ),
+    (
         "tdm_fetched",
         // Was the file's one `Gap`, on a reproduction that could not pass
         // because the test harness had no way to register a Tier-3 allowlist

@@ -44,7 +44,8 @@ preprint DOI and its reported OA locations are tried on the ordinary
 `oa-publisher` allowlist -- LEGAL §2a (a), never a constructed URL.
 
 **D3: The answer says what it is.** `PdfLegStatus::PreprintDoiFallback` (wire
-`preprint_fallback`, with `preprint_doi`, `platform`, `found_by`
+`preprint_doi_fallback` -- its own status, so an agent tells it from an arXiv
+`preprint_fallback` -- with `preprint_doi`, `platform`, `found_by`
 `crossref_relation` / `biorxiv_pubs`, `original_block`); the stored entry carries
 `preprint_doi`, and the licence is the preprint's.
 

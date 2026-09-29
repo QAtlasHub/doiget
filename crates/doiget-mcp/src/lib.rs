@@ -3827,7 +3827,10 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             original_block,
             found_by,
         } => json!({
-            "status": "preprint_fallback",
+            // Its own status, not `preprint_fallback`: an arXiv preprint and
+            // a bioRxiv one are different routes, and the route registry
+            // (route_coverage_e2e) holds each to its own test.
+            "status": "preprint_doi_fallback",
             "preprint_doi": preprint_doi,
             "platform": platform,
             "original_block": original_block,

@@ -250,7 +250,7 @@ fn a_closed_doi_reaches_its_biorxiv_preprint_through_crossrefs_relation() {
     let td = TempDir::new().unwrap();
     let v = Mcp::start(&td).fetch("10.1111/1556-4029.14027");
     assert_eq!(v["oa_status"], "closed", "{v}");
-    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(v["pdf"]["status"], "preprint_doi_fallback", "{v}");
     assert_eq!(v["pdf"]["preprint_doi"], "10.1101/482166", "{v}");
     assert_eq!(v["pdf"]["found_by"], "crossref_relation", "{v}");
     assert!(v["size_bytes"].as_u64().unwrap_or(0) > 1_000, "{v}");
