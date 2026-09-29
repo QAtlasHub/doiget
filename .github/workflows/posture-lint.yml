@@ -299,6 +299,15 @@ jobs:
         # checksum is caught by `brew install` and by nothing before it.
         run: bash scripts/update-homebrew-formula.test.sh
 
+      - name: install.sh reports what it replaces and leaves its manifest (#594)
+        shell: bash
+        # Offline: a fake curl on PATH serves fixture assets. What it pins is
+        # the upgrade path -- a re-run says which version it replaced and
+        # writes the doiget.install.json that doiget_health reports from. It
+        # cannot check the real release assets; the sha256 step above the
+        # manifest is the same code path users run.
+        run: bash scripts/install.test.sh
+
       - name: release-tracking files name one version (#501, #511)
         shell: bash
         # Four files record "the last published stable", and a stable release

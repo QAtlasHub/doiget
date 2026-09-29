@@ -22,7 +22,7 @@ speaks **stdio only** ([ADR-0001](DECISIONS/), [`SCOPE.md`](SCOPE.md) §non-goal
 | `doiget_list_recent` | Last N fetched entries. |
 | `doiget_paper_pdf_path` | Return the local path of a cached PDF, with its `origin` (`user-supplied` for a PDF added with `doiget add`, else null) and stored `license`. **Does not read, parse, or transmit content.** |
 | `doiget_capability_profile` | Report which sources this instance is allowed to use. |
-| `doiget_health` | Operational sanity (store writable, version, schema). `store_writable` is a best-effort probe of the nearest **existing** ancestor of the store root — it creates nothing, so calling this tool never materialises `papers/` (#406). |
+| `doiget_health` | Operational sanity (store writable, version, schema). `store_writable` is a best-effort probe of the nearest **existing** ancestor of the store root — it creates nothing, so calling this tool never materialises `papers/` (#406). `build` (#594) says which binary is answering -- `binary` is its absolute path, which includes the home directory, as the MCP config naming it does -- its `channel` (`stable` / `beta`), install `method` and the `update` command, with no network call. |
 
 Additional tools:
 

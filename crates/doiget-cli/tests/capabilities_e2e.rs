@@ -60,12 +60,18 @@ fn capabilities_emits_valid_json_with_all_top_level_keys() {
         "env_vars",
         "mcp_tools",
         "docs",
+        "build",
     ] {
         assert!(
             v.get(key).is_some(),
             "top-level key `{key}` missing from capabilities JSON"
         );
     }
+    // #594: the build block describes this binary.
+    assert_eq!(v["build"]["version"], env!("CARGO_PKG_VERSION"));
+    let channel = v["build"]["channel"].as_str().unwrap();
+    assert!(matches!(channel, "stable" | "beta"), "{channel}");
+    assert!(v["build"]["binary"].is_string(), "{}", v["build"]);
 }
 
 #[test]

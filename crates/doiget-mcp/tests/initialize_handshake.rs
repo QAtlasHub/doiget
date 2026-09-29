@@ -187,6 +187,15 @@ async fn initialize_tools_list_health_roundtrip() -> anyhow::Result<()> {
         structured["store_writable"].is_boolean(),
         "doiget_health.store_writable must be a bool; got: {structured:?}"
     );
+    // #594: which binary is answering and how to update it.
+    let build = &structured["build"];
+    assert_eq!(build["version"], structured["version"], "{structured:?}");
+    for k in ["channel", "method", "update", "check"] {
+        assert!(
+            build[k].is_string(),
+            "build.{k} must be a string: {build:?}"
+        );
+    }
 
     // -- 4. tools/call doiget_capability_profile ----------------------
     let cap = client

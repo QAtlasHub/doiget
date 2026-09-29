@@ -88,6 +88,16 @@ Installs to `~/.local/bin` (override with `DOIGET_INSTALL_DIR`); pin a version w
 irm https://raw.githubusercontent.com/QAtlasHub/doiget/main/scripts/install.ps1 | iex
 ```
 
+**Upgrading.** Re-run the installer. It says which version it replaced and
+leaves a `doiget.install.json` beside the binary. doiget never checks for
+updates by itself (ADR-0015). To see which binary is actually running,
+including the one an MCP config names by path, use `doiget capabilities`
+(`build`) or the `doiget_health` tool. Both report the version, the channel,
+the install method and that method's update command. `doiget version --check`
+compares with the latest release when you ask. A Claude Desktop `.mcpb`
+extension is never updated automatically; install the new `.mcpb` from the
+latest release.
+
 ### From crates.io (Rust toolchain — compiles from source)
 
 The published crate is **`doiget-cli`** (it produces the `doiget` binary).

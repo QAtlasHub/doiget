@@ -216,7 +216,8 @@ impl Server {
     ///
     /// Per `docs/MCP_TOOLS.md` §1, this tool MUST exist for the smoke
     /// test to validate the rmcp wiring. The output shape is
-    /// `{ ok: true, version, schema_version, store_writable }`.
+    /// `{ ok: true, version, schema_version, store_writable, build }`
+    /// (`build` since #594: see [`doiget_core::install_info`]).
     ///
     /// `store_writable` is a best-effort probe of the nearest existing
     /// ancestor of the store root — see [`probe_store_writable`]. It
@@ -225,8 +226,8 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: Operational sanity check for the doiget MCP server.\n\
                        INPUTS: none.\n\
-                       OUTPUTS: { ok: true, version, schema_version, store_writable }.\n\
-                       COSTS: <1 ms.\n\
+                       OUTPUTS: { ok: true, version, schema_version, store_writable, build: { version, channel, binary, method, manifest, manifest_matches, update, check } }. `build` says which binary answered and how to update it; compare `version` with the latest release only if the user asks (`build.check`).\n\
+                       COSTS: <1 ms; no network.\n\
                        SIDE EFFECTS: none.\n\
                        LIMITS: store_writable is a best-effort probe of the nearest existing ancestor; it never creates the store.",
         annotations(
@@ -248,6 +249,11 @@ impl Server {
             "version": VERSION,
             "schema_version": SCHEMA_VERSION,
             "store_writable": store_writable,
+            // #594: which binary is answering and how it got there, so an
+            // agent that is served a stale build can see it -- the version
+            // alone had nothing to be compared with. No network: the latest
+            // release is only ever looked up on explicit request (`check`).
+            "build": doiget_core::install_info::install_info(),
         });
         Ok(CallToolResult::structured(payload))
     }
