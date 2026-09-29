@@ -16,8 +16,11 @@
 //!
 //! ```sh
 //! DOIGET_CONTACT_EMAIL=you@example.org \
-//!   cargo test -p doiget-cli --test live_routes -- --ignored --test-threads=1
+//!   cargo test -p doiget-cli --features live-tests --test live_routes -- --ignored --test-threads=1
 //! ```
+// Compiled only with `--features live-tests` (live.yml): `#[ignore]` alone put
+// these on the PR path, because the `test (slow)` job runs `-- --ignored`.
+#![cfg(feature = "live-tests")]
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -238,22 +241,6 @@ fn the_maintainers_paper_reaches_its_preprint_by_doi_and_by_arxiv_id() {
     let by_arxiv = mcp.fetch("arxiv:2512.07923");
     assert_eq!(by_arxiv["pdf"]["status"], "fetched", "{by_arxiv}");
     assert_eq!(by_arxiv["source"], "arxiv", "{by_arxiv}");
-}
-
-/// #640: a closed Wiley DOI whose Crossref record names its bioRxiv
-/// preprint (10.1101/482166). No arXiv copy; the bioRxiv DOI is fetched
-/// through the OA location Unpaywall reports for it -- in a default build,
-/// with no new host.
-#[test]
-#[ignore = "live network; run by .github/workflows/live.yml"]
-fn a_closed_doi_reaches_its_biorxiv_preprint_through_crossrefs_relation() {
-    let td = TempDir::new().unwrap();
-    let v = Mcp::start(&td).fetch("10.1111/1556-4029.14027");
-    assert_eq!(v["oa_status"], "closed", "{v}");
-    assert_eq!(v["pdf"]["status"], "preprint_doi_fallback", "{v}");
-    assert_eq!(v["pdf"]["preprint_doi"], "10.1101/482166", "{v}");
-    assert_eq!(v["pdf"]["found_by"], "crossref_relation", "{v}");
-    assert!(v["size_bytes"].as_u64().unwrap_or(0) > 1_000, "{v}");
 }
 
 /// The same paper cited: the Crossref record, rendered.

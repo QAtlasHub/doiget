@@ -51,8 +51,11 @@ preprint DOI and its reported OA locations are tried on the ordinary
 
 ## Consequences
 
-- Measured live: `10.1111/1556-4029.14027` (Wiley, closed) now yields its bioRxiv
-  preprint `10.1101/482166` in a default build.
+- Measured live from a workstation: `10.1111/1556-4029.14027` (Wiley, closed) now
+  yields its bioRxiv preprint `10.1101/482166` in a default build. From a GitHub
+  Actions runner the same fetch ends `no_oa_url` -- bioRxiv does not serve the PDF
+  to that datacenter address -- so the route is pinned by the mock e2e test, not by
+  the live suite.
 - A closed DOI whose Crossref record names no preprint gains nothing unless
   bioRxiv `pubs` is enabled.
 - OSF's and ChemRxiv's own APIs remain further sub-issues of #474.
