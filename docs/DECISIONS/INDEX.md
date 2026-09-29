@@ -75,6 +75,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0056 | A not-determined marker never overwrites a determination | Accepted | `fix/583-store-downgrade` | #583 |
 | 0057 | Repeat suppression: a session is not re-asked what a retry cannot change | Accepted | `feat/507-repeat-suppression` | #507 |
 | 0058 | Software citations from GitHub, and Zenodo's concept DOI | Accepted | `feat/614-software` | #614 |
+| 0059 | Entitled-network publisher sources: the shape, decided before any source | Accepted (design only) | `docs/593-entitled-network-adr` | #517, #593, #603 |
 
 ## Conventions
 
