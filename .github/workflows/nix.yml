@@ -2,8 +2,10 @@
 # is advertised in the README, and until this job nothing had ever built it --
 # it had pinned a toolchain the dependency tree no longer accepts.
 #
-# Off the PR path except when the inputs it depends on change; weekly otherwise,
-# because nixpkgs-unstable moves under it.
+# On a PR when the flake, the lockfile or the Rust sources change -- a source
+# change can break the Nix build (a newer std API, a new system dependency)
+# without touching the flake -- and weekly, because nixpkgs-unstable moves
+# under it. Linux and macOS: the flake has a Darwin-specific input list.
 name: nix
 
 on:
@@ -13,6 +15,8 @@ on:
       - flake.lock
       - Cargo.lock
       - Cargo.toml
+      - "crates/**"
+      - rust-toolchain.toml
       - .github/workflows/nix.yml
   schedule:
     - cron: "17 4 * * 1"
@@ -23,8 +27,12 @@ permissions:
 
 jobs:
   build:
-    name: nix build .#doiget
-    runs-on: ubuntu-latest
+    name: nix build .#doiget (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1

@@ -308,6 +308,12 @@ jobs:
         # manifest is the same code path users run.
         run: bash scripts/install.test.sh
 
+      - name: binstall overrides name the assets a release builds (#501)
+        shell: bash
+        # The overrides are hand-written asset names; a renamed release
+        # artifact would make `cargo binstall doiget-cli` 404 silently.
+        run: bash scripts/check_binstall_assets.sh
+
       - name: release-tracking files name one version (#501, #511)
         shell: bash
         # Four files record "the last published stable", and a stable release
