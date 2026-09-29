@@ -314,10 +314,15 @@ pub fn pubmed_allowlist() -> Vec<SourceAllowlist> {
     )]
 }
 
-/// Allowlist for **bioRxiv / medRxiv `pubs`** (#640): the preprint behind a
-/// published DOI. Asked only when `DOIGET_ENABLE_BIORXIV` is set and the
-/// content leg found nothing; the preprint itself is then fetched through
-/// its own DOI's reported OA location, never from this host.
+/// Allowlist for the **preprint finders** that are not fetch sources. Each
+/// has its own gate, and each is asked only when the content leg found
+/// nothing; none of them serves content.
+///
+/// - bioRxiv / medRxiv `pubs` (#640), on `DOIGET_ENABLE_BIORXIV`: the
+///   preprint DOI behind a published DOI, then fetched through its own
+///   reported OA location, never from this host.
+/// - INSPIRE-HEP (#642), on `DOIGET_ENABLE_INSPIRE`: a record's arXiv id.
+/// - NASA ADS (#644), on a non-empty `DOIGET_ADS_TOKEN`: a record's arXiv id.
 pub fn preprint_allowlist() -> Vec<SourceAllowlist> {
     vec![
         SourceAllowlist::new("biorxiv", vec!["api.biorxiv.org".to_string()]),

@@ -1123,10 +1123,9 @@ pub enum PdfLegStatus {
         /// The OA-publisher error that triggered the fallback (for logs
         /// and audit trail context).
         original_block: String,
-        /// Who named the preprint: `unpaywall` (#325), or one of
-        /// [`crate::preprint::FoundBy`]'s tokens when Unpaywall named none
-        /// (ADR-0062).
-        found_by: String,
+        /// Who named the preprint: Unpaywall (#325), or the finder that
+        /// found it when Unpaywall named none (ADR-0062).
+        found_by: crate::preprint::FoundBy,
     },
     /// Nothing open for the DOI itself, and no arXiv preprint: a non-arXiv
     /// preprint (bioRxiv, medRxiv, Research Square, OSF, ...) was found and
@@ -1138,8 +1137,8 @@ pub enum PdfLegStatus {
         platform: Option<String>,
         /// What the DOI's own content leg ended with.
         original_block: String,
-        /// Who named the preprint ([`crate::preprint::FoundBy`]'s token).
-        found_by: String,
+        /// Who named the preprint.
+        found_by: crate::preprint::FoundBy,
     },
     /// The OA chain was blocked and a Tier-3 TDM source served the
     /// publisher's own copy under the user's TDM agreement (#458).
@@ -2568,16 +2567,18 @@ async fn try_arxiv_preprint_fallback(
                 ..
             },
             _,
-        ) => (s.clone(), message.clone(), "unpaywall".to_string()),
-        (PdfLegStatus::Blocked { message, .. }, Some(f)) => (
-            f.arxiv_id.as_str().to_string(),
+        ) => (
+            s.clone(),
             message.clone(),
-            f.found_by.as_str().to_string(),
+            crate::preprint::FoundBy::Unpaywall,
         ),
+        (PdfLegStatus::Blocked { message, .. }, Some(f)) => {
+            (f.arxiv_id.as_str().to_string(), message.clone(), f.found_by)
+        }
         (PdfLegStatus::NoOaUrl, Some(f)) => (
             f.arxiv_id.as_str().to_string(),
             "no open copy known to Unpaywall".to_string(),
-            f.found_by.as_str().to_string(),
+            f.found_by,
         ),
         _ => return (pdf_leg, oa_pdf_bytes, None, None),
     };
@@ -2690,7 +2691,7 @@ async fn try_preprint_doi_fallback(
                         preprint_doi: found.doi.as_str().to_string(),
                         platform: found.platform,
                         original_block,
-                        found_by: found.found_by.as_str().to_string(),
+                        found_by: found.found_by,
                     },
                     Some(bytes),
                     Some(license),

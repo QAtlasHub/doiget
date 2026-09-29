@@ -175,9 +175,9 @@ See [`CAPABILITY.md`](CAPABILITY.md) for the full type definition and resolution
 ## 7. MSRV
 
 `doiget-core`'s declared MSRV (`Cargo.toml [workspace.package] rust-version`) is
-**1.86**. Active development tracks `channel = "stable"` in `rust-toolchain.toml`,
+**1.88**. Active development tracks `channel = "stable"` in `rust-toolchain.toml`,
 so day-to-day builds use the latest stable toolchain; the CI `msrv` job pins
-explicitly to 1.86 to verify the declared floor still holds.
+explicitly to 1.88 to verify the declared floor still holds.
 
 Raising the declared MSRV is a **minor** version bump and requires a CHANGELOG
 entry. Lowering it requires an ADR (we do not retroactively re-support older

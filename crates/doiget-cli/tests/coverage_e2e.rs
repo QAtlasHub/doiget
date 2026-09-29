@@ -136,3 +136,27 @@ fn sources_prints_a_table_by_default_on_a_non_tty() {
         .stdout(predicates::str::contains("tdm-aps"))
         .stdout(predicates::str::contains("{").not());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn coverage_of_a_doi_crossref_does_not_know_fails_with_its_code() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let td = TempDir::new().unwrap();
+    let mut cmd = doiget(&td);
+    cmd.env("DOIGET_CROSSREF_BASE", server.uri())
+        .env("DOIGET_UNPAYWALL_BASE", format!("{}/v2", server.uri()))
+        .args(["coverage", "10.1234/nowhere"]);
+    let out = tokio::task::spawn_blocking(move || cmd.output().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("error[NOT_FOUND]"), "{err}");
+    assert!(
+        out.stdout.is_empty(),
+        "no report for a failed resolve: {out:?}"
+    );
+}

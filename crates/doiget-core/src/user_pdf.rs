@@ -26,7 +26,7 @@ use chrono::Utc;
 
 use crate::orchestrator::{cite_metadata, resolve_only, write_metadata_and_pdf};
 use crate::source::{FetchContext, FetchError};
-use crate::store::{DoigetExtension, Metadata, Store, ORIGIN_USER_SUPPLIED};
+use crate::store::{DoigetExtension, Metadata, Store, StoreError, ORIGIN_USER_SUPPLIED};
 use crate::{CapabilityProfile, Ref};
 
 /// What [`add_user_pdf`] stored.
@@ -106,6 +106,16 @@ pub enum AddError {
     /// The store write failed.
     #[error("writing the store: {0}")]
     Store(#[source] FetchError),
+    /// The store has an entry for the ref that cannot be read. Writing over
+    /// it would drop its tags, collections and annotation unseen.
+    #[error("the store entry for {ref_} could not be read ({source}); fix or remove it first")]
+    UnreadableEntry {
+        /// The ref.
+        ref_: String,
+        /// Why the read failed.
+        #[source]
+        source: StoreError,
+    },
 }
 
 /// The file's name without its `.pdf` extension (case-insensitive) and a
@@ -278,9 +288,12 @@ pub async fn add_user_pdf(
             path: pdf_path,
         });
     }
-    let stored = crate::store::blocking_section(|| store.read(&safekey))
-        .ok()
-        .flatten();
+    let stored = crate::store::blocking_section(|| store.read(&safekey)).map_err(|source| {
+        AddError::UnreadableEntry {
+            ref_: ref_.as_input_str().to_string(),
+            source,
+        }
+    })?;
     let mut m: Metadata = match stored {
         Some(m) => m,
         None => {

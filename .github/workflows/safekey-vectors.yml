@@ -115,7 +115,7 @@ jobs:
 
       - name: Install Rust toolchain (MSRV via rust-toolchain.toml)
         # No explicit version pin needed: the workspace `rust-toolchain.toml`
-        # declares the channel (stable) and the MSRV (1.86). dtolnay's
+        # declares the channel (stable); the MSRV lives in Cargo.toml. dtolnay's
         # toolchain action honors that file when no toolchain input is set.
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8   # stable, 2025-10-23
 

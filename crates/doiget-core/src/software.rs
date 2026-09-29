@@ -40,6 +40,22 @@ pub const GITHUB_RAW_BASE_ENV: &str = "DOIGET_GITHUB_RAW_BASE";
 const API_DEFAULT: &str = "https://api.github.com";
 const RAW_DEFAULT: &str = "https://raw.githubusercontent.com";
 
+/// Whether `t` can be a git tag name and is safe to put in a GitHub API or
+/// raw path: git's own ref-name rules (no `..`, no space, control or
+/// `~^:?*[\\`), plus no `#` or `%`, and no empty or dot-only segment, so
+/// the tag cannot reach outside the `repos/{owner}/{repo}` path it is
+/// joined onto.
+fn valid_tag(t: &str) -> bool {
+    !t.is_empty()
+        && !t.contains("..")
+        && t.split('/').all(|seg| !seg.is_empty() && seg != ".")
+        && !t.chars().any(|c| {
+            c.is_whitespace()
+                || c.is_control()
+                || matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\' | '#' | '%')
+        })
+}
+
 /// A GitHub repository, optionally at a tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GithubRef {
@@ -79,7 +95,11 @@ impl GithubRef {
         let tag = match &segs[2..] {
             [] => None,
             ["releases", "tag", tag @ ..] | ["tree", tag @ ..] if !tag.is_empty() => {
-                Some(tag.join("/"))
+                let t = tag.join("/");
+                if !valid_tag(&t) {
+                    return None;
+                }
+                Some(t)
             }
             _ => return None,
         };
@@ -300,6 +320,7 @@ pub async fn resolve_github(
                 .as_ref()
                 .and_then(|r| r.get("tag_name"))
                 .and_then(Value::as_str)
+                .filter(|t| valid_tag(t))
                 .map(str::to_string);
             if let Some(t) = &tag {
                 notes.push(format!(
@@ -654,8 +675,21 @@ mod tests {
             "https://github.com/o/r/issues/3",
             "10.5281/zenodo.123",
             "github.com/o/r",
+            "https://github.com/o/r/tree/v1%2F..%2F..%2Fx",
         ] {
             assert_eq!(GithubRef::parse(no), None, "{no}");
+        }
+    }
+
+    #[test]
+    fn a_tag_that_could_leave_the_repository_path_is_refused() {
+        for ok in ["v0.1.0", "release/2.0", "v1.0+build.5", "2024-01_rc1"] {
+            assert!(valid_tag(ok), "{ok}");
+        }
+        for no in [
+            "", "..", "a/../b", "a//b", "./a", "a b", "a?b", "a#b", "a%2Fb", "a:b", "a\\b",
+        ] {
+            assert!(!valid_tag(no), "{no:?}");
         }
     }
 

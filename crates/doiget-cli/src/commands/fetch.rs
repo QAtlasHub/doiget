@@ -609,7 +609,7 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
                 label,
                 outcome.size_bytes,
                 arxiv_id,
-                found_by.replace('_', " "),
+                found_by.as_str().replace('_', " "),
                 outcome.path
             ));
         }
@@ -626,7 +626,7 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
                 outcome.size_bytes,
                 platform.as_deref().unwrap_or("its"),
                 preprint_doi,
-                found_by.replace('_', " "),
+                found_by.as_str().replace('_', " "),
                 outcome.path
             ));
         }

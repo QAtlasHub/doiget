@@ -34,6 +34,8 @@ use crate::{ArxivId, Doi};
 /// Which method found a preprint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoundBy {
+    /// Unpaywall named an arXiv location for the DOI itself (#325).
+    Unpaywall,
     /// Crossref's `relation.has-preprint`.
     CrossrefRelation,
     /// An OpenAlex location on arXiv.
@@ -53,6 +55,7 @@ impl FoundBy {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Unpaywall => "unpaywall",
             Self::CrossrefRelation => "crossref_relation",
             Self::OpenAlexLocation => "openalex_location",
             Self::ArxivTitleSearch => "arxiv_title_search",
