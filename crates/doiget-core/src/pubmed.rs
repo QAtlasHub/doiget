@@ -335,6 +335,16 @@ pub async fn resolve_entries_in_session(
     entries: Vec<Result<ParsedEntry, ParseError>>,
     ctx: &FetchContext,
 ) -> Result<Vec<Resolved>, FetchError> {
+    // No PubMed id, no lookup session: a bibliography without one must log
+    // exactly what it did before (#634 review -- one session_start per
+    // batch).
+    let any = entries.iter().any(|e| {
+        matches!(e, Err(ParseError::UnsupportedIdentifier { kind, value, .. })
+            if PubmedId::from_kind(kind, value).is_some())
+    });
+    if !any {
+        return Ok(entries.into_iter().map(Resolved::Entry).collect());
+    }
     bookend(ctx, LogEvent::SessionStart, LogResult::Ok)?;
     let resolved = resolve_entries(entries, ctx).await;
     bookend(
