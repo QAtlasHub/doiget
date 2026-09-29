@@ -56,6 +56,8 @@ const ENV_KEYS: &[&str] = &[
     "DOIGET_NCBI_BASE",
     "DOIGET_BIORXIV_BASE",
     "DOIGET_ENABLE_BIORXIV",
+    "DOIGET_INSPIRE_BASE",
+    "DOIGET_ENABLE_INSPIRE",
     "DOIGET_UNPAYWALL_EMAIL",
     // #462: the Tier-3 route. Cleared for every test so an APS grant can
     // never leak from one into another.
@@ -1879,6 +1881,8 @@ struct NonArxivCase {
     biorxiv_pubs: bool,
     /// An arXiv search hit for the title.
     arxiv_hit: bool,
+    /// Serve an INSPIRE record naming the arXiv id, and enable it (#642).
+    inspire: bool,
 }
 
 async fn nonarxiv_case(c: NonArxivCase) -> anyhow::Result<(serde_json::Value, Vec<String>)> {
@@ -1935,6 +1939,13 @@ async fn nonarxiv_case(c: NonArxivCase) -> anyhow::Result<(serde_json::Value, Ve
         .mount(&server)
         .await;
     Mock::given(method("GET"))
+        .and(path("/api/doi/10.1371/journal.pone.0256482"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "metadata": {"arxiv_eprints": [{"value": "2105.00042", "categories": ["q-bio.PE"]}]}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
         .and(path("/pubs/biorxiv/10.1371/journal.pone.0256482/na/json"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "collection": [{"preprint_doi": "10.1101/2021.04.29.21256344", "preprint_platform": "bioRxiv"}]
@@ -1975,6 +1986,10 @@ async fn nonarxiv_case(c: NonArxivCase) -> anyhow::Result<(serde_json::Value, Ve
         env.set("DOIGET_BIORXIV_BASE", &server.uri());
         env.set("DOIGET_ENABLE_BIORXIV", "1");
     }
+    if c.inspire {
+        env.set("DOIGET_INSPIRE_BASE", &server.uri());
+        env.set("DOIGET_ENABLE_INSPIRE", "1");
+    }
     let (client, server_handle) = boot_in_memory_server().await?;
     let mut args = serde_json::Map::new();
     args.insert(
@@ -2013,6 +2028,7 @@ async fn a_preprint_doi_with_no_open_location_leaves_the_leg_as_it_was_640() -> 
         preprint_has_location: false,
         biorxiv_pubs: false,
         arxiv_hit: false,
+        inspire: false,
     })
     .await?;
     assert_eq!(v["ok"], true, "not an error: {v}");
@@ -2029,6 +2045,7 @@ async fn an_arxiv_preprint_wins_over_a_sibling_non_arxiv_one_640() -> anyhow::Re
         preprint_has_location: true,
         biorxiv_pubs: false,
         arxiv_hit: true,
+        inspire: false,
     })
     .await?;
     assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
@@ -2051,6 +2068,7 @@ async fn a_blocked_copy_also_follows_a_non_arxiv_preprint_640() -> anyhow::Resul
         preprint_has_location: true,
         biorxiv_pubs: false,
         arxiv_hit: false,
+        inspire: false,
     })
     .await?;
     assert_eq!(v["pdf"]["status"], "preprint_doi_fallback", "{v}");
@@ -2080,6 +2098,7 @@ async fn biorxiv_pubs_names_the_preprint_end_to_end_640() -> anyhow::Result<()> 
         preprint_has_location: true,
         biorxiv_pubs: true,
         arxiv_hit: false,
+        inspire: false,
     })
     .await?;
     assert_eq!(v["pdf"]["status"], "preprint_doi_fallback", "{v}");
@@ -2087,6 +2106,31 @@ async fn biorxiv_pubs_names_the_preprint_end_to_end_640() -> anyhow::Result<()> 
     assert_eq!(v["pdf"]["platform"], "bioRxiv", "{v}");
     assert!(
         paths.iter().any(|p| p.starts_with("/pubs/biorxiv/")),
+        "{paths:?}"
+    );
+    Ok(())
+}
+
+/// #642 end to end: env var -> CapabilityProfile.metadata.inspire ->
+/// preprint::find -> the arXiv preprint INSPIRE names, reported as such.
+#[cfg(feature = "citation")]
+#[tokio::test]
+#[serial_test::serial]
+async fn inspire_names_the_arxiv_preprint_end_to_end_642() -> anyhow::Result<()> {
+    let (v, paths) = nonarxiv_case(NonArxivCase {
+        relation: serde_json::json!({}),
+        journal_pdf: None,
+        preprint_has_location: false,
+        biorxiv_pubs: false,
+        arxiv_hit: false,
+        inspire: true,
+    })
+    .await?;
+    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(v["pdf"]["arxiv_id"], "2105.00042", "{v}");
+    assert_eq!(v["pdf"]["found_by"], "inspire", "{v}");
+    assert!(
+        paths.iter().any(|p| p.starts_with("/api/doi/")),
         "{paths:?}"
     );
     Ok(())
