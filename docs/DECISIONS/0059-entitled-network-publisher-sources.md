@@ -3,7 +3,7 @@
 - **Date:** 2026-09-29
 - **Status:** Accepted (design only; no source implemented)
 - **Supersedes:** -
-- **Builds on:** [0002](0002-tdm-feature-gated.md) (Tier-3 opt-in), [0027](0027-redirect-allowlist-oa-publisher-physics.md) and [0039](0039-publisher-hosts-stay-off-allowlist.md) (`oa-publisher` is for Open Access), [0041](0041-tdm-sources-scoped-to-publisher-prefixes.md) (a publisher source is scoped to its prefixes), [0052](0052-crossref-link-is-programme-scoped.md) (Crossref's `similarity-checking` link is not a route), [0055](0055-error-disposition.md), [0057](0057-repeat-suppression.md)
+- **Builds on:** [0048](0048-access-ceiling.md) (the access ceiling, LEGAL.md §2a, which any such source raises -- see D3), [0002](0002-tdm-feature-gated.md) (Tier-3 opt-in), [0027](0027-redirect-allowlist-oa-publisher-physics.md) and [0039](0039-publisher-hosts-stay-off-allowlist.md) (`oa-publisher` is for Open Access), [0041](0041-tdm-sources-scoped-to-publisher-prefixes.md) (a publisher source is scoped to its prefixes), [0052](0052-crossref-link-is-programme-scoped.md) (Crossref's `similarity-checking` link is not a route), [0055](0055-error-disposition.md), [0057](0057-repeat-suppression.md)
 - **Source:** #517 ("change it": retrieve through routes the user is lawfully entitled to use, including the network's institutional entitlement), #593 (Cambridge Core book chapters, measured), #603 (APS, measured)
 
 ## Context
@@ -36,9 +36,10 @@ source must have, so the first one is not the one that decides it by accident.
 **D1: A capability of its own, with no key.** The credential is the network,
 so the Tier-3 `key + agreement` pair does not transfer. An entitled-network
 source is compiled in by its own Cargo feature and enabled by an explicit
-opt-in, `DOIGET_ENTITLED_<VENDOR>=1`, plus a recorded entitlement note (for
+opt-in, `DOIGET_ENTITLED_<PUBLISHER>=1`, plus a recorded entitlement note (for
 example the institution's name) that goes into the provenance log. No setting
-enables every vendor at once.
+enables every publisher at once; `<PUBLISHER>` follows the
+`DOIGET_KEY_<PUBLISHER>` / `DOIGET_AGREE_TDM_<PUBLISHER>` naming.
 
 **D2: A separate allowlist key, never a widening of `oa-publisher`.** Even where
 the host is already on `oa-publisher` (APS: `*.aps.org`, there for PRX and PR
@@ -47,11 +48,31 @@ Research), the subscription route registers its own key, for example
 stored as if it were free, and the provenance row must say *subscription via
 the network*, not *OA publisher*.
 
-**D3: The route is the landing page's href, read, not constructed.** Even when
-the PDF URL is a function of the DOI (APS), the source fetches the landing
-page and takes the href it serves, so a layout change fails loudly instead of
-fetching the wrong thing. ADR-0052 still excludes Crossref's
-`similarity-checking` link.
+**D3: Any such source raises the access ceiling, and the PR that adds it
+amends LEGAL.md §2a.** §2a allows exactly two kinds of candidate URL -- (a) one
+an enabled source reported, (b) one built from the vendor's *documented* URL
+scheme -- and says there is no third: no link-following, no scraping, no
+`href` extraction. Both measured routes fall outside it. Cambridge Core's
+chapter PDF is reachable only through an href on the landing page, which is
+the third kind. APS's `journals.aps.org/<journal>/pdf/<doi>` is a function of
+the DOI, but it is observed, not documented, so it is not (b) either.
+
+This ADR does not raise the ceiling. It records which kind to prefer when a
+source does, so that PR argues from a settled design:
+
+- **Preferred: the landing page's href, read, not constructed**, even where the
+  URL looks derivable (APS). A layout change then fails loudly instead of
+  fetching the wrong thing, and the route is the one an entitled reader takes.
+  The new kind would be bounded to exactly that: one href of the served
+  landing page, for a DOI in the source's prefix and type, on the source's own
+  allowlist key (D2), accepted only under D4.
+- ADR-0052 still excludes Crossref's `similarity-checking` link, even where it
+  is byte-identical: it is a licensed programme's channel, not a reader's
+  route.
+
+Per ADR-0048, the source's PR amends §2a in the same change, names where the
+new kind is enforced, and adds it to "How this changed". No source may ship
+before that amendment.
 
 **D4: Entitlement is proven positively.** A response counts only with
 `Content-Type: application/pdf` and the `%PDF-` magic. An unentitled network
@@ -89,9 +110,9 @@ shape is measured); APS follows once its off-network response is.
 
 - #593 and #603 stay open as the implementation issues; this ADR is their
   design. Neither is implemented in 0.9.0.
-- LEGAL.md needs a section on entitled-network retrieval when the first source
-  lands, quoting each publisher's terms; the APS terms text still has to be
-  found (#603).
+- LEGAL.md §2a is unchanged by this ADR. The first source's PR amends it
+  (D3) and adds a section on entitled-network retrieval quoting each
+  publisher's terms; the APS terms text still has to be found (#603).
 - #603's note stands as an open check: whether `tdm-aps` can fire for a closed
   DOI at all, given that Crossref always answers for one (#458). If it cannot,
   the entitled-network route is the only one for `10.1103`.
