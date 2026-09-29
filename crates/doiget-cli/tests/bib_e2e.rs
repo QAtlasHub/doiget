@@ -79,6 +79,7 @@ fn fixture(type_: Option<&str>) -> Metadata {
             annotation: None,
             repaired_fields: Default::default(),
             short_venue: None,
+            origin: None,
         }),
         other: BTreeMap::new(),
     }

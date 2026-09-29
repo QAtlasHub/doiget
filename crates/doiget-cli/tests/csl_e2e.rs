@@ -87,6 +87,7 @@ fn journal_article_fixture() -> (Safekey, Metadata) {
             annotation: None,
             repaired_fields: Default::default(),
             short_venue: None,
+            origin: None,
         }),
         other: BTreeMap::new(),
     };
@@ -136,6 +137,7 @@ fn comma_form_fixture() -> (Safekey, Metadata) {
             annotation: None,
             repaired_fields: Default::default(),
             short_venue: None,
+            origin: None,
         }),
         other: BTreeMap::new(),
     };

@@ -75,6 +75,7 @@ pub fn render_ref_parse_error(e: &doiget_core::RefParseError) {
     ));
 }
 
+pub mod add;
 pub mod audit_log;
 pub mod batch;
 pub mod bib;

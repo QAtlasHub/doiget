@@ -585,6 +585,32 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
+    /// Add a PDF you downloaded yourself to the store (#606): `add <ref>
+    /// <file.pdf>`, or `add --from-dir DIR` to match a downloads folder by the
+    /// id in each file name. Recorded as user-supplied with no licence claim;
+    /// the PDF's content is never read (ADR-0003). The file is copied.
+    Add {
+        /// DOI or arXiv id the file is the PDF of.
+        ref_: Option<String>,
+        /// The PDF.
+        #[arg(value_parser = parse_utf8_path)]
+        file: Option<camino::Utf8PathBuf>,
+        /// Match every PDF in DIR to an entry still missing one, by the id
+        /// in its file name (`BF01340294.pdf` -> `10.1007/BF01340294`).
+        #[arg(long, value_name = "DIR", value_parser = parse_utf8_path, conflicts_with_all = ["ref_", "file"])]
+        from_dir: Option<camino::Utf8PathBuf>,
+        /// With --from-dir: match against this bibliography's entries instead
+        /// of the store's entries without a PDF.
+        #[arg(long, value_name = "FILE", value_parser = parse_utf8_path, requires = "from_dir")]
+        refs: Option<camino::Utf8PathBuf>,
+        /// With --from-dir: add the matches (without it, only the plan is printed).
+        #[arg(long, requires = "from_dir")]
+        apply: bool,
+        /// Replace a PDF already in the store, and accept a file whose name
+        /// is another work's id.
+        #[arg(long)]
+        force: bool,
+    },
     /// Which source, if any, can deliver a DOI's PDF -- before fetching (#605).
     /// Reports the publisher, the OA status Unpaywall records, and for every
     /// source whether this doiget can ask it (ready / not built / not
@@ -957,6 +983,14 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 .await
         }
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
+        Some(Command::Add {
+            ref_,
+            file,
+            from_dir,
+            refs,
+            apply,
+            force,
+        }) => doiget_cli::commands::add::run(ref_, file, from_dir, refs, force, apply).await,
         Some(Command::Coverage { ref_ }) => {
             doiget_cli::commands::coverage::run_coverage(ref_, mode, out.quiet_was_explicit).await
         }

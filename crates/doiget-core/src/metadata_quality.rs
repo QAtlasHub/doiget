@@ -352,6 +352,7 @@ mod tests {
                 annotation: None,
                 repaired_fields: BTreeMap::new(),
                 short_venue: None,
+                origin: None,
             }),
             ..Metadata::default()
         };

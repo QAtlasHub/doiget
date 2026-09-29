@@ -505,6 +505,7 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
             annotation: None,
             repaired_fields: Default::default(),
             short_venue: None,
+            origin: None,
         }),
         other: BTreeMap::new(),
     }
@@ -1446,6 +1447,7 @@ async fn fetch_paper_arxiv(
             annotation: None,
             repaired_fields: Default::default(),
             short_venue: None,
+            origin: None,
         }),
         other: BTreeMap::new(),
     };
@@ -1912,6 +1914,7 @@ async fn fetch_paper_doi(
             annotation: None,
             repaired_fields: Default::default(),
             short_venue: extracted.short_venue.clone(),
+            origin: None,
         }),
         other: BTreeMap::new(),
     };
@@ -2411,7 +2414,7 @@ async fn try_arxiv_preprint_fallback(
 
 /// Stage PDF bytes to a tempfile so the existing `Store::write` atomic-
 /// rename code path applies (the store takes a path, not bytes).
-fn stage_pdf_to_tempfile(bytes: &[u8]) -> Result<tempfile::NamedTempFile, FetchError> {
+pub(crate) fn stage_pdf_to_tempfile(bytes: &[u8]) -> Result<tempfile::NamedTempFile, FetchError> {
     let tmp = tempfile::NamedTempFile::new().map_err(|e| FetchError::SourceSchema {
         hint: format!("creating PDF staging tempfile: {e}"),
     })?;
@@ -2423,7 +2426,7 @@ fn stage_pdf_to_tempfile(bytes: &[u8]) -> Result<tempfile::NamedTempFile, FetchE
 
 /// Persist `metadata` (and optionally a PDF at `pdf_src`) through the
 /// trait-object [`Store`] and emit a `StoreWrite` provenance row.
-fn write_metadata_and_pdf(
+pub(crate) fn write_metadata_and_pdf(
     store: &dyn Store,
     safekey: &Safekey,
     metadata: &Metadata,
@@ -2459,7 +2462,14 @@ fn write_metadata_and_pdf(
             ctx.log.append(RowInput {
                 event: LogEvent::StoreWrite,
                 result: LogResult::Ok,
-                capability: Capability::Oa,
+                // #606: a hand-added PDF was fetched under no capability.
+                capability: if metadata.doiget.as_ref().and_then(|d| d.origin.as_deref())
+                    == Some(crate::store::ORIGIN_USER_SUPPLIED)
+                {
+                    Capability::UserSupplied
+                } else {
+                    Capability::Oa
+                },
                 ref_: metadata
                     .doi
                     .as_ref()

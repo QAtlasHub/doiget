@@ -607,7 +607,7 @@ fn merge_metadata(existing: Metadata, incoming: Metadata, user_fields: UserField
                 incoming_d.oa_status = existing_d.oa_status;
             }
             if incoming_d.license == LICENSE_UNDETERMINED {
-                incoming_d.license = existing_d.license;
+                incoming_d.license = existing_d.license.clone();
             }
             // Same rule for the two fields a minimal metadata-only write
             // never looks for (ADR-0056): no abbreviation in the incoming
@@ -623,6 +623,19 @@ fn merge_metadata(existing: Metadata, incoming: Metadata, user_fields: UserField
             }
             if incoming_d.repaired_fields.is_empty() {
                 incoming_d.repaired_fields = existing_d.repaired_fields.clone();
+            }
+            // #606: a metadata-only re-fetch of an entry whose PDF the user
+            // added by hand carries no PDF of its own. Its `[doiget]` would
+            // then say `size_bytes = 0` from a resolver while the user's file
+            // is still on disk -- so the record of that file stays. A fetch
+            // that DID bring a PDF replaced the bytes, and wins as before.
+            if existing_d.origin.as_deref() == Some(super::metadata::ORIGIN_USER_SUPPLIED)
+                && incoming_d.size_bytes == 0
+            {
+                incoming_d.origin = existing_d.origin.clone();
+                incoming_d.source = existing_d.source.clone();
+                incoming_d.size_bytes = existing_d.size_bytes;
+                incoming_d.license = existing_d.license.clone();
             }
             // `tags` / `collections` / `annotation` are USER-AUTHORED. A
             // fetch never writes them -- all three orchestrator construction
@@ -971,6 +984,7 @@ mod tests {
                 annotation: None,
                 repaired_fields: Default::default(),
                 short_venue: None,
+                origin: None,
             }),
             other: BTreeMap::new(),
         }
@@ -1066,6 +1080,34 @@ mod tests {
             out.doiget.expect("ext").short_venue.as_deref(),
             Some("Phys. Rev. B")
         );
+    }
+
+    #[test]
+    fn a_metadata_only_refetch_keeps_the_record_of_a_user_supplied_pdf() {
+        let mut existing = sample_metadata();
+        let d = existing.doiget.as_mut().expect("ext");
+        d.origin = Some(super::super::metadata::ORIGIN_USER_SUPPLIED.into());
+        d.source = "user".into();
+        d.size_bytes = 4_102_500;
+        d.license = LICENSE_UNDETERMINED.into();
+        let mut incoming = sample_metadata();
+        let d = incoming.doiget.as_mut().expect("ext");
+        d.source = "crossref".into();
+        d.size_bytes = 0;
+        let out = merge_metadata(existing.clone(), incoming.clone(), UserFields::Preserve);
+        let od = out.doiget.expect("ext");
+        assert_eq!(od.origin.as_deref(), Some("user-supplied"));
+        assert_eq!((od.source.as_str(), od.size_bytes), ("user", 4_102_500));
+
+        // A fetch that brought its own PDF replaced the bytes: it wins.
+        let d = incoming.doiget.as_mut().expect("ext");
+        d.source = "oa-publisher".into();
+        d.size_bytes = 123;
+        let od = merge_metadata(existing, incoming, UserFields::Preserve)
+            .doiget
+            .expect("ext");
+        assert_eq!(od.origin, None);
+        assert_eq!(od.source, "oa-publisher");
     }
 
     #[test]

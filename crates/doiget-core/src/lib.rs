@@ -36,6 +36,7 @@ pub mod source_catalog;
 pub mod sources;
 pub mod store;
 pub mod user_extension;
+pub mod user_pdf;
 pub mod verify_config;
 
 // Phase 4 citation graph (ADR-0010). Compile-gated by the `citation`

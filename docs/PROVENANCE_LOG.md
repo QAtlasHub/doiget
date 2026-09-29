@@ -51,7 +51,7 @@ in all timestamps.
 | `license` | string | event=fetch ok | OA license string, or `"unknown"` |
 | `size_bytes` | `u64` | event=fetch ok | |
 | `store_path` | string | event=fetch ok | Relative to store root. |
-| `capability` | enum | yes | `oa` / `metadata` / `tdm-elsevier` / `tdm-aps` / `tdm-springer` |
+| `capability` | enum | yes | `oa` / `metadata` / `tdm-elsevier` / `tdm-aps` / `tdm-springer` / `tdm-ieee` / `user-supplied` (a `store_write` for a PDF added with `doiget add`, #606 -- fetched under no capability; the original file path is never logged) |
 | `error_code` | enum (`docs/ERRORS.md` §3) | `result=err` | The closed-set code for this row's failure. **Which code depends on the layer, deliberately:** a failed `fetch` leg records the *transport* mechanism (a policy-blocked OA leg is `NETWORK_ERROR` — see `ERRORS.md` §6.1), while a `session_end` row records the code the CALLER was given, after any reclassification. So the two rows for one blocked fetch legitimately differ, and each is true about its own layer. `null` on `result=ok` rows, and on a batch `session_end`, which spans many refs and has no single code (#507). |
 | `session_id` | ULID (26 chars) | yes | One per process invocation. |
 | `schema_version` | string | yes | Always the literal `"v2"` for rows written by current builds (ADR-0024). v1 rows (pre-Slice-4) lack this field; the migration tool in §"Schema migration" below brings them onto the v2 shape. |
