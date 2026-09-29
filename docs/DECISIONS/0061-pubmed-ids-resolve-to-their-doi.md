@@ -36,9 +36,12 @@ databases, and an unknown id answers `result.<uid>.error`.
 `pmcid:PMCN` / `PMCN`, and PubMed / PMC article URLs; bare digits are refused
 (too easily something else). `batch`, `verify`, `missing` and
 `doiget_batch_from_bibliography` resolve the PMID / PMCID entries a
-bibliography carries. Other single-ref commands say which commands take a
-PubMed id. `--dry-run` and `--offline` make no request, so they do not resolve
-one, and say so.
+bibliography carries. Over MCP, `doiget_fetch_paper`, `doiget_resolve_paper`,
+`doiget_metadata_only` and `doiget_batch_fetch` take a PubMed id too (#638).
+Other single-ref commands and tools -- local-only ones, which make no request
+-- name the input as a PubMed id and the commands that resolve one.
+`--dry-run` / `dry_run` and `--offline` make no request, so they do not
+resolve one, and say so.
 
 **D3: Nothing is guessed when there is no DOI.** A record with no DOI is
 reported as such (`NOT_IMPLEMENTED`: the record is real, doiget reaches it only
