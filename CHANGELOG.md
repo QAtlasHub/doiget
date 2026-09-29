@@ -8,6 +8,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `doiget-core` is the only crate with strict semver guarantees during the 0.x line; CLI
 flag changes and `doiget-mcp` tool spec changes will be called out explicitly here.
 
+## [Unreleased]
+
+The 0.9.0 cycle (betas 0.9.0-beta.1 … beta.27). New subcommands and MCP inputs, so a
+minor bump. Every item links its issue; the ADRs named are in `docs/DECISIONS/`.
+
+### Added
+
+- **[fetch]** A closed DOI now reaches its **preprint** when one exists, not only when
+  Unpaywall names it (#636, ADR-0062). In order, stopping at the first answer: Crossref
+  `relation.has-preprint` (no request); OpenAlex `locations[]` (opt-in); INSPIRE-HEP
+  `arxiv_eprints` (opt-in, #642, ADR-0064); NASA ADS `identifier`, on your own
+  `DOIGET_ADS_TOKEN` (#644, ADR-0065); and an exact-title, first-author arXiv search.
+  A non-arXiv preprint (bioRxiv, medRxiv, Research Square, OSF, …) named by Crossref, or
+  by bioRxiv's `pubs` with `DOIGET_ENABLE_BIORXIV`, is fetched through its own DOI's
+  Unpaywall location (#640, ADR-0063). The envelope says `preprint_fallback` /
+  `preprint_doi_fallback` and which finder answered (`found_by`). Measured: the
+  maintainer's own `10.1103/bbnt-brjz` now yields arXiv:2512.07923.
+- **[ref]** **PMID / PMCID** input (`pmid:N`, `PMCN`, PubMed / PMC URLs) resolves to the
+  DOI PubMed lists for it, through NCBI E-utilities at NCBI's 3 requests/second (#500,
+  ADR-0061). `fetch`, `cite`, `batch`, `verify`, `missing`, and over MCP
+  `doiget_fetch_paper`, `doiget_resolve_paper`, `doiget_metadata_only`,
+  `doiget_batch_fetch` and `doiget_batch_from_bibliography` (#638). A record with no DOI
+  is `NOT_IMPLEMENTED`; no record is `NOT_FOUND`. The store identity stays the DOI.
+- **[cite]** `doiget cite <GitHub release URL>` renders **`@software`** from the release
+  and the repository's `CITATION.cff`; a Zenodo version DOI is cited by its concept DOI
+  (`--zenodo-version` keeps the version); `verify` checks a software entry still resolves
+  (#614, ADR-0058).
+- **[cite]** Citekey templates, `--key`, and a `file` field pointing at the local PDF
+  (#610); `--journal-abbrev iso4` from Crossref's own `short-container-title` (#611).
+- **[cli]** `doiget missing <bibliography>`: which cited works have no local PDF, and
+  where to get each (#607). `doiget coverage <doi>` / `doiget sources`: which source, if
+  any, can deliver a DOI before fetching (#605). `doiget add`: a hand-downloaded PDF into
+  the store, recorded as `origin = "user-supplied"` (#606).
+- **[fetch]** **Repeat suppression**: a session is not re-asked what a retry cannot
+  change; `force` (MCP) / `--refetch` (CLI) asks anyway and is logged (#507, ADR-0057).
+- **[health]** `doiget_health` / `doiget capabilities` say which binary is answering, how
+  it was installed and how to update it, with no network call (#594).
+- **[dist]** `cargo binstall doiget-cli`, and a Nix flake that builds (Linux and macOS
+  in CI) (#501).
+- **[allowlist]** J-STAGE joins the opt-in `trust_oa_registries` set (#646, ADR-0066).
+- **[test]** A nightly **live suite** (`.github/workflows/live.yml`, `--features
+  live-tests`): the real binary against the real services, one ref per route, asserting
+  which route produced each outcome (#462).
+
+### Changed
+
+- **[fetch]** An enabled OpenAlex is asked when the record is closed, and names the
+  repository deposit it cannot follow (#547).
+- **[metadata]** Titles with JATS / MathML markup are reduced to plain text everywhere,
+  not only in BibTeX (#609); replacement characters (U+FFFD) are flagged and repaired
+  from an enabled source (#608).
+- **[mcp]** `doiget_capability_profile`'s `metadata_sources` lists every enabled opt-in
+  source, not three of them (#641 review).
+
+### Fixed
+
+- **[store]** Store calls no longer hold a tokio worker (#590); one base-override table
+  for every test client (#587); an empty or unexpanded `--store-root` is refused (#613).
+- **[cli]** Windows' 1 MiB main-thread stack overflowed in debug builds; the CLI runs on
+  an 8 MiB thread (#611).
+
+### Docs / decisions
+
+- BiblioFetch.jl coexistence is retired: STORE.md and SAFEKEY.md are doiget's own specs;
+  nothing on disk changed (ADR-0060).
+- Entitled-network publisher sources: the shape, decided before any source (#593, #603,
+  ADR-0059 -- design only).
+- LEGAL.md §2 and §2a record every new host and candidate-URL kind above.
+
 ## [0.8.13] - 2026-09-01
 
 ### Fixed
