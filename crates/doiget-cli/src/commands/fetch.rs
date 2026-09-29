@@ -599,10 +599,16 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
             }
         }
         // Issue #325: publisher PDF was blocked, arXiv preprint auto-fetched.
-        PdfLegStatus::PreprintFallback { arxiv_id, .. } => {
+        PdfLegStatus::PreprintFallback {
+            arxiv_id, found_by, ..
+        } => {
             print_success(format_args!(
-                "fetched {} ({} bytes) via arXiv preprint arxiv:{} -> {}",
-                label, outcome.size_bytes, arxiv_id, outcome.path
+                "fetched {} ({} bytes) via arXiv preprint arxiv:{} (found by {}) -> {}",
+                label,
+                outcome.size_bytes,
+                arxiv_id,
+                found_by.replace('_', " "),
+                outcome.path
             ));
         }
         // #458: the publisher served its own copy under the user's TDM

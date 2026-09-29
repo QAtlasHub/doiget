@@ -778,6 +778,11 @@ async fn fetch_paper_doi_falls_back_to_the_arxiv_preprint() -> anyhow::Result<()
         serde_json::json!("arxiv"),
         "the bytes came from arXiv, and `source` has to say so: {structured:?}"
     );
+    assert_eq!(
+        structured["pdf"]["found_by"],
+        serde_json::json!("unpaywall"),
+        "ADR-0062: who named the preprint: {structured:?}"
+    );
     assert!(
         structured["size_bytes"].as_u64().unwrap_or(0) > 0,
         "a fallback that reports success must have written bytes: {structured:?}"
@@ -1396,5 +1401,166 @@ async fn batch_from_bibliography_resolves_pubmed_ids_500() -> anyhow::Result<()>
     server_handle.await??;
     drop(env);
     drop(td);
+    Ok(())
+}
+
+/// ADR-0062, the measured case: closed at the publisher, unknown to
+/// Unpaywall, on arXiv all the same. Found by arXiv's title search, and
+/// fetched as #325 fetches -- or, when Crossref's relation names it, found
+/// with no search at all.
+async fn preprint_discovery_case(
+    relation: serde_json::Value,
+) -> anyhow::Result<(serde_json::Value, Vec<String>)> {
+    preprint_discovery_case_with(relation, None).await
+}
+
+/// `publisher_pdf`: an Unpaywall location on a host off the allowlist, so
+/// the content leg is Blocked -- with no arXiv hint -- rather than NoOaUrl.
+async fn preprint_discovery_case_with(
+    relation: serde_json::Value,
+    publisher_pdf: Option<&str>,
+) -> anyhow::Result<(serde_json::Value, Vec<String>)> {
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const TITLE: &str = "Environment-matrix-product operator for boundary-free large-scale quantum many-body simulations";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works/10.1103/bbnt-brjz"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "ok",
+            "message": {
+                "title": [TITLE],
+                "author": [{"family": "Shimozono", "given": "Souta"}, {"family": "Hotta", "given": "Chisa"}],
+                "issued": {"date-parts": [[2026, 6, 5]]},
+                "type": "journal-article",
+                "relation": relation
+            }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v2/10.1103%2Fbbnt-brjz"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(match publisher_pdf {
+                None => serde_json::json!({
+                    "doi": "10.1103/bbnt-brjz", "is_oa": false, "oa_status": "closed",
+                    "best_oa_location": null, "oa_locations": []
+                }),
+                Some(pdf) => serde_json::json!({
+                    "doi": "10.1103/bbnt-brjz", "is_oa": true, "oa_status": "bronze",
+                    "best_oa_location": {"url_for_pdf": pdf, "url": pdf},
+                    "oa_locations": [{"url_for_pdf": pdf, "url": pdf}]
+                }),
+            }),
+        )
+        .mount(&server)
+        .await;
+
+    let arxiv = MockServer::start().await;
+    let entry = format!(
+        "<feed><entry><id>http://arxiv.org/abs/2512.07923v1</id><title>{TITLE}</title>\
+         <published>2025-12-08T00:00:00Z</published>\
+         <author><name>Souta Shimozono</name></author><author><name>Chisa Hotta</name></author>\
+         </entry></feed>"
+    );
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .and(query_param("max_results", "5"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(entry.clone()))
+        .mount(&arxiv)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(entry))
+        .mount(&arxiv)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(SAMPLE_PDF_BODY.to_vec()))
+        .mount(&arxiv)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let root = camino::Utf8Path::from_path(td.path())
+        .expect("utf-8")
+        .to_path_buf();
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", root.join("papers").as_str());
+    env.set("DOIGET_LOG_PATH", root.join("log.jsonl").as_str());
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", server.uri()));
+    env.set("DOIGET_OA_PUBLISHER_BASE", &server.uri());
+    env.set("DOIGET_ARXIV_BASE", &arxiv.uri());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1103/bbnt-brjz"));
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_fetch_paper").with_arguments(args))
+        .await?;
+    let structured = result.structured_content.clone().expect("structured");
+    let searches = arxiv
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|r| r.url.query().map(str::to_string))
+        .filter(|q| q.contains("search_query"))
+        .collect();
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok((structured, searches))
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_closed_doi_unknown_to_unpaywall_finds_its_preprint_by_arxiv_search() -> anyhow::Result<()>
+{
+    let (v, searches) = preprint_discovery_case(serde_json::json!({})).await?;
+    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(v["pdf"]["arxiv_id"], "2512.07923", "{v}");
+    assert_eq!(v["pdf"]["found_by"], "arxiv_title_search", "{v}");
+    assert_eq!(v["source"], "arxiv", "{v}");
+    assert_eq!(searches.len(), 1, "one search: {searches:?}");
+    assert!(searches[0].contains("Shimozono"), "{searches:?}");
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_crossref_has_preprint_relation_needs_no_search() -> anyhow::Result<()> {
+    let relation = serde_json::json!({"has-preprint": [
+        {"id-type": "doi", "id": "10.48550/arXiv.2512.07923", "asserted-by": "subject"}]});
+    let (v, searches) = preprint_discovery_case(relation).await?;
+    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(v["pdf"]["found_by"], "crossref_relation", "{v}");
+    assert!(
+        searches.is_empty(),
+        "the relation answered; no search: {searches:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_blocked_copy_with_no_arxiv_hint_also_looks_for_the_preprint() -> anyhow::Result<()> {
+    let (v, searches) = preprint_discovery_case_with(
+        serde_json::json!({}),
+        Some("https://journals.example-publisher.org/paper.pdf"),
+    )
+    .await?;
+    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(v["pdf"]["found_by"], "arxiv_title_search", "{v}");
+    assert!(
+        v["pdf"]["original_block"]
+            .as_str()
+            .unwrap_or("")
+            .contains("journals.example-publisher.org"),
+        "the block that triggered the search is kept: {v}"
+    );
+    assert_eq!(searches.len(), 1, "{searches:?}");
     Ok(())
 }
