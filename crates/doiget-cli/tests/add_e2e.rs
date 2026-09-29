@@ -39,6 +39,11 @@ fn setup() -> (TempDir, Utf8PathBuf) {
     (td, base)
 }
 
+/// `dl/<name>` as the command prints it: with the platform's separator.
+fn dl(name: &str) -> String {
+    camino::Utf8Path::new("dl").join(name).to_string()
+}
+
 fn doiget(base: &Utf8PathBuf) -> Command {
     let mut cmd = Command::cargo_bin("doiget").expect("binary");
     cmd.current_dir(base)
@@ -73,8 +78,11 @@ fn add_records_a_user_supplied_pdf_and_logs_no_source_path() {
         .find(|l| l.contains("store_write"))
         .expect("store_write row");
     assert!(row.contains("\"capability\":\"user-supplied\""), "{row}");
+    // The temp dir's unique name is in the original path on every platform,
+    // and never in the store-relative path the row is allowed to carry.
+    let tmp_name = base.file_name().expect("tempdir name");
     assert!(
-        !row.contains("/dl/"),
+        !row.contains(tmp_name) && !row.contains("dl/") && !row.contains("dl\\\\"),
         "the original path must not be logged: {row}"
     );
 
@@ -113,13 +121,18 @@ fn add_from_dir_plans_then_applies_by_file_name() {
         .args(["add", "--from-dir", "dl"])
         .assert()
         .success()
-        .stderr(predicate::str::contains(
-            "would add dl/BF01340294.pdf -> 10.1007/BF01340294",
-        ))
-        .stderr(predicate::str::contains(
-            "would add dl/PhysRev.34.1293.pdf -> 10.1103/PhysRev.34.1293",
-        ))
-        .stderr(predicate::str::contains("unmatched: dl/notes.pdf"));
+        .stderr(predicate::str::contains(format!(
+            "would add {} -> 10.1007/BF01340294",
+            dl("BF01340294.pdf")
+        )))
+        .stderr(predicate::str::contains(format!(
+            "would add {} -> 10.1103/PhysRev.34.1293",
+            dl("PhysRev.34.1293.pdf")
+        )))
+        .stderr(predicate::str::contains(format!(
+            "unmatched: {}",
+            dl("notes.pdf")
+        )));
     assert!(
         !base.join("papers/doi_10.1007_BF01340294.pdf").exists(),
         "a dry run writes nothing"
