@@ -1607,6 +1607,15 @@ async fn single_ref_tools_take_a_pubmed_id_638() -> anyhow::Result<()> {
         .mount(&server)
         .await;
     Mock::given(method("GET"))
+        .and(path("/esummary.fcgi"))
+        .and(query_param("id", "777"))
+        .respond_with(esummary(
+            "777",
+            serde_json::json!({"articleids": [{"idtype": "doi", "value": "10.9999/gone"}]}),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
         .and(path("/works/10.1176/ajp.155.7.895"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "status": "ok",
@@ -1698,6 +1707,39 @@ async fn single_ref_tools_take_a_pubmed_id_638() -> anyhow::Result<()> {
             .contains("lists no DOI"),
         "{batch}"
     );
+
+    // doiget_metadata_only: no lookup under dry_run, a resolution without.
+    let meta_dry = call(
+        "doiget_metadata_only",
+        serde_json::json!({"ref": "pmid:9659853", "dry_run": true}),
+    )
+    .await?
+    .structured_content
+    .expect("structured");
+    assert_eq!(meta_dry["error"]["code"], "INVALID_REF", "{meta_dry}");
+    let meta_live = call(
+        "doiget_metadata_only",
+        serde_json::json!({"ref": "pmid:9659853"}),
+    )
+    .await?
+    .structured_content
+    .expect("structured");
+    assert_ne!(meta_live["error"]["code"], "INVALID_REF", "{meta_live}");
+
+    // Repeat suppression keys on the DOI the call ran under, so a PubMed id
+    // whose DOI is terminally absent is replayed the second time (#638
+    // review: the session_end row used to carry the raw `pmid:` input, a
+    // key the replay check never looks up).
+    let first = call("doiget_fetch_paper", serde_json::json!({"ref": "pmid:777"}))
+        .await?
+        .structured_content
+        .expect("structured");
+    assert_eq!(first["error"]["code"], "NOT_FOUND", "{first}");
+    let second = call("doiget_fetch_paper", serde_json::json!({"ref": "pmid:777"}))
+        .await?
+        .structured_content
+        .expect("structured");
+    assert_eq!(second["error"]["replayed"], true, "{second}");
 
     // A local-only tool names it rather than calling it malformed.
     let info = call("doiget_info", serde_json::json!({"ref": "pmid:9659853"}))
