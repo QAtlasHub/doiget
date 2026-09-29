@@ -281,6 +281,7 @@ Notes:
 | `openalex` | 2 | 4 | (reserved) |
 | `semantic-scholar` | 2 | 4 | (reserved) |
 | `doaj` | 2 | 4 | (reserved) |
+| `inspire` | 2 | 0.9 | `inspirehep.net` -- `api/doi/<doi>` only, with `DOIGET_ENABLE_INSPIRE` (#642, ADR-0064) |
 | `biorxiv` | 2 | 0.9 | `api.biorxiv.org` -- `pubs` only, with `DOIGET_ENABLE_BIORXIV` (#640, ADR-0063) |
 | `springer-tdm` | 3 | 5a | (reserved) |
 | `aps-tdm` | 3 | 5b | (reserved) |

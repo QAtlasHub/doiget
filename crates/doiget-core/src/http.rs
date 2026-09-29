@@ -319,10 +319,11 @@ pub fn pubmed_allowlist() -> Vec<SourceAllowlist> {
 /// content leg found nothing; the preprint itself is then fetched through
 /// its own DOI's reported OA location, never from this host.
 pub fn preprint_allowlist() -> Vec<SourceAllowlist> {
-    vec![SourceAllowlist::new(
-        "biorxiv",
-        vec!["api.biorxiv.org".to_string()],
-    )]
+    vec![
+        SourceAllowlist::new("biorxiv", vec!["api.biorxiv.org".to_string()]),
+        // #642: INSPIRE-HEP's record for a DOI, read for its arXiv id only.
+        SourceAllowlist::new("inspire", vec!["inspirehep.net".to_string()]),
+    ]
 }
 
 /// Always-compiled allowlist for **software citations** (#614, ADR-0058):
