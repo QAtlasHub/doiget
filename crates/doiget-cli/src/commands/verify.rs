@@ -171,7 +171,11 @@ async fn verify_software(
             if code == ErrorCode::LogError {
                 bail!("provenance log error during verify (aborting): {e}");
             }
-            (VerifyStatus::Unreachable, Some((code, e.to_string())))
+            let message = match doiget_core::software::explain(&e) {
+                Some(why) => format!("{e}: {why}"),
+                None => e.to_string(),
+            };
+            (VerifyStatus::Unreachable, Some((code, message)))
         }
     };
     let mut record = serde_json::json!({

@@ -169,9 +169,15 @@ async fn cite_github(g: &GithubRef, offline: bool, keys: super::KeyOptions) -> R
     }
     let keys = keys.with_config_defaults()?;
     let ctx = crate::commands::fetch::build_resolve_context()?;
-    let cited = resolve_github(g, &ctx)
-        .await
-        .map_err(|e| anyhow::Error::new(e).context(format!("failed to cite {}", g.html_url())))?;
+    let cited = match resolve_github(g, &ctx).await {
+        Ok(c) => c,
+        Err(e) => {
+            if let Some(why) = doiget_core::software::explain(&e) {
+                print_err(format_args!("note: {why}"));
+            }
+            return Err(anyhow::Error::new(e).context(format!("failed to cite {}", g.html_url())));
+        }
+    };
     for note in &cited.notes {
         print_err(format_args!("note: {note}"));
     }
@@ -198,7 +204,7 @@ fn choose_zenodo_doi(metadata: &mut Metadata, outcome: &MetadataOnlyOutcome, kee
         Some(ZenodoDoi::Version { concept }) if !keep_version => match Doi::parse(&concept) {
             Ok(d) => {
                 print_err(format_args!(
-                    "note: cited the concept DOI {concept}, which names every version;                      {given} is one version (pass --zenodo-version to cite it)"
+                    "note: cited the concept DOI {concept}, which names every version; {given} is one version (pass --zenodo-version to cite it)"
                 ));
                 metadata.doi = Some(d);
                 // The version's number and landing page describe that
@@ -321,5 +327,34 @@ mod tests {
             Some("10.5281/zenodo.200")
         );
         assert!(kept.other.contains_key("version"));
+    }
+
+    #[test]
+    fn a_concept_doi_or_an_unusable_concept_leaves_the_doi_as_given() {
+        let concept = serde_json::json!([{
+            "relationType": "HasVersion", "relatedIdentifierType": "DOI",
+            "relatedIdentifier": "10.5281/zenodo.201"
+        }]);
+        let mut m = zenodo_record();
+        choose_zenodo_doi(&mut m, &datacite_outcome(concept), false);
+        assert_eq!(
+            m.doi.as_ref().map(|d| d.as_str()),
+            Some("10.5281/zenodo.200")
+        );
+
+        let broken = serde_json::json!([{
+            "relationType": "IsVersionOf", "relatedIdentifierType": "DOI",
+            "relatedIdentifier": "not a doi"
+        }]);
+        let mut m = zenodo_record();
+        choose_zenodo_doi(&mut m, &datacite_outcome(broken), false);
+        assert_eq!(
+            m.doi.as_ref().map(|d| d.as_str()),
+            Some("10.5281/zenodo.200")
+        );
+        assert!(
+            m.other.contains_key("version"),
+            "nothing is dropped without a concept"
+        );
     }
 }

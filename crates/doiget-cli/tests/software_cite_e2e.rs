@@ -49,6 +49,11 @@ async fn github() -> MockServer {
         .respond_with(ResponseTemplate::new(404))
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/someone/private"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
     server
 }
 
@@ -84,7 +89,8 @@ async fn verify_checks_a_software_entry_resolves_on_github() {
     std::fs::write(
         td.path().join("refs.bib"),
         "@software{hf, title={HFDMRG}, url={https://github.com/srwhite59/HFDMRG.jl/releases/tag/v0.1.0}}\n\
-         @software{gone, title={Gone}, url={https://github.com/someone/deleted}}\n",
+         @software{gone, title={Gone}, url={https://github.com/someone/deleted}}\n\
+         @software{private, title={Private}, url={https://github.com/someone/private}}\n",
     )
     .unwrap();
     let mut cmd = doiget(&td, &server);
@@ -105,5 +111,80 @@ async fn verify_checks_a_software_entry_resolves_on_github() {
     };
     assert_eq!(status("hf").as_deref(), Some("valid"), "{rows:?}");
     assert_eq!(status("gone").as_deref(), Some("absent"), "{rows:?}");
+    // A 403: not retryable, not absent -- and both causes are named.
+    assert_eq!(
+        status("private").as_deref(),
+        Some("unreachable"),
+        "{rows:?}"
+    );
+    let private = rows.iter().find(|r| r["entry_key"] == "private").unwrap();
+    assert_eq!(private["error"]["code"], "CAPABILITY_DENIED", "{private}");
+    assert!(
+        private["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not public"),
+        "{private}"
+    );
     assert!(!out.status.success(), "an absent entry fails verify");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_applies_to_a_software_citation_and_offline_is_refused() {
+    let server = github().await;
+    let td = TempDir::new().unwrap();
+    let url = "https://github.com/srwhite59/HFDMRG.jl/releases/tag/v0.1.0";
+    let mut keyed = doiget(&td, &server);
+    keyed.args(["cite", url, "--key", "white2023hfdmrg"]);
+    let mut offline = doiget(&td, &server);
+    offline.args(["cite", url, "--offline"]);
+    let (keyed, offline) = tokio::task::spawn_blocking(move || {
+        (
+            keyed.assert().success().get_output().clone(),
+            offline.assert().failure().get_output().clone(),
+        )
+    })
+    .await
+    .unwrap();
+    let bib = String::from_utf8(keyed.stdout).unwrap();
+    assert!(bib.starts_with("@software{white2023hfdmrg,"), "{bib}");
+    let err = String::from_utf8(offline.stderr).unwrap();
+    assert!(err.contains("no store entry to render"), "{err}");
+}
+
+/// batch and missing name a software entry as software, with the command
+/// that cites it -- not as an entry missing an identifier.
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_and_missing_name_a_software_entry() {
+    let server = github().await;
+    let td = TempDir::new().unwrap();
+    std::fs::write(
+        td.path().join("refs.bib"),
+        "@software{hf, title={HFDMRG}, url={https://github.com/srwhite59/HFDMRG.jl}}\n",
+    )
+    .unwrap();
+    let mut batch = doiget(&td, &server);
+    batch.args(["--mode", "json", "batch", "refs.bib"]);
+    let mut missing = doiget(&td, &server);
+    missing.args(["--mode", "json", "missing", "refs.bib", "--offline"]);
+    let (batch, missing) = tokio::task::spawn_blocking(move || {
+        (
+            batch.assert().get_output().clone(),
+            missing.assert().get_output().clone(),
+        )
+    })
+    .await
+    .unwrap();
+    let batch_out = String::from_utf8(batch.stdout).unwrap();
+    assert!(batch_out.contains("NOT_IMPLEMENTED"), "{batch_out}");
+    assert!(batch_out.contains("doiget cite"), "{batch_out}");
+    let missing_out = String::from_utf8(missing.stdout).unwrap();
+    assert!(
+        missing_out.contains("software at https://github.com/srwhite59/HFDMRG.jl"),
+        "{missing_out}"
+    );
+    assert!(
+        missing_out.contains("\"entry_key\":\"hf\""),
+        "{missing_out}"
+    );
 }

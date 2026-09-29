@@ -34,9 +34,14 @@ tag has no release; and `raw.githubusercontent.com`, for `CITATION.cff` at that
 tag. They are Tier 1 allowlist entries under the source keys `github` and
 `github-raw`, behind the rate limiter and the provenance log like every other
 request. Neither is contacted by `fetch`, `batch`, search or any MCP tool.
-Requests are unauthenticated: GitHub allows 60 an hour per address, and its
-403 or 429 for that limit is reported as a `retry_after` answer, not as the
-access refusal a 403 otherwise means. doiget sends no GitHub token.
+Requests are unauthenticated: GitHub allows 60 an hour per address, and
+doiget sends no GitHub token. A 429 is reported as `retry_after`. A 403 stays
+`CAPABILITY_DENIED` (`needs_config`): GitHub sends it both for the spent limit
+and for a repository that is not public, the status cannot tell them apart,
+and calling it retryable would have a private repository asked again every
+30 s under repeat suppression (ADR-0057). `cite` and `verify` name both causes.
+Each request is logged with the cited URL as its `ref` and no
+`canonical_digest` (docs/PROVENANCE_LOG.md).
 
 **D3: `CITATION.cff` wins where it speaks.** Its authors and title are the
 authors' own statement of how to be cited, so they replace the repository
@@ -62,7 +67,10 @@ software (`ParseError::SoftwareUrl`). `verify` asks GitHub whether the
 repository, and the release or tag it names, still exist: `valid`, `absent`
 on a 404, `unreachable` otherwise. `batch`, `missing` and
 `doiget_batch_from_bibliography` report such an entry as software, with the
-`cite` command that renders it, rather than as missing an identifier.
+`cite` command that renders it, rather than as missing an identifier. It is
+checked even under `[verify] on_missing_id = "skip"`: it is not missing an
+identifier any more -- its URL is one `verify` can check, which is what #614
+asked of it.
 
 ## Consequences
 

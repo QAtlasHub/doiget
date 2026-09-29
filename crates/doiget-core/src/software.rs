@@ -274,10 +274,9 @@ pub struct SoftwareCitation {
 ///
 /// # Errors
 ///
-/// [`FetchError`] from the repository lookup -- a 404 is `NOT_FOUND`, and
-/// GitHub's unauthenticated limit (60 requests an hour) answers 403 or 429,
-/// which is reported as a `retry_after` answer rather than an access
-/// refusal. A missing release or `CITATION.cff` is not an error.
+/// [`FetchError`] from the repository lookup -- a 404 is `NOT_FOUND`, a 429
+/// is `retry_after`, and a 403 stays `CAPABILITY_DENIED` ([`explain`] says
+/// why). A missing release or `CITATION.cff` is not an error.
 pub async fn resolve_github(
     g: &GithubRef,
     ctx: &FetchContext,
@@ -538,12 +537,15 @@ async fn get(
                 .append(row(LogResult::Err, None, Some("NOT_FOUND")))?;
             Ok(None)
         }
-        // GitHub's unauthenticated API allows 60 requests an hour and says
-        // so with a 403 (or 429). That is a limit to wait out, not the access
-        // refusal a 403 otherwise means, so it is reported as a 429: a
-        // `retry_after` answer, with a wait when GitHub named none.
+        // A 429 is the rate limit and is reported as one, with a wait when
+        // GitHub named none. A 403 is left a 403 (CAPABILITY_DENIED,
+        // needs_config): GitHub sends it both for the spent unauthenticated
+        // limit (60 an hour) and for a repository that is not public, and
+        // without the response headers the two cannot be told apart. Calling
+        // every 403 retryable would have a private repository retried every
+        // 30 s under repeat suppression; [`explain`] names both causes.
         Err(HttpError::HttpStatus {
-            status: 403 | 429,
+            status: 429,
             url,
             retry_after_ms,
         }) => {
@@ -564,6 +566,21 @@ async fn get(
                 .append(row(LogResult::Err, None, Some(code.as_wire())))?;
             Err(e)
         }
+    }
+}
+
+/// What a GitHub error means, when the status alone would mislead: a 403
+/// is either the spent unauthenticated limit or a repository that is not
+/// public, and GitHub's status does not say which.
+#[must_use]
+pub fn explain(e: &FetchError) -> Option<&'static str> {
+    match e {
+        FetchError::Http(crate::http::HttpError::HttpStatus { status: 403, .. }) => Some(
+            "GitHub answers 403 both when the unauthenticated limit (60 requests an hour per \
+             address) is spent -- it resets within the hour -- and when the repository is not \
+             public; doiget sends no token",
+        ),
+        _ => None,
     }
 }
 
@@ -830,6 +847,58 @@ preferred-citation:
 
         #[tokio::test]
         #[serial_test::serial]
+        async fn a_bare_repository_url_cites_the_latest_release_or_no_version() {
+            let server = MockServer::start().await;
+            mount_repo(&server).await;
+            Mock::given(method("GET"))
+                .and(path("/repos/srwhite59/HFDMRG.jl/releases/latest"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "tag_name": "v0.2.0", "published_at": "2024-01-15T00:00:00Z"
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/repos/o/norel"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "name": "norel", "owner": {"login": "o"}
+                })))
+                .mount(&server)
+                .await;
+            let (ctx, _td) = ctx_for(&server).await;
+            let latest = resolve_github(
+                &GithubRef::parse("https://github.com/srwhite59/HFDMRG.jl").unwrap(),
+                &ctx,
+            )
+            .await
+            .expect("cites");
+            let none = resolve_github(
+                &GithubRef::parse("https://github.com/o/norel").unwrap(),
+                &ctx,
+            )
+            .await
+            .expect("cites");
+            clear_env();
+            assert_eq!(
+                latest
+                    .metadata
+                    .other
+                    .get("version")
+                    .and_then(toml::Value::as_str),
+                Some("v0.2.0")
+            );
+            assert_eq!(latest.metadata.year, Some(2024));
+            assert!(
+                latest.notes.iter().any(|n| n.contains("latest release")),
+                "{:?}",
+                latest.notes
+            );
+            // No release and no tag: no version and no date are invented.
+            assert!(!none.metadata.other.contains_key("version"));
+            assert_eq!(none.metadata.year, None);
+        }
+
+        #[tokio::test]
+        #[serial_test::serial]
         async fn a_missing_repository_is_not_found_and_the_hourly_limit_is_a_rate_limit() {
             let server = MockServer::start().await;
             Mock::given(method("GET"))
@@ -863,12 +932,13 @@ preferred-citation:
             .expect("a clean answer");
             clear_env();
             assert_eq!(crate::ErrorCode::from(&gone), crate::ErrorCode::NotFound);
-            // A limit to wait out, not the refusal a bare 403 would read as.
+            // A 403 stays a refusal (a private repository must not be
+            // retried every 30 s), and the explanation names both causes.
             assert_eq!(
-                crate::ErrorCode::from(&busy).disposition(),
-                crate::Disposition::RetryAfter
+                crate::ErrorCode::from(&busy),
+                crate::ErrorCode::CapabilityDenied
             );
-            assert_eq!(crate::source::retry_after_ms(&busy), Some(60_000));
+            assert!(explain(&busy).is_some_and(|w| w.contains("60 requests an hour")));
             assert!(!resolves);
             // Every request is on the provenance log, under its own source.
             let log = std::fs::read_to_string(ctx.log.path()).expect("log");

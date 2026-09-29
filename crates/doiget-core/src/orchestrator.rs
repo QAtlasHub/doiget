@@ -7167,6 +7167,38 @@ mod oa_fallthrough_tests {
         );
     }
 
+    /// #614: a DataCite Software record cites as `@software`, with the
+    /// creators, year, version and URL the baseline used to drop.
+    #[cfg(feature = "metadata")]
+    #[test]
+    fn a_datacite_software_record_cites_as_software_614() {
+        let outcome: MetadataOnlyOutcome = serde_json::from_value(serde_json::json!({
+            "source": "datacite", "resolver_profile": "test", "license": null, "oa_url": null,
+            "metadata": {
+                "titles": [{"title": "HFDMRG.jl"}],
+                "creators": [{"name": "White, Steven R."}],
+                "publicationYear": 2023,
+                "publisher": "Zenodo",
+                "types": {"resourceTypeGeneral": "Software"},
+                "version": "v0.1.0",
+                "url": "https://zenodo.org/records/200"
+            }
+        }))
+        .expect("outcome");
+        let ref_ = Ref::Doi(Doi::parse("10.5281/zenodo.200").expect("doi"));
+        let m = cite_metadata(&ref_, &outcome);
+        let bib = crate::store::render::to_bibtex("hf", &m);
+        assert!(bib.starts_with("@software{hf,"), "{bib}");
+        assert!(bib.contains("author     = {White, Steven R.}"), "{bib}");
+        assert!(bib.contains("year       = {2023}"), "{bib}");
+        assert!(bib.contains("version    = {v0.1.0}"), "{bib}");
+        assert!(
+            bib.contains("url        = {https://zenodo.org/records/200}"),
+            "{bib}"
+        );
+        assert!(bib.contains("publisher  = {Zenodo}"), "{bib}");
+    }
+
     /// #547, the reported shape: Unpaywall calls the work closed (no OA URL
     /// at all, not a refused one), and OpenAlex -- switched on -- names the
     /// institutional deposit with an author-listing URL. The fall-through

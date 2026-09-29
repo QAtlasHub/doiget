@@ -483,7 +483,10 @@ pub struct RowInput<'a> {
     pub result: LogResult,
     /// Capability under which the row is written (REQUIRED for every row).
     pub capability: Capability,
-    /// Optional DOI / arXiv id.
+    /// Optional DOI / arXiv id -- or, for a software citation's GitHub
+    /// requests (`source` `github` / `github-raw`, #614), the repository or
+    /// release URL cited. Those rows carry no `canonical_digest`: the URL is
+    /// not a `Ref`, and nothing is stored under it.
     pub ref_: Option<&'a str>,
     /// Optional source name.
     pub source: Option<&'a str>,
