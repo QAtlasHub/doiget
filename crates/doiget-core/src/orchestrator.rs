@@ -2029,7 +2029,17 @@ async fn try_optional_source_oa_fallback(
     attempts: &mut Vec<SourceAttempt>,
     already_resolved: Option<(&'static str, &Value)>,
 ) -> (PdfLegStatus, Option<Vec<u8>>) {
-    if pdf_bytes.is_some() || !matches!(pdf_leg, PdfLegStatus::Blocked { .. }) {
+    // Blocked (a location refused) and NoOaUrl (the OA chain had no location
+    // at all) are both a content leg that failed. #547: gating on Blocked
+    // alone meant a user who switched OpenAlex on never had it asked when
+    // Unpaywall called the work closed -- the exact case where OpenAlex names
+    // an institutional deposit Unpaywall does not know about.
+    if pdf_bytes.is_some()
+        || !matches!(
+            pdf_leg,
+            PdfLegStatus::Blocked { .. } | PdfLegStatus::NoOaUrl
+        )
+    {
         return (pdf_leg, pdf_bytes);
     }
 
@@ -6816,6 +6826,137 @@ mod oa_fallthrough_tests {
             matches!(outcome.pdf_leg, PdfLegStatus::Fetched),
             "the run should have recovered; got {:?}",
             outcome.pdf_leg
+        );
+    }
+
+    /// #547, the reported shape: Unpaywall calls the work closed (no OA URL
+    /// at all, not a refused one), and OpenAlex -- switched on -- names the
+    /// institutional deposit with an author-listing URL. The fall-through
+    /// used to run on a Blocked leg only, so OpenAlex was never asked and
+    /// the run said nothing but "no OA PDF available".
+    /// The #547 record: Unpaywall calls it closed; OpenAlex, if asked,
+    /// names the institutional deposit with an author-listing URL.
+    async fn fetch_closed_record(openalex_enabled: bool) -> (FetchPaperOutcome, Vec<String>) {
+        let server = MockServer::start().await;
+        Mock::given(path_regex("^/works/10\\.1109"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"status":"ok","message":{"title":["Eigenvalue Decomposition"],"type":"journal-article"}}"#,
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(path_regex("^/works/doi:10\\.1109"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "https://openalex.org/W1",
+                "locations": [
+                    {"is_oa": false, "pdf_url": null,
+                     "landing_page_url": "https://doi.org/10.1109/tsp.2023.3269664",
+                     "source": {"display_name": "IEEE Transactions on Signal Processing"}},
+                    {"is_oa": false, "pdf_url": null,
+                     "landing_page_url": "https://strathprints.strath.ac.uk/view/author/70486.html>",
+                     "source": {"display_name": "Strathprints: The University of Strathclyde"}}
+                ]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(path_regex("^/10\\.1109"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"doi":"10.1109/tsp.2023.3269664","is_oa":false,"oa_status":"closed","best_oa_location":null,"oa_locations":[]}"#,
+            ))
+            .mount(&server)
+            .await;
+        let base = server.uri();
+        let mut env = vec![
+            ("DOIGET_CROSSREF_BASE", base.clone()),
+            ("DOIGET_UNPAYWALL_BASE", base.clone()),
+            ("DOIGET_OPENALEX_BASE", base.clone()),
+            ("DOIGET_CONTACT_EMAIL", "test@example.org".to_string()),
+        ];
+        if openalex_enabled {
+            env.push(("DOIGET_ENABLE_OPENALEX", "1".to_string()));
+        }
+        let _env = EnvSet::new(&env);
+        let profile = CapabilityProfile::from_env().expect("profile");
+        let host = server.address().to_string();
+        let td = TempDir::new().expect("tempdir");
+        let dir = Utf8PathBuf::try_from(td.path().to_path_buf()).expect("utf-8");
+        let session_id = "01J000000000000000000FALL".to_string();
+        let ctx = FetchContext {
+            http: Arc::new(HttpClient::new_for_tests_allow_http_multi(&[
+                ("crossref", host.as_str()),
+                ("unpaywall", host.as_str()),
+                ("openalex", host.as_str()),
+            ])),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+            log: Arc::new(
+                ProvenanceLog::open(dir.join("t.jsonl"), session_id.clone()).expect("log"),
+            ),
+            session_id,
+            cache_root: None,
+        };
+        let store_td = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::try_from(store_td.path().to_path_buf()).expect("utf-8");
+        let store = crate::store::FsStore::new(root.clone()).expect("store");
+        let ref_ = Ref::Doi(Doi::parse("10.1109/tsp.2023.3269664").expect("doi"));
+        let outcome = fetch_paper(&ref_, &profile, &ctx, &store, &root)
+            .await
+            .expect("resolves");
+        let paths = server
+            .received_requests()
+            .await
+            .expect("recorded")
+            .iter()
+            .map(|r| r.url.path().to_string())
+            .collect();
+        (outcome, paths)
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_closed_record_still_asks_an_enabled_openalex_and_names_the_deposit() {
+        let (outcome, paths) = fetch_closed_record(true).await;
+        // The shape the disabled test below looks for, seen when enabled.
+        assert!(
+            paths.iter().any(|p| p.starts_with("/works/doi:")),
+            "{paths:?}"
+        );
+
+        assert!(
+            matches!(outcome.pdf_leg, PdfLegStatus::NoOaUrl),
+            "{:?}",
+            outcome.pdf_leg
+        );
+        let row = outcome
+            .attempts
+            .iter()
+            .find(|a| a.source == "openalex")
+            .expect("an openalex row");
+        let AttemptOutcome::NotOpenAccess { detail } = &row.outcome else {
+            panic!(
+                "OpenAlex must have been asked and reported what it named; got {:?}",
+                row.outcome
+            );
+        };
+        assert!(detail.contains("Strathprints"), "{detail}");
+        assert!(
+            detail.contains("malformed"),
+            "the stray `>` is named: {detail}"
+        );
+    }
+
+    /// The #547 gate widened to NoOaUrl; with nothing enabled it must still
+    /// cost nothing.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn with_no_source_enabled_a_closed_record_asks_nothing_more() {
+        let (outcome, paths) = fetch_closed_record(false).await;
+        assert!(
+            matches!(outcome.pdf_leg, PdfLegStatus::NoOaUrl),
+            "{:?}",
+            outcome.pdf_leg
+        );
+        assert!(
+            !paths.iter().any(|p| p.starts_with("/works/doi:")),
+            "a disabled OpenAlex must cost nothing; paths were {paths:?}"
         );
     }
 
