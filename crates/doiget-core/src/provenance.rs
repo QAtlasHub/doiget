@@ -181,6 +181,11 @@ pub enum LogEvent {
     StoreWrite,
     /// Process ended cleanly.
     SessionEnd,
+    /// A caller asked again, with `force`, about a ref this session had
+    /// already been answered on -- a request repeat suppression would
+    /// otherwise have replayed (#507, ADR-0057). The row is the record that
+    /// the override was used.
+    RepeatForced,
 }
 
 /// Per-row outcome (PROVENANCE_LOG.md §3). `non_exhaustive` for forward
@@ -256,6 +261,9 @@ pub struct ProvenanceLog {
     /// env var; this removes a parallel-test race without serializing
     /// every multi-append test. `0` = rotation disabled.
     rotate_threshold: u64,
+    /// What this session has told its callers, per ref, fed from the
+    /// `session_end` rows as they are written (#507, ADR-0057).
+    repeat: crate::repeat::RepeatIndex,
 }
 
 /// Mutable internal state, guarded by [`ProvenanceLog::state`].
@@ -658,6 +666,7 @@ impl ProvenanceLog {
             }),
             session_id,
             rotate_threshold,
+            repeat: crate::repeat::RepeatIndex::default(),
         })
     }
 
@@ -779,7 +788,24 @@ impl ProvenanceLog {
         state.next_seq = ts_seq + 1;
         state.last_hash = this_hash;
 
+        // #507: only a row that is durably on disk feeds repeat
+        // suppression -- the log is the record of what callers were told.
+        if input.event == LogEvent::SessionEnd {
+            if let Some(r) = input.ref_ {
+                let code = input.error_code.and_then(crate::ErrorCode::from_wire);
+                if code.is_some() || input.result == LogResult::Ok {
+                    self.repeat.observe(r, code);
+                }
+            }
+        }
+
         Ok(ts_seq)
+    }
+
+    /// What this session has already told callers about each ref (#507).
+    #[must_use]
+    pub fn repeat(&self) -> &crate::repeat::RepeatIndex {
+        &self.repeat
     }
 
     /// Returns the path the log was opened at. Useful for tests and audit tooling.

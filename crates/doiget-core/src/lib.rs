@@ -31,6 +31,7 @@ pub mod provenance;
 pub mod rate_limiter;
 pub mod refs;
 pub mod remediation;
+pub mod repeat;
 pub mod resolver_cache;
 pub mod source;
 pub mod source_catalog;
@@ -845,6 +846,32 @@ impl ErrorCode {
 }
 
 impl ErrorCode {
+    /// Every code, for [`ErrorCode::from_wire`].
+    pub const ALL: &'static [ErrorCode] = &[
+        ErrorCode::InvalidRef,
+        ErrorCode::NoOaAvailable,
+        ErrorCode::RateLimited,
+        ErrorCode::NetworkError,
+        ErrorCode::NotFound,
+        ErrorCode::Ambiguous,
+        ErrorCode::StoreError,
+        ErrorCode::LogError,
+        ErrorCode::CapabilityDenied,
+        ErrorCode::FetchTimeout,
+        ErrorCode::SchemaTooNew,
+        ErrorCode::LockTimeout,
+        ErrorCode::InternalError,
+        ErrorCode::NotImplemented,
+        ErrorCode::TextUnavailable,
+    ];
+
+    /// The code whose [`ErrorCode::as_wire`] is `s`, e.g. read back from the
+    /// provenance log's `error_code` column (#507).
+    #[must_use]
+    pub fn from_wire(s: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|c| c.as_wire() == s)
+    }
+
     /// The `SCREAMING_SNAKE_CASE` wire token for this code, as a
     /// `&'static str`. Identical to the serde representation but
     /// allocation-free and usable where a borrowed string with a
@@ -1821,6 +1848,43 @@ fn build_tdm_grant(agree_var: &str, key: String) -> TdmGrant {
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// #507: suppression reads codes back from the log's `error_code`
+    /// column, so every code must survive the trip -- and ALL must hold every
+    /// variant, which the exhaustive match below makes a compile error to
+    /// forget.
+    #[test]
+    fn every_error_code_round_trips_through_its_wire_token() {
+        const fn listed(c: ErrorCode) {
+            match c {
+                ErrorCode::InvalidRef
+                | ErrorCode::NoOaAvailable
+                | ErrorCode::RateLimited
+                | ErrorCode::NetworkError
+                | ErrorCode::NotFound
+                | ErrorCode::Ambiguous
+                | ErrorCode::StoreError
+                | ErrorCode::LogError
+                | ErrorCode::CapabilityDenied
+                | ErrorCode::FetchTimeout
+                | ErrorCode::SchemaTooNew
+                | ErrorCode::LockTimeout
+                | ErrorCode::InternalError
+                | ErrorCode::NotImplemented
+                | ErrorCode::TextUnavailable => {}
+            }
+        }
+        assert_eq!(ErrorCode::ALL.len(), 15, "a new variant goes in ALL too");
+        for c in ErrorCode::ALL {
+            listed(*c);
+            assert_eq!(ErrorCode::from_wire(c.as_wire()), Some(*c));
+            assert_eq!(
+                serde_json::to_value(c).expect("serialize"),
+                serde_json::json!(c.as_wire())
+            );
+        }
+        assert_eq!(ErrorCode::from_wire("NOT_A_CODE"), None);
+    }
 
     #[test]
     fn rate_limits_hard_coded_match_legal_safeguards() {

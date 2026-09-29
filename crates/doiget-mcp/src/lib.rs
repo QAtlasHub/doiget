@@ -51,9 +51,9 @@ use doiget_core::http::{
     tier_3_allowlists, HttpClient,
 };
 use doiget_core::orchestrator::{
-    batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
-    metadata_only_to_store_with_options, resolve_only_with_options as core_resolve_only,
-    FetchPaperOutcome, MetadataOnlyOptions, MetadataOnlyOutcome, PdfLegStatus,
+    batch_fetch_plans, metadata_only_to_store_with_options,
+    resolve_only_with_options as core_resolve_only, FetchPaperOutcome, MetadataOnlyOptions,
+    MetadataOnlyOutcome, PdfLegStatus,
 };
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
@@ -626,7 +626,7 @@ impl Server {
     /// `StoreWrite` row is also emitted by the orchestrator.
     #[tool(
         description = "WHEN TO USE: User wants to download a paper PDF given a DOI or arXiv id.\n\
-                       INPUTS: ref (DOI or arXiv id), dry_run (optional bool).\n\
+                       INPUTS: ref (DOI or arXiv id), dry_run (optional bool), force (optional bool: ask again even if this session was just answered on the ref; without it such a repeat is replayed as ok:false with replayed:true, #507).\n\
                        OUTPUTS: { ok: true, ref, source, path, license, size_bytes, schema_version, pdf, attempts } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, ref, error }.\n\
                        READ `pdf.status` — `ok: true` does NOT mean a PDF landed. `fetched` = PDF on disk; `no_oa_url` = metadata only, no free copy exists; `blocked` = a free copy EXISTS but was refused.\n\
                        ON `blocked`: do not report the paper as unavailable. `pdf.remediation` lists the config changes that would lift it, narrowest first — `additional_host` entries go under [[network.additional_hosts]] in the config file, a `trust_flag` is a [network] boolean. Show them to the user and let them choose; both widen the trusted download surface.\n\
@@ -722,7 +722,15 @@ impl Server {
             )));
         }
 
-        let outcome = core_fetch_paper(&ref_, &self.profile, &ctx, &store, &store_root).await;
+        let outcome = doiget_core::orchestrator::fetch_paper_with(
+            &ref_,
+            &self.profile,
+            &ctx,
+            &store,
+            &store_root,
+            doiget_core::orchestrator::FetchOptions::default().with_force(input.force),
+        )
+        .await;
 
         // #507, second surface. `core_fetch_paper` returns `Ok` with a FAILED
         // leg when an OA URL was found and refused, so `Result::is_ok` alone
@@ -734,15 +742,14 @@ impl Server {
         let session_ok = outcome
             .as_ref()
             .is_ok_and(FetchPaperOutcome::is_clean_success);
-        let blocked_code = match outcome.as_ref() {
-            Ok(o) => match &o.pdf_leg {
-                doiget_core::orchestrator::PdfLegStatus::Blocked { code, .. } => {
-                    Some(code.as_wire())
-                }
-                _ => None,
-            },
-            Err(_) => None,
-        };
+        // The code the caller is shown -- a policy refusal is
+        // CAPABILITY_DENIED, not the transport's NETWORK_ERROR -- since repeat
+        // suppression reads it back (#507, `reported_error_code`).
+        let blocked_code = outcome
+            .as_ref()
+            .ok()
+            .and_then(FetchPaperOutcome::reported_error_code)
+            .map(|c| c.as_wire());
         // #507: the bookend recorded THAT the call failed and not WHAT it
         // failed with, so the provenance log could not answer "what did this
         // session tell the caller about this ref?" -- which is the question
@@ -797,7 +804,7 @@ impl Server {
     /// `{ok:false, error:{...}}` envelope.
     #[tool(
         description = "WHEN TO USE: User wants to fetch many papers in one call (up to 100).\n\
-                       INPUTS: refs (array of up to 100 DOIs / arXiv ids), dry_run (optional bool).\n\
+                       INPUTS: refs (array of up to 100 DOIs / arXiv ids), dry_run (optional bool), force (optional bool: ask again even if this session was just answered on the ref; without it such a repeat is replayed as ok:false with replayed:true, #507).\n\
                        OUTPUTS: { ok: true, results: [{ref, ok, ...}] } OR { ok: true, dry_run: true, plans: [{ref, plan, rate_limit_budget}] } OR { ok:false, error }.\n\
                        COSTS: 1-3 s per ref, bounded by the 5/sec global rate cap.\n\
                        SIDE EFFECTS: Writes PDFs / metadata TOMLs to the store (unless dry_run). Appends one provenance row per attempt.\n\
@@ -909,8 +916,15 @@ impl Server {
             )));
         }
 
-        let batch_outcome =
-            core_batch_fetch(&parsed, &self.profile, &ctx, &store, &store_root).await;
+        let batch_outcome = doiget_core::orchestrator::batch_fetch_with(
+            &parsed,
+            &self.profile,
+            &ctx,
+            &store,
+            &store_root,
+            doiget_core::orchestrator::FetchOptions::default().with_force(input.force),
+        )
+        .await;
 
         // #507, third and fourth surfaces. `.is_ok()` on a `BatchResultEntry`
         // calls a Blocked PDF leg a success, exactly as the single-ref tool
@@ -985,7 +999,7 @@ impl Server {
     /// not the data inside.
     #[tool(
         description = "WHEN TO USE: User has a Zotero / Mendeley CSL-JSON export and wants to fetch all OA-resolvable entries.\n\
-                       INPUTS: path (absolute path to .bib / .csl / .json), format (\"auto\" | \"csl-json\" | \"bibtex\" | \"refs\", default \"auto\"), strict (bool, default false).\n\
+                       INPUTS: path (absolute path to .bib / .csl / .json), format (\"auto\" | \"csl-json\" | \"bibtex\" | \"refs\", default \"auto\"), strict (bool, default false), force (optional bool, as for doiget_batch_fetch).\n\
                        OUTPUTS: { ok: true, summary:{total,ok,failed,parse_errors}, results: [{entry_key, ref, ok, ...}] } OR { ok:false, error }.\n\
                        COSTS: Same as batch_fetch — 1-3 s per entry, bounded by the 5/sec global rate cap.\n\
                        SIDE EFFECTS: Writes PDFs / metadata TOMLs to the store. Appends one provenance row per attempt.\n\
@@ -1199,7 +1213,15 @@ impl Server {
         // through to the result rows below.
         let refs: Vec<Ref> = to_fetch.iter().map(|(r, _)| r.clone()).collect();
         let entry_keys: Vec<Option<String>> = to_fetch.iter().map(|(_, k)| k.clone()).collect();
-        let batch_outcome = core_batch_fetch(&refs, &self.profile, &ctx, &store, &store_root).await;
+        let batch_outcome = doiget_core::orchestrator::batch_fetch_with(
+            &refs,
+            &self.profile,
+            &ctx,
+            &store,
+            &store_root,
+            doiget_core::orchestrator::FetchOptions::default().with_force(input.force),
+        )
+        .await;
 
         // Same boundary as the sibling batch tool above (#507).
         let session_ok = batch_outcome.as_ref().is_ok_and(|b| {
@@ -3541,6 +3563,10 @@ fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value 
     if let Some(ms) = doiget_core::source::retry_after_ms(err) {
         error_obj.insert("retry_after_ms".into(), json!(ms));
     }
+    // #507: say so when the answer is a replay, not a fresh one.
+    if doiget_core::source::is_replayed(err) {
+        error_obj.insert("replayed".into(), json!(true));
+    }
     if let Some(dc) = denial {
         // `DenialContext` is `Serialize` (`#[serde(deny_unknown_fields)]`,
         // optional fields) and `serde_json::to_value` cannot fail on a
@@ -3590,6 +3616,12 @@ pub struct FetchPaperInput {
     /// (ADR-0022). Defaults to `false`.
     #[serde(default)]
     pub dry_run: bool,
+    /// Ask even if this session was already answered on the ref with
+    /// something a retry cannot change yet (#507). Without it such a repeat
+    /// returns `ok:false` with `replayed: true` and the earlier code; with
+    /// it the request goes out and the log records that it was forced.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Build the `{ok:true, ref, source, path, ...}` success envelope per
@@ -3762,6 +3794,10 @@ fn fetch_paper_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value {
     if let Some(ms) = doiget_core::source::retry_after_ms(err) {
         error_obj.insert("retry_after_ms".into(), json!(ms));
     }
+    // #507: say so when the answer is a replay, not a fresh one.
+    if doiget_core::source::is_replayed(err) {
+        error_obj.insert("replayed".into(), json!(true));
+    }
     if let Some(dc) = denial {
         error_obj.insert(
             "denial_context".into(),
@@ -3810,6 +3846,12 @@ pub struct BatchFromBibliographyInput {
     /// successful siblings.
     #[serde(default)]
     pub strict: bool,
+    /// Ask even if this session was already answered on the ref with
+    /// something a retry cannot change yet (#507). Without it such a repeat
+    /// returns `ok:false` with `replayed: true` and the earlier code; with
+    /// it the request goes out and the log records that it was forced.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Resolve a `--format` token to a [`doiget_core::refs::Format`]. The
@@ -3890,6 +3932,10 @@ fn build_bibliography_envelope(
                 if let Some(ms) = doiget_core::source::retry_after_ms(err) {
                     error_obj.insert("retry_after_ms".into(), json!(ms));
                 }
+                // #507: say so when the answer is a replay, not a fresh one.
+                if doiget_core::source::is_replayed(err) {
+                    error_obj.insert("replayed".into(), json!(true));
+                }
                 if let Some(dc) = denial {
                     error_obj.insert(
                         "denial_context".into(),
@@ -3945,6 +3991,12 @@ pub struct BatchFetchInput {
     /// per ref without touching the network or store.
     #[serde(default)]
     pub dry_run: bool,
+    /// Ask even if this session was already answered on the ref with
+    /// something a retry cannot change yet (#507). Without it such a repeat
+    /// returns `ok:false` with `replayed: true` and the earlier code; with
+    /// it the request goes out and the log records that it was forced.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Build the `{ok:true, results: [...]}` envelope for a successful
@@ -3997,6 +4049,10 @@ fn batch_fetch_success_envelope(
                 // name of a measurement.
                 if let Some(ms) = doiget_core::source::retry_after_ms(err) {
                     error_obj.insert("retry_after_ms".into(), json!(ms));
+                }
+                // #507: say so when the answer is a replay, not a fresh one.
+                if doiget_core::source::is_replayed(err) {
+                    error_obj.insert("replayed".into(), json!(true));
                 }
                 if let Some(dc) = denial {
                     error_obj.insert(
@@ -4933,7 +4989,10 @@ mod tests {
         assert!(!store_root_env_is_usable("${HOME}/papers"));
     }
 
+    // Serial: it reads the store-root env and config.toml, which the serial
+    // config-rung tests below point at `/from/config` while they run.
     #[test]
+    #[serial_test::serial]
     fn resolve_store_root_returns_some_on_normal_host() {
         // The default is `<cwd>/papers` (ADR-0036): either branch yields a
         // root on a normal host — `DOIGET_STORE_ROOT` when set, else the cwd

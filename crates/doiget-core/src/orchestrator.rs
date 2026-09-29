@@ -1204,6 +1204,30 @@ pub struct FetchPaperOutcome {
 }
 
 impl FetchPaperOutcome {
+    /// The error code this outcome reports to its caller, or `None` for a
+    /// clean success. A blocked PDF leg is `Ok` with a failed leg; its code
+    /// is the one the caller is shown, where a policy refusal (off the
+    /// allowlist, an insecure redirect, a blocklisted host) is
+    /// `CAPABILITY_DENIED` rather than the transport's `NETWORK_ERROR`
+    /// (#145). Shared so repeat suppression reads the same answer the CLI
+    /// and MCP surfaces give (#507).
+    #[must_use]
+    pub fn reported_error_code(&self) -> Option<crate::ErrorCode> {
+        match &self.pdf_leg {
+            PdfLegStatus::Blocked { code, denial, .. } => {
+                Some(match denial.as_ref().map(|d| d.reason) {
+                    Some(
+                        crate::DenialReason::RedirectNotInAllowlist
+                        | crate::DenialReason::InsecureScheme
+                        | crate::DenialReason::HostInBlockList,
+                    ) => crate::ErrorCode::CapabilityDenied,
+                    _ => *code,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// `true` when this outcome is a success with nothing withheld.
     ///
     /// A `Blocked` PDF leg is an `Ok` outcome whose payload was refused, so
@@ -1326,6 +1350,110 @@ pub async fn fetch_paper(
     store: &dyn Store,
     store_root: &Utf8Path,
 ) -> Result<FetchPaperOutcome, FetchError> {
+    fetch_paper_with(
+        ref_,
+        profile,
+        ctx,
+        store,
+        store_root,
+        FetchOptions::default(),
+    )
+    .await
+}
+
+/// How [`fetch_paper_with`] treats a request this session was already
+/// answered on (#507, ADR-0057).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FetchOptions {
+    /// Ask the network even though this session already has an answer a
+    /// retry cannot change yet. The one override repeat suppression has; it
+    /// is per request, never a setting, and it is logged.
+    pub force: bool,
+}
+
+impl FetchOptions {
+    /// Set [`FetchOptions::force`]. A builder, since the struct is
+    /// `#[non_exhaustive]`.
+    #[must_use]
+    pub const fn with_force(mut self, force: bool) -> Self {
+        self.force = force;
+        self
+    }
+}
+
+/// [`fetch_paper`], with repeat suppression's override exposed.
+///
+/// Before any network, the session's [`crate::repeat::RepeatIndex`] is
+/// asked whether this ref was already answered: a `terminal` or
+/// `needs_config` answer within the replay window returns
+/// [`FetchError::Replayed`] carrying that answer's code; a `retry_after`
+/// answer less than the minimum gap ago returns one carrying
+/// `RATE_LIMITED` and the seconds left. `opts.force` asks anyway, and
+/// appends a `repeat_forced` row saying so.
+///
+/// # Errors
+///
+/// As [`fetch_paper`], plus [`FetchError::Replayed`].
+pub async fn fetch_paper_with(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    store: &dyn Store,
+    store_root: &Utf8Path,
+    opts: FetchOptions,
+) -> Result<FetchPaperOutcome, FetchError> {
+    let input = ref_.as_input_str();
+    match ctx.log.repeat().check(input) {
+        crate::repeat::Verdict::Proceed => {}
+        verdict if opts.force => {
+            let code = match &verdict {
+                crate::repeat::Verdict::Replay { code, .. }
+                | crate::repeat::Verdict::Wait { code, .. } => code.as_wire(),
+                crate::repeat::Verdict::Proceed => "",
+            };
+            ctx.log.append(RowInput {
+                event: LogEvent::RepeatForced,
+                result: LogResult::Ok,
+                capability: Capability::Oa,
+                ref_: Some(input),
+                source: None,
+                error_code: Some(code).filter(|c| !c.is_empty()),
+                size_bytes: None,
+                license: None,
+                store_path: None,
+                canonical_digest: None,
+            })?;
+        }
+        crate::repeat::Verdict::Replay { code, at } => {
+            return Err(FetchError::Replayed {
+                code,
+                message: format!(
+                    "this session already asked about {input} at {at} and was told {} ({}); \
+                     nothing that decides it has changed since, so it was not asked again. \
+                     Pass force (MCP) or --refetch (CLI) to ask anyway.",
+                    code.as_wire(),
+                    code.disposition().as_wire(),
+                ),
+                retry_after_secs: None,
+            });
+        }
+        crate::repeat::Verdict::Wait {
+            code,
+            at,
+            remaining_secs,
+        } => {
+            return Err(FetchError::Replayed {
+                code: crate::ErrorCode::RateLimited,
+                message: format!(
+                    "this session asked about {input} at {at} and was told {} (retry_after); \
+                     retry in {remaining_secs}s, or pass force / --refetch to ask now.",
+                    code.as_wire(),
+                ),
+                retry_after_secs: Some(remaining_secs),
+            });
+        }
+    }
     let safekey = ref_.safekey();
     match ref_ {
         Ref::Arxiv(id) => {
@@ -3043,6 +3171,30 @@ pub async fn batch_fetch(
     store: &dyn Store,
     store_root: &Utf8Path,
 ) -> Result<BatchOutcome, FetchError> {
+    batch_fetch_with(
+        refs,
+        profile,
+        ctx,
+        store,
+        store_root,
+        FetchOptions::default(),
+    )
+    .await
+}
+
+/// [`batch_fetch`] with [`FetchOptions`] applied to every entry (#507).
+///
+/// # Errors
+///
+/// As [`batch_fetch`].
+pub async fn batch_fetch_with(
+    refs: &[Ref],
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    store: &dyn Store,
+    store_root: &Utf8Path,
+    opts: FetchOptions,
+) -> Result<BatchOutcome, FetchError> {
     if refs.len() > MAX_BATCH_REFS {
         return Err(FetchError::TooManyRefs {
             got: refs.len(),
@@ -3051,7 +3203,18 @@ pub async fn batch_fetch(
     }
     let mut results = Vec::with_capacity(refs.len());
     for ref_ in refs {
-        let outcome = fetch_paper(ref_, profile, ctx, store, store_root).await;
+        let outcome = fetch_paper_with(ref_, profile, ctx, store, store_root, opts).await;
+        // #507: a batch writes one bookend for the whole run, so each
+        // entry's answer is recorded here -- a DOI repeated in one batch, or
+        // asked again by the next call, is then held to the same rule as a
+        // single fetch.
+        ctx.log.repeat().observe(
+            ref_.as_input_str(),
+            match &outcome {
+                Ok(o) => o.reported_error_code(),
+                Err(e) => Some(crate::ErrorCode::from(e)),
+            },
+        );
         results.push(BatchResultEntry {
             ref_: ref_.clone(),
             outcome,
@@ -4295,6 +4458,150 @@ mod tests {
         .expect("the fetch wrote metadata");
         assert!(toml.contains("short_venue = \"Phys. Rev. B\""), "{toml}");
         std::env::remove_var("DOIGET_CROSSREF_BASE");
+    }
+
+    /// #507 step 2, through the real resolver and provenance log. A DOI
+    /// Crossref has no record of is NOT_FOUND (terminal); once the session's
+    /// bookend says so, asking again is answered from the log without a
+    /// request, `force` asks anyway and is logged, and a duplicate inside
+    /// one batch is replayed too.
+    /// #507: a retry_after answer under RETRY_AFTER_GAP old is refused with
+    /// the time left, before any request, and as RATE_LIMITED -- so a caller
+    /// that honours retry_after waits instead of hammering.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_recent_retry_after_answer_is_a_timed_wait_507() {
+        let (_s, ctx, store, store_root, _td) = md139_harness_with("{}").await;
+        let profile = CapabilityProfile::from_env().expect("profile");
+        let ref_ = Ref::Doi(Doi::parse("10.1234/busy").expect("doi"));
+        ctx.log
+            .repeat()
+            .observe("10.1234/busy", Some(crate::ErrorCode::NetworkError));
+        let got = fetch_paper_with(
+            &ref_,
+            &profile,
+            &ctx,
+            &store,
+            &store_root,
+            FetchOptions::default(),
+        )
+        .await;
+        match got {
+            Err(FetchError::Replayed {
+                code,
+                retry_after_secs: Some(secs),
+                ..
+            }) => {
+                assert_eq!(code, crate::ErrorCode::RateLimited);
+                assert!((1..=30).contains(&secs), "{secs}");
+            }
+            other => panic!("expected a timed wait, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_terminal_answer_is_replayed_and_force_asks_again_507() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let (_s, ctx, store, store_root, _td) = md139_harness_with("{}").await;
+        // Point Crossref and Unpaywall at the 404 server instead.
+        std::env::set_var("DOIGET_CROSSREF_BASE", server.uri());
+        let host = server.address().to_string();
+        let ctx = FetchContext {
+            http: std::sync::Arc::new(crate::http::HttpClient::new_for_tests_allow_http_multi(&[
+                ("crossref", host.as_str()),
+                ("unpaywall", host.as_str()),
+            ])),
+            ..ctx
+        };
+        std::env::set_var("DOIGET_UNPAYWALL_BASE", server.uri());
+        let profile = CapabilityProfile::from_env().expect("profile");
+        let ref_ = Ref::Doi(Doi::parse("10.1234/nowhere").expect("doi"));
+        let requests = || async { server.received_requests().await.unwrap_or_default().len() };
+
+        let first = fetch_paper(&ref_, &profile, &ctx, &store, &store_root).await;
+        assert_eq!(
+            first.as_ref().err().map(crate::ErrorCode::from),
+            Some(crate::ErrorCode::NotFound),
+            "{first:?}"
+        );
+        // What the CLI / MCP front end writes after telling the caller.
+        ctx.log
+            .append(RowInput {
+                event: LogEvent::SessionEnd,
+                result: LogResult::Err,
+                capability: Capability::Oa,
+                ref_: Some("10.1234/nowhere"),
+                source: None,
+                error_code: Some("NOT_FOUND"),
+                size_bytes: None,
+                license: None,
+                store_path: None,
+                canonical_digest: None,
+            })
+            .expect("bookend");
+        let sent = requests().await;
+
+        let second = fetch_paper(&ref_, &profile, &ctx, &store, &store_root).await;
+        match &second {
+            Err(e @ FetchError::Replayed { code, .. }) => {
+                assert_eq!(*code, crate::ErrorCode::NotFound);
+                assert_eq!(crate::ErrorCode::from(e), crate::ErrorCode::NotFound);
+                assert!(e.to_string().contains("--refetch"), "{e}");
+            }
+            other => panic!("expected a replay, got {other:?}"),
+        }
+        assert_eq!(
+            requests().await,
+            sent,
+            "a replay must not touch the network"
+        );
+
+        let dup = batch_fetch(
+            &[ref_.clone(), ref_.clone()],
+            &profile,
+            &ctx,
+            &store,
+            &store_root,
+        )
+        .await
+        .expect("batch");
+        assert!(dup
+            .results
+            .iter()
+            .all(|r| matches!(r.outcome, Err(FetchError::Replayed { .. }))));
+        assert_eq!(requests().await, sent, "nor may a batch of repeats");
+
+        let forced = fetch_paper_with(
+            &ref_,
+            &profile,
+            &ctx,
+            &store,
+            &store_root,
+            FetchOptions::default().with_force(true),
+        )
+        .await;
+        assert!(
+            matches!(&forced, Err(e) if !matches!(e, FetchError::Replayed { .. })),
+            "force must reach the network, not replay: {forced:?}"
+        );
+        assert!(requests().await > sent, "force asks the network");
+        let log = std::fs::read_to_string(ctx.log.path()).expect("log");
+        assert!(
+            log.lines()
+                .any(|l| l.contains("\"event\":\"repeat_forced\"")
+                    && l.contains("10.1234/nowhere")
+                    && l.contains("NOT_FOUND")),
+            "the override is recorded"
+        );
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+        std::env::remove_var("DOIGET_UNPAYWALL_BASE");
     }
 
     #[tokio::test]

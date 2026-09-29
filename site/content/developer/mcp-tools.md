@@ -289,6 +289,35 @@ Tools where `dry_run` does not apply (`doiget_info`, `doiget_search_local`,
 `INVALID_REF`-class — i.e. surface as
 `{ok:false, error:{code:"INVALID_REF", ...}}`.
 
+## 10a. Repeat suppression and `force` (NORMATIVE; ADR-0057)
+
+`doiget_fetch_paper`, `doiget_batch_fetch` and `doiget_batch_from_bibliography`
+accept an optional `force: boolean`, defaulting to `false`.
+
+Within one server session, a ref already answered with something a retry cannot
+change yet is not asked again (#507):
+
+- a `terminal` or `needs_config` answer is replayed for 10 minutes;
+- a `retry_after` answer is refused for 30 s from when it was given.
+
+The replay is an ordinary failure envelope. Its `error.code` is the original
+answer's, or `RATE_LIMITED` while a `retry_after` wait runs, and it adds:
+
+```typescript
+error: {
+  code, message, disposition,
+  replayed: true,          // the answer was not fetched again
+  retry_after_ms?: number, // while a retry_after wait runs: time left
+}
+```
+
+This holds even when the first call was `ok: true` with a blocked PDF leg: the
+repeat did nothing, so it is `ok: false`. A change to `config.toml` lifts the
+replay. `force: true` sends the request anyway, and the provenance log records
+a `repeat_forced` row. There is no setting that disables suppression.
+`doiget_resolve_paper` and `doiget_metadata_only` are not suppressed: they
+make metadata requests only, bounded by the rate cap.
+
 ## 11. `doiget_metadata_only` (NORMATIVE)
 
 `doiget_metadata_only` resolves a `ref` through the configured metadata
