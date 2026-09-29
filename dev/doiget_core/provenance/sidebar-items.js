@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["LOG_SCHEMA_VERSION"],"enum":["Capability","LogError","LogEvent","LogResult","VerifyIssueKind"],"fn":["migrate_v1_to_v2","verify","verify_all"],"struct":["LogRow","MigrationReport","ProvenanceLog","RowInput","VerifyIssue","VerifyReport"]};

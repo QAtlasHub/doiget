@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Contribute &middot; doiget</title>
+  <meta name="description" content="Architecture overview, phase plan, and ADRs for contributors.">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/contribute/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Contribute · doiget">
+  <meta property="og:description" content="Architecture overview, phase plan, and ADRs for contributors.">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/contribute/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Contribute · doiget">
+  <meta name="twitter:description" content="Architecture overview, phase plan, and ADRs for contributors.">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="section">
+  <header class="section-head">
+    <h1>Contribute</h1>
+    <p class="lede">Architecture overview, phase plan, and ADRs for contributors.</p>
+  </header>
+
+  <p>This section is for people who want to <strong>send a pull request</strong> or
+otherwise contribute changes to doiget. If you want to use doiget, see
+[Use]({{ get_url(path='@/use/_index.md') | safe }}); if you want to embed
+doiget, see [Developer]({{ get_url(path='@/developer/_index.md') | safe }}).</p>
+<h2 id="start-here">Start here</h2>
+<ol>
+<li>Read [CONTRIBUTING.md]({{ config.extra.github_url }}/blob/main/CONTRIBUTING.md) for the workflow.</li>
+<li>Skim [docs/ARCHITECTURE.md]({{ config.extra.github_url }}/blob/main/docs/ARCHITECTURE.md) to understand the workspace layout (<code>doiget-core</code> / <code>doiget-cli</code> / <code>doiget-mcp</code>).</li>
+<li>Check [docs/PHASES.md]({{ config.extra.github_url }}/blob/main/docs/PHASES.md) to see which phase the project is in.</li>
+<li>Browse [docs/DECISIONS/]({{ config.extra.github_url }}/tree/main/docs/DECISIONS) for the 24 ADRs that bind major design choices.</li>
+</ol>
+<h2 id="doc-class-system-adr-0014">Doc class system (ADR-0014)</h2>
+<p>Every document in <code>docs/</code> carries a status header:</p>
+<ul>
+<li><strong>NORMATIVE</strong> — binding contract. Changes require an ADR.</li>
+<li><strong>INFORMATIVE</strong> — orientation / explanation. May evolve without ADR.</li>
+</ul>
+<p>This site mirrors the same convention. The
+[ARCHITECTURE]({{ get_url(path='@/contribute/architecture.md') | safe }})
+page is INFORMATIVE; the [MCP tools]({{ get_url(path='@/developer/_index.md') | safe }}#1-mcp-server-stdio-json-rpc)
+contract is NORMATIVE and revisions are gated by ADR.</p>
+<h2 id="adr-driven-design">ADR-driven design</h2>
+<p>If a design discussion in
+[GitHub Discussions]({{ config.extra.github_url }}/discussions) reaches
+a decision, an ADR captures it in <code>docs/DECISIONS/</code>. If Discussions ever
+disappears, the ADRs preserve the binding decisions in the source tree.</p>
+<p>PRs that lock in a new design decision <strong>must</strong> include an ADR before
+the code change lands. PRs that follow an existing ADR are fine on their
+own.</p>
+
+
+  
+
+  
+  <h2>Pages</h2>
+  <ul class="index">
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/contribute/architecture/">Architecture</a>
+        <span class="lede">&mdash; doiget is a Rust workspace of three crates (`doiget-core`, `doiget-cli`, `doiget-mcp`)</span>
+      </li>
+    
+      <li>
+        <a href="https://codes.sota-shimozono.com/doiget/contribute/phases/">Phase plan</a>
+        <span class="lede">&mdash; doiget is fully implemented and released:</span>
+      </li>
+    
+  </ul>
+  
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

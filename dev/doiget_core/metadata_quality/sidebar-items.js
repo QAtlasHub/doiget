@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["REPLACEMENT_CHAR","RESTORE_MAX_CHARS"],"fn":["has_replacement_char","repair","repair_with","replacement_char_fields","restores"],"struct":["QualityReport"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["NCBI","NCBI_BASE_ENV"],"enum":["Lookup","PubmedId","Resolved"],"fn":["lookup","lookup_in_session","resolve_entries","resolve_entries_in_session"],"struct":["Digits","Unresolved"]};

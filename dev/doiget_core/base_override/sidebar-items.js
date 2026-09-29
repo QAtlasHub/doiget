@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["BASE_OVERRIDES"],"enum":["BaseOverrideError"],"fn":["test_client_from","test_client_from_env"],"struct":["BaseOverride"]};

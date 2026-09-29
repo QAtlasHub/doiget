@@ -1,0 +1,1 @@
+rd_("fdoigetjdoiget_clikdoiget_corejdoiget_mcp")

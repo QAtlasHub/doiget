@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CATALOG"],"enum":["Availability","Covers","Role"],"fn":["availability","configured","covers","for_publisher"],"struct":["SourceInfo"]};

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Posture &amp; legal &middot; doiget</title>
+  <meta name="description" content="What doiget will and will not do. Scope, eight safeguards, and legal posture.">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Posture &amp; legal · doiget">
+  <meta property="og:description" content="What doiget will and will not do. Scope, eight safeguards, and legal posture.">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Posture &amp; legal · doiget">
+  <meta name="twitter:description" content="What doiget will and will not do. Scope, eight safeguards, and legal posture.">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Posture &amp; legal</h1>
+    <p class="lede">What doiget will and will not do. Scope, eight safeguards, and legal posture.</p>
+  </header>
+
+  <p>doiget is a general-purpose automation tool for retrieving papers through
+official publisher and aggregator APIs. This page summarizes what doiget
+will and will not do; the binding specs live in
+[docs/SCOPE.md]({{ config.extra.github_url }}/blob/main/docs/SCOPE.md)
+and
+[docs/LEGAL.md]({{ config.extra.github_url }}/blob/main/docs/LEGAL.md).</p>
+<h2 id="what-doiget-does">What doiget does</h2>
+<ul>
+<li>Retrieves PDFs from sources where the user has access through one of:
+<ol>
+<li><strong>Public Open Access sources</strong> (default) — Crossref, Unpaywall, arXiv.</li>
+<li><strong>The user's own institutional or personal credentials</strong> (opt-in,
+compile-time gated per publisher) — Springer Nature OA,
+APS Harvest, Elsevier ScienceDirect TDM.</li>
+</ol>
+</li>
+<li>Writes the resulting PDF and a TOML metadata sidecar to the user's
+local filesystem under <code>~/papers/</code>.</li>
+<li>Maintains a cryptographic provenance log (JSON Lines + SHA-256 hash
+chain) of every fetch attempt.</li>
+</ul>
+<h2 id="what-doiget-does-not-do">What doiget does not do</h2>
+<ul>
+<li><strong>Does not bypass paywalls.</strong> Sources that require credentials are
+compile-time gated and need user-supplied credentials to activate.</li>
+<li><strong>Does not host content.</strong> Retrieved PDFs land on the user's own
+filesystem. doiget does not operate as a public mirror or SaaS.</li>
+<li><strong>Does not bundle publisher API keys.</strong> Each user supplies their own.</li>
+<li><strong>Does not relicense fetched content.</strong> The MIT license applies only
+to doiget's own source code; retrieved PDFs retain their original
+license, which is determined by each paper's own license, the
+publisher's API terms of service, and the user's access rights.</li>
+<li><strong>Does not send telemetry.</strong> No phone-home, no auto-update, no
+analytics (ADR-0015).</li>
+</ul>
+<h2 id="eight-safeguards-adr-0019">Eight safeguards (ADR-0019)</h2>
+<p>doiget enforces eight safeguards across five social and three technical
+categories. The technical safeguards are:</p>
+<ol>
+<li><strong>Capability profile gate</strong> — sources are unreachable unless the
+capability profile resolved from env vars permits them.</li>
+<li><strong>Redirect allowlist</strong> — HTTP redirects are accepted only to a
+per-source allowlist; off-list hosts trip a structured
+<code>denial_context</code> error.</li>
+<li><strong>Fail-closed provenance log</strong> — any log-write failure aborts the
+fetch.</li>
+</ol>
+<p>The five social safeguards (TDM author opt-in, takedown response,
+removal mechanism, contact addressability, public posture) are
+documented in
+[docs/SCOPE.md]({{ config.extra.github_url }}/blob/main/docs/SCOPE.md).</p>
+<h2 id="user-responsibilities">User responsibilities</h2>
+<p>Users are responsible for ensuring they have the right to access the
+content they request and for compliance with each source's terms of
+service. doiget is a tool; the legal posture of any fetched content is
+determined by the user's own credentials, institutional affiliations,
+and intended use.</p>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/use&#x2F;posture-and-legal.md">
+      site/content/use&#x2F;posture-and-legal.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

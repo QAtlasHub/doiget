@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AddError"],"fn":["add_user_pdf","check_file","file_stem","looks_like_an_id","match_file","stem_names"],"struct":["AddOutcome"]};

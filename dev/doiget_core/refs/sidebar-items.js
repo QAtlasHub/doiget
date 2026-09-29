@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Format","ParseError"],"fn":["detect_format","parse_bibtex","parse_csl_json","parse_input","parse_plain_refs","unsupported_identifier_claim"],"struct":["ParsedEntry"]};
