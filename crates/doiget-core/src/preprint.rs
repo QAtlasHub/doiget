@@ -176,6 +176,18 @@ fn normalise(title: &str) -> String {
         .collect()
 }
 
+/// Whether a title can identify a paper in a search: at least 20 letters
+/// and digits (counted as characters, not bytes -- a CJK title is three
+/// bytes a character) across at least three words. "Introduction" and
+/// "Editorial" are not.
+fn distinctive(title: &str) -> bool {
+    let words = crate::markup::plain_title(title)
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .count();
+    normalise(title).chars().count() >= 20 && words >= 3
+}
+
 /// An arXiv id without its version suffix.
 fn arxiv_id(raw: &str) -> Option<ArxivId> {
     let raw = raw.trim().trim_end_matches('/');
@@ -229,12 +241,12 @@ pub async fn find(
         .pointer("/author/0/family")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if normalise(title).len() < 12 || family.is_empty() {
-        // A short or missing title, or no named first author, is not enough
+    if !distinctive(title) || family.is_empty() {
+        // A short or generic title, or no named first author, is not enough
         // to tell one paper from another.
         return Ok(None);
     }
-    match arxiv_search(title, family, ctx).await {
+    match arxiv_search(doi, title, family, ctx).await {
         Ok(feed) => Ok(
             match_search(&feed, title, family, doi).map(|arxiv_id| Found {
                 arxiv_id,
@@ -262,21 +274,22 @@ async fn openalex_work(doi: &Doi, ctx: &FetchContext) -> Result<Option<Value>, F
     if let Some(email) = crate::orchestrator::configured_contact_email() {
         url.query_pairs_mut().append_pair("mailto", &email);
     }
-    let _permit = ctx.rate_limiter.acquire("openalex").await;
-    match ctx.http.fetch_bytes("openalex", url).await {
-        Ok((body, _)) => {
-            serde_json::from_slice(&body)
-                .map(Some)
-                .map_err(|e| FetchError::SourceSchema {
-                    hint: format!("OpenAlex returned non-JSON: {e}"),
-                })
-        }
-        Err(crate::http::HttpError::HttpStatus { status: 404, .. }) => Ok(None),
-        Err(e) => Err(FetchError::Http(e)),
-    }
+    let Some(body) = logged_get(doi, "openalex", url, ctx).await? else {
+        return Ok(None);
+    };
+    serde_json::from_slice(&body)
+        .map(Some)
+        .map_err(|e| FetchError::SourceSchema {
+            hint: format!("OpenAlex returned non-JSON: {e}"),
+        })
 }
 
-async fn arxiv_search(title: &str, family: &str, ctx: &FetchContext) -> Result<String, FetchError> {
+async fn arxiv_search(
+    doi: &Doi,
+    title: &str,
+    family: &str,
+    ctx: &FetchContext,
+) -> Result<String, FetchError> {
     let mut url = base("DOIGET_ARXIV_BASE", "https://export.arxiv.org")?;
     url.set_path("/api/query");
     // arXiv's query language: a quoted phrase for the title, the surname
@@ -285,9 +298,57 @@ async fn arxiv_search(title: &str, family: &str, ctx: &FetchContext) -> Result<S
     url.query_pairs_mut()
         .append_pair("search_query", &format!("ti:\"{phrase}\" AND au:{family}"))
         .append_pair("max_results", "5");
-    let _permit = ctx.rate_limiter.acquire("arxiv").await;
-    let (body, _) = ctx.http.fetch_bytes("arxiv", url).await?;
-    Ok(String::from_utf8_lossy(&body).into_owned())
+    Ok(logged_get(doi, "arxiv", url, ctx)
+        .await?
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default())
+}
+
+/// One rate-limited request, recorded in the provenance log as a `resolve`
+/// row for `doi` under `source` -- like every other request a fetch makes
+/// (ADR-0006). `Ok(None)` for a 404.
+async fn logged_get(
+    doi: &Doi,
+    source: &'static str,
+    url: Url,
+    ctx: &FetchContext,
+) -> Result<Option<bytes::Bytes>, FetchError> {
+    use crate::provenance::{Capability, LogEvent, LogResult, RowInput};
+    let _permit = ctx.rate_limiter.acquire(source).await;
+    let digest = crate::Ref::Doi(doi.clone())
+        .promote(source, None)
+        .digest_hex();
+    let row = |result, size, error_code| RowInput {
+        event: LogEvent::Resolve,
+        result,
+        capability: Capability::Metadata,
+        ref_: Some(doi.as_str()),
+        source: Some(source),
+        error_code,
+        size_bytes: size,
+        license: None,
+        store_path: None,
+        canonical_digest: Some(&digest),
+    };
+    match ctx.http.fetch_bytes(source, url).await {
+        Ok((body, _)) => {
+            ctx.log
+                .append(row(LogResult::Ok, Some(body.len() as u64), None))?;
+            Ok(Some(body))
+        }
+        Err(crate::http::HttpError::HttpStatus { status: 404, .. }) => {
+            ctx.log
+                .append(row(LogResult::Err, None, Some("NOT_FOUND")))?;
+            Ok(None)
+        }
+        Err(e) => {
+            let e = FetchError::Http(e);
+            let code = crate::ErrorCode::from(&e);
+            ctx.log
+                .append(row(LogResult::Err, None, Some(code.as_wire())))?;
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -364,5 +425,144 @@ mod tests {
                 .as_str(),
             "2401.00001"
         );
+    }
+
+    #[test]
+    fn a_generic_or_short_title_is_not_distinctive_counting_characters() {
+        assert!(!distinctive("Introduction"));
+        assert!(!distinctive("Editorial comment"));
+        // Four CJK characters are twelve bytes; they are four characters.
+        assert!(!distinctive("量子多体系"));
+        assert!(distinctive(
+            "Environment-matrix-product operator for boundary-free simulations"
+        ));
+    }
+
+    mod live_shape {
+        //! `find` through the real HTTP client and log, against mocks.
+        use super::super::*;
+        use std::sync::Arc;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        const TITLE: &str =
+            "Environment-matrix-product operator for boundary-free large-scale quantum many-body simulations";
+
+        async fn ctx(server: &MockServer) -> (FetchContext, tempfile::TempDir) {
+            let host = server.address().to_string();
+            let td = tempfile::TempDir::new().expect("tempdir");
+            let log = camino::Utf8PathBuf::try_from(td.path().join("log.jsonl")).expect("utf-8");
+            std::env::set_var("DOIGET_OPENALEX_BASE", server.uri());
+            std::env::set_var("DOIGET_ARXIV_BASE", server.uri());
+            let sid = "01J0000000000000000000PP62".to_string();
+            (
+                FetchContext {
+                    http: Arc::new(crate::http::HttpClient::new_for_tests_allow_http_multi(&[
+                        ("openalex", host.as_str()),
+                        ("arxiv", host.as_str()),
+                    ])),
+                    rate_limiter: Arc::new(crate::rate_limiter::RateLimiter::new(
+                        crate::RateLimits::HARD_CODED,
+                    )),
+                    log: Arc::new(
+                        crate::provenance::ProvenanceLog::open(log, sid.clone()).expect("log"),
+                    ),
+                    session_id: sid,
+                    cache_root: None,
+                },
+                td,
+            )
+        }
+
+        fn clear() {
+            std::env::remove_var("DOIGET_OPENALEX_BASE");
+            std::env::remove_var("DOIGET_ARXIV_BASE");
+        }
+
+        async fn server() -> MockServer {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/works/doi:10.1103/bbnt-brjz"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "locations": [{"landing_page_url": "http://arxiv.org/abs/2512.07923v1"}]
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/query"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                    "<feed><entry><id>http://arxiv.org/abs/2512.07923v1</id><title>{TITLE}</title>\
+                     <author><name>Souta Shimozono</name></author></entry></feed>"
+                )))
+                .mount(&server)
+                .await;
+            server
+        }
+
+        fn record(title: &str) -> Value {
+            serde_json::json!({"title": [title], "author": [{"family": "Shimozono"}]})
+        }
+
+        async fn paths(server: &MockServer) -> Vec<String> {
+            server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .iter()
+                .map(|r| r.url.path().to_string())
+                .collect()
+        }
+
+        #[tokio::test]
+        #[serial_test::serial]
+        async fn an_enabled_openalex_answers_before_any_arxiv_search() {
+            let server = server().await;
+            let (ctx, _td) = ctx(&server).await;
+            let doi = Doi::parse("10.1103/bbnt-brjz").unwrap();
+            let found = find(&doi, &record(TITLE), true, &ctx)
+                .await
+                .unwrap()
+                .unwrap();
+            let seen = paths(&server).await;
+            let log = std::fs::read_to_string(ctx.log.path()).unwrap();
+            clear();
+            assert_eq!(found.found_by, FoundBy::OpenAlexLocation);
+            assert_eq!(found.arxiv_id.as_str(), "2512.07923");
+            assert!(!seen.iter().any(|p| p == "/api/query"), "{seen:?}");
+            assert!(log.contains("\"source\":\"openalex\""), "logged: {log}");
+        }
+
+        #[tokio::test]
+        #[serial_test::serial]
+        async fn a_disabled_openalex_is_not_asked_and_the_search_answers() {
+            let server = server().await;
+            let (ctx, _td) = ctx(&server).await;
+            let doi = Doi::parse("10.1103/bbnt-brjz").unwrap();
+            let found = find(&doi, &record(TITLE), false, &ctx)
+                .await
+                .unwrap()
+                .unwrap();
+            let seen = paths(&server).await;
+            let log = std::fs::read_to_string(ctx.log.path()).unwrap();
+            clear();
+            assert_eq!(found.found_by, FoundBy::ArxivTitleSearch);
+            assert!(!seen.iter().any(|p| p.starts_with("/works/")), "{seen:?}");
+            assert!(log.contains("\"source\":\"arxiv\""), "logged: {log}");
+        }
+
+        #[tokio::test]
+        #[serial_test::serial]
+        async fn a_generic_title_is_not_searched_at_all() {
+            let server = server().await;
+            let (ctx, _td) = ctx(&server).await;
+            let doi = Doi::parse("10.1103/bbnt-brjz").unwrap();
+            let found = find(&doi, &record("Introduction"), false, &ctx)
+                .await
+                .unwrap();
+            let seen = paths(&server).await;
+            clear();
+            assert!(found.is_none());
+            assert!(seen.is_empty(), "{seen:?}");
+        }
     }
 }

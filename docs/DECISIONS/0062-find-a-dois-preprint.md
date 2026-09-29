@@ -41,8 +41,9 @@ under the DOI's safekey, reported as `preprint_fallback`.
 `arxiv_title_search`, on the MCP envelope and in the CLI line.
 
 **D3: Strict matching over recall.** A wrong preprint stored under a DOI is worse
-than none: every check in D1.3 must hold, and a short title (under 12 letters
-and digits) or a record with no named first author is not searched at all.
+than none: every check in D1.3 must hold, and a title under 20 letters and
+digits (counted as characters) or under three words, or a record with no named
+first author, is not searched at all.
 Fuzzy matching, and preprint servers other than arXiv, are not attempted.
 
 **D4: The access ceiling moves, and says so.** An arXiv id a source *reported* is
@@ -53,8 +54,11 @@ these sources, and "How this changed" records it.
 
 - A closed DOI with a public arXiv preprint now yields the preprint, and the
   envelope says it is a preprint and how it was found.
-- A closed DOI with none costs one arXiv search more than before (plus an
-  OpenAlex request if enabled), paced by arXiv's rate limit.
+- The cost is per closed DOI, not per preprint found: every DOI whose content
+  leg finds nothing pays one arXiv search (plus an OpenAlex request if
+  enabled), and arXiv's 3-second pacing applies across them -- a `batch` of
+  mostly-closed DOIs gets slower by about 3 s each. Each request is a
+  `resolve` row in the provenance log under its own source.
 - Not covered: bioRxiv / medRxiv / Research Square preprints named by Crossref's
   relation. Their DOIs could be fetched through the ordinary OA route; that is a
   further decision.

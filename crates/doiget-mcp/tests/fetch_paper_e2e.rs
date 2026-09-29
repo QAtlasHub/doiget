@@ -1411,6 +1411,15 @@ async fn batch_from_bibliography_resolves_pubmed_ids_500() -> anyhow::Result<()>
 async fn preprint_discovery_case(
     relation: serde_json::Value,
 ) -> anyhow::Result<(serde_json::Value, Vec<String>)> {
+    preprint_discovery_case_with(relation, None).await
+}
+
+/// `publisher_pdf`: an Unpaywall location on a host off the allowlist, so
+/// the content leg is Blocked -- with no arXiv hint -- rather than NoOaUrl.
+async fn preprint_discovery_case_with(
+    relation: serde_json::Value,
+    publisher_pdf: Option<&str>,
+) -> anyhow::Result<(serde_json::Value, Vec<String>)> {
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1432,10 +1441,19 @@ async fn preprint_discovery_case(
         .await;
     Mock::given(method("GET"))
         .and(path("/v2/10.1103%2Fbbnt-brjz"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "doi": "10.1103/bbnt-brjz", "is_oa": false, "oa_status": "closed",
-            "best_oa_location": null, "oa_locations": []
-        })))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(match publisher_pdf {
+                None => serde_json::json!({
+                    "doi": "10.1103/bbnt-brjz", "is_oa": false, "oa_status": "closed",
+                    "best_oa_location": null, "oa_locations": []
+                }),
+                Some(pdf) => serde_json::json!({
+                    "doi": "10.1103/bbnt-brjz", "is_oa": true, "oa_status": "bronze",
+                    "best_oa_location": {"url_for_pdf": pdf, "url": pdf},
+                    "oa_locations": [{"url_for_pdf": pdf, "url": pdf}]
+                }),
+            }),
+        )
         .mount(&server)
         .await;
 
@@ -1523,5 +1541,26 @@ async fn a_crossref_has_preprint_relation_needs_no_search() -> anyhow::Result<()
         searches.is_empty(),
         "the relation answered; no search: {searches:?}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_blocked_copy_with_no_arxiv_hint_also_looks_for_the_preprint() -> anyhow::Result<()> {
+    let (v, searches) = preprint_discovery_case_with(
+        serde_json::json!({}),
+        Some("https://journals.example-publisher.org/paper.pdf"),
+    )
+    .await?;
+    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(v["pdf"]["found_by"], "arxiv_title_search", "{v}");
+    assert!(
+        v["pdf"]["original_block"]
+            .as_str()
+            .unwrap_or("")
+            .contains("journals.example-publisher.org"),
+        "the block that triggered the search is kept: {v}"
+    );
+    assert_eq!(searches.len(), 1, "{searches:?}");
     Ok(())
 }
