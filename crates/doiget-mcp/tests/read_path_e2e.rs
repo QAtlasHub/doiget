@@ -364,3 +364,54 @@ async fn doiget_info_dry_run_field_is_rejected() -> anyhow::Result<()> {
     drop(env);
     Ok(())
 }
+
+#[tokio::test]
+#[serial_test::serial]
+async fn doiget_paper_pdf_path_reports_a_user_supplied_origin_and_license_606() -> anyhow::Result<()>
+{
+    use doiget_core::store::{DoigetExtension, FsStore, Metadata, Store, ORIGIN_USER_SUPPLIED};
+    let (_td, root) = temp_store_root();
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", root.as_str());
+    let ref_ = doiget_core::Ref::parse("10.1007/BF01340294").unwrap();
+    let pdf = root.join("staged.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4\n").unwrap();
+    let m = Metadata {
+        schema_version: "1.0".into(),
+        title: "On the theory".into(),
+        pdf_path: Some(format!("{}.pdf", ref_.safekey().as_str())),
+        doiget: Some(DoigetExtension {
+            fetched_at: chrono::Utc::now(),
+            source: "user".into(),
+            license: "unknown".into(),
+            oa_status: None,
+            size_bytes: 9,
+            mcp_call_id: None,
+            tags: vec![],
+            collections: vec![],
+            annotation: None,
+            repaired_fields: Default::default(),
+            short_venue: None,
+            origin: Some(ORIGIN_USER_SUPPLIED.into()),
+        }),
+        ..Metadata::default()
+    };
+    FsStore::new(root.clone())?.write(&ref_.safekey(), &m, Some(&pdf))?;
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1007/BF01340294"));
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_paper_pdf_path").with_arguments(args))
+        .await?;
+    let s = result.structured_content.as_ref().expect("structured");
+    assert_eq!(s["pdf_exists"], serde_json::json!(true), "{s:?}");
+    assert_eq!(s["origin"], serde_json::json!("user-supplied"), "{s:?}");
+    assert_eq!(s["license"], serde_json::json!("unknown"), "{s:?}");
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    Ok(())
+}

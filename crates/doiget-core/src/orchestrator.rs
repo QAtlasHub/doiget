@@ -2414,7 +2414,7 @@ async fn try_arxiv_preprint_fallback(
 
 /// Stage PDF bytes to a tempfile so the existing `Store::write` atomic-
 /// rename code path applies (the store takes a path, not bytes).
-fn stage_pdf_to_tempfile(bytes: &[u8]) -> Result<tempfile::NamedTempFile, FetchError> {
+pub(crate) fn stage_pdf_to_tempfile(bytes: &[u8]) -> Result<tempfile::NamedTempFile, FetchError> {
     let tmp = tempfile::NamedTempFile::new().map_err(|e| FetchError::SourceSchema {
         hint: format!("creating PDF staging tempfile: {e}"),
     })?;

@@ -132,3 +132,49 @@ fn add_from_dir_plans_then_applies_by_file_name() {
     assert!(base.join("papers/doi_10.1007_BF01340294.pdf").exists());
     assert!(base.join("papers/doi_10.1103_PhysRev.34.1293.pdf").exists());
 }
+
+#[test]
+fn add_force_replaces_a_stored_pdf_and_says_so() {
+    let (_td, base) = setup();
+    doiget(&base)
+        .args(["add", DOI, "dl/BF01340294.pdf"])
+        .assert()
+        .success();
+    std::fs::write(base.join("dl/BF01340294.pdf"), b"%PDF-1.7\nnewer\n").expect("pdf");
+    doiget(&base)
+        .args(["add", DOI, "dl/BF01340294.pdf", "--force"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("replacing the stored PDF"));
+    let stored = std::fs::read(base.join("papers/doi_10.1007_BF01340294.pdf")).expect("read");
+    assert_eq!(stored, b"%PDF-1.7\nnewer\n");
+}
+
+#[test]
+fn add_force_accepts_a_name_that_claims_another_work() {
+    let (_td, base) = setup();
+    doiget(&base)
+        .args(["add", DOI, "dl/BF01397394.pdf", "--force"])
+        .assert()
+        .success();
+    assert!(base.join("papers/doi_10.1007_BF01340294.pdf").exists());
+}
+
+#[test]
+fn add_from_dir_with_refs_matches_only_the_bibliographys_entries() {
+    let (_td, base) = setup();
+    std::fs::write(
+        base.join("refs.bib"),
+        "@article{fock1930, title={z}, doi={10.1007/BF01340294}, year={1930}}\n",
+    )
+    .expect("bib");
+    doiget(&base)
+        .args(["add", "--from-dir", "dl", "--refs", "refs.bib", "--apply"])
+        .assert()
+        .success();
+    assert!(base.join("papers/doi_10.1007_BF01340294.pdf").exists());
+    assert!(
+        !base.join("papers/doi_10.1103_PhysRev.34.1293.pdf").exists(),
+        "not in the bibliography, so not a candidate"
+    );
+}

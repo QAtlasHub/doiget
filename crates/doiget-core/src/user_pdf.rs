@@ -176,14 +176,17 @@ pub fn looks_like_an_id(stem: &str) -> bool {
         && stem.chars().any(|c| c.is_ascii_digit())
 }
 
-/// Check `file` the way a fetch checks bytes off the wire, without reading
-/// past the magic number (ADR-0003). Returns its size.
+/// Check `file` the way a fetch checks bytes off the wire, and return the
+/// bytes that passed -- the only ones the store is given. Nothing past the
+/// magic number is interpreted (ADR-0003); the bytes are held, as a fetch
+/// holds a response body, never parsed.
 ///
 /// # Errors
 ///
 /// [`AddError::NotAFile`], [`AddError::Symlink`], [`AddError::TooLarge`],
 /// [`AddError::NotAPdf`] or [`AddError::Io`].
-pub fn check_file(file: &Utf8Path) -> Result<u64, AddError> {
+pub fn check_file(file: &Utf8Path) -> Result<Vec<u8>, AddError> {
+    use std::io::Read;
     let io = |source| AddError::Io {
         path: file.to_path_buf(),
         source,
@@ -195,23 +198,48 @@ pub fn check_file(file: &Utf8Path) -> Result<u64, AddError> {
     if !meta.is_file() {
         return Err(AddError::NotAFile(file.to_path_buf()));
     }
-    if meta.len() > crate::PDF_MAX_BYTES {
-        return Err(AddError::TooLarge {
-            path: file.to_path_buf(),
-            actual: meta.len(),
-            cap: crate::PDF_MAX_BYTES,
-        });
-    }
-    let mut magic = [0u8; 5];
-    let n = {
-        use std::io::Read;
-        let mut f = std::fs::File::open(file).map_err(io)?;
-        f.read(&mut magic).map_err(io)?
+    let too_large = |actual| AddError::TooLarge {
+        path: file.to_path_buf(),
+        actual,
+        cap: crate::PDF_MAX_BYTES,
     };
-    if n < 5 || &magic != b"%PDF-" {
+    if meta.len() > crate::PDF_MAX_BYTES {
+        return Err(too_large(meta.len()));
+    }
+    // Everything below reads through ONE handle, and these are the only
+    // bytes that reach the store: a file swapped for a symlink or grown
+    // after the checks above cannot slip past them at copy time.
+    let f = std::fs::File::open(file).map_err(io)?;
+    let opened = f.metadata().map_err(io)?;
+    if !opened.is_file() || !same_file(&meta, &opened) {
+        return Err(AddError::Symlink(file.to_path_buf()));
+    }
+    let mut bytes = Vec::new();
+    f.take(crate::PDF_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
+    let len = bytes.len() as u64;
+    if len > crate::PDF_MAX_BYTES {
+        return Err(too_large(len));
+    }
+    if !bytes.starts_with(b"%PDF-") {
         return Err(AddError::NotAPdf(file.to_path_buf()));
     }
-    Ok(meta.len())
+    Ok(bytes)
+}
+
+/// Whether the path checked and the handle opened are one file.
+#[cfg(unix)]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// Whether the path checked and the handle opened are one file. Stable std
+/// has no file id on Windows; the handle's own `is_file` is the check.
+#[cfg(not(unix))]
+fn same_file(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
+    true
 }
 
 /// Add `file` to the store as `ref_`'s PDF.
@@ -232,7 +260,8 @@ pub async fn add_user_pdf(
     store: &dyn Store,
     store_root: &Utf8Path,
 ) -> Result<AddOutcome, AddError> {
-    let size = check_file(file)?;
+    let bytes = check_file(file)?;
+    let size = bytes.len() as u64;
     let stem = file_stem(file);
     if !force && looks_like_an_id(&stem) && !stem_names(&stem, ref_) {
         return Err(AddError::NamesAnotherWork {
@@ -287,8 +316,16 @@ pub async fn add_user_pdf(
         short_venue: prior.as_ref().and_then(|d| d.short_venue.clone()),
         origin: Some(ORIGIN_USER_SUPPLIED.to_string()),
     });
-    crate::store::blocking_section(|| write_metadata_and_pdf(store, &safekey, &m, Some(file), ctx))
-        .map_err(AddError::Store)?;
+    let staged = crate::orchestrator::stage_pdf_to_tempfile(&bytes).map_err(AddError::Store)?;
+    let staged_path = Utf8Path::from_path(staged.path()).ok_or_else(|| {
+        AddError::Store(FetchError::SourceSchema {
+            hint: "staging tempfile path is not UTF-8".to_string(),
+        })
+    })?;
+    crate::store::blocking_section(|| {
+        write_metadata_and_pdf(store, &safekey, &m, Some(staged_path), ctx)
+    })
+    .map_err(AddError::Store)?;
     Ok(AddOutcome {
         safekey: safekey.as_str().to_string(),
         path: pdf_path,
@@ -363,7 +400,7 @@ mod tests {
         let dir = Utf8Path::from_path(td.path()).expect("utf-8");
         let pdf = dir.join("ok.pdf");
         std::fs::write(&pdf, b"%PDF-1.4\n...").expect("write");
-        assert_eq!(check_file(&pdf).expect("ok"), 12);
+        assert_eq!(check_file(&pdf).expect("ok").len(), 12);
         let html = dir.join("login.pdf");
         std::fs::write(&html, b"<!doctype html>").expect("write");
         assert!(matches!(check_file(&html), Err(AddError::NotAPdf(_))));
@@ -372,6 +409,10 @@ mod tests {
             check_file(&dir.join("absent.pdf")),
             Err(AddError::Io { .. })
         ));
+        let big = dir.join("big.pdf");
+        let f = std::fs::File::create(&big).expect("create");
+        f.set_len(crate::PDF_MAX_BYTES + 1).expect("sparse");
+        assert!(matches!(check_file(&big), Err(AddError::TooLarge { .. })));
         #[cfg(unix)]
         {
             let link = dir.join("link.pdf");
