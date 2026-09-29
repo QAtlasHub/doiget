@@ -55,6 +55,9 @@ its use of these APIs polite.
   `DOIGET_ENABLE_<NAME>`, so compiling the feature in contacts nobody by itself.
   DataCite is queried by exact DOI only — never used as a search surface — and
   needs no key or account.
+- `--features metadata`: **INSPIRE-HEP** (<https://inspirehep.net>) -- only with
+  `DOIGET_ENABLE_INSPIRE`, and only for a DOI whose own copy is closed: the DOI is sent
+  to learn its arXiv id (#642).
 - `--features metadata`: **bioRxiv / medRxiv** (<https://api.biorxiv.org>) -- only with
   `DOIGET_ENABLE_BIORXIV`, and only for a DOI whose own copy is closed: the DOI is sent
   to learn whether a bioRxiv / medRxiv preprint of it exists (#640).

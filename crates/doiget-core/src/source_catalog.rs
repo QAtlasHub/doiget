@@ -152,6 +152,12 @@ pub const CATALOG: &[SourceInfo] = &[
         &["DOIGET_ENABLE_S2"],
     ),
     t2(
+        "inspire",
+        Role::OaLocation,
+        Covers::AnyDoi,
+        &["DOIGET_ENABLE_INSPIRE"],
+    ),
+    t2(
         "biorxiv",
         Role::OaLocation,
         Covers::AnyDoi,
@@ -306,6 +312,7 @@ fn enabled(name: &str, p: &CapabilityProfile) -> bool {
         "semantic_scholar" => m.semantic_scholar,
         "doaj" => m.doaj,
         "biorxiv" => m.biorxiv,
+        "inspire" => m.inspire,
         "tdm-aps" => p.tdm_aps.is_some(),
         "tdm-elsevier" => p.tdm_elsevier.is_some(),
         "tdm-springer" => p.tdm_springer.is_some(),

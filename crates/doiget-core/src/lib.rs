@@ -1174,6 +1174,9 @@ pub struct MetadataAccess {
     /// bioRxiv / medRxiv `pubs`: a closed DOI's preprint (#640); enabled by
     /// `DOIGET_ENABLE_BIORXIV`.
     pub biorxiv: bool,
+    /// INSPIRE-HEP: a closed DOI's arXiv id (#642); enabled by
+    /// `DOIGET_ENABLE_INSPIRE`.
+    pub inspire: bool,
     /// DOI **resolution** for DataCite-registered DOIs (Zenodo / figshare /
     /// Dryad / OSF / most institutional repositories); enabled by
     /// `DOIGET_ENABLE_DATACITE`.
@@ -1315,6 +1318,15 @@ pub const SOURCE_RATE_OVERRIDES: &[(&str, SourceRate)] = &[
         "biorxiv",
         SourceRate {
             min_interval_ms: 1_000,
+            max_concurrent: 1,
+        },
+    ),
+    (
+        // INSPIRE-HEP (#642): "every IP address is allowed 15 requests in a
+        // 5s window" (github.com/inspirehep/rest-api-doc, read 2026-09-29).
+        "inspire",
+        SourceRate {
+            min_interval_ms: 334,
             max_concurrent: 1,
         },
     ),
@@ -1615,6 +1627,11 @@ impl CapabilityProfile {
             ),
             biorxiv: resolve_metadata_flag(
                 "DOIGET_ENABLE_BIORXIV",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            inspire: resolve_metadata_flag(
+                "DOIGET_ENABLE_INSPIRE",
                 "metadata",
                 cfg!(feature = "metadata"),
             ),
@@ -2021,6 +2038,7 @@ mod tests {
             "DOIGET_ENABLE_S2",
             "DOIGET_ENABLE_DOAJ",
             "DOIGET_ENABLE_BIORXIV",
+            "DOIGET_ENABLE_INSPIRE",
             "DOIGET_AGREE_TDM_ELSEVIER",
             "DOIGET_KEY_ELSEVIER",
             "DOIGET_AGREE_TDM_APS",

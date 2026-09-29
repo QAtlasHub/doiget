@@ -306,6 +306,7 @@ mod tests {
             semantic_scholar: false,
             doaj: false,
             biorxiv: false,
+            inspire: false,
             datacite,
             hal: false,
             openaire: false,

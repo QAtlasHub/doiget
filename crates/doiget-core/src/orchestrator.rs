@@ -1941,7 +1941,7 @@ async fn fetch_paper_doi(
         | PdfLegStatus::Blocked {
             suggested_arxiv_id: None,
             ..
-        } => crate::preprint::find(doi, &crossref_meta, profile.metadata.openalex, ctx).await?,
+        } => crate::preprint::find(doi, &crossref_meta, &profile.metadata, ctx).await?,
         _ => None,
     };
     let (pdf_leg, pdf_bytes, arxiv_id_for_metadata, fallback_license) =
@@ -5933,6 +5933,7 @@ mod chain_tests {
             semantic_scholar: false,
             doaj: false,
             biorxiv: false,
+            inspire: false,
             datacite: false,
             hal: false,
             openaire: false,

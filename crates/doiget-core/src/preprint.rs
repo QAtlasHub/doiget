@@ -39,6 +39,8 @@ pub enum FoundBy {
     ArxivTitleSearch,
     /// bioRxiv / medRxiv's `pubs` endpoint (#640).
     BiorxivPubs,
+    /// INSPIRE-HEP's `arxiv_eprints` for the DOI (#642).
+    Inspire,
 }
 
 impl FoundBy {
@@ -50,6 +52,7 @@ impl FoundBy {
             Self::OpenAlexLocation => "openalex_location",
             Self::ArxivTitleSearch => "arxiv_title_search",
             Self::BiorxivPubs => "biorxiv_pubs",
+            Self::Inspire => "inspire",
         }
     }
 }
@@ -186,6 +189,18 @@ pub fn from_openalex_work(work: &Value) -> Option<ArxivId> {
     })
 }
 
+/// The arXiv id INSPIRE-HEP's record gives (`metadata.arxiv_eprints`), if
+/// any. Nothing else in the record is read (#642): its `documents` are files
+/// whose provenance and licence are not stated per file.
+#[must_use]
+pub fn from_inspire_record(record: &Value) -> Option<ArxivId> {
+    record
+        .pointer("/metadata/arxiv_eprints")?
+        .as_array()?
+        .iter()
+        .find_map(|e| e.get("value").and_then(Value::as_str).and_then(arxiv_id))
+}
+
 /// One arXiv search hit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Hit {
@@ -302,9 +317,10 @@ fn arxiv_id(raw: &str) -> Option<ArxivId> {
 pub async fn find(
     doi: &Doi,
     crossref_message: &Value,
-    openalex_enabled: bool,
+    enabled: &crate::MetadataAccess,
     ctx: &FetchContext,
 ) -> Result<Option<Found>, FetchError> {
+    let openalex_enabled = enabled.openalex;
     if let Some(arxiv_id) = from_crossref(crossref_message) {
         return Ok(Some(Found {
             arxiv_id,
@@ -324,6 +340,21 @@ pub async fn find(
             Ok(None) => {}
             Err(FetchError::Log(e)) => return Err(FetchError::Log(e)),
             Err(e) => tracing::info!(error = %e, "preprint lookup: OpenAlex did not answer"),
+        }
+    }
+    if enabled.inspire {
+        match inspire_record(doi, ctx).await {
+            Ok(Some(record)) => {
+                if let Some(arxiv_id) = from_inspire_record(&record) {
+                    return Ok(Some(Found {
+                        arxiv_id,
+                        found_by: FoundBy::Inspire,
+                    }));
+                }
+            }
+            Ok(None) => {}
+            Err(FetchError::Log(e)) => return Err(FetchError::Log(e)),
+            Err(e) => tracing::info!(error = %e, "preprint lookup: INSPIRE did not answer"),
         }
     }
     let title = crossref_message
@@ -374,6 +405,19 @@ async fn openalex_work(doi: &Doi, ctx: &FetchContext) -> Result<Option<Value>, F
         .map(Some)
         .map_err(|e| FetchError::SourceSchema {
             hint: format!("OpenAlex returned non-JSON: {e}"),
+        })
+}
+
+async fn inspire_record(doi: &Doi, ctx: &FetchContext) -> Result<Option<Value>, FetchError> {
+    let mut url = base("DOIGET_INSPIRE_BASE", "https://inspirehep.net")?;
+    url.set_path(&format!("/api/doi/{}", doi.as_str()));
+    let Some(body) = logged_get(doi, "inspire", url, ctx).await? else {
+        return Ok(None);
+    };
+    serde_json::from_slice(&body)
+        .map(Some)
+        .map_err(|e| FetchError::SourceSchema {
+            hint: format!("INSPIRE returned non-JSON: {e}"),
         })
 }
 
@@ -547,12 +591,14 @@ mod tests {
             let log = camino::Utf8PathBuf::try_from(td.path().join("log.jsonl")).expect("utf-8");
             std::env::set_var("DOIGET_OPENALEX_BASE", server.uri());
             std::env::set_var("DOIGET_ARXIV_BASE", server.uri());
+            std::env::set_var("DOIGET_INSPIRE_BASE", server.uri());
             let sid = "01J0000000000000000000PP62".to_string();
             (
                 FetchContext {
                     http: Arc::new(crate::http::HttpClient::new_for_tests_allow_http_multi(&[
                         ("openalex", host.as_str()),
                         ("arxiv", host.as_str()),
+                        ("inspire", host.as_str()),
                     ])),
                     rate_limiter: Arc::new(crate::rate_limiter::RateLimiter::new(
                         crate::RateLimits::HARD_CODED,
@@ -570,6 +616,7 @@ mod tests {
         fn clear() {
             std::env::remove_var("DOIGET_OPENALEX_BASE");
             std::env::remove_var("DOIGET_ARXIV_BASE");
+            std::env::remove_var("DOIGET_INSPIRE_BASE");
         }
 
         async fn server() -> MockServer {
@@ -612,10 +659,18 @@ mod tests {
             let server = server().await;
             let (ctx, _td) = ctx(&server).await;
             let doi = Doi::parse("10.1103/bbnt-brjz").unwrap();
-            let found = find(&doi, &record(TITLE), true, &ctx)
-                .await
-                .unwrap()
-                .unwrap();
+            let found = find(
+                &doi,
+                &record(TITLE),
+                &crate::MetadataAccess {
+                    openalex: true,
+                    ..Default::default()
+                },
+                &ctx,
+            )
+            .await
+            .unwrap()
+            .unwrap();
             let seen = paths(&server).await;
             let log = std::fs::read_to_string(ctx.log.path()).unwrap();
             clear();
@@ -625,16 +680,55 @@ mod tests {
             assert!(log.contains("\"source\":\"openalex\""), "logged: {log}");
         }
 
+        /// #642: an enabled INSPIRE answers from `arxiv_eprints`, before
+        /// any arXiv search.
+        #[tokio::test]
+        #[serial_test::serial]
+        async fn an_enabled_inspire_answers_before_the_arxiv_search() {
+            let server = server().await;
+            Mock::given(method("GET"))
+                .and(path("/api/doi/10.1103/bbnt-brjz"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "metadata": {"arxiv_eprints": [{"value": "2512.07923", "categories": ["cond-mat.str-el"]}]}
+                })))
+                .mount(&server)
+                .await;
+            let (ctx, _td) = ctx(&server).await;
+            let doi = Doi::parse("10.1103/bbnt-brjz").unwrap();
+            let enabled = crate::MetadataAccess {
+                inspire: true,
+                ..Default::default()
+            };
+            let found = find(&doi, &record(TITLE), &enabled, &ctx)
+                .await
+                .unwrap()
+                .unwrap();
+            let seen = paths(&server).await;
+            clear();
+            assert_eq!(found.found_by, FoundBy::Inspire);
+            assert_eq!(found.arxiv_id.as_str(), "2512.07923");
+            assert!(!seen.iter().any(|p| p == "/api/query"), "{seen:?}");
+            assert!(
+                !seen.iter().any(|p| p.starts_with("/works/")),
+                "OpenAlex off: {seen:?}"
+            );
+        }
+
         #[tokio::test]
         #[serial_test::serial]
         async fn a_disabled_openalex_is_not_asked_and_the_search_answers() {
             let server = server().await;
             let (ctx, _td) = ctx(&server).await;
             let doi = Doi::parse("10.1103/bbnt-brjz").unwrap();
-            let found = find(&doi, &record(TITLE), false, &ctx)
-                .await
-                .unwrap()
-                .unwrap();
+            let found = find(
+                &doi,
+                &record(TITLE),
+                &crate::MetadataAccess::default(),
+                &ctx,
+            )
+            .await
+            .unwrap()
+            .unwrap();
             let seen = paths(&server).await;
             let log = std::fs::read_to_string(ctx.log.path()).unwrap();
             clear();
@@ -705,14 +799,29 @@ mod tests {
             let server = server().await;
             let (ctx, _td) = ctx(&server).await;
             let doi = Doi::parse("10.1103/bbnt-brjz").unwrap();
-            let found = find(&doi, &record("Introduction"), false, &ctx)
-                .await
-                .unwrap();
+            let found = find(
+                &doi,
+                &record("Introduction"),
+                &crate::MetadataAccess::default(),
+                &ctx,
+            )
+            .await
+            .unwrap();
             let seen = paths(&server).await;
             clear();
             assert!(found.is_none());
             assert!(seen.is_empty(), "{seen:?}");
         }
+    }
+
+    /// #642: the shape of a live INSPIRE record (10.1103/PhysRevLett.116.061102).
+    #[test]
+    fn an_inspire_record_gives_its_arxiv_eprint() {
+        let rec = serde_json::json!({"metadata": {
+            "arxiv_eprints": [{"value": "1602.03837", "categories": ["gr-qc"]}],
+            "documents": [{"url": "https://inspirehep.net/files/4d19c13c"}]}});
+        assert_eq!(from_inspire_record(&rec).unwrap().as_str(), "1602.03837");
+        assert!(from_inspire_record(&serde_json::json!({"metadata": {}})).is_none());
     }
 
     /// #640: shapes from a live Crossref sample and a live `pubs` answer.
