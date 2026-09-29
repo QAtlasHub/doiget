@@ -41,6 +41,8 @@ This is enforced structurally rather than only by documentation:
   | `oa_publisher_allowlist` | ~20 publisher and repository patterns (`*.springer.com`, `*.nature.com`, `*.wiley.com`, `*.elsevier.com`, `*.sciencedirect.com`, `*.plos.org`, `*.mdpi.com`, `*.frontiersin.org`, `*.biorxiv.org`, `*.medrxiv.org`, `europepmc.org`, `*.nih.gov`, `*.aps.org`, `scipost.org`, …) | following the OA PDF URL an index reported; the host is wherever the OA copy lives (ADR-0027) |
   | `discovery_allowlist` | `api.openalex.org` | `doiget search` discovery (ADR-0031 D4), **always-on, no env gate** |
   | `fulltext_allowlist` | `ar5iv.labs.arxiv.org` | `doiget text` structured full text (ADR-0032), **always-on** |
+  | `pubmed_allowlist` (`ncbi`) | `eutils.ncbi.nlm.nih.gov` | turning a PMID / PMCID the caller names into its DOI -- one `esummary` request, 3 a second at most, never content (ADR-0061) |
+  | `software_allowlist` (`github`, `github-raw`) | `api.github.com`, `raw.githubusercontent.com` | `doiget cite` / `verify` on a GitHub repository or release URL the caller names -- the release and its `CITATION.cff`, never a fetch (ADR-0058) |
 
   This list read "Crossref, Unpaywall, arXiv" until #494. **OpenAlex was absent
   entirely** — a third-party service, not an arXiv subdomain, reached by the shipped
@@ -61,8 +63,9 @@ This is enforced structurally rather than only by documentation:
   user-provided API key. Both must be present, otherwise the source is unavailable at
   runtime. See [`CAPABILITY.md`](CAPABILITY.md).
 - A hard-coded rate limit (5 concurrent fetches, 5/second — stricter still for
-  sources whose terms say so, e.g. arXiv at 1 request / 3 s) prevents bulk-scraping
-  patterns and cannot be overridden by configuration.
+  sources whose terms say so, e.g. arXiv at 1 request / 3 s) bounds how fast
+  doiget asks, and repeat suppression bounds how often it asks the same thing
+  (§6a.5). Neither can be overridden by configuration.
 
 ## 2a. Access ceiling (binding constraint)
 
@@ -86,6 +89,26 @@ and - only when the content leg was already blocked - CORE's `downloadUrl`, HAL'
 behind its own `DOIGET_ENABLE_*` flag.
 *Enforced by:* `orchestrator::optional_source_oa_url`, which dispatches to one
 per-source extractor and returns `None` for any other source name.
+
+**(a-ii) The arXiv preprint of the requested DOI, as a source named it.** When the
+content leg found nothing -- no OA URL, or a blocked one -- an arXiv id reported for
+*that* DOI is fetched at arXiv's documented `/pdf/<id>` (kind (b)'s endpoint, for an id
+a source reported rather than one the user typed). The sources that may name it:
+Unpaywall's `oa_locations` (#325); Crossref's `relation.has-preprint`, from the record
+the fetch already holds; OpenAlex `locations[]`, only when `DOIGET_ENABLE_OPENALEX` is
+set; INSPIRE-HEP's `arxiv_eprints`, only when `DOIGET_ENABLE_INSPIRE` is set (ADR-0064);
+NASA ADS's `identifier`, only with the user's own `DOIGET_ADS_TOKEN` (ADR-0065);
+and arXiv's own API search, accepted only for a hit with the record's title
+(letters and digits, case-folded), the first author among its authors, and no
+different published DOI (ADR-0062). If none names an arXiv preprint, a **non-arXiv**
+preprint DOI may be followed instead (#640, ADR-0063): one Crossref's
+`relation.has-preprint` names, or -- only with `DOIGET_ENABLE_BIORXIV` -- one
+bioRxiv / medRxiv's `pubs` endpoint names. That DOI is fetched from the location
+*Unpaywall reports for it* -- kind (a), on the ordinary allowlists, never a constructed
+URL. A default fetch contacts no host it did not before
+-- Crossref and arXiv are Tier 1 -- and the envelope names which source found it
+(`found_by`).
+*Enforced by:* `preprint::find` and `orchestrator::try_arxiv_preprint_fallback`.
 
 **(a-i) Crossref `link[]` is NOT one of them, and this was measured.** #517 asked
 whether the fetch path should carry the publisher link Crossref reports, so that a
@@ -153,8 +176,14 @@ was this document updated to say so:
 - **#445 / ADR-0029** — when the OA chain and the arXiv preprint fallback are both
   exhausted, the enabled optional sources are asked whether anyone else holds a copy,
   and the URL they report is tried.
+- **ADR-0062** — when Unpaywall names no arXiv preprint, Crossref's relation, an enabled
+  OpenAlex, or an exact-title arXiv search may; the preprint is then fetched as #325
+  already did. Recorded as (a-ii) above.
+- **#640 / ADR-0063** — failing an arXiv preprint, a bioRxiv / medRxiv / other preprint
+  DOI named by Crossref (or by bioRxiv's `pubs`, if enabled) is fetched through its own
+  Unpaywall-reported location. Also (a-ii).
 
-Neither is improper. But the argument for them is **not** "we never exceed Unpaywall" —
+None is improper. But the argument for them is **not** "we never exceed Unpaywall" —
 that argument is simply false now. The real argument is the one written above: every
 leg is a publisher-sanctioned API or an index the user switched on, reached at a host
 on the allowlist, under the user's own credential where one is required, with the
@@ -307,6 +336,30 @@ them requires changing source files that are gated by branch protection.
    `rate_limiter.rs::tests` — including one that fails the build if a table
    entry is looser than the global cap and would therefore be silently
    ignored.
+
+   **Rate is not persistence** (#507, ADR-0057). A cap on requests per second
+   does not bound how often the *same* request is made: an agent retrying 500
+   refused DOIs ten times each sends 5,000 requests without exceeding 5/s. So
+   within a session (one `doiget serve` process, or one CLI run), a ref already
+   answered with something a retry cannot change is not asked again:
+
+   - a `terminal` or `needs_config` answer (ADR-0055) is replayed for 10 minutes,
+     as `ok:false` with `replayed: true` and the original code, without a
+     request;
+   - a `retry_after` answer is let through after 30 s, and refused before that
+     with `RATE_LIMITED` and the true remaining time.
+
+   The answers come from the provenance log's `session_end` rows as they are
+   written (§6 of `PROVENANCE_LOG.md`). A change to `config.toml` lifts a replay,
+   because it is the one input that can change within a session. The window and
+   the gap are library constants, like `RateLimits`: **nothing in configuration
+   turns suppression off.** A caller that needs a fresh answer asks for it per
+   request (`force` on the MCP tools, `--refetch` on the CLI). That request goes
+   out, and a `repeat_forced` log row records the override. *Enforced by:*
+   `doiget_core::repeat` (constants; `observe` fed only by durably written
+   rows), `orchestrator::fetch_paper_with` (checked before any network), and
+   the tests `a_terminal_answer_is_replayed_and_force_asks_again_507` and
+   `a_repeated_terminal_answer_is_a_replay_until_forced`.
 
 ### 6b. Policy commitments (3)
 

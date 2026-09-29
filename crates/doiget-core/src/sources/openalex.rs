@@ -312,13 +312,67 @@ pub(crate) fn describe_locations(record: &serde_json::Value) -> Option<(usize, S
     } else {
         format!(" ({})", named.join("; "))
     };
+    // Name the locations that are a real deposit whose URL cannot be
+    // followed, and say why: the #547 record's Strathprints location is an
+    // author-listing page with a stray `>`, which is a different next step
+    // ("search that repository for the title") from "nobody has a copy".
+    let unusable: Vec<String> = locations
+        .iter()
+        .filter_map(|loc| {
+            let url = loc
+                .get("landing_page_url")
+                .and_then(serde_json::Value::as_str)?;
+            let why = landing_page_problem(url)?;
+            let host = loc
+                .get("source")
+                .and_then(|s| s.get("display_name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("a repository");
+            Some(format!(
+                "{host}'s URL {url} {why}; search that repository for the title"
+            ))
+        })
+        .collect();
+    let tail = if unusable.is_empty() {
+        "A location without a PDF URL may still be a real deposit whose landing page is not an item page".to_string()
+    } else {
+        unusable.join(". ")
+    };
     Some((
         oa,
         format!(
-        "openalex named {} location(s){hosts}: {oa} flagged open access, {with_pdf} with a PDF URL. A location without a PDF URL may still be a real deposit whose landing page is not an item page",
+            "openalex named {} location(s){hosts}: {oa} flagged open access, {with_pdf} with a PDF URL. {tail}",
             locations.len()
         ),
     ))
+}
+
+/// Why a location's landing page cannot be followed to an item, if it
+/// visibly cannot: an EPrints / DSpace listing or search page rather than a
+/// record (their `view/...`, `browse` and `cgi/search` templates only -- a
+/// bare `authors/` segment is as often an item's own path), or a URL OpenAlex stored with a trailing character that is not
+/// part of it. `None` means it looks like an item (or a DOI link).
+fn landing_page_problem(url: &str) -> Option<&'static str> {
+    let trimmed = url.trim_end_matches(['>', '"', '\'', ')', ']']);
+    let malformed = trimmed.len() != url.len();
+    let path = trimmed.split_once("://").map_or(trimmed, |(_, rest)| rest);
+    let path = path.split_once('/').map_or("", |(_, p)| p).to_lowercase();
+    let listing = [
+        "view/author/",
+        "view/people/",
+        "view/year/",
+        "view/divisions/",
+        "browse",
+        "cgi/search",
+    ]
+    .iter()
+    .any(|m| path.starts_with(m) || path.contains(&format!("/{m}")));
+    match (malformed, listing) {
+        (true, true) => Some("is malformed (a stray trailing character) and, even trimmed, a listing page rather than an item"),
+        (true, false) => Some("is malformed (a stray trailing character); trimmed, it may be the item"),
+        (false, true) => Some("is a listing page, not an item page"),
+        (false, false) => None,
+    }
 }
 
 fn truncate_for_hint(body: &[u8]) -> String {
@@ -384,6 +438,38 @@ mod tests {
             d.contains("0 with a PDF URL"),
             "and why none was followed: {d}"
         );
+        assert!(
+            d.contains("strathprints.strath.ac.uk/view/author/70486.html is a listing page"),
+            "names WHICH location cannot be followed and why: {d}"
+        );
+    }
+
+    /// OpenAlex stored the #547 URL with a stray `>`; that is named as such,
+    /// and a DOI link or an item URL is not called a problem.
+    #[test]
+    fn a_landing_page_that_cannot_be_followed_is_told_apart_from_an_item() {
+        use super::landing_page_problem;
+        assert!(
+            landing_page_problem("https://strathprints.strath.ac.uk/view/author/70486.html>")
+                .is_some_and(|w| w.contains("malformed"))
+        );
+        assert!(
+            landing_page_problem("https://eprints.example.ac.uk/cgi/search/simple?q=x").is_some()
+        );
+        assert!(landing_page_problem("https://strathprints.strath.ac.uk/85235/").is_none());
+        // A stray character on an item URL: malformed, but not a listing.
+        assert!(
+            landing_page_problem("https://strathprints.strath.ac.uk/85235/>").is_some_and(
+                |w| w.contains("malformed") && !w.contains("listing page rather than")
+            )
+        );
+        // An item that happens to live under an `authors/` path is an item.
+        assert!(
+            landing_page_problem("https://repo.example.edu/authors/smith/2023-paper-title")
+                .is_none()
+        );
+        assert!(landing_page_problem("https://doi.org/10.1109/tsp.2023.3269664").is_none());
+        assert!(landing_page_problem("https://hal.science/hal-01234567").is_none());
     }
 
     /// The control from the report: a proper item PDF URL at the same
@@ -495,6 +581,9 @@ mod tests {
             openalex: true,
             semantic_scholar: false,
             doaj: false,
+            biorxiv: false,
+            inspire: false,
+            ads: false,
             datacite: false,
             hal: false,
             openaire: false,

@@ -8,6 +8,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `doiget-core` is the only crate with strict semver guarantees during the 0.x line; CLI
 flag changes and `doiget-mcp` tool spec changes will be called out explicitly here.
 
+## [0.9.0] - 2026-09-29
+
+The 0.9.0 cycle (betas 0.9.0-beta.1 … beta.30), plus four review rounds of its
+promotion (#649). It adds subcommands and MCP inputs, so this is a minor bump. Every
+item links its issue, and the ADRs it names are in `docs/DECISIONS/`. **For scripts:**
+the MSRV is now 1.88, and `doiget add`'s exit codes changed (see Changed and Fixed).
+
+### Added
+
+- **[fetch]** A closed DOI now reaches its **preprint** when one exists, not only when
+  Unpaywall names it (#636, ADR-0062). In order, stopping at the first answer: Crossref
+  `relation.has-preprint` (no request); OpenAlex `locations[]` (opt-in); INSPIRE-HEP
+  `arxiv_eprints` (opt-in, #642, ADR-0064); NASA ADS `identifier`, on your own
+  `DOIGET_ADS_TOKEN` (#644, ADR-0065); and an exact-title, first-author arXiv search.
+  A non-arXiv preprint (bioRxiv, medRxiv, Research Square, OSF, …) named by Crossref, or
+  by bioRxiv's `pubs` with `DOIGET_ENABLE_BIORXIV`, is fetched through its own DOI's
+  Unpaywall location (#640, ADR-0063). The envelope says `preprint_fallback` /
+  `preprint_doi_fallback` and which finder answered (`found_by`). Measured: the
+  maintainer's own `10.1103/bbnt-brjz` now yields arXiv:2512.07923.
+- **[ref]** **PMID / PMCID** input (`pmid:N`, `PMCN`, PubMed / PMC URLs) resolves to the
+  DOI PubMed lists for it, through NCBI E-utilities at NCBI's 3 requests/second (#500,
+  ADR-0061). `fetch`, `cite`, `batch`, `verify`, `missing`, and over MCP
+  `doiget_fetch_paper`, `doiget_resolve_paper`, `doiget_metadata_only`,
+  `doiget_batch_fetch` and `doiget_batch_from_bibliography` (#638). A record with no DOI
+  is `NOT_IMPLEMENTED`; no record is `NOT_FOUND`. The store identity stays the DOI.
+- **[cite]** `doiget cite <GitHub release URL>` renders **`@software`** from the release
+  and the repository's `CITATION.cff`; a Zenodo version DOI is cited by its concept DOI
+  (`--zenodo-version` keeps the version); `verify` checks a software entry still resolves
+  (#614, ADR-0058).
+- **[cite]** Citekey templates, `--key`, and a `file` field pointing at the local PDF
+  (#610); `--journal-abbrev iso4` from Crossref's own `short-container-title` (#611).
+- **[cli]** `doiget missing <bibliography>`: which cited works have no local PDF, and
+  where to get each (#607). `doiget coverage <doi>` / `doiget sources`: which source, if
+  any, can deliver a DOI before fetching (#605). `doiget add`: a hand-downloaded PDF into
+  the store, recorded as `origin = "user-supplied"` (#606).
+- **[fetch]** **Repeat suppression**: a session is not re-asked what a retry cannot
+  change; `force` (MCP) / `--refetch` (CLI) asks anyway and is logged (#507, ADR-0057).
+- **[health]** `doiget_health` / `doiget capabilities` say which binary is answering, how
+  it was installed and how to update it, with no network call (#594).
+- **[dist]** `cargo binstall doiget-cli`, and a Nix flake that builds (Linux and macOS
+  in CI) (#501).
+- **[allowlist]** J-STAGE joins the opt-in `trust_oa_registries` set (#646, ADR-0066).
+- **[test]** A nightly **live suite** (`.github/workflows/live.yml`, `--features
+  live-tests`): the real binary against the real services, one ref per route, asserting
+  which route produced each outcome (#462).
+
+### Changed
+
+- **[fetch]** An enabled OpenAlex is asked when the record is closed, and names the
+  repository deposit it cannot follow (#547).
+- **[metadata]** Titles with JATS / MathML markup are reduced to plain text everywhere,
+  not only in BibTeX (#609); replacement characters (U+FFFD) are flagged and repaired
+  from an enabled source (#608).
+- **[mcp]** `doiget_capability_profile`'s `metadata_sources` lists every enabled opt-in
+  source, not three of them (#641 review).
+- **[core]** Values that pass a check now keep a type that says so. All four are covered
+  by `docs/PUBLIC_API.md` §1a: these modules are public for the binaries and not
+  semver-locked. The wire values are unchanged (#649 review).
+  - `PdfLegStatus::{PreprintFallback, PreprintDoiFallback}.found_by` is a
+    `preprint::FoundBy`, with a new `Unpaywall` variant.
+  - `PreprintDoiFallback.preprint_doi` is a `Doi`.
+  - A `PubmedId` holds `pubmed::Digits`, which only its parsers make.
+  - `GithubRef`'s fields are private behind getters, so its owner, repository and tag
+    have always passed `parse`.
+- **[msrv]** The declared MSRV rises from 1.86 to **1.88**, which rmcp 3.x already
+  required. The `msrv` CI job never noticed, because `rust-toolchain.toml` overrode
+  its pinned toolchain with stable; it now pins with `RUSTUP_TOOLCHAIN` (#649 review).
+
+### Fixed
+
+- **[store]** Store calls no longer hold a tokio worker (#590); one base-override table
+  for every test client (#587); an empty or unexpanded `--store-root` is refused (#613).
+- **[cli]** Windows' 1 MiB main-thread stack overflowed in debug builds; the CLI runs on
+  an 8 MiB thread (#611).
+- **[cite]** `doiget cite` of a DOI registered with **DataCite** (Zenodo, figshare, …)
+  never asked DataCite. Its resolve path went from Crossref straight to Unpaywall, so
+  #614's concept-DOI default and `--zenodo-version` could not run. An enabled DataCite
+  (`DOIGET_ENABLE_DATACITE`) is now asked when Crossref has no record. The same fix
+  applies to `doiget_metadata_only` / `doiget_resolve_paper` (#649 review).
+- **[add] (breaking for scripts)** `doiget add` no longer takes an unreadable store
+  entry for "no entry" and writes over it; it stops and names the entry. Its exit codes
+  follow `docs/ERRORS.md` §4: a failed resolve exits as `fetch` would, and 4 is the
+  store's I/O failure. They had been swapped. `add --from-dir` now names a directory
+  entry it could not read, or one whose name is not UTF-8, instead of leaving it out of
+  the plan unseen (#649 review).
+- **[core]** Repeat suppression drops entries past every window once the index has
+  doubled since its last sweep, so a long `doiget serve` session no longer keeps one per
+  refused ref forever, and a stream of new refusals is not a scan each. Its
+  `config.toml` read runs as a blocking section. The U+FFFD repair match is bounded:
+  2,000 characters, and a length the losses cannot explain is refused before
+  aligning (#649 review).
+- **[batch]** A DOI listed twice in one `doiget batch` run, both copies in the same
+  concurrent window, was fetched twice: repeat suppression records an answer only once
+  it lands. Entries for the same ref now run one after the other, so the second is a
+  replay, as in the MCP batch tools (#649 review).
+- **[cite]** A GitHub tag with `..`, `%`, `?`, `#` or whitespace is refused, whether it
+  came from the URL or from GitHub's latest-release answer, so it cannot leave the
+  `repos/{owner}/{repo}` API path (#649 review).
+
+### Docs / decisions
+
+- BiblioFetch.jl coexistence is retired: STORE.md and SAFEKEY.md are doiget's own specs;
+  nothing on disk changed (ADR-0060).
+- Entitled-network publisher sources: the shape, decided before any source (#593, #603,
+  ADR-0059 -- design only).
+- LEGAL.md §2 and §2a record every new host and candidate-URL kind above.
+
 ## [0.8.13] - 2026-09-01
 
 ### Fixed

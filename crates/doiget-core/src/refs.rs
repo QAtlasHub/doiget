@@ -14,10 +14,12 @@
 //!   (ADR-0030 D2). One `@entrytype{KEY, …}` per entry; the `doi`
 //!   field is preferred, falling back to an arXiv `eprint`.
 //!
-//! Identifier-pick priority per ADR-0030 D3: `doi` > `arxiv` > `pmid`
-//! (PMID adapter parking until the `Ref::Pmid` variant lands in a
-//! later slice; current code carries the rule through without
-//! producing a `Pmid` ref).
+//! Identifier-pick priority per ADR-0030 D3: `doi` > `arxiv` > `pmid`.
+//! A PMID / PMCID entry is reported here as `UnsupportedIdentifier` and
+//! turned into the DOI PubMed lists for it by
+//! [`crate::pubmed::resolve_entries`] (#500, ADR-0061) -- a request, so
+//! not in this pure parser. There is no `Ref::Pmid`: the DOI is the
+//! identity.
 //!
 //! Parse-error policy per ADR-0030 D5: a single entry's failure is
 //! captured per-entry and does NOT abort the whole batch. The caller
@@ -67,7 +69,8 @@ pub enum ParseError {
         entry_key: Option<String>,
     },
     /// The entry DOES carry an identifier, and it is one doiget recognises
-    /// and cannot resolve yet (#500).
+    /// and resolves only with a request: a PMID / PMCID, through the DOI
+    /// PubMed lists for it (#500, `crate::pubmed::resolve_entries`).
     ///
     /// Distinct from [`Self::NoIdentifier`] because the two send a reader in
     /// opposite directions. "entry has no DOI / arXiv id" is accurate about
@@ -79,12 +82,22 @@ pub enum ParseError {
     /// Surfaces as `NOT_IMPLEMENTED` rather than `INVALID_REF`: the input is
     /// valid and the support is absent, and the two carry different advice --
     /// "wait for a release" versus "correct your input" (ADR-0055).
-    #[error("entry {entry_key:?} is identified only by {kind} {value:?}, which doiget cannot resolve yet (issue #500) -- it is NOT missing an identifier")]
+    #[error("entry {entry_key:?} is identified only by {kind} {value:?}, which doiget resolves through the DOI PubMed lists for it -- a request this run did not make; it is NOT missing an identifier")]
     UnsupportedIdentifier {
         /// Human-facing name of the identifier class, e.g. `"PMID"`.
         kind: &'static str,
         /// The identifier as written in the entry.
         value: String,
+        /// The source bibliography's citation key, when known.
+        entry_key: Option<String>,
+    },
+    /// The entry has no DOI or arXiv id but is software on GitHub: its
+    /// `url` is a repository or release (#614). `verify` checks it still
+    /// resolves, and `doiget cite <url>` renders it as `@software`.
+    #[error("entry {entry_key:?} is software at {url}, with no DOI / arXiv id; `doiget cite {url}` cites it")]
+    SoftwareUrl {
+        /// The GitHub URL as written in the entry.
+        url: String,
         /// The source bibliography's citation key, when known.
         entry_key: Option<String>,
     },
@@ -136,7 +149,7 @@ pub enum ParseError {
 /// whitespace into user-facing output before anything asserted the text.
 #[must_use]
 pub fn unsupported_identifier_claim(kind: &str, value: &str) -> String {
-    format!("entry is identified only by {kind} {value:?}, which doiget cannot resolve yet (issue #500); it is NOT missing an identifier")
+    format!("entry is identified only by {kind} {value:?}, which doiget resolves through the DOI PubMed lists for it (#500) -- a request this run did not make (--dry-run / --offline); it is NOT missing an identifier")
 }
 
 /// Input-shape discriminator per ADR-0030 D4.
@@ -265,9 +278,9 @@ pub fn parse_plain_refs(text: &str) -> Vec<Result<ParsedEntry, ParseError>> {
 ///    sometimes emits `doi` lowercase — we accept both).
 /// 2. `archivePrefix == "arXiv"` (case-insensitive) + `eprint`
 ///    (or `note: "arXiv:..."` shape Zotero emits).
-/// 3. (PMID parking — `Ref::Pmid` not yet defined; PMIDs in CSL-JSON
-///    are recorded as parse failures with `NoIdentifier` until the
-///    variant lands.)
+/// 3. A PMID / PMCID (`PMID`, `PMCID`, or Zotero's `note`) is reported as
+///    `UnsupportedIdentifier`, for [`crate::pubmed::resolve_entries`] to
+///    turn into its DOI (#500, ADR-0061).
 ///
 /// `entry_key` is the `id` field verbatim.
 pub fn parse_csl_json(text: &str) -> Vec<Result<ParsedEntry, ParseError>> {
@@ -391,6 +404,16 @@ fn parse_csl_entry(
         return Err(ParseError::UnsupportedIdentifier {
             kind,
             value,
+            entry_key,
+        });
+    }
+    if let Some(url) = entry
+        .get("URL")
+        .and_then(|v| v.as_str())
+        .filter(|u| crate::software::GithubRef::parse(u).is_some())
+    {
+        return Err(ParseError::SoftwareUrl {
+            url: url.trim().to_string(),
             entry_key,
         });
     }
@@ -524,6 +547,13 @@ fn parse_bibtex_entry(
             value,
             entry_key,
         });
+    }
+    if let Some(url) = entry
+        .get("url")
+        .map(|v| v.format_verbatim().trim().to_string())
+        .filter(|u| crate::software::GithubRef::parse(u).is_some())
+    {
+        return Err(ParseError::SoftwareUrl { url, entry_key });
     }
     Err(ParseError::NoIdentifier { entry_key })
 }
@@ -1147,5 +1177,30 @@ doi:10.1234/foo
         // The `entry_key` prefix belongs to `Display`, not here -- callers
         // carry it in a field of its own and would say it twice.
         assert!(!msg.starts_with("entry {"), "no entry_key prefix: {msg}");
+    }
+
+    /// #614: an entry with no DOI or arXiv id whose url is a GitHub
+    /// repository or release is software, in both formats; any other URL
+    /// leaves the entry id-less.
+    #[test]
+    fn a_github_url_makes_an_id_less_entry_software() {
+        let bib = parse_bibtex(
+            "@software{hf, title={HFDMRG}, url={https://github.com/srwhite59/HFDMRG.jl/releases/tag/v0.1.0}}\n\
+             @misc{web, title={A page}, url={https://example.org/page}}\n",
+        );
+        assert_eq!(
+            bib[0],
+            Err(ParseError::SoftwareUrl {
+                url: "https://github.com/srwhite59/HFDMRG.jl/releases/tag/v0.1.0".into(),
+                entry_key: Some("hf".into()),
+            })
+        );
+        assert!(matches!(bib[1], Err(ParseError::NoIdentifier { .. })));
+        let csl = parse_csl_json(
+            r#"[{"id":"hf","type":"software","title":"HFDMRG","URL":"https://github.com/srwhite59/HFDMRG.jl"}]"#,
+        );
+        assert!(
+            matches!(&csl[0], Err(ParseError::SoftwareUrl { url, .. }) if url.ends_with("HFDMRG.jl"))
+        );
     }
 }

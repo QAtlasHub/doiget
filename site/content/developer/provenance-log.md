@@ -50,14 +50,14 @@ in all timestamps.
 |---|---|---|---|
 | `ts` | RFC3339 UTC, millisecond precision | yes | |
 | `ts_seq` | `u64` | yes | Per-session monotonic sequence number. |
-| `event` | enum | yes | `session_start`, `capability_resolved`, `resolve`, `fetch`, `store_write`, `session_end` |
-| `ref` | string | event-dependent | DOI or arXiv id (validated; no log injection). |
-| `source` | enum | event-dependent | `crossref`/`unpaywall`/`arxiv`/`openalex`/`s2`/`doaj`/`tdm-elsevier`/`tdm-aps`/`tdm-springer` |
+| `event` | enum | yes | `session_start`, `capability_resolved`, `resolve`, `fetch`, `store_write`, `session_end`, `repeat_forced` (a request sent with `force` / `--refetch` that repeat suppression would otherwise have replayed; `error_code` is the answer it overrode -- #507, ADR-0057) |
+| `ref` | string | event-dependent | DOI or arXiv id (validated; no log injection). On a `fetch` row with `source` `github` / `github-raw` (a software citation, #614 / ADR-0058) it is the GitHub repository or release URL, and `canonical_digest` is `null`: the URL is not a ref and nothing is stored under it. On a `resolve` row with `source` `ncbi` (a PubMed id turned into its DOI, #500 / ADR-0061) it is the PubMed id as `PMID <digits>` or `PMCID PMC<digits>`, again with a `null` digest; the lookup's own `session_start` / `session_end` carry `source` `ncbi` and no `ref`. |
+| `source` | string | event-dependent | The source key, as `docs/SOURCES.md` names it: a fetch source (`crossref`, `unpaywall`, `arxiv`, `openalex`, `s2`, `doaj`, `tdm-elsevier`, `tdm-aps`, `tdm-springer`, `tdm-ieee`, ...) or a lookup that serves no content (`ncbi` #500, `github` / `github-raw` #614, `biorxiv` #640, `inspire` #642, `ads` #644). |
 | `result` | enum | yes | `ok` / `err` / `denied` |
 | `license` | string | event=fetch ok | OA license string, or `"unknown"` |
 | `size_bytes` | `u64` | event=fetch ok | |
 | `store_path` | string | event=fetch ok | Relative to store root. |
-| `capability` | enum | yes | `oa` / `metadata` / `tdm-elsevier` / `tdm-aps` / `tdm-springer` |
+| `capability` | enum | yes | `oa` / `metadata` / `tdm-elsevier` / `tdm-aps` / `tdm-springer` / `tdm-ieee` / `user-supplied` (a `store_write` for a PDF added with `doiget add`, #606 -- fetched under no capability; the original file path is never logged) |
 | `error_code` | enum (`docs/ERRORS.md` §3) | `result=err` | The closed-set code for this row's failure. **Which code depends on the layer, deliberately:** a failed `fetch` leg records the *transport* mechanism (a policy-blocked OA leg is `NETWORK_ERROR` — see `ERRORS.md` §6.1), while a `session_end` row records the code the CALLER was given, after any reclassification. So the two rows for one blocked fetch legitimately differ, and each is true about its own layer. `null` on `result=ok` rows, and on a batch `session_end`, which spans many refs and has no single code (#507). |
 | `session_id` | ULID (26 chars) | yes | One per process invocation. |
 | `schema_version` | string | yes | Always the literal `"v2"` for rows written by current builds (ADR-0024). v1 rows (pre-Slice-4) lack this field; the migration tool in §"Schema migration" below brings them onto the v2 shape. |

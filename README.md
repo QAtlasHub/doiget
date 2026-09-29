@@ -1,7 +1,6 @@
 # doiget
 
 > A single-binary CLI + stdio MCP server that turns DOIs and arXiv ids into local PDFs through official, OA-first APIs.
-> Designed as the **agent-facing companion** to [BiblioFetch.jl](https://github.com/sotashimozono/BiblioFetch.jl).
 
 [![crates.io](https://img.shields.io/crates/v/doiget-core.svg)](https://crates.io/crates/doiget-core)
 [![downloads](https://img.shields.io/crates/d/doiget-core.svg)](https://crates.io/crates/doiget-core)
@@ -12,8 +11,8 @@
 [![issues](https://img.shields.io/github/issues/QAtlasHub/doiget)](https://github.com/QAtlasHub/doiget/issues)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[![docs (stable)](https://img.shields.io/badge/docs-stable-blue)](https://codes.sota-shimozono.com/doiget/)
-[![docs (dev/next)](https://img.shields.io/badge/docs-dev%20%28next%29-orange)](https://codes.sota-shimozono.com/doiget/dev/)
+[![docs (stable)](https://img.shields.io/badge/docs-stable-blue)](https://qatlashub.github.io/doiget/)
+[![docs (dev/next)](https://img.shields.io/badge/docs-dev%20%28next%29-orange)](https://qatlashub.github.io/doiget/dev/)
 [![API (docs.rs)](https://img.shields.io/badge/API-docs.rs-blue)](https://docs.rs/doiget-core)
 
 **Docs:** stable = the Zola site (built from `main`); dev = rustdoc built from `next`; API = `docs.rs` (latest published release).
@@ -53,7 +52,7 @@ See [docs/LEGAL.md](docs/LEGAL.md) and [docs/SCOPE.md](docs/SCOPE.md).
 | Contributor | [CONTRIBUTING.md](CONTRIBUTING.md) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) → [docs/DECISIONS/](docs/DECISIONS/) |
 | Publisher legal team | [docs/LEGAL.md](docs/LEGAL.md) + [CONTACT.md](CONTACT.md) |
 | Security researcher | [docs/SECURITY.md](docs/SECURITY.md) + [docs/PROVENANCE_LOG.md](docs/PROVENANCE_LOG.md) + [docs/CAPABILITY.md](docs/CAPABILITY.md) |
-| BiblioFetch.jl user | [docs/MIGRATION.md](docs/MIGRATION.md) + [docs/STORE.md](docs/STORE.md) + [docs/SAFEKEY.md](docs/SAFEKEY.md) |
+| Moving a BiblioFetch.jl store | [docs/MIGRATION.md](docs/MIGRATION.md) + [docs/STORE.md](docs/STORE.md) + [docs/SAFEKEY.md](docs/SAFEKEY.md) |
 
 Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 Threat model: [docs/SECURITY.md](docs/SECURITY.md)
@@ -87,6 +86,16 @@ Installs to `~/.local/bin` (override with `DOIGET_INSTALL_DIR`); pin a version w
 ```powershell
 irm https://raw.githubusercontent.com/QAtlasHub/doiget/main/scripts/install.ps1 | iex
 ```
+
+**Upgrading.** Re-run the installer. It says which version it replaced and
+leaves a `doiget.install.json` beside the binary. doiget never checks for
+updates by itself (ADR-0015). To see which binary is actually running,
+including the one an MCP config names by path, use `doiget capabilities`
+(`build`) or the `doiget_health` tool. Both report the version, the channel,
+the install method and that method's update command. `doiget version --check`
+compares with the latest release when you ask. A Claude Desktop `.mcpb`
+extension is never updated automatically; install the new `.mcpb` from the
+latest release.
 
 ### From crates.io (Rust toolchain — compiles from source)
 
@@ -173,12 +182,13 @@ why it is now submittable.
 | Shell / PowerShell installer | shipping |
 | GitHub Release binaries (signed, SBOM) | shipping |
 | `cargo install doiget-cli` | shipping (needs a C linker) |
+| `cargo binstall doiget-cli` | metadata ships from 0.9.0: fetches the release binary instead of compiling (Linux x86_64, macOS, Windows x86_64). It does **not** check the `.sha256` sidecars or cosign bundles; the shell installers do |
 | `.mcpb` Claude Desktop extension | shipping since 0.8.4 |
 | MCP Registry | listed |
 | npm / npx | `doiget-cli` (installs the `doiget` command); see below for what is published |
 | Claude Code plugin | self-hosted marketplace, as above |
 | Homebrew | `Formula/doiget.rb` in this repo; see above for the tap line |
-| Nix | `flake.nix` exposes `packages.default` / `packages.doiget`, not only a dev shell. The outputs exist; `nix profile install` has not been exercised |
+| Nix | `nix profile install github:QAtlasHub/doiget` builds `packages.doiget` from source. The flake could not build before 0.9.0: it pinned Rust 1.86 below what the dependencies require, and its version string was stale. The `nix` workflow now builds it when the flake or lockfile changes, and weekly |
 | `.deb` | **not built** — low value; most Linux users take the binary or Nix |
 | Docker | **not planned** — see below |
 
@@ -243,20 +253,13 @@ Institutional TDM access (Springer OA, APS Harvest, Elsevier ScienceDirect TDM) 
 the default published binary; it must be opted in at build time per publisher.
 See [docs/SOURCES.md](docs/SOURCES.md).
 
-## Coexistence with BiblioFetch.jl
+## Stores written by BiblioFetch.jl
 
-doiget and BiblioFetch.jl share the same on-disk store format (TOML metadata + PDF files
-under a configurable store root). doiget defaults to `./papers` (under the current working
-directory; ADR-0036), BiblioFetch.jl to `~/papers/`; point both at the same root (e.g.
-`DOIGET_STORE_ROOT=~/papers`) to share one store. The shared schema, locking protocol, and
-atomic write contract are
-specified in [docs/STORE.md](docs/STORE.md). Reference test vectors for the shared safekey
-algorithm are in [docs/SAFEKEY.md](docs/SAFEKEY.md).
-
-| Tool | Best for |
-|---|---|
-| BiblioFetch.jl | Julia REPL, research vault, citation graph exploration |
-| doiget | Agents / MCP hosts, batch operations, scripted pipelines, container deployments |
+doiget's store format (TOML metadata + PDF files under a configurable store root,
+[docs/STORE.md](docs/STORE.md)) began as a format shared with BiblioFetch.jl. That
+contract is retired (ADR-0060), and the format did not change: point doiget at an
+existing store (`DOIGET_STORE_ROOT=~/papers`) and it reads it, preserving the
+`[bibliofetch]` table it does not own. doiget defaults to `./papers` (ADR-0036).
 
 ## License
 

@@ -78,6 +78,18 @@ pub struct MetadataOnlyOutcome {
     /// parsed Atom-feed JSON (see
     /// `crate::sources::arxiv::parse_atom_feed`).
     pub metadata: Value,
+    /// Quality flags on what [`metadata_only_to_store`] wrote, e.g.
+    /// `replacement_char:venue` for a field that still carries a U+FFFD
+    /// (#608). `metadata` above stays the resolver's payload as received, so
+    /// this -- with `repaired_fields` -- is how a caller learns the stored
+    /// entry differs from it. Empty from the pure resolvers, which store
+    /// nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metadata_quality: Vec<String>,
+    /// Fields [`metadata_only_to_store`] repaired from another enabled
+    /// source before writing, field -> source key (#608).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub repaired_fields: std::collections::BTreeMap<String, String>,
 }
 
 /// Resolve a [`Ref`] to metadata WITHOUT triggering a publisher PDF
@@ -251,6 +263,8 @@ pub async fn metadata_only_with_options(
             // Pure resolver — no store write here (see fn doc); the
             // store-write side effect lives in `metadata_only_to_store`.
             MetadataOnlyOutcome {
+                metadata_quality: Vec::new(),
+                repaired_fields: std::collections::BTreeMap::new(),
                 source: arxiv.name().to_string(),
                 resolver_profile: arxiv.name().to_string(),
                 license: Some("arxiv-default".to_string()),
@@ -402,7 +416,15 @@ pub async fn metadata_only_to_store_with_options(
 ) -> Result<MetadataOnlyOutcome, FetchError> {
     let outcome = metadata_only_with_options(ref_, profile, ctx, opts).await?;
     let safekey = ref_.safekey();
-    let metadata = build_metadata_only_metadata(ref_, &outcome);
+    let mut metadata = build_metadata_only_metadata(ref_, &outcome);
+    // #608: same repair as the fetch path, so the store never holds a
+    // U+FFFD an enabled source could have supplied. Recorded in
+    // `[doiget].repaired_fields`; what is left is warned about here, since
+    // this outcome type carries the resolver payload, not the stored entry.
+    let quality = crate::metadata_quality::repair(&mut metadata, profile, ctx).await;
+    let mut outcome = outcome;
+    outcome.metadata_quality = quality.flags();
+    outcome.repaired_fields = quality.repaired;
     // `pdf_src = None` => writes `<root>/.metadata/<safekey>.toml` and
     // appends the `StoreWrite` row (the exact path `fetch_paper` uses
     // for its DOI metadata-only fallback).
@@ -481,6 +503,9 @@ fn build_metadata_only_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Me
             tags: Vec::new(),
             collections: Vec::new(),
             annotation: None,
+            repaired_fields: Default::default(),
+            short_venue: None,
+            origin: None,
         }),
         other: BTreeMap::new(),
     }
@@ -513,6 +538,9 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
         }
         m.year = f.year;
         m.venue = f.venue;
+        if let Some(d) = m.doiget.as_mut() {
+            d.short_venue = f.short_venue;
+        }
         m.volume = f.volume;
         m.issue = f.issue;
         m.pages = f.pages;
@@ -530,6 +558,8 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
             .and_then(|a| a.first())
             .and_then(Value::as_str)
             .map(str::to_string);
+    } else if outcome.source == "datacite" {
+        cite_datacite(&mut m, &outcome.metadata);
     } else if outcome.source == "arxiv" {
         // arXiv Atom overlay (issue #303). The baseline already pulled
         // title/authors; add the publication year (from the Atom
@@ -547,6 +577,35 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
     }
     m
 }
+
+/// DataCite overlay for `cite` (#614): the creators, year, publisher and
+/// resourceTypeGeneral the baseline leaves out, plus, for software, the
+/// version and landing URL a release is cited by. Without `metadata` the
+/// DataCite source is not compiled in, so nothing reaches here.
+#[cfg(feature = "metadata")]
+fn cite_datacite(m: &mut Metadata, attributes: &Value) {
+    let f = extract_datacite_fields(attributes);
+    if let Some(title) = f.title {
+        m.title = title;
+    }
+    if !f.authors.is_empty() {
+        m.authors = f.authors;
+    }
+    m.year = f.year.or(m.year);
+    m.publisher = f.venue;
+    m.type_ = f.type_;
+    if let Some(v) = attributes.get("version").and_then(Value::as_str) {
+        m.other
+            .insert("version".into(), toml::Value::String(v.to_string()));
+    }
+    m.url = attributes
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+}
+
+#[cfg(not(feature = "metadata"))]
+fn cite_datacite(_: &mut Metadata, _: &Value) {}
 
 /// Extract the four-digit year from an RFC3339 timestamp — the arXiv Atom
 /// `published` field, e.g. `"2004-03-24T00:00:00Z"`. Returns `None` if the
@@ -606,7 +665,7 @@ fn extract_metadata_title(meta: &Value) -> Option<String> {
     if s.is_empty() {
         None
     } else {
-        Some(s)
+        Some(crate::markup::plain_title(&s))
     }
 }
 
@@ -683,7 +742,7 @@ fn env_nonempty(key: &str) -> Option<String> {
 /// doctor` and the tests must all see an edit to the file or the
 /// environment, and one small read is free next to the network legs it
 /// precedes.
-fn resolve_contact_email() -> String {
+pub(crate) fn resolve_contact_email() -> String {
     contact_email_or_placeholder()
 }
 
@@ -868,6 +927,8 @@ async fn metadata_only_doi(
             // Pure resolver -- no store write here (see `metadata_only`
             // doc); persistence is `metadata_only_to_store`'s job.
             Ok(MetadataOnlyOutcome {
+                metadata_quality: Vec::new(),
+                repaired_fields: std::collections::BTreeMap::new(),
                 source: crossref.name().to_string(),
                 resolver_profile: crossref.name().to_string(),
                 license,
@@ -877,6 +938,14 @@ async fn metadata_only_doi(
             })
         }
         Err(crossref_err) => {
+            // #649 review: a DOI registered with DataCite (Zenodo, figshare,
+            // ...) is not in Crossref, and this path never asked DataCite, so
+            // `cite` never saw a `datacite` outcome and #614's concept-DOI
+            // choice could not run. An enabled DataCite is asked first.
+            #[cfg(feature = "metadata")]
+            if let Some(outcome) = datacite_metadata_only(ref_, profile, ctx).await? {
+                return Ok(outcome);
+            }
             // Crossref failed. Try Unpaywall as a fallback before
             // surfacing the original error.
             let unpaywall = unpaywall_source_from_env(&contact);
@@ -891,6 +960,8 @@ async fn metadata_only_doi(
                         Some(res.license)
                     };
                     Ok(MetadataOnlyOutcome {
+                        metadata_quality: Vec::new(),
+                        repaired_fields: std::collections::BTreeMap::new(),
                         source: unpaywall.name().to_string(),
                         resolver_profile: unpaywall.name().to_string(),
                         license,
@@ -905,6 +976,41 @@ async fn metadata_only_doi(
                     Err(crossref_err)
                 }
             }
+        }
+    }
+}
+
+/// DataCite's record for a DOI Crossref does not know, when DataCite is
+/// enabled. `None` when it is off, cannot serve the ref, or has nothing; a
+/// provenance-log failure still aborts.
+#[cfg(feature = "metadata")]
+async fn datacite_metadata_only(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+) -> Result<Option<MetadataOnlyOutcome>, FetchError> {
+    let datacite = optional_base("DOIGET_DATACITE_BASE").map_or_else(
+        crate::sources::datacite::DataCiteSource::new,
+        crate::sources::datacite::DataCiteSource::with_base,
+    );
+    if !datacite.can_serve(profile, ref_) {
+        return Ok(None);
+    }
+    match datacite.fetch(ref_, profile, ctx).await {
+        Ok(res) => Ok(Some(MetadataOnlyOutcome {
+            metadata_quality: Vec::new(),
+            repaired_fields: std::collections::BTreeMap::new(),
+            source: datacite.name().to_string(),
+            resolver_profile: datacite.name().to_string(),
+            license: (res.license != "unknown").then_some(res.license),
+            oa_url: None,
+            oa_status: None,
+            metadata: res.metadata_json.unwrap_or(Value::Null),
+        })),
+        Err(e @ FetchError::Log(_)) => Err(e),
+        Err(e) => {
+            tracing::debug!(error = %e, "metadata_only: DataCite has no record either");
+            Ok(None)
         }
     }
 }
@@ -1060,6 +1166,22 @@ pub enum PdfLegStatus {
         /// The OA-publisher error that triggered the fallback (for logs
         /// and audit trail context).
         original_block: String,
+        /// Who named the preprint: Unpaywall (#325), or the finder that
+        /// found it when Unpaywall named none (ADR-0062).
+        found_by: crate::preprint::FoundBy,
+    },
+    /// Nothing open for the DOI itself, and no arXiv preprint: a non-arXiv
+    /// preprint (bioRxiv, medRxiv, Research Square, OSF, ...) was found and
+    /// fetched through the OA location its own DOI reports (#640).
+    PreprintDoiFallback {
+        /// The preprint's DOI.
+        preprint_doi: Doi,
+        /// The platform, when the finder named one.
+        platform: Option<String>,
+        /// What the DOI's own content leg ended with.
+        original_block: String,
+        /// Who named the preprint.
+        found_by: crate::preprint::FoundBy,
     },
     /// The OA chain was blocked and a Tier-3 TDM source served the
     /// publisher's own copy under the user's TDM agreement (#458).
@@ -1162,9 +1284,40 @@ pub struct FetchPaperOutcome {
     ///
     /// Empty for an arXiv ref, which has no optional chain.
     pub attempts: Vec<SourceAttempt>,
+    /// Quality flags on the stored metadata, e.g. `replacement_char:venue`
+    /// for a field whose resolver value carries a U+FFFD that no enabled
+    /// source could repair (#608). Empty when the metadata is clean.
+    pub metadata_quality: Vec<String>,
+    /// Fields repaired from another source, field → source key (#608).
+    /// Also recorded in the store as `[doiget].repaired_fields`.
+    pub repaired_fields: BTreeMap<String, String>,
 }
 
 impl FetchPaperOutcome {
+    /// The error code this outcome reports to its caller, or `None` for a
+    /// clean success. A blocked PDF leg is `Ok` with a failed leg; its code
+    /// is the one the caller is shown, where a policy refusal (off the
+    /// allowlist, an insecure redirect, a blocklisted host) is
+    /// `CAPABILITY_DENIED` rather than the transport's `NETWORK_ERROR`
+    /// (#145). Shared so repeat suppression reads the same answer the CLI
+    /// and MCP surfaces give (#507).
+    #[must_use]
+    pub fn reported_error_code(&self) -> Option<crate::ErrorCode> {
+        match &self.pdf_leg {
+            PdfLegStatus::Blocked { code, denial, .. } => {
+                Some(match denial.as_ref().map(|d| d.reason) {
+                    Some(
+                        crate::DenialReason::RedirectNotInAllowlist
+                        | crate::DenialReason::InsecureScheme
+                        | crate::DenialReason::HostInBlockList,
+                    ) => crate::ErrorCode::CapabilityDenied,
+                    _ => *code,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// `true` when this outcome is a success with nothing withheld.
     ///
     /// A `Blocked` PDF leg is an `Ok` outcome whose payload was refused, so
@@ -1216,6 +1369,8 @@ impl FetchPaperOutcome {
             authors: Vec::new(),
             year: None,
             attempts: Vec::new(),
+            metadata_quality: Vec::new(),
+            repaired_fields: BTreeMap::new(),
         }
     }
 
@@ -1285,6 +1440,110 @@ pub async fn fetch_paper(
     store: &dyn Store,
     store_root: &Utf8Path,
 ) -> Result<FetchPaperOutcome, FetchError> {
+    fetch_paper_with(
+        ref_,
+        profile,
+        ctx,
+        store,
+        store_root,
+        FetchOptions::default(),
+    )
+    .await
+}
+
+/// How [`fetch_paper_with`] treats a request this session was already
+/// answered on (#507, ADR-0057).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FetchOptions {
+    /// Ask the network even though this session already has an answer a
+    /// retry cannot change yet. The one override repeat suppression has; it
+    /// is per request, never a setting, and it is logged.
+    pub force: bool,
+}
+
+impl FetchOptions {
+    /// Set [`FetchOptions::force`]. A builder, since the struct is
+    /// `#[non_exhaustive]`.
+    #[must_use]
+    pub const fn with_force(mut self, force: bool) -> Self {
+        self.force = force;
+        self
+    }
+}
+
+/// [`fetch_paper`], with repeat suppression's override exposed.
+///
+/// Before any network, the session's [`crate::repeat::RepeatIndex`] is
+/// asked whether this ref was already answered: a `terminal` or
+/// `needs_config` answer within the replay window returns
+/// [`FetchError::Replayed`] carrying that answer's code; a `retry_after`
+/// answer less than the minimum gap ago returns one carrying
+/// `RATE_LIMITED` and the seconds left. `opts.force` asks anyway, and
+/// appends a `repeat_forced` row saying so.
+///
+/// # Errors
+///
+/// As [`fetch_paper`], plus [`FetchError::Replayed`].
+pub async fn fetch_paper_with(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    store: &dyn Store,
+    store_root: &Utf8Path,
+    opts: FetchOptions,
+) -> Result<FetchPaperOutcome, FetchError> {
+    let input = ref_.as_input_str();
+    match ctx.log.repeat().check(input) {
+        crate::repeat::Verdict::Proceed => {}
+        verdict if opts.force => {
+            let code = match &verdict {
+                crate::repeat::Verdict::Replay { code, .. }
+                | crate::repeat::Verdict::Wait { code, .. } => code.as_wire(),
+                crate::repeat::Verdict::Proceed => "",
+            };
+            ctx.log.append(RowInput {
+                event: LogEvent::RepeatForced,
+                result: LogResult::Ok,
+                capability: Capability::Oa,
+                ref_: Some(input),
+                source: None,
+                error_code: Some(code).filter(|c| !c.is_empty()),
+                size_bytes: None,
+                license: None,
+                store_path: None,
+                canonical_digest: None,
+            })?;
+        }
+        crate::repeat::Verdict::Replay { code, at } => {
+            return Err(FetchError::Replayed {
+                code,
+                message: format!(
+                    "this session already asked about {input} at {at} and was told {} ({}); \
+                     nothing that decides it has changed since, so it was not asked again. \
+                     Pass force (MCP) or --refetch (CLI) to ask anyway.",
+                    code.as_wire(),
+                    code.disposition().as_wire(),
+                ),
+                retry_after_secs: None,
+            });
+        }
+        crate::repeat::Verdict::Wait {
+            code,
+            at,
+            remaining_secs,
+        } => {
+            return Err(FetchError::Replayed {
+                code: crate::ErrorCode::RateLimited,
+                message: format!(
+                    "this session asked about {input} at {at} and was told {} (retry_after); \
+                     retry in {remaining_secs}s, or pass force / --refetch to ask now.",
+                    code.as_wire(),
+                ),
+                retry_after_secs: Some(remaining_secs),
+            });
+        }
+    }
     let safekey = ref_.safekey();
     match ref_ {
         Ref::Arxiv(id) => {
@@ -1404,6 +1663,9 @@ async fn fetch_paper_arxiv(
             tags: Vec::new(),
             collections: Vec::new(),
             annotation: None,
+            repaired_fields: Default::default(),
+            short_venue: None,
+            origin: None,
         }),
         other: BTreeMap::new(),
     };
@@ -1438,6 +1700,14 @@ async fn fetch_paper_arxiv(
         year: metadata.year,
         // arXiv resolves directly; the optional chain is a DOI concept.
         attempts: Vec::new(),
+        // arXiv's own Atom feed is UTF-8 end to end; the U+FFFD loss #608
+        // describes is a Crossref deposit problem. Still reported if seen.
+        metadata_quality: crate::metadata_quality::QualityReport {
+            remaining: crate::metadata_quality::replacement_char_fields(&metadata),
+            ..Default::default()
+        }
+        .flags(),
+        repaired_fields: BTreeMap::new(),
     })
 }
 
@@ -1705,8 +1975,19 @@ async fn fetch_paper_doi(
     // Issue #325: auto preprint fallback. If the OA chain was blocked but
     // Unpaywall hinted at an arXiv preprint, attempt that fetch and store
     // it under the DOI safekey instead of returning Blocked.
+    // ADR-0062: when Unpaywall named no preprint and nothing was fetched,
+    // look for one -- Crossref's relation, OpenAlex if enabled, then arXiv's
+    // own search by title and first author.
+    let discovered = match &pdf_leg {
+        PdfLegStatus::NoOaUrl
+        | PdfLegStatus::Blocked {
+            suggested_arxiv_id: None,
+            ..
+        } => crate::preprint::find(doi, &crossref_meta, &profile.metadata, ctx).await?,
+        _ => None,
+    };
     let (pdf_leg, pdf_bytes, arxiv_id_for_metadata, fallback_license) =
-        try_arxiv_preprint_fallback(doi, pdf_leg, pdf_bytes, profile, ctx).await;
+        try_arxiv_preprint_fallback(doi, pdf_leg, pdf_bytes, discovered, profile, ctx).await;
 
     // #445: and if that did not help either, ask whoever else is switched
     // on. Additive by construction — see the fn docs.
@@ -1738,6 +2019,20 @@ async fn fetch_paper_doi(
     let (pdf_leg, pdf_bytes) =
         try_tdm_content_fallback(doi, pdf_leg, pdf_bytes, profile, ctx, &mut attempts).await;
 
+    // #640: still nothing, and no arXiv preprint -- a non-arXiv preprint
+    // DOI, fetched through the OA location Unpaywall reports for it.
+    let (pdf_leg, pdf_bytes, preprint_license) = try_preprint_doi_fallback(
+        doi,
+        &crossref_meta,
+        pdf_leg,
+        pdf_bytes,
+        &unpaywall_contact,
+        profile,
+        ctx,
+    )
+    .await?;
+    let fallback_license = fallback_license.or(preprint_license);
+
     if let Some(fl) = fallback_license {
         license = fl;
     }
@@ -1768,7 +2063,13 @@ async fn fetch_paper_doi(
     // mask a total failure and violate the "explain why" promise.
     // Surface the Crossref error so the caller reports a real reason.
     if let Some(e) = crossref_err {
-        if pdf_bytes.is_none() {
+        // ...unless another source DID resolve the DOI. DataCite exists for
+        // exactly the DOIs Crossref has no record of (#414); returning
+        // NotFound here threw its answer away whenever no PDF also landed,
+        // with a note saying "datacite consulted: resolved" under a message
+        // saying the sources "did not resolve it" (found by the #587 e2e,
+        // review of #621).
+        if pdf_bytes.is_none() && optional_meta.is_none() {
             // #413: attach the resolution trace. Returning the bare
             // Crossref error was the whole problem — it said nothing about
             // whether the optional chain had been consulted and come up
@@ -1815,9 +2116,14 @@ async fn fetch_paper_doi(
         None => (source_label, 0u64, None, None),
     };
 
-    let metadata = Metadata {
+    let mut metadata = Metadata {
         schema_version: SCHEMA_VERSION.to_string(),
-        title: extracted.title.unwrap_or_else(|| doi.as_str().to_string()),
+        // #609: publishers deposit inline JATS / MathML pretty-printed onto
+        // lines of their own; the store holds the title the author wrote.
+        title: extracted
+            .title
+            .map(|t| crate::markup::plain_title(&t))
+            .unwrap_or_else(|| doi.as_str().to_string()),
         authors: extracted.authors,
         year: extracted.year,
         doi: Some(doi.clone()),
@@ -1825,7 +2131,7 @@ async fn fetch_paper_doi(
         // DOI-fetch path: no arXiv id, so no arXiv categories.
         arxiv_categories: Vec::new(),
         abstract_: None,
-        venue: extracted.venue,
+        venue: extracted.venue.map(|v| crate::markup::plain_title(&v)),
         volume: extracted.volume,
         issue: extracted.issue,
         pages: extracted.pages,
@@ -1849,9 +2155,22 @@ async fn fetch_paper_doi(
             tags: Vec::new(),
             collections: Vec::new(),
             annotation: None,
+            repaired_fields: Default::default(),
+            short_venue: extracted.short_venue.clone(),
+            origin: None,
         }),
         other: BTreeMap::new(),
     };
+    // #640: an entry holding a preprint says which one.
+    if let PdfLegStatus::PreprintDoiFallback { preprint_doi, .. } = &pdf_leg {
+        metadata.other.insert(
+            "preprint_doi".into(),
+            toml::Value::String(preprint_doi.as_str().to_string()),
+        );
+    }
+    // #608: a Crossref record that lost characters to U+FFFD is repaired
+    // from an enabled source when one matches, and flagged when none does.
+    let quality = crate::metadata_quality::repair(&mut metadata, profile, ctx).await;
 
     let pdf_src_path = pdf_staged
         .as_ref()
@@ -1888,6 +2207,8 @@ async fn fetch_paper_doi(
         authors: metadata.authors.clone(),
         year: metadata.year,
         attempts,
+        metadata_quality: quality.flags(),
+        repaired_fields: quality.repaired,
     })
 }
 
@@ -1958,7 +2279,17 @@ async fn try_optional_source_oa_fallback(
     attempts: &mut Vec<SourceAttempt>,
     already_resolved: Option<(&'static str, &Value)>,
 ) -> (PdfLegStatus, Option<Vec<u8>>) {
-    if pdf_bytes.is_some() || !matches!(pdf_leg, PdfLegStatus::Blocked { .. }) {
+    // Blocked (a location refused) and NoOaUrl (the OA chain had no location
+    // at all) are both a content leg that failed. #547: gating on Blocked
+    // alone meant a user who switched OpenAlex on never had it asked when
+    // Unpaywall called the work closed -- the exact case where OpenAlex names
+    // an institutional deposit Unpaywall does not know about.
+    if pdf_bytes.is_some()
+        || !matches!(
+            pdf_leg,
+            PdfLegStatus::Blocked { .. } | PdfLegStatus::NoOaUrl
+        )
+    {
         return (pdf_leg, pdf_bytes);
     }
 
@@ -2262,6 +2593,7 @@ async fn try_arxiv_preprint_fallback(
     doi: &Doi,
     pdf_leg: PdfLegStatus,
     oa_pdf_bytes: Option<Vec<u8>>,
+    discovered: Option<crate::preprint::Found>,
     profile: &CapabilityProfile,
     ctx: &FetchContext,
 ) -> (
@@ -2270,12 +2602,27 @@ async fn try_arxiv_preprint_fallback(
     Option<ArxivId>,
     Option<String>,
 ) {
-    let (arxiv_id_str, original_block) = match &pdf_leg {
-        PdfLegStatus::Blocked {
-            suggested_arxiv_id: Some(s),
-            message,
-            ..
-        } => (s.clone(), message.clone()),
+    let (arxiv_id_str, original_block, found_by) = match (&pdf_leg, &discovered) {
+        (
+            PdfLegStatus::Blocked {
+                suggested_arxiv_id: Some(s),
+                message,
+                ..
+            },
+            _,
+        ) => (
+            s.clone(),
+            message.clone(),
+            crate::preprint::FoundBy::Unpaywall,
+        ),
+        (PdfLegStatus::Blocked { message, .. }, Some(f)) => {
+            (f.arxiv_id.as_str().to_string(), message.clone(), f.found_by)
+        }
+        (PdfLegStatus::NoOaUrl, Some(f)) => (
+            f.arxiv_id.as_str().to_string(),
+            "no open copy known to Unpaywall".to_string(),
+            f.found_by,
+        ),
         _ => return (pdf_leg, oa_pdf_bytes, None, None),
     };
 
@@ -2314,6 +2661,7 @@ async fn try_arxiv_preprint_fallback(
                     PdfLegStatus::PreprintFallback {
                         arxiv_id: arxiv_id.as_str().to_string(),
                         original_block,
+                        found_by,
                     },
                     Some(bytes.to_vec()),
                     Some(arxiv_id),
@@ -2341,9 +2689,68 @@ async fn try_arxiv_preprint_fallback(
     }
 }
 
+/// #640: when the DOI's own content leg found nothing and no arXiv preprint
+/// did either, a non-arXiv preprint DOI ([`crate::preprint::find_preprint_doi`])
+/// is resolved through Unpaywall and fetched from the OA location Unpaywall
+/// reports for it, on the ordinary `oa-publisher` allowlist -- LEGAL §2a (a),
+/// never a constructed URL. Returns the leg, the bytes, and the preprint's
+/// licence.
+async fn try_preprint_doi_fallback(
+    doi: &Doi,
+    crossref_meta: &Value,
+    pdf_leg: PdfLegStatus,
+    pdf_bytes: Option<Vec<u8>>,
+    unpaywall_contact: &str,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+) -> Result<(PdfLegStatus, Option<Vec<u8>>, Option<String>), FetchError> {
+    let original_block = match &pdf_leg {
+        PdfLegStatus::NoOaUrl => "no open copy known to Unpaywall".to_string(),
+        PdfLegStatus::Blocked { message, .. } => message.clone(),
+        _ => return Ok((pdf_leg, pdf_bytes, None)),
+    };
+    let Some(found) =
+        crate::preprint::find_preprint_doi(doi, crossref_meta, profile.metadata.biorxiv, ctx)
+            .await?
+    else {
+        return Ok((pdf_leg, pdf_bytes, None));
+    };
+    let preprint_ref = Ref::Doi(found.doi.clone());
+    let unpaywall = unpaywall_source_from_env(unpaywall_contact);
+    let located = match unpaywall.fetch(&preprint_ref, profile, ctx).await {
+        Ok(r) => r,
+        Err(FetchError::Log(e)) => return Err(FetchError::Log(e)),
+        Err(e) => {
+            tracing::info!(error = %e, preprint = %found.doi.as_str(), "preprint DOI: Unpaywall did not answer");
+            return Ok((pdf_leg, pdf_bytes, None));
+        }
+    };
+    let license = located.license.clone();
+    for candidate in extract_oa_url_chain(located.metadata_json.as_ref()) {
+        match try_fetch_oa_pdf(&found.doi, &candidate, ctx).await {
+            Ok((bytes, _)) => {
+                return Ok((
+                    PdfLegStatus::PreprintDoiFallback {
+                        preprint_doi: found.doi.clone(),
+                        platform: found.platform,
+                        original_block,
+                        found_by: found.found_by,
+                    },
+                    Some(bytes),
+                    Some(license),
+                ));
+            }
+            Err(e) => {
+                tracing::info!(error = %e, url = %candidate, "preprint DOI: OA candidate failed")
+            }
+        }
+    }
+    Ok((pdf_leg, pdf_bytes, None))
+}
+
 /// Stage PDF bytes to a tempfile so the existing `Store::write` atomic-
 /// rename code path applies (the store takes a path, not bytes).
-fn stage_pdf_to_tempfile(bytes: &[u8]) -> Result<tempfile::NamedTempFile, FetchError> {
+pub(crate) fn stage_pdf_to_tempfile(bytes: &[u8]) -> Result<tempfile::NamedTempFile, FetchError> {
     let tmp = tempfile::NamedTempFile::new().map_err(|e| FetchError::SourceSchema {
         hint: format!("creating PDF staging tempfile: {e}"),
     })?;
@@ -2355,7 +2762,7 @@ fn stage_pdf_to_tempfile(bytes: &[u8]) -> Result<tempfile::NamedTempFile, FetchE
 
 /// Persist `metadata` (and optionally a PDF at `pdf_src`) through the
 /// trait-object [`Store`] and emit a `StoreWrite` provenance row.
-fn write_metadata_and_pdf(
+pub(crate) fn write_metadata_and_pdf(
     store: &dyn Store,
     safekey: &Safekey,
     metadata: &Metadata,
@@ -2386,12 +2793,19 @@ fn write_metadata_and_pdf(
         (None, None) => None,
     };
 
-    match store.write(safekey, metadata, pdf_src) {
+    match crate::store::blocking_section(|| store.write(safekey, metadata, pdf_src)) {
         Ok(()) => {
             ctx.log.append(RowInput {
                 event: LogEvent::StoreWrite,
                 result: LogResult::Ok,
-                capability: Capability::Oa,
+                // #606: a hand-added PDF was fetched under no capability.
+                capability: if metadata.doiget.as_ref().and_then(|d| d.origin.as_deref())
+                    == Some(crate::store::ORIGIN_USER_SUPPLIED)
+                {
+                    Capability::UserSupplied
+                } else {
+                    Capability::Oa
+                },
                 ref_: metadata
                     .doi
                     .as_ref()
@@ -2611,6 +3025,9 @@ pub(crate) struct CrossrefFields {
     pub(crate) issue: Option<String>,
     pub(crate) pages: Option<String>,
     pub(crate) type_: Option<String>,
+    /// Crossref `short-container-title[0]` (#611). `None` for sources that
+    /// report no abbreviation.
+    pub(crate) short_venue: Option<String>,
 }
 
 /// Map a DataCite `data.attributes` object onto [`CrossrefFields`].
@@ -2677,6 +3094,7 @@ pub(crate) fn extract_datacite_fields(attributes: &Value) -> CrossrefFields {
         issue: None,
         pages: None,
         type_,
+        short_venue: None,
     }
 }
 
@@ -2689,7 +3107,11 @@ pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        // #609: every consumer of this extractor -- cite, verify, missing,
+        // resolve_citation -- gets the title the author wrote, not the
+        // deposit's pretty-printed JATS. Render-time cleaning hid that this
+        // path was not covered.
+        .map(crate::markup::plain_title);
 
     let authors = msg
         .get("author")
@@ -2725,7 +3147,7 @@ pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(crate::markup::plain_title);
 
     let type_ = msg
         .get("type")
@@ -2749,6 +3171,14 @@ pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
         .and_then(|v| v.as_str())
         .map(normalize_page_range);
 
+    let short_venue = msg
+        .get("short-container-title")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.as_str())
+        .map(|s| crate::markup::plain_title(s.trim()))
+        .filter(|s| !s.is_empty());
+
     CrossrefFields {
         title,
         authors,
@@ -2758,6 +3188,7 @@ pub(crate) fn extract_crossref_fields(msg: &Value) -> CrossrefFields {
         issue,
         pages,
         type_,
+        short_venue,
     }
 }
 
@@ -2938,6 +3369,30 @@ pub async fn batch_fetch(
     store: &dyn Store,
     store_root: &Utf8Path,
 ) -> Result<BatchOutcome, FetchError> {
+    batch_fetch_with(
+        refs,
+        profile,
+        ctx,
+        store,
+        store_root,
+        FetchOptions::default(),
+    )
+    .await
+}
+
+/// [`batch_fetch`] with [`FetchOptions`] applied to every entry (#507).
+///
+/// # Errors
+///
+/// As [`batch_fetch`].
+pub async fn batch_fetch_with(
+    refs: &[Ref],
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+    store: &dyn Store,
+    store_root: &Utf8Path,
+    opts: FetchOptions,
+) -> Result<BatchOutcome, FetchError> {
     if refs.len() > MAX_BATCH_REFS {
         return Err(FetchError::TooManyRefs {
             got: refs.len(),
@@ -2946,7 +3401,18 @@ pub async fn batch_fetch(
     }
     let mut results = Vec::with_capacity(refs.len());
     for ref_ in refs {
-        let outcome = fetch_paper(ref_, profile, ctx, store, store_root).await;
+        let outcome = fetch_paper_with(ref_, profile, ctx, store, store_root, opts).await;
+        // #507: a batch writes one bookend for the whole run, so each
+        // entry's answer is recorded here -- a DOI repeated in one batch, or
+        // asked again by the next call, is then held to the same rule as a
+        // single fetch.
+        ctx.log.repeat().observe(
+            ref_.as_input_str(),
+            match &outcome {
+                Ok(o) => o.reported_error_code(),
+                Err(e) => Some(crate::ErrorCode::from(e)),
+            },
+        );
         results.push(BatchResultEntry {
             ref_: ref_.clone(),
             outcome,
@@ -3125,6 +3591,8 @@ mod tests {
     /// `envelope.message`, not the outer `{status, message}` wrapper).
     fn crossref_outcome() -> MetadataOnlyOutcome {
         MetadataOnlyOutcome {
+            metadata_quality: Vec::new(),
+            repaired_fields: std::collections::BTreeMap::new(),
             source: "crossref".to_string(),
             resolver_profile: "crossref".to_string(),
             license: None,
@@ -3173,6 +3641,8 @@ mod tests {
         // rather than being fabricated.
         let ref_ = Ref::parse("arxiv:2401.12345").unwrap();
         let outcome = MetadataOnlyOutcome {
+            metadata_quality: Vec::new(),
+            repaired_fields: std::collections::BTreeMap::new(),
             source: "arxiv".to_string(),
             resolver_profile: "arxiv".to_string(),
             license: Some("arxiv-default".to_string()),
@@ -3196,6 +3666,8 @@ mod tests {
         // (not the Crossref extractor). Review #318: this path was untested.
         let ref_ = Ref::parse("arxiv:2401.12345").unwrap();
         let outcome = MetadataOnlyOutcome {
+            metadata_quality: Vec::new(),
+            repaired_fields: std::collections::BTreeMap::new(),
             source: "arxiv".to_string(),
             resolver_profile: "arxiv".to_string(),
             license: Some("arxiv-default".to_string()),
@@ -3216,6 +3688,8 @@ mod tests {
 
         // A malformed `published` omits the year rather than fabricating one.
         let bad = MetadataOnlyOutcome {
+            metadata_quality: Vec::new(),
+            repaired_fields: std::collections::BTreeMap::new(),
             metadata: serde_json::json!({ "title": "x", "published": "not-a-date" }),
             ..outcome
         };
@@ -3976,6 +4450,22 @@ mod tests {
         Utf8PathBuf,
         tempfile::TempDir,
     ) {
+        md139_harness_with(
+            r#"{"status":"ok","message":{"title":["Example Paper"],"author":[{"given":"Ada","family":"Lovelace"}]}}"#,
+        )
+        .await
+    }
+
+    /// [`md139_harness`] answering every request with `crossref_body`.
+    async fn md139_harness_with(
+        crossref_body: &str,
+    ) -> (
+        wiremock::MockServer,
+        FetchContext,
+        crate::store::FsStore,
+        Utf8PathBuf,
+        tempfile::TempDir,
+    ) {
         use crate::http::HttpClient;
         use crate::provenance::ProvenanceLog;
         use crate::rate_limiter::RateLimiter;
@@ -3987,9 +4477,7 @@ mod tests {
 
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"status":"ok","message":{"title":["Example Paper"],"author":[{"given":"Ada","family":"Lovelace"}]}}"#,
-            ))
+            .respond_with(ResponseTemplate::new(200).set_body_string(crossref_body))
             .mount(&server)
             .await;
         std::env::set_var("DOIGET_CROSSREF_BASE", server.uri());
@@ -4068,6 +4556,250 @@ mod tests {
         assert_eq!(ext.size_bytes, 0, "metadata-only entry has no PDF");
 
         std::env::remove_var("DOIGET_CROSSREF_BASE");
+    }
+
+    /// #609, through the real resolver and store rather than the pure
+    /// function: AIP's pretty-printed `P<scp>y</scp>SCF` is stored as the
+    /// title the author wrote. Render-time cleaning would hide a regression
+    /// here, so this reads the TOML back.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_pretty_printed_crossref_title_is_stored_as_plain_text_609() {
+        let body = serde_json::json!({"status": "ok", "message": {
+            "title": ["Recent developments in the P\n                    <scp>y</scp>\n                    SCF program package"],
+            "author": [{"given": "Qiming", "family": "Sun"}]
+        }})
+        .to_string();
+        let (_server, ctx, store, store_root, _td) = md139_harness_with(&body).await;
+        let profile = CapabilityProfile::from_env().expect("clean env");
+        let ref_ = Ref::Doi(Doi("10.1063/5.0006074".to_string()));
+        metadata_only_to_store(&ref_, &profile, &ctx, &store)
+            .await
+            .expect("metadata_only_to_store ok");
+        let tomls = metadata_dir_tomls(&store_root);
+        let body = std::fs::read_to_string(&tomls[0]).expect("read metadata toml");
+        let meta: crate::store::Metadata = toml::from_str(&body).expect("parse metadata toml");
+        assert_eq!(
+            meta.title,
+            "Recent developments in the PySCF program package"
+        );
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+    }
+
+    /// #608 (review of #619): the metadata-only store path must tell its
+    /// caller what it could not repair; `metadata` is the raw payload, so
+    /// without these fields an MCP agent had no signal at all.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn metadata_only_to_store_reports_an_unrepaired_replacement_char_608() {
+        let body = serde_json::json!({"status": "ok", "message": {
+            "title": ["N\u{FFFD}herungsmethode zur L\u{FFFD}sung"],
+            "author": [{"given": "V.", "family": "Fock"}]
+        }})
+        .to_string();
+        let (_server, ctx, store, store_root, _td) = md139_harness_with(&body).await;
+        let profile = CapabilityProfile::from_env().expect("clean env");
+        let ref_ = Ref::Doi(Doi("10.1007/BF01340294".to_string()));
+        let outcome = metadata_only_to_store(&ref_, &profile, &ctx, &store)
+            .await
+            .expect("metadata_only_to_store ok");
+        assert_eq!(
+            outcome.metadata_quality,
+            vec!["replacement_char:title".to_string()]
+        );
+        assert!(outcome.repaired_fields.is_empty());
+        let tomls = metadata_dir_tomls(&store_root);
+        let body = std::fs::read_to_string(&tomls[0]).expect("read metadata toml");
+        assert!(
+            body.contains('\u{FFFD}'),
+            "nothing enabled, so nothing repaired: {body}"
+        );
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+    }
+
+    #[test]
+    fn short_container_title_is_read_cleaned_and_absent_when_empty_611() {
+        let f = extract_crossref_fields(
+            &serde_json::json!({"short-container-title": ["Phys. Rev. <i>B</i>"]}),
+        );
+        assert_eq!(f.short_venue.as_deref(), Some("Phys. Rev. B"));
+        for empty in [
+            serde_json::json!({"short-container-title": []}),
+            serde_json::json!({"short-container-title": [""]}),
+            serde_json::json!({}),
+        ] {
+            assert!(
+                extract_crossref_fields(&empty).short_venue.is_none(),
+                "{empty}"
+            );
+        }
+    }
+
+    /// #611 (review of #623): the fetch path stores the abbreviation, so a
+    /// later offline `bib --journal-abbrev` has it.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn the_fetch_path_stores_the_crossref_abbreviation_611() {
+        let body = serde_json::json!({"status": "ok", "message": {
+            "title": ["Density-matrix algorithms"],
+            "container-title": ["Physical Review B"],
+            "short-container-title": ["Phys. Rev. B"]
+        }})
+        .to_string();
+        let (_server, ctx, store, store_root, _td) = md139_harness_with(&body).await;
+        let profile = CapabilityProfile::from_env().expect("clean env");
+        let ref_ = Ref::Doi(Doi("10.1103/PhysRevB.48.10345".to_string()));
+        let _ = fetch_paper(&ref_, &profile, &ctx, &store, &store_root).await;
+        let toml = std::fs::read_to_string(
+            store_root.join(".metadata/doi_10.1103_PhysRevB.48.10345.toml"),
+        )
+        .expect("the fetch wrote metadata");
+        assert!(toml.contains("short_venue = \"Phys. Rev. B\""), "{toml}");
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+    }
+
+    /// #507 step 2, through the real resolver and provenance log. A DOI
+    /// Crossref has no record of is NOT_FOUND (terminal); once the session's
+    /// bookend says so, asking again is answered from the log without a
+    /// request, `force` asks anyway and is logged, and a duplicate inside
+    /// one batch is replayed too.
+    /// #507: a retry_after answer under RETRY_AFTER_GAP old is refused with
+    /// the time left, before any request, and as RATE_LIMITED -- so a caller
+    /// that honours retry_after waits instead of hammering.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_recent_retry_after_answer_is_a_timed_wait_507() {
+        let (_s, ctx, store, store_root, _td) = md139_harness_with("{}").await;
+        let profile = CapabilityProfile::from_env().expect("profile");
+        let ref_ = Ref::Doi(Doi::parse("10.1234/busy").expect("doi"));
+        ctx.log
+            .repeat()
+            .observe("10.1234/busy", Some(crate::ErrorCode::NetworkError));
+        let got = fetch_paper_with(
+            &ref_,
+            &profile,
+            &ctx,
+            &store,
+            &store_root,
+            FetchOptions::default(),
+        )
+        .await;
+        match got {
+            Err(FetchError::Replayed {
+                code,
+                retry_after_secs: Some(secs),
+                ..
+            }) => {
+                assert_eq!(code, crate::ErrorCode::RateLimited);
+                assert!((1..=30).contains(&secs), "{secs}");
+            }
+            other => panic!("expected a timed wait, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_terminal_answer_is_replayed_and_force_asks_again_507() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let (_s, ctx, store, store_root, _td) = md139_harness_with("{}").await;
+        // Point Crossref and Unpaywall at the 404 server instead.
+        std::env::set_var("DOIGET_CROSSREF_BASE", server.uri());
+        let host = server.address().to_string();
+        let ctx = FetchContext {
+            http: std::sync::Arc::new(crate::http::HttpClient::new_for_tests_allow_http_multi(&[
+                ("crossref", host.as_str()),
+                ("unpaywall", host.as_str()),
+            ])),
+            ..ctx
+        };
+        std::env::set_var("DOIGET_UNPAYWALL_BASE", server.uri());
+        let profile = CapabilityProfile::from_env().expect("profile");
+        let ref_ = Ref::Doi(Doi::parse("10.1234/nowhere").expect("doi"));
+        let requests = || async { server.received_requests().await.unwrap_or_default().len() };
+
+        let first = fetch_paper(&ref_, &profile, &ctx, &store, &store_root).await;
+        assert_eq!(
+            first.as_ref().err().map(crate::ErrorCode::from),
+            Some(crate::ErrorCode::NotFound),
+            "{first:?}"
+        );
+        // What the CLI / MCP front end writes after telling the caller.
+        ctx.log
+            .append(RowInput {
+                event: LogEvent::SessionEnd,
+                result: LogResult::Err,
+                capability: Capability::Oa,
+                ref_: Some("10.1234/nowhere"),
+                source: None,
+                error_code: Some("NOT_FOUND"),
+                size_bytes: None,
+                license: None,
+                store_path: None,
+                canonical_digest: None,
+            })
+            .expect("bookend");
+        let sent = requests().await;
+
+        let second = fetch_paper(&ref_, &profile, &ctx, &store, &store_root).await;
+        match &second {
+            Err(e @ FetchError::Replayed { code, .. }) => {
+                assert_eq!(*code, crate::ErrorCode::NotFound);
+                assert_eq!(crate::ErrorCode::from(e), crate::ErrorCode::NotFound);
+                assert!(e.to_string().contains("--refetch"), "{e}");
+            }
+            other => panic!("expected a replay, got {other:?}"),
+        }
+        assert_eq!(
+            requests().await,
+            sent,
+            "a replay must not touch the network"
+        );
+
+        let dup = batch_fetch(
+            &[ref_.clone(), ref_.clone()],
+            &profile,
+            &ctx,
+            &store,
+            &store_root,
+        )
+        .await
+        .expect("batch");
+        assert!(dup
+            .results
+            .iter()
+            .all(|r| matches!(r.outcome, Err(FetchError::Replayed { .. }))));
+        assert_eq!(requests().await, sent, "nor may a batch of repeats");
+
+        let forced = fetch_paper_with(
+            &ref_,
+            &profile,
+            &ctx,
+            &store,
+            &store_root,
+            FetchOptions::default().with_force(true),
+        )
+        .await;
+        assert!(
+            matches!(&forced, Err(e) if !matches!(e, FetchError::Replayed { .. })),
+            "force must reach the network, not replay: {forced:?}"
+        );
+        assert!(requests().await > sent, "force asks the network");
+        let log = std::fs::read_to_string(ctx.log.path()).expect("log");
+        assert!(
+            log.lines()
+                .any(|l| l.contains("\"event\":\"repeat_forced\"")
+                    && l.contains("10.1234/nowhere")
+                    && l.contains("NOT_FOUND")),
+            "the override is recorded"
+        );
+        std::env::remove_var("DOIGET_CROSSREF_BASE");
+        std::env::remove_var("DOIGET_UNPAYWALL_BASE");
     }
 
     #[tokio::test]
@@ -5244,6 +5976,9 @@ mod chain_tests {
             openalex: false,
             semantic_scholar: false,
             doaj: false,
+            biorxiv: false,
+            inspire: false,
+            ads: false,
             datacite: false,
             hal: false,
             openaire: false,
@@ -6599,6 +7334,169 @@ mod oa_fallthrough_tests {
             matches!(outcome.pdf_leg, PdfLegStatus::Fetched),
             "the run should have recovered; got {:?}",
             outcome.pdf_leg
+        );
+    }
+
+    /// #614: a DataCite Software record cites as `@software`, with the
+    /// creators, year, version and URL the baseline used to drop.
+    #[cfg(feature = "metadata")]
+    #[test]
+    fn a_datacite_software_record_cites_as_software_614() {
+        let outcome: MetadataOnlyOutcome = serde_json::from_value(serde_json::json!({
+            "source": "datacite", "resolver_profile": "test", "license": null, "oa_url": null,
+            "metadata": {
+                "titles": [{"title": "HFDMRG.jl"}],
+                "creators": [{"name": "White, Steven R."}],
+                "publicationYear": 2023,
+                "publisher": "Zenodo",
+                "types": {"resourceTypeGeneral": "Software"},
+                "version": "v0.1.0",
+                "url": "https://zenodo.org/records/200"
+            }
+        }))
+        .expect("outcome");
+        let ref_ = Ref::Doi(Doi::parse("10.5281/zenodo.200").expect("doi"));
+        let m = cite_metadata(&ref_, &outcome);
+        let bib = crate::store::render::to_bibtex("hf", &m);
+        assert!(bib.starts_with("@software{hf,"), "{bib}");
+        assert!(bib.contains("author     = {White, Steven R.}"), "{bib}");
+        assert!(bib.contains("year       = {2023}"), "{bib}");
+        assert!(bib.contains("version    = {v0.1.0}"), "{bib}");
+        assert!(
+            bib.contains("url        = {https://zenodo.org/records/200}"),
+            "{bib}"
+        );
+        assert!(bib.contains("publisher  = {Zenodo}"), "{bib}");
+    }
+
+    /// #547, the reported shape: Unpaywall calls the work closed (no OA URL
+    /// at all, not a refused one), and OpenAlex -- switched on -- names the
+    /// institutional deposit with an author-listing URL. The fall-through
+    /// used to run on a Blocked leg only, so OpenAlex was never asked and
+    /// the run said nothing but "no OA PDF available".
+    /// The #547 record: Unpaywall calls it closed; OpenAlex, if asked,
+    /// names the institutional deposit with an author-listing URL.
+    async fn fetch_closed_record(openalex_enabled: bool) -> (FetchPaperOutcome, Vec<String>) {
+        let server = MockServer::start().await;
+        Mock::given(path_regex("^/works/10\\.1109"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"status":"ok","message":{"title":["Eigenvalue Decomposition"],"type":"journal-article"}}"#,
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(path_regex("^/works/doi:10\\.1109"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "https://openalex.org/W1",
+                "locations": [
+                    {"is_oa": false, "pdf_url": null,
+                     "landing_page_url": "https://doi.org/10.1109/tsp.2023.3269664",
+                     "source": {"display_name": "IEEE Transactions on Signal Processing"}},
+                    {"is_oa": false, "pdf_url": null,
+                     "landing_page_url": "https://strathprints.strath.ac.uk/view/author/70486.html>",
+                     "source": {"display_name": "Strathprints: The University of Strathclyde"}}
+                ]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(path_regex("^/10\\.1109"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"doi":"10.1109/tsp.2023.3269664","is_oa":false,"oa_status":"closed","best_oa_location":null,"oa_locations":[]}"#,
+            ))
+            .mount(&server)
+            .await;
+        let base = server.uri();
+        let mut env = vec![
+            ("DOIGET_CROSSREF_BASE", base.clone()),
+            ("DOIGET_UNPAYWALL_BASE", base.clone()),
+            ("DOIGET_OPENALEX_BASE", base.clone()),
+            ("DOIGET_CONTACT_EMAIL", "test@example.org".to_string()),
+        ];
+        if openalex_enabled {
+            env.push(("DOIGET_ENABLE_OPENALEX", "1".to_string()));
+        }
+        let _env = EnvSet::new(&env);
+        let profile = CapabilityProfile::from_env().expect("profile");
+        let host = server.address().to_string();
+        let td = TempDir::new().expect("tempdir");
+        let dir = Utf8PathBuf::try_from(td.path().to_path_buf()).expect("utf-8");
+        let session_id = "01J000000000000000000FALL".to_string();
+        let ctx = FetchContext {
+            http: Arc::new(HttpClient::new_for_tests_allow_http_multi(&[
+                ("crossref", host.as_str()),
+                ("unpaywall", host.as_str()),
+                ("openalex", host.as_str()),
+            ])),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimits::HARD_CODED)),
+            log: Arc::new(
+                ProvenanceLog::open(dir.join("t.jsonl"), session_id.clone()).expect("log"),
+            ),
+            session_id,
+            cache_root: None,
+        };
+        let store_td = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::try_from(store_td.path().to_path_buf()).expect("utf-8");
+        let store = crate::store::FsStore::new(root.clone()).expect("store");
+        let ref_ = Ref::Doi(Doi::parse("10.1109/tsp.2023.3269664").expect("doi"));
+        let outcome = fetch_paper(&ref_, &profile, &ctx, &store, &root)
+            .await
+            .expect("resolves");
+        let paths = server
+            .received_requests()
+            .await
+            .expect("recorded")
+            .iter()
+            .map(|r| r.url.path().to_string())
+            .collect();
+        (outcome, paths)
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_closed_record_still_asks_an_enabled_openalex_and_names_the_deposit() {
+        let (outcome, paths) = fetch_closed_record(true).await;
+        // The shape the disabled test below looks for, seen when enabled.
+        assert!(
+            paths.iter().any(|p| p.starts_with("/works/doi:")),
+            "{paths:?}"
+        );
+
+        assert!(
+            matches!(outcome.pdf_leg, PdfLegStatus::NoOaUrl),
+            "{:?}",
+            outcome.pdf_leg
+        );
+        let row = outcome
+            .attempts
+            .iter()
+            .find(|a| a.source == "openalex")
+            .expect("an openalex row");
+        let AttemptOutcome::NotOpenAccess { detail } = &row.outcome else {
+            panic!(
+                "OpenAlex must have been asked and reported what it named; got {:?}",
+                row.outcome
+            );
+        };
+        assert!(detail.contains("Strathprints"), "{detail}");
+        assert!(
+            detail.contains("malformed"),
+            "the stray `>` is named: {detail}"
+        );
+    }
+
+    /// The #547 gate widened to NoOaUrl; with nothing enabled it must still
+    /// cost nothing.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn with_no_source_enabled_a_closed_record_asks_nothing_more() {
+        let (outcome, paths) = fetch_closed_record(false).await;
+        assert!(
+            matches!(outcome.pdf_leg, PdfLegStatus::NoOaUrl),
+            "{:?}",
+            outcome.pdf_leg
+        );
+        assert!(
+            !paths.iter().any(|p| p.starts_with("/works/doi:")),
+            "a disabled OpenAlex must cost nothing; paths were {paths:?}"
         );
     }
 

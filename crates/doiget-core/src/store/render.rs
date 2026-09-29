@@ -36,6 +36,14 @@ use super::Metadata;
 /// bare braces, so this is safe-by-default for the Phase 2 starter.
 #[must_use]
 pub fn to_bibtex(citation_key: &str, m: &Metadata) -> String {
+    to_bibtex_with_fields(citation_key, m, &[])
+}
+
+/// [`to_bibtex`] with `extra` fields appended after the ones the metadata
+/// supplies, in order -- e.g. `("file", "refs/fock1930.pdf")` (#610).
+/// Values get the same brace and markup scrubbing as every other field.
+#[must_use]
+pub fn to_bibtex_with_fields(citation_key: &str, m: &Metadata, extra: &[(&str, &str)]) -> String {
     let mut out = String::new();
     let entry_type = bibtex_entry_type(m.type_.as_deref());
     out.push_str(&format!("@{entry_type}{{{citation_key},\n"));
@@ -82,6 +90,16 @@ pub fn to_bibtex(citation_key: &str, m: &Metadata) -> String {
             push_field(&mut out, "issn", issn);
         }
     }
+    // Software (#614): the version cited and where it lives. A release has
+    // no journal to find it by, so the URL is the locator.
+    if entry_type == "software" {
+        if let Some(v) = m.other.get("version").and_then(toml::Value::as_str) {
+            push_field(&mut out, "version", v);
+        }
+        if let Some(u) = m.url.as_deref().filter(|u| !u.is_empty()) {
+            push_field(&mut out, "url", u);
+        }
+    }
 
     // arXiv preprint identity (issue #303): emit `eprint` + `archivePrefix`
     // (+ `primaryClass` when known) for any entry carrying an arXiv id, so
@@ -95,6 +113,9 @@ pub fn to_bibtex(citation_key: &str, m: &Metadata) -> String {
         if let Some(class) = arxiv_primary_class(m) {
             push_field(&mut out, "primaryClass", &class);
         }
+    }
+    for (name, value) in extra {
+        push_field(&mut out, name, value);
     }
 
     out.push_str("}\n");
@@ -126,13 +147,18 @@ fn arxiv_primary_class(m: &Metadata) -> Option<String> {
 fn bibtex_entry_type(type_: Option<&str>) -> &'static str {
     match type_ {
         Some("journal-article") => "article",
+        // Our own GitHub record, and DataCite's resourceTypeGeneral (#614).
+        // biblatex has `@software`; classic BibTeX styles treat an unknown
+        // type as `@misc`, so nothing is lost there.
+        Some("software" | "Software") => "software",
         _ => "misc",
     }
 }
 
 /// Append a single `  <key>      = {<value>},\n` line, padded so the `=`
-/// columns line up across the seven-field Phase 2 surface (width 10 is
-/// wide enough for `publisher`, the longest key).
+/// columns line up for the standard fields (width 10 fits `publisher`).
+/// A longer optional key -- `shortjournal` (#611), `archivePrefix` --
+/// overruns the column rather than re-indenting every entry's output.
 fn push_field(out: &mut String, key: &str, value: &str) {
     let escaped = strip_bibtex_unsafe(key, value);
     out.push_str(&format!("  {key:<10} = {{{escaped}}},\n"));
@@ -141,15 +167,15 @@ fn push_field(out: &mut String, key: &str, value: &str) {
 /// Strip BibTeX-unsafe `{` / `}` from `value`, warning once per field so
 /// the dropped characters are visible in stderr / structured logs.
 ///
-/// Crossref embeds HTML / MathML markup in titles and venues (`<i>`,
-/// `<sub>`, `<mml:math>…</mml:math>`); those `<…>` tags are removed first
-/// (their inner text is kept) so the rendered BibTeX is clean enough to
-/// paste into a `.bib`. This is the same pragmatic trade-off doi2bib
-/// makes — it is a tag scrubber, not a TeX-aware math translator, so a
-/// title's math markup collapses to its plain-text content rather than to
-/// `$…$`.
+/// Crossref embeds JATS / HTML / MathML markup in titles and venues (`<i>`,
+/// `<sub>`, `<mml:math>…</mml:math>`), often pretty-printed onto lines of
+/// their own. [`crate::markup::plain_title`] reduces that to the text the
+/// author wrote first (#609), so the rendered BibTeX is clean enough to
+/// paste into a `.bib`. It is a markup scrubber, not a TeX-aware math
+/// translator: a title's math markup collapses to its plain-text content
+/// rather than to `$…$`.
 fn strip_bibtex_unsafe(key: &str, value: &str) -> String {
-    let detagged = strip_markup_tags(value);
+    let detagged = crate::markup::plain_title(value);
     if detagged.contains('{') || detagged.contains('}') {
         tracing::warn!(
             field = key,
@@ -161,34 +187,6 @@ fn strip_bibtex_unsafe(key: &str, value: &str) -> String {
         .chars()
         .filter(|c| !matches!(c, '{' | '}'))
         .collect()
-}
-
-/// Remove HTML / MathML markup tags (`<i>`, `<sub>`, `<mml:math>`, …),
-/// keeping the text between them. Equivalent to deleting every `<…>`
-/// run: a deliberately simple angle-bracket scanner, not an HTML parser.
-///
-/// A `<` with no matching `>` (e.g. genuine inline math `a < b` that
-/// Crossref left unescaped) leaves the remainder verbatim — only
-/// well-formed tag runs are dropped. Strings with no markup return
-/// unchanged without allocating a scan buffer.
-fn strip_markup_tags(value: &str) -> String {
-    if !(value.contains('<') && value.contains('>')) {
-        return value.to_string();
-    }
-    let mut out = String::with_capacity(value.len());
-    let mut rest = value;
-    while let Some(lt) = rest.find('<') {
-        match rest[lt..].find('>') {
-            Some(gt_rel) => {
-                out.push_str(&rest[..lt]);
-                rest = &rest[lt + gt_rel + 1..];
-            }
-            // No closing '>' for this '<': keep the remainder as-is.
-            None => break,
-        }
-    }
-    out.push_str(rest);
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +202,22 @@ fn strip_markup_tags(value: &str) -> String {
 /// Empty optional fields are omitted from the JSON.
 #[must_use]
 pub fn to_csl_array(citation_key: &str, m: &Metadata) -> serde_json::Value {
-    let item = build_csl_item(citation_key, m);
+    to_csl_array_with(citation_key, m, false)
+}
+
+/// [`to_csl_array`], adding `container-title-short` from
+/// `[doiget].short_venue` when `short_container` is set and the record
+/// carried an abbreviation (#611).
+#[must_use]
+pub fn to_csl_array_with(
+    citation_key: &str,
+    m: &Metadata,
+    short_container: bool,
+) -> serde_json::Value {
+    let mut item = build_csl_item(citation_key, m);
+    if short_container {
+        item.container_title_short = m.doiget.as_ref().and_then(|d| d.short_venue.clone());
+    }
     // `CslItem` is all-`Serialize` over owned/borrowed primitives, so
     // `to_value` cannot fail; fall back to an empty array rather than
     // panicking if a future field breaks that invariant.
@@ -220,7 +233,7 @@ struct CslItem<'a> {
     id: &'a str,
     #[serde(rename = "type")]
     type_: &'static str,
-    title: &'a str,
+    title: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     author: Vec<CslName>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -228,7 +241,12 @@ struct CslItem<'a> {
     #[serde(rename = "DOI", skip_serializing_if = "Option::is_none")]
     doi: Option<&'a str>,
     #[serde(rename = "container-title", skip_serializing_if = "Option::is_none")]
-    container_title: Option<&'a str>,
+    container_title: Option<String>,
+    #[serde(
+        rename = "container-title-short",
+        skip_serializing_if = "Option::is_none"
+    )]
+    container_title_short: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     volume: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -239,6 +257,12 @@ struct CslItem<'a> {
     publisher: Option<&'a str>,
     #[serde(rename = "ISSN", skip_serializing_if = "Option::is_none")]
     issn: Option<&'a str>,
+    /// Software only (#614).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<&'a str>,
+    /// Software only (#614): the release is found by its URL.
+    #[serde(rename = "URL", skip_serializing_if = "Option::is_none")]
+    url: Option<&'a str>,
 }
 
 /// CSL name-variable shape. Empty halves are omitted so a single-token
@@ -260,24 +284,34 @@ struct CslIssued {
 }
 
 fn build_csl_item<'a>(citation_key: &'a str, m: &'a Metadata) -> CslItem<'a> {
+    let software = matches!(m.type_.as_deref(), Some("software" | "Software"));
     CslItem {
         id: citation_key,
         type_: match m.type_.as_deref() {
             Some("journal-article") => "article-journal",
+            // CSL 1.0.2 `software` (#614).
+            _ if software => "software",
             _ => "manuscript",
         },
-        title: &m.title,
+        title: crate::markup::plain_title(&m.title),
         author: m.authors.iter().map(|s| parse_author(s)).collect(),
         issued: m.year.map(|y| CslIssued {
             date_parts: vec![vec![y]],
         }),
         doi: m.doi.as_ref().map(|d| d.as_str()),
-        container_title: m.venue.as_deref(),
+        container_title: m.venue.as_deref().map(crate::markup::plain_title),
+        container_title_short: None,
         volume: m.volume.as_deref(),
         issue: m.issue.as_deref(),
         page: m.pages.as_deref(),
         publisher: m.publisher.as_deref(),
         issn: m.issn.as_deref(),
+        version: m
+            .other
+            .get("version")
+            .and_then(toml::Value::as_str)
+            .filter(|_| software),
+        url: m.url.as_deref().filter(|_| software),
     }
 }
 
@@ -358,6 +392,9 @@ mod tests {
                 tags: Vec::new(),
                 collections: Vec::new(),
                 annotation: None,
+                repaired_fields: Default::default(),
+                short_venue: None,
+                origin: None,
             }),
             other: BTreeMap::new(),
         }
@@ -483,6 +520,42 @@ mod tests {
             s.contains("title      = {Spin-S chains with S=1 order},"),
             "{s}"
         );
+    }
+
+    #[test]
+    fn csl_title_and_container_markup_is_reduced_to_text() {
+        // #609: CSL is the other render; it borrowed the raw string before.
+        let mut m = fixture(Some("journal-article"));
+        m.title = "Spin-<i>S</i> chains".to_string();
+        m.venue = Some("J. <i>Chem</i>. Phys.".to_string());
+        let v = to_csl_array("k", &m);
+        assert_eq!(v[0]["title"], "Spin-S chains");
+        assert_eq!(v[0]["container-title"], "J. Chem. Phys.");
+    }
+
+    #[test]
+    fn csl_container_title_short_only_on_request_and_only_when_known() {
+        let mut m = fixture(Some("journal-article"));
+        assert!(to_csl_array_with("k", &m, true)[0]
+            .get("container-title-short")
+            .is_none());
+        m.doiget.as_mut().expect("ext").short_venue = Some("Phys. Rev. X".into());
+        assert!(to_csl_array("k", &m)[0]
+            .get("container-title-short")
+            .is_none());
+        assert_eq!(
+            to_csl_array_with("k", &m, true)[0]["container-title-short"],
+            "Phys. Rev. X"
+        );
+    }
+
+    #[test]
+    fn bibtex_an_inequality_in_a_title_is_not_a_tag() {
+        // Review of #618: the old scrubber (and the first cut of the new
+        // one) read `T<Tc ... H>` as a tag and dropped the text between.
+        let mut m = fixture(Some("journal-article"));
+        m.title = "Resistivity for T<Tc in field H>Hc2".to_string();
+        assert!(to_bibtex("k", &m).contains("title      = {Resistivity for T<Tc in field H>Hc2},"));
     }
 
     #[test]

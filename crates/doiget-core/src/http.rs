@@ -303,6 +303,54 @@ pub fn tier_1_allowlist() -> Vec<SourceAllowlist> {
     ]
 }
 
+/// Always-compiled allowlist for **PubMed id resolution** (#500, ADR-0061):
+/// a PMID / PMCID is turned into its DOI by NCBI E-utilities. Not a fetch
+/// source either -- it answers "which DOI is this", never with content -- so
+/// it stays out of [`tier_1_allowlist`] and out of every fetch plan.
+pub fn pubmed_allowlist() -> Vec<SourceAllowlist> {
+    vec![SourceAllowlist::new(
+        crate::pubmed::NCBI,
+        vec!["eutils.ncbi.nlm.nih.gov".to_string()],
+    )]
+}
+
+/// Allowlist for the **preprint finders** that are not fetch sources. Each
+/// has its own gate, and each is asked only when the content leg found
+/// nothing; none of them serves content.
+///
+/// - bioRxiv / medRxiv `pubs` (#640), on `DOIGET_ENABLE_BIORXIV`: the
+///   preprint DOI behind a published DOI, then fetched through its own
+///   reported OA location, never from this host.
+/// - INSPIRE-HEP (#642), on `DOIGET_ENABLE_INSPIRE`: a record's arXiv id.
+/// - NASA ADS (#644), on a non-empty `DOIGET_ADS_TOKEN`: a record's arXiv id.
+pub fn preprint_allowlist() -> Vec<SourceAllowlist> {
+    vec![
+        SourceAllowlist::new("biorxiv", vec!["api.biorxiv.org".to_string()]),
+        // #642: INSPIRE-HEP's record for a DOI, read for its arXiv id only.
+        SourceAllowlist::new("inspire", vec!["inspirehep.net".to_string()]),
+        // #644: NASA ADS search, on the user's own token.
+        SourceAllowlist::new("ads", vec!["api.adsabs.harvard.edu".to_string()]),
+    ]
+}
+
+/// Always-compiled allowlist for **software citations** (#614, ADR-0058):
+/// `doiget cite` / `verify` on a GitHub repository or release URL. Kept out
+/// of [`tier_1_allowlist`] because it is not a fetch source -- a fetch
+/// plan's source list is read from that one, and GitHub must never appear
+/// in it. Only the CLI registers it; no MCP tool cites a URL.
+pub fn software_allowlist() -> Vec<SourceAllowlist> {
+    vec![
+        SourceAllowlist::new(
+            crate::software::GITHUB_API,
+            vec!["api.github.com".to_string()],
+        ),
+        SourceAllowlist::new(
+            crate::software::GITHUB_RAW,
+            vec!["raw.githubusercontent.com".to_string()],
+        ),
+    ]
+}
+
 /// Hard-coded Phase 4 allowlist for Tier 2 metadata sources (OpenAlex,
 /// Semantic Scholar, DOAJ). Sourced from `docs/SOURCES.md` §1 (the Tier 2
 /// table) and `docs/REDIRECT_ALLOWLIST.md` §3 (same redirect-allowlist

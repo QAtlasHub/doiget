@@ -284,6 +284,19 @@ struct RawConfig {
     network: Option<RawNetwork>,
     #[serde(default)]
     store: Option<RawStore>,
+    #[serde(default)]
+    cite: Option<RawCite>,
+    #[serde(flatten)]
+    _other: serde::de::IgnoredAny,
+}
+
+/// `[cite]` -- defaults for `doiget cite` / `doiget bib` keys (#610).
+#[derive(Debug, Default, Deserialize)]
+struct RawCite {
+    #[serde(default)]
+    key_template: Option<String>,
+    #[serde(default)]
+    file_field: Option<String>,
     #[serde(flatten)]
     _other: serde::de::IgnoredAny,
 }
@@ -372,6 +385,11 @@ pub struct UserExtensionConfig {
     /// (#504). Rung below `DOIGET_UNPAYWALL_EMAIL`, itself above
     /// [`Self::contact_email`].
     pub unpaywall_email: Option<String>,
+    /// `[cite] key_template` -- the default `--key-template` (#610). Blank
+    /// is absent.
+    pub cite_key_template: Option<String>,
+    /// `[cite] file_field` -- the default `--file-field` pattern (#610).
+    pub cite_file_field: Option<String>,
 }
 
 /// Returns the built-in curated set of academic institution host patterns.
@@ -435,8 +453,10 @@ pub fn academic_repo_hosts() -> Vec<UserExtensionHost> {
 /// correct.
 ///
 /// Every entry is a registry or repository whose *purpose* is open
-/// distribution, not a publisher platform — enabling this must not become
-/// a way to reach paywalled content. Both the apex and the `*.` wildcard
+/// distribution -- or, since ADR-0066, a national open-access platform
+/// whose default is free access (J-STAGE) -- and never a commercial
+/// publisher platform: enabling this must not become a way to reach
+/// paywalled content. Both the apex and the `*.` wildcard
 /// are listed where the apex itself serves content: a single-suffix
 /// wildcard does not match the apex ([`validate_pattern`]), and the DOAJ
 /// redirect in #405 targeted the bare apex.
@@ -454,6 +474,13 @@ pub fn oa_registry_hosts() -> Vec<UserExtensionHost> {
         (
             "core.ac.uk",
             "CORE — OA aggregator (Open University / Jisc)",
+        ),
+        // #646 / ADR-0066: a national platform whose default is free access.
+        // Unpaywall reports its PDFs as gold / bronze; a restricted article
+        // answers an HTML login page, which the %PDF- check refuses.
+        (
+            "www.jstage.jst.go.jp",
+            "J-STAGE — Japan's national journal platform (JST)",
         ),
     ];
     PATTERNS
@@ -521,6 +548,12 @@ fn parse_str(
         .map(|r| r.trim().to_string())
         .filter(|r| !r.is_empty());
 
+    let nonblank = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let (cite_key_template, cite_file_field) = match raw.cite {
+        Some(c) => (nonblank(c.key_template), nonblank(c.file_field)),
+        None => (None, None),
+    };
+
     Ok(UserExtensionConfig {
         additional_hosts: validated,
         trust_academic_repos,
@@ -528,6 +561,8 @@ fn parse_str(
         store_root,
         contact_email,
         unpaywall_email,
+        cite_key_template,
+        cite_file_field,
     })
 }
 
@@ -1286,12 +1321,31 @@ host = "*.uj.edu.pl"
             "osf.io",
             "hal.science",
             "core.ac.uk",
+            "www.jstage.jst.go.jp",
         ] {
             assert!(
                 patterns.contains(expected),
                 "expected OA registry pattern {expected} not found in {patterns:?}"
             );
         }
+    }
+
+    /// `trust_oa_registries` alone lets a J-STAGE PDF through (ADR-0066),
+    /// offline: the default list does not, and the flag's hosts do, without
+    /// `trust_academic_repos` (#649 review: only the live suite checked it).
+    #[test]
+    fn trust_oa_registries_alone_admits_jstage() {
+        const JSTAGE: &str = "www.jstage.jst.go.jp";
+        let oa = |a: &Vec<SourceAllowlist>| {
+            a.iter()
+                .find(|x| x.source == "oa-publisher")
+                .expect("oa-publisher allowlist")
+                .matches(JSTAGE)
+        };
+        let mut allowlists = crate::http::oa_publisher_allowlist();
+        assert!(!oa(&allowlists), "J-STAGE is not a default host");
+        merge_into_allowlists(&mut allowlists, &oa_registry_hosts());
+        assert!(oa(&allowlists), "the flag's own hosts admit J-STAGE");
     }
 
     /// The two curated sets must stay disjoint: an entry in both would make
@@ -1356,6 +1410,20 @@ host = "*.uj.edu.pl"
 
     /// A blank value is "unset", not the empty path — which would resolve
     /// to the filesystem root.
+    #[test]
+    fn cite_section_parses_and_blank_values_are_absent() {
+        // #610 (review of #622).
+        let cfg = parse_str(
+            "[cite]\nkey_template = \"{author}{year}\"\nfile_field = \"  \"\n",
+            Utf8Path::new("t.toml"),
+        )
+        .expect("parses");
+        assert_eq!(cfg.cite_key_template.as_deref(), Some("{author}{year}"));
+        assert_eq!(cfg.cite_file_field, None, "a blank value is absent");
+        let cfg = parse_str("", Utf8Path::new("t.toml")).expect("parses");
+        assert_eq!((cfg.cite_key_template, cfg.cite_file_field), (None, None));
+    }
+
     #[test]
     fn blank_store_root_parses_as_absent() {
         let cfg =

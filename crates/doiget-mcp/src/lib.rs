@@ -51,9 +51,9 @@ use doiget_core::http::{
     tier_3_allowlists, HttpClient,
 };
 use doiget_core::orchestrator::{
-    batch_fetch as core_batch_fetch, batch_fetch_plans, fetch_paper as core_fetch_paper,
-    metadata_only_to_store_with_options, resolve_only_with_options as core_resolve_only,
-    FetchPaperOutcome, MetadataOnlyOptions, MetadataOnlyOutcome, PdfLegStatus,
+    batch_fetch_plans, metadata_only_to_store_with_options,
+    resolve_only_with_options as core_resolve_only, FetchPaperOutcome, MetadataOnlyOptions,
+    MetadataOnlyOutcome, PdfLegStatus,
 };
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
@@ -66,7 +66,7 @@ use doiget_core::{
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
+    model::{CallToolResult, Implementation, ProtocolVersion, ServerCapabilities, ServerConfig},
     schemars::{self, JsonSchema},
     tool, tool_handler, tool_router,
     transport::stdio,
@@ -166,6 +166,49 @@ impl Server {
     /// every tool call. See the field docs on [`Server`] for what that cost:
     /// no rate pacing between MCP calls, and a provenance hash chain that
     /// two overlapping calls could break.
+    /// `raw` as a [`Ref`], a PubMed id first resolved to the DOI PubMed
+    /// lists for it through NCBI E-utilities (#638, ADR-0061). `network:
+    /// false` (a dry run) refuses the lookup and says so, rather than make a
+    /// request the caller was promised would not happen.
+    ///
+    /// The error is the code and message the tool's envelope carries.
+    async fn ref_or_pubmed(&self, raw: &str, network: bool) -> Result<Ref, (ErrorCode, String)> {
+        use doiget_core::pubmed::{lookup_in_session, Lookup, PubmedId};
+        let Some(id) = PubmedId::parse(raw) else {
+            return Ref::parse(raw)
+                .map_err(|e| (ErrorCode::InvalidRef, format!("invalid ref: {e}")));
+        };
+        if !network {
+            return Err((
+                ErrorCode::InvalidRef,
+                format!(
+                    "{} becomes a DOI through one NCBI lookup, and dry_run makes no request; pass the DOI",
+                    id.display()
+                ),
+            ));
+        }
+        let ctx = self.fetch_context().map_err(|e| {
+            (
+                ErrorCode::InternalError,
+                format!("context init failed: {e}"),
+            )
+        })?;
+        match lookup_in_session(&id, &ctx).await {
+            Ok(Lookup::Doi(doi)) => Ok(Ref::Doi(doi)),
+            Ok(found @ Lookup::NoRecord) => {
+                Err((ErrorCode::NotFound, found.reason(&id).unwrap_or_default()))
+            }
+            Ok(found) => Err((
+                ErrorCode::NotImplemented,
+                found.reason(&id).unwrap_or_default(),
+            )),
+            Err(e) => Err((
+                ErrorCode::from(&e),
+                format!("looking up {} at NCBI failed: {e}", id.display()),
+            )),
+        }
+    }
+
     fn fetch_context(&self) -> anyhow::Result<FetchContext> {
         let log = match self.log.get() {
             Some(l) => Arc::clone(l),
@@ -216,7 +259,8 @@ impl Server {
     ///
     /// Per `docs/MCP_TOOLS.md` §1, this tool MUST exist for the smoke
     /// test to validate the rmcp wiring. The output shape is
-    /// `{ ok: true, version, schema_version, store_writable }`.
+    /// `{ ok: true, version, schema_version, store_writable, build }`
+    /// (`build` since #594: see [`doiget_core::install_info`]).
     ///
     /// `store_writable` is a best-effort probe of the nearest existing
     /// ancestor of the store root — see [`probe_store_writable`]. It
@@ -225,8 +269,8 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: Operational sanity check for the doiget MCP server.\n\
                        INPUTS: none.\n\
-                       OUTPUTS: { ok: true, version, schema_version, store_writable }.\n\
-                       COSTS: <1 ms.\n\
+                       OUTPUTS: { ok: true, version, schema_version, store_writable, build: { version, channel, binary, method, manifest, manifest_matches, update, check } }. `build` says which binary answered and how to update it; compare `version` with the latest release only if the user asks (`build.check`).\n\
+                       COSTS: <1 ms; no network.\n\
                        SIDE EFFECTS: none.\n\
                        LIMITS: store_writable is a best-effort probe of the nearest existing ancestor; it never creates the store.",
         annotations(
@@ -248,6 +292,11 @@ impl Server {
             "version": VERSION,
             "schema_version": SCHEMA_VERSION,
             "store_writable": store_writable,
+            // #594: which binary is answering and how it got there, so an
+            // agent that is served a stale build can see it -- the version
+            // alone had nothing to be compared with. No network: the latest
+            // release is only ever looked up on explicit request (`check`).
+            "build": doiget_core::install_info::install_info(),
         });
         Ok(CallToolResult::structured(payload))
     }
@@ -326,13 +375,14 @@ impl Server {
     ) -> Result<CallToolResult, ErrorData> {
         // Step 1: parse the ref. Failures collapse to INVALID_REF per
         // docs/ERRORS.md §2 / docs/PUBLIC_API.md §4.
-        let ref_ = match Ref::parse(&input.ref_) {
+        // #638: a PubMed id is resolved to its DOI (never under dry_run).
+        let ref_ = match self.ref_or_pubmed(&input.ref_, !input.dry_run).await {
             Ok(r) => r,
-            Err(e) => {
+            Err((code, message)) => {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
                     Some(&input.ref_),
-                    ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    code,
+                    &message,
                 )));
             }
         };
@@ -410,7 +460,7 @@ impl Server {
             event: LogEvent::SessionStart,
             result: LogResult::Ok,
             capability: Capability::Metadata,
-            ref_: Some(input.ref_.as_str()),
+            ref_: Some(ref_.as_input_str()),
             source: None,
             error_code: None,
             size_bytes: None,
@@ -449,7 +499,7 @@ impl Server {
                 LogResult::Err
             },
             capability: Capability::Metadata,
-            ref_: Some(input.ref_.as_str()),
+            ref_: Some(ref_.as_input_str()),
             source: None,
             error_code: session_err,
             size_bytes: None,
@@ -519,13 +569,14 @@ impl Server {
     ) -> Result<CallToolResult, ErrorData> {
         // Step 1: parse the ref. Failures collapse to INVALID_REF per
         // docs/ERRORS.md §2 / docs/PUBLIC_API.md §4.
-        let ref_ = match Ref::parse(&input.ref_) {
+        // #638: a PubMed id is resolved to its DOI.
+        let ref_ = match self.ref_or_pubmed(&input.ref_, true).await {
             Ok(r) => r,
-            Err(e) => {
+            Err((code, message)) => {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
                     Some(&input.ref_),
-                    ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    code,
+                    &message,
                 )));
             }
         };
@@ -550,7 +601,7 @@ impl Server {
             event: LogEvent::SessionStart,
             result: LogResult::Ok,
             capability: Capability::Metadata,
-            ref_: Some(input.ref_.as_str()),
+            ref_: Some(ref_.as_input_str()),
             source: None,
             error_code: None,
             size_bytes: None,
@@ -586,7 +637,7 @@ impl Server {
                 LogResult::Err
             },
             capability: Capability::Metadata,
-            ref_: Some(input.ref_.as_str()),
+            ref_: Some(ref_.as_input_str()),
             source: None,
             error_code: session_err,
             size_bytes: None,
@@ -620,7 +671,7 @@ impl Server {
     /// `StoreWrite` row is also emitted by the orchestrator.
     #[tool(
         description = "WHEN TO USE: User wants to download a paper PDF given a DOI or arXiv id.\n\
-                       INPUTS: ref (DOI or arXiv id), dry_run (optional bool).\n\
+                       INPUTS: ref (DOI or arXiv id), dry_run (optional bool), force (optional bool: ask again even if this session was just answered on the ref; without it such a repeat is replayed as ok:false with replayed:true, #507).\n\
                        OUTPUTS: { ok: true, ref, source, path, license, size_bytes, schema_version, pdf, attempts } OR { ok: true, dry_run: true, ref, plan, rate_limit_budget } OR { ok:false, ref, error }.\n\
                        READ `pdf.status` — `ok: true` does NOT mean a PDF landed. `fetched` = PDF on disk; `no_oa_url` = metadata only, no free copy exists; `blocked` = a free copy EXISTS but was refused.\n\
                        ON `blocked`: do not report the paper as unavailable. `pdf.remediation` lists the config changes that would lift it, narrowest first — `additional_host` entries go under [[network.additional_hosts]] in the config file, a `trust_flag` is a [network] boolean. Show them to the user and let them choose; both widen the trusted download surface.\n\
@@ -640,13 +691,14 @@ impl Server {
         Parameters(input): Parameters<FetchPaperInput>,
     ) -> Result<CallToolResult, ErrorData> {
         // Step 1: parse the ref. Failures collapse to INVALID_REF.
-        let ref_ = match Ref::parse(&input.ref_) {
+        // #638: a PubMed id is resolved to its DOI (never under dry_run).
+        let ref_ = match self.ref_or_pubmed(&input.ref_, !input.dry_run).await {
             Ok(r) => r,
-            Err(e) => {
+            Err((code, message)) => {
                 return Ok(CallToolResult::structured(fetch_paper_error_envelope(
                     Some(&input.ref_),
-                    ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    code,
+                    &message,
                 )));
             }
         };
@@ -698,7 +750,7 @@ impl Server {
             event: LogEvent::SessionStart,
             result: LogResult::Ok,
             capability: Capability::Oa,
-            ref_: Some(input.ref_.as_str()),
+            ref_: Some(ref_.as_input_str()),
             source: None,
             error_code: None,
             size_bytes: None,
@@ -716,7 +768,15 @@ impl Server {
             )));
         }
 
-        let outcome = core_fetch_paper(&ref_, &self.profile, &ctx, &store, &store_root).await;
+        let outcome = doiget_core::orchestrator::fetch_paper_with(
+            &ref_,
+            &self.profile,
+            &ctx,
+            &store,
+            &store_root,
+            doiget_core::orchestrator::FetchOptions::default().with_force(input.force),
+        )
+        .await;
 
         // #507, second surface. `core_fetch_paper` returns `Ok` with a FAILED
         // leg when an OA URL was found and refused, so `Result::is_ok` alone
@@ -728,15 +788,14 @@ impl Server {
         let session_ok = outcome
             .as_ref()
             .is_ok_and(FetchPaperOutcome::is_clean_success);
-        let blocked_code = match outcome.as_ref() {
-            Ok(o) => match &o.pdf_leg {
-                doiget_core::orchestrator::PdfLegStatus::Blocked { code, .. } => {
-                    Some(code.as_wire())
-                }
-                _ => None,
-            },
-            Err(_) => None,
-        };
+        // The code the caller is shown -- a policy refusal is
+        // CAPABILITY_DENIED, not the transport's NETWORK_ERROR -- since repeat
+        // suppression reads it back (#507, `reported_error_code`).
+        let blocked_code = outcome
+            .as_ref()
+            .ok()
+            .and_then(FetchPaperOutcome::reported_error_code)
+            .map(|c| c.as_wire());
         // #507: the bookend recorded THAT the call failed and not WHAT it
         // failed with, so the provenance log could not answer "what did this
         // session tell the caller about this ref?" -- which is the question
@@ -754,7 +813,7 @@ impl Server {
                 LogResult::Err
             },
             capability: Capability::Oa,
-            ref_: Some(input.ref_.as_str()),
+            ref_: Some(ref_.as_input_str()),
             source: None,
             error_code: session_err,
             size_bytes: None,
@@ -791,7 +850,7 @@ impl Server {
     /// `{ok:false, error:{...}}` envelope.
     #[tool(
         description = "WHEN TO USE: User wants to fetch many papers in one call (up to 100).\n\
-                       INPUTS: refs (array of up to 100 DOIs / arXiv ids), dry_run (optional bool).\n\
+                       INPUTS: refs (array of up to 100 DOIs / arXiv ids), dry_run (optional bool), force (optional bool: ask again even if this session was just answered on the ref; without it such a repeat is replayed as ok:false with replayed:true, #507).\n\
                        OUTPUTS: { ok: true, results: [{ref, ok, ...}] } OR { ok: true, dry_run: true, plans: [{ref, plan, rate_limit_budget}] } OR { ok:false, error }.\n\
                        COSTS: 1-3 s per ref, bounded by the 5/sec global rate cap.\n\
                        SIDE EFFECTS: Writes PDFs / metadata TOMLs to the store (unless dry_run). Appends one provenance row per attempt.\n\
@@ -824,12 +883,13 @@ impl Server {
         // all-or-nothing).
         let mut parsed: Vec<Ref> = Vec::with_capacity(input.refs.len());
         for raw in &input.refs {
-            match Ref::parse(raw) {
+            // #638: a PubMed id is resolved to its DOI (never under dry_run).
+            match self.ref_or_pubmed(raw, !input.dry_run).await {
                 Ok(r) => parsed.push(r),
-                Err(e) => {
+                Err((code, message)) => {
                     return Ok(CallToolResult::structured(batch_fetch_error_envelope(
-                        ErrorCode::InvalidRef,
-                        &format!("invalid ref {raw:?}: {e}"),
+                        code,
+                        &format!("{raw:?}: {message}"),
                     )));
                 }
             }
@@ -903,8 +963,15 @@ impl Server {
             )));
         }
 
-        let batch_outcome =
-            core_batch_fetch(&parsed, &self.profile, &ctx, &store, &store_root).await;
+        let batch_outcome = doiget_core::orchestrator::batch_fetch_with(
+            &parsed,
+            &self.profile,
+            &ctx,
+            &store,
+            &store_root,
+            doiget_core::orchestrator::FetchOptions::default().with_force(input.force),
+        )
+        .await;
 
         // #507, third and fourth surfaces. `.is_ok()` on a `BatchResultEntry`
         // calls a Blocked PDF leg a success, exactly as the single-ref tool
@@ -979,7 +1046,7 @@ impl Server {
     /// not the data inside.
     #[tool(
         description = "WHEN TO USE: User has a Zotero / Mendeley CSL-JSON export and wants to fetch all OA-resolvable entries.\n\
-                       INPUTS: path (absolute path to .bib / .csl / .json), format (\"auto\" | \"csl-json\" | \"bibtex\" | \"refs\", default \"auto\"), strict (bool, default false).\n\
+                       INPUTS: path (absolute path to .bib / .csl / .json), format (\"auto\" | \"csl-json\" | \"bibtex\" | \"refs\", default \"auto\"), strict (bool, default false), force (optional bool, as for doiget_batch_fetch).\n\
                        OUTPUTS: { ok: true, summary:{total,ok,failed,parse_errors}, results: [{entry_key, ref, ok, ...}] } OR { ok:false, error }.\n\
                        COSTS: Same as batch_fetch — 1-3 s per entry, bounded by the 5/sec global rate cap.\n\
                        SIDE EFFECTS: Writes PDFs / metadata TOMLs to the store. Appends one provenance row per attempt.\n\
@@ -1047,7 +1114,56 @@ impl Server {
         // parse failure aborts the call.
         let mut parse_errors: Vec<Value> = Vec::new();
         let mut to_fetch: Vec<(Ref, Option<String>)> = Vec::new();
-        for entry in parsed {
+        // #500 / ADR-0061: a PMID / PMCID entry becomes the DOI PubMed lists
+        // for it. The lookups get their own context (their own logged
+        // session), ahead of the fetch session below.
+        let parsed = if parsed.iter().any(|e| {
+            matches!(e, Err(doiget_core::refs::ParseError::UnsupportedIdentifier { kind, .. })
+                if matches!(*kind, "PMID" | "PMCID"))
+        }) {
+            let lookup_ctx = match self.fetch_context() {
+                Ok(c) => c,
+                Err(e) => {
+                    return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                        ErrorCode::InternalError,
+                        &format!("batch-from-bibliography context init failed: {e}"),
+                    )));
+                }
+            };
+            match doiget_core::pubmed::resolve_entries_in_session(parsed, &lookup_ctx).await {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                        ErrorCode::LogError,
+                        &format!("provenance log error while resolving PubMed ids: {e}"),
+                    )));
+                }
+            }
+        } else {
+            parsed
+                .into_iter()
+                .map(doiget_core::pubmed::Resolved::Entry)
+                .collect()
+        };
+        for item in parsed {
+            let entry = match item {
+                doiget_core::pubmed::Resolved::Entry(entry) => entry,
+                doiget_core::pubmed::Resolved::Unresolved(u) => {
+                    if input.strict {
+                        return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                            u.code,
+                            &format!("{} (strict mode aborts)", u.reason),
+                        )));
+                    }
+                    parse_errors.push(json!({
+                        "entry_key": u.entry_key,
+                        "ref":       u.id.display(),
+                        "ok":        false,
+                        "error": error_object(u.code, u.reason),
+                    }));
+                    continue;
+                }
+            };
             match entry {
                 Ok(p) => to_fetch.push((p.ref_, p.entry_key)),
                 Err(doiget_core::refs::ParseError::InvalidRef {
@@ -1094,6 +1210,25 @@ impl Server {
                         "ref":       Value::Null,
                         "ok":        false,
                         "error": error_object(ErrorCode::NotImplemented, msg),
+                    }));
+                }
+                // #614: software on GitHub -- no paper to fetch.
+                Err(err @ doiget_core::refs::ParseError::SoftwareUrl { .. }) => {
+                    let msg = err.to_string();
+                    let doiget_core::refs::ParseError::SoftwareUrl { url, entry_key } = err else {
+                        unreachable!("guarded by the pattern above")
+                    };
+                    if input.strict {
+                        return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                            ErrorCode::NotImplemented,
+                            &format!("{msg} (strict mode aborts)"),
+                        )));
+                    }
+                    parse_errors.push(json!({
+                        "entry_key": entry_key,
+                        "ref":       url,
+                        "ok":        false,
+                        "error": error_object(ErrorCode::NotImplemented, msg.as_str()),
                     }));
                 }
                 Err(doiget_core::refs::ParseError::NoIdentifier { entry_key }) => {
@@ -1193,7 +1328,15 @@ impl Server {
         // through to the result rows below.
         let refs: Vec<Ref> = to_fetch.iter().map(|(r, _)| r.clone()).collect();
         let entry_keys: Vec<Option<String>> = to_fetch.iter().map(|(_, k)| k.clone()).collect();
-        let batch_outcome = core_batch_fetch(&refs, &self.profile, &ctx, &store, &store_root).await;
+        let batch_outcome = doiget_core::orchestrator::batch_fetch_with(
+            &refs,
+            &self.profile,
+            &ctx,
+            &store,
+            &store_root,
+            doiget_core::orchestrator::FetchOptions::default().with_force(input.force),
+        )
+        .await;
 
         // Same boundary as the sibling batch tool above (#507).
         let session_ok = batch_outcome.as_ref().is_ok_and(|b| {
@@ -1269,7 +1412,7 @@ impl Server {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    &invalid_ref_message(&input.ref_, &e),
                 )));
             }
         };
@@ -1294,7 +1437,7 @@ impl Server {
                 )));
             }
         };
-        match store.read(&safekey) {
+        match doiget_core::store::blocking_section(|| store.read(&safekey)) {
             Ok(Some(m)) => {
                 let payload = match serde_json::to_value(&m) {
                     Ok(v) => v,
@@ -1378,7 +1521,7 @@ impl Server {
                 )));
             }
         };
-        match store.search(&input.query, limit) {
+        match doiget_core::store::blocking_section(|| store.search(&input.query, limit)) {
             Ok(entries) => Ok(CallToolResult::structured(json!({
                 "ok": true,
                 "scope": "local",
@@ -1999,7 +2142,7 @@ impl Server {
                 )));
             }
         };
-        match store.list_recent(limit) {
+        match doiget_core::store::blocking_section(|| store.list_recent(limit)) {
             Ok(entries) => Ok(CallToolResult::structured(json!({
                 "ok": true,
                 "count": entries.len(),
@@ -2025,7 +2168,7 @@ impl Server {
     #[tool(
         description = "WHEN TO USE: Locate the local PDF file for a stored entry (returns a path, NOT the PDF bytes).\n\
                        INPUTS: ref (DOI or arXiv id).\n\
-                       OUTPUTS: { ok: true, ref, safekey, path: string|null, pdf_exists: bool } OR { ok:false, ref, error }.\n\
+                       OUTPUTS: { ok: true, ref, safekey, path: string|null, pdf_exists: bool, origin: string|null (\"user-supplied\" for a PDF added with doiget add; null when doiget fetched it), license: string|null } OR { ok:false, ref, error }.\n\
                        COSTS: <10 ms local read.\n\
                        SIDE EFFECTS: none. NEVER reads or transmits PDF bytes.\n\
                        LIMITS: Both 'no metadata entry' and 'metadata exists but PDF file missing' surface as { ok: true, path: null, pdf_exists: false } — call doiget_info to distinguish the two cases. Returns an ok:false envelope only on invalid ref / store-open failure.",
@@ -2046,7 +2189,7 @@ impl Server {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    &invalid_ref_message(&input.ref_, &e),
                 )));
             }
         };
@@ -2071,16 +2214,24 @@ impl Server {
                 )));
             }
         };
-        match store.read(&safekey) {
-            Ok(Some(_)) => {
+        match doiget_core::store::blocking_section(|| store.read(&safekey)) {
+            Ok(Some(m)) => {
                 let pdf_path = store_root.join(format!("{}.pdf", safekey.as_str()));
                 let exists = pdf_path.exists();
+                let d = m.doiget.as_ref();
                 Ok(CallToolResult::structured(json!({
                     "ok": true,
                     "ref": input.ref_,
                     "safekey": safekey.as_str(),
                     "path": if exists { Value::String(pdf_path.to_string()) } else { Value::Null },
                     "pdf_exists": exists,
+                    // #606: where the PDF came from, so an agent does not
+                    // read a user's licensed download as an open copy.
+                    // `user-supplied` (added with `doiget add`, no licence
+                    // claim) or null (fetched by doiget); `license` is the
+                    // stored claim, `unknown` when none was determined.
+                    "origin": d.and_then(|d| d.origin.clone()),
+                    "license": d.map(|d| d.license.clone()),
                 })))
             }
             Ok(None) => Ok(CallToolResult::structured(json!({
@@ -2154,7 +2305,7 @@ impl Server {
                     return Ok(CallToolResult::structured(read_path_error_envelope(
                         Some(&input.ref_),
                         ErrorCode::InvalidRef,
-                        &format!("invalid ref: {e}"),
+                        &invalid_ref_message(&input.ref_, &e),
                     )));
                 }
             };
@@ -2499,7 +2650,7 @@ impl Server {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    &invalid_ref_message(&input.ref_, &e),
                 )));
             }
         };
@@ -2526,7 +2677,7 @@ impl Server {
             }
         };
 
-        let mut metadata = match store.read(&safekey) {
+        let mut metadata = match doiget_core::store::blocking_section(|| store.read(&safekey)) {
             Ok(Some(m)) => m,
             Ok(None) => {
                 return Ok(CallToolResult::structured(json!({
@@ -2598,7 +2749,9 @@ impl Server {
         let tags = ext.tags.clone();
         let collections = ext.collections.clone();
 
-        match store.write_user_authored(&safekey, &metadata, None) {
+        match doiget_core::store::blocking_section(|| {
+            store.write_user_authored(&safekey, &metadata, None)
+        }) {
             Ok(()) => Ok(CallToolResult::structured(json!({
                 "ok": true,
                 "ref": input.ref_,
@@ -2642,7 +2795,7 @@ impl Server {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    &invalid_ref_message(&input.ref_, &e),
                 )));
             }
         };
@@ -2669,7 +2822,7 @@ impl Server {
             }
         };
 
-        let mut metadata = match store.read(&safekey) {
+        let mut metadata = match doiget_core::store::blocking_section(|| store.read(&safekey)) {
             Ok(Some(m)) => m,
             Ok(None) => {
                 return Ok(CallToolResult::structured(json!({
@@ -2746,7 +2899,9 @@ impl Server {
 
         let annotation = ext.annotation.clone();
 
-        match store.write_user_authored(&safekey, &metadata, None) {
+        match doiget_core::store::blocking_section(|| {
+            store.write_user_authored(&safekey, &metadata, None)
+        }) {
             Ok(()) => Ok(CallToolResult::structured(json!({
                 "ok": true,
                 "ref": input.ref_,
@@ -3275,13 +3430,13 @@ impl Server {
                 Err(e) => {
                     entries.push(json!({
                         "ref": r,
-                        "error": error_object(ErrorCode::InvalidRef, format!("invalid ref: {e}")),
+                        "error": error_object(ErrorCode::InvalidRef, invalid_ref_message(r, &e)),
                     }));
                     continue;
                 }
             };
             let safekey = ref_.safekey();
-            match store.read(&safekey) {
+            match doiget_core::store::blocking_section(|| store.read(&safekey)) {
                 Ok(Some(m)) => {
                     let payload = match fmt {
                         CiteFmt::Bibtex => {
@@ -3457,6 +3612,12 @@ fn metadata_only_success_envelope(outcome: &MetadataOnlyOutcome, ref_str: &str) 
         // or null when not determined (e.g. the Crossref-first path).
         "oa_status": outcome.oa_status,
         "metadata": outcome.metadata,
+        // #608: `metadata` is the resolver's payload as received. When the
+        // store write repaired a U+FFFD field from an enabled source, or
+        // could not, these say so -- the only channel an agent has, since
+        // tracing goes to stderr, which the stdio transport never surfaces.
+        "metadata_quality": outcome.metadata_quality,
+        "repaired_fields": outcome.repaired_fields,
         "schema_version": SCHEMA_VERSION,
     })
 }
@@ -3517,6 +3678,10 @@ fn metadata_only_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value 
     if let Some(ms) = doiget_core::source::retry_after_ms(err) {
         error_obj.insert("retry_after_ms".into(), json!(ms));
     }
+    // #507: say so when the answer is a replay, not a fresh one.
+    if doiget_core::source::is_replayed(err) {
+        error_obj.insert("replayed".into(), json!(true));
+    }
     if let Some(dc) = denial {
         // `DenialContext` is `Serialize` (`#[serde(deny_unknown_fields)]`,
         // optional fields) and `serde_json::to_value` cannot fail on a
@@ -3566,6 +3731,12 @@ pub struct FetchPaperInput {
     /// (ADR-0022). Defaults to `false`.
     #[serde(default)]
     pub dry_run: bool,
+    /// Ask even if this session was already answered on the ref with
+    /// something a retry cannot change yet (#507). Without it such a repeat
+    /// returns `ok:false` with `replayed: true` and the earlier code; with
+    /// it the request goes out and the log records that it was forced.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Build the `{ok:true, ref, source, path, ...}` success envelope per
@@ -3640,10 +3811,29 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
         PdfLegStatus::PreprintFallback {
             arxiv_id,
             original_block,
+            found_by,
         } => json!({
             "status": "preprint_fallback",
             "arxiv_id": arxiv_id,
             "original_block": original_block,
+            // ADR-0062: who named the preprint, as a `FoundBy` token.
+            "found_by": found_by.as_str(),
+        }),
+        // #640: a non-arXiv preprint, fetched through its own DOI.
+        PdfLegStatus::PreprintDoiFallback {
+            preprint_doi,
+            platform,
+            original_block,
+            found_by,
+        } => json!({
+            // Its own status, not `preprint_fallback`: an arXiv preprint and
+            // a bioRxiv one are different routes, and the route registry
+            // (route_coverage_e2e) holds each to its own test.
+            "status": "preprint_doi_fallback",
+            "preprint_doi": preprint_doi.as_str(),
+            "platform": platform,
+            "original_block": original_block,
+            "found_by": found_by.as_str(),
         }),
         // `PdfLegStatus` is `#[non_exhaustive]`; a future variant
         // surfaces as a forward-compatible neutral status rather than
@@ -3683,6 +3873,12 @@ fn fetch_paper_success_envelope(outcome: &FetchPaperOutcome, ref_str: &str) -> V
         // when there is no trace, so "unavailable" stays distinguishable
         // from "empty".
         "attempts": attempts_json(&outcome.attempts),
+        // #608: a stored field that still carries a U+FFFD (a character
+        // the publisher's deposit lost), e.g. `replacement_char:venue`, and
+        // the fields repaired from another enabled source. Both empty for
+        // clean metadata; always present so an agent can rely on the key.
+        "metadata_quality": outcome.metadata_quality,
+        "repaired_fields": outcome.repaired_fields,
     })
 }
 
@@ -3732,6 +3928,10 @@ fn fetch_paper_fetch_error_envelope(err: &FetchError, ref_str: &str) -> Value {
     if let Some(ms) = doiget_core::source::retry_after_ms(err) {
         error_obj.insert("retry_after_ms".into(), json!(ms));
     }
+    // #507: say so when the answer is a replay, not a fresh one.
+    if doiget_core::source::is_replayed(err) {
+        error_obj.insert("replayed".into(), json!(true));
+    }
     if let Some(dc) = denial {
         error_obj.insert(
             "denial_context".into(),
@@ -3780,6 +3980,12 @@ pub struct BatchFromBibliographyInput {
     /// successful siblings.
     #[serde(default)]
     pub strict: bool,
+    /// Ask even if this session was already answered on the ref with
+    /// something a retry cannot change yet (#507). Without it such a repeat
+    /// returns `ok:false` with `replayed: true` and the earlier code; with
+    /// it the request goes out and the log records that it was forced.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Resolve a `--format` token to a [`doiget_core::refs::Format`]. The
@@ -3860,6 +4066,10 @@ fn build_bibliography_envelope(
                 if let Some(ms) = doiget_core::source::retry_after_ms(err) {
                     error_obj.insert("retry_after_ms".into(), json!(ms));
                 }
+                // #507: say so when the answer is a replay, not a fresh one.
+                if doiget_core::source::is_replayed(err) {
+                    error_obj.insert("replayed".into(), json!(true));
+                }
                 if let Some(dc) = denial {
                     error_obj.insert(
                         "denial_context".into(),
@@ -3915,6 +4125,12 @@ pub struct BatchFetchInput {
     /// per ref without touching the network or store.
     #[serde(default)]
     pub dry_run: bool,
+    /// Ask even if this session was already answered on the ref with
+    /// something a retry cannot change yet (#507). Without it such a repeat
+    /// returns `ok:false` with `replayed: true` and the earlier code; with
+    /// it the request goes out and the log records that it was forced.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Build the `{ok:true, results: [...]}` envelope for a successful
@@ -3967,6 +4183,10 @@ fn batch_fetch_success_envelope(
                 // name of a measurement.
                 if let Some(ms) = doiget_core::source::retry_after_ms(err) {
                     error_obj.insert("retry_after_ms".into(), json!(ms));
+                }
+                // #507: say so when the answer is a replay, not a fresh one.
+                if doiget_core::source::is_replayed(err) {
+                    error_obj.insert("replayed".into(), json!(true));
                 }
                 if let Some(dc) = denial {
                     error_obj.insert(
@@ -4135,170 +4355,111 @@ fn crossref_source_from_env() -> Result<CrossrefSource, String> {
     }
 }
 
+/// The `INVALID_REF` message for a tool that takes a DOI or arXiv id only.
+/// A PubMed id is valid input for the network tools, so it is named as one
+/// rather than called malformed (#638).
+fn invalid_ref_message(raw: &str, e: &doiget_core::RefParseError) -> String {
+    if doiget_core::pubmed::PubmedId::parse(raw).is_some() {
+        format!(
+            "{raw} is a PubMed id; doiget_fetch_paper, doiget_resolve_paper, \
+             doiget_metadata_only and doiget_batch_fetch resolve it to its DOI -- \
+             this tool takes the DOI itself"
+        )
+    } else {
+        format!("invalid ref: {e}")
+    }
+}
+
 /// HTTP client construction with the same `DOIGET_*_BASE` test-override
 /// surface that `doiget-cli` honors (`build_http_client` in
 /// `crates/doiget-cli/src/commands/fetch.rs`). When no overrides are
 /// set, returns the production allowlist (Tier 1 ∪ OA publisher ∪ Tier 2 ∪
 /// full-text (ar5iv)).
 fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
-    let arxiv = std::env::var("DOIGET_ARXIV_BASE").ok();
-    let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
-    let unpaywall = std::env::var("DOIGET_UNPAYWALL_BASE").ok();
-    let oa_publisher = std::env::var("DOIGET_OA_PUBLISHER_BASE").ok();
-
-    let openalex_base = std::env::var("DOIGET_OPENALEX_BASE").ok();
-    // ADR-0032: ar5iv full-text base override (test wiremock origin).
-    let ar5iv_base = std::env::var("DOIGET_AR5IV_BASE").ok();
-    // `doiget_paper_tex_source` uses the `"arxiv"` HTTP source key (same key
-    // as `DOIGET_ARXIV_BASE`). MCP integration tests that override only the
-    // source API can set `DOIGET_ARXIV_SRC_BASE`; in the test-mode path below
-    // it is treated as a fallback for the `"arxiv"` source entry when
-    // `DOIGET_ARXIV_BASE` is absent.
-    let arxiv_src = std::env::var("DOIGET_ARXIV_SRC_BASE").ok();
-
-    #[cfg(feature = "tdm-aps")]
-    let tdm_aps = std::env::var("DOIGET_APS_BASE").ok();
-    #[cfg(feature = "tdm-elsevier")]
-    let tdm_elsevier = std::env::var("DOIGET_ELSEVIER_BASE").ok();
-    #[cfg(feature = "tdm-springer")]
-    let tdm_springer = std::env::var("DOIGET_SPRINGER_BASE").ok();
-    #[cfg(feature = "tdm-ieee")]
-    let tdm_ieee = std::env::var("DOIGET_IEEE_BASE").ok();
-    if arxiv.is_none()
-        && arxiv_src.is_none()
-        && crossref.is_none()
-        && unpaywall.is_none()
-        && oa_publisher.is_none()
-        && openalex_base.is_none()
-        && ar5iv_base.is_none()
+    // #587: one table in doiget-core decides test mode and what the test
+    // client registers, for this builder and the CLI's alike.
+    if let Some(client) = doiget_core::base_override::test_client_from_env()
+        .map_err(|e| anyhow::anyhow!("building the DOIGET_*_BASE test client: {e}"))?
     {
-        let mut allowlists = tier_1_allowlist();
-        allowlists.extend(oa_publisher_allowlist());
-        // Slice 15: Tier 2 allowlist is unioned in unconditionally —
-        // the runtime `metadata.openalex` / `.semantic_scholar` /
-        // `.doaj` capability flags gate whether the source impls
-        // even call `HttpClient::fetch_bytes` under these keys, so
-        // including the hosts here cannot widen the network surface
-        // beyond what the CapabilityProfile already permits.
-        allowlists.extend(tier_2_allowlist());
-        // ADR-0032: full-text extraction (`doiget_paper_text`) is Tier-1
-        // OA, always-on. Register `ar5iv.labs.arxiv.org` under the
-        // `"ar5iv"` source key so `paper_text::paper_text` can reach it.
-        allowlists.extend(fulltext_allowlist());
-        // #454: the Tier-3 transport gate, mirroring the CLI builder.
-        // Empty in a default build; the `CapabilityProfile` grant is
-        // still what decides whether a TDM source is ever called.
-        allowlists.extend(tier_3_allowlists());
+        return Ok(client);
+    }
+    let mut allowlists = tier_1_allowlist();
+    allowlists.extend(oa_publisher_allowlist());
+    // ADR-0061: PMID / PMCID -> DOI for `doiget_batch_from_bibliography`.
+    allowlists.extend(doiget_core::http::pubmed_allowlist());
+    // #640: bioRxiv / medRxiv `pubs`, gated at runtime on DOIGET_ENABLE_BIORXIV.
+    allowlists.extend(doiget_core::http::preprint_allowlist());
+    // Slice 15: Tier 2 allowlist is unioned in unconditionally —
+    // the runtime `metadata.openalex` / `.semantic_scholar` /
+    // `.doaj` capability flags gate whether the source impls
+    // even call `HttpClient::fetch_bytes` under these keys, so
+    // including the hosts here cannot widen the network surface
+    // beyond what the CapabilityProfile already permits.
+    allowlists.extend(tier_2_allowlist());
+    // ADR-0032: full-text extraction (`doiget_paper_text`) is Tier-1
+    // OA, always-on. Register `ar5iv.labs.arxiv.org` under the
+    // `"ar5iv"` source key so `paper_text::paper_text` can reach it.
+    allowlists.extend(fulltext_allowlist());
+    // #454: the Tier-3 transport gate, mirroring the CLI builder.
+    // Empty in a default build; the `CapabilityProfile` grant is
+    // still what decides whether a TDM source is ever called.
+    allowlists.extend(tier_3_allowlists());
 
-        // ADR-0028 D2: merge user-extension hosts from
-        // `<config_dir>/doiget/config.toml`. Mirrors the CLI path in
-        // `crates/doiget-cli/src/commands/fetch.rs::build_http_client`
-        // so the MCP server sees the same user-curated allowlist
-        // additions. Failure handling matches the CLI:
-        //   - missing config (file not found) is silent (Ok-empty);
-        //   - malformed config emits `tracing::warn!` and continues
-        //     with the curated allowlist;
-        //   - unresolvable config dir emits `tracing::debug!`.
-        match config_dir_utf8() {
-            Ok(cfg_dir) => {
-                let path = cfg_dir.join("doiget").join("config.toml");
-                match doiget_core::user_extension::load(&path) {
-                    Ok(cfg) => {
-                        let mut hosts = cfg.additional_hosts;
-                        if cfg.trust_academic_repos {
-                            hosts.extend(doiget_core::user_extension::academic_repo_hosts());
-                        }
-                        // Issue #405: the Gold-OA counterpart. Separate flag
-                        // because the trust argument is different — see
-                        // `oa_registry_hosts`.
-                        if cfg.trust_oa_registries {
-                            hosts.extend(doiget_core::user_extension::oa_registry_hosts());
-                        }
-                        if !hosts.is_empty() {
-                            tracing::info!(
-                                count = hosts.len(),
-                                trust_academic_repos = cfg.trust_academic_repos,
-                                trust_oa_registries = cfg.trust_oa_registries,
-                                path = %path,
-                                "merging user-extension allowlist hosts (ADR-0028 D2)"
-                            );
-                            doiget_core::user_extension::merge_into_allowlists(
-                                &mut allowlists,
-                                &hosts,
-                            );
-                        }
+    // ADR-0028 D2: merge user-extension hosts from
+    // `<config_dir>/doiget/config.toml`. Mirrors the CLI path in
+    // `crates/doiget-cli/src/commands/fetch.rs::build_http_client`
+    // so the MCP server sees the same user-curated allowlist
+    // additions. Failure handling matches the CLI:
+    //   - missing config (file not found) is silent (Ok-empty);
+    //   - malformed config emits `tracing::warn!` and continues
+    //     with the curated allowlist;
+    //   - unresolvable config dir emits `tracing::debug!`.
+    match config_dir_utf8() {
+        Ok(cfg_dir) => {
+            let path = cfg_dir.join("doiget").join("config.toml");
+            match doiget_core::user_extension::load(&path) {
+                Ok(cfg) => {
+                    let mut hosts = cfg.additional_hosts;
+                    if cfg.trust_academic_repos {
+                        hosts.extend(doiget_core::user_extension::academic_repo_hosts());
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
+                    // Issue #405: the Gold-OA counterpart. Separate flag
+                    // because the trust argument is different — see
+                    // `oa_registry_hosts`.
+                    if cfg.trust_oa_registries {
+                        hosts.extend(doiget_core::user_extension::oa_registry_hosts());
+                    }
+                    if !hosts.is_empty() {
+                        tracing::info!(
+                            count = hosts.len(),
+                            trust_academic_repos = cfg.trust_academic_repos,
+                            trust_oa_registries = cfg.trust_oa_registries,
                             path = %path,
-                            "failed to load user-extension allowlist; \
-                             falling back to curated set only"
+                            "merging user-extension allowlist hosts (ADR-0028 D2)"
                         );
+                        doiget_core::user_extension::merge_into_allowlists(&mut allowlists, &hosts);
                     }
                 }
-            }
-            Err(e) => {
-                tracing::debug!(
-                    error = %e,
-                    "config dir unresolvable; \
-                     user-extension allowlist disabled (curated set only)"
-                );
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %path,
+                        "failed to load user-extension allowlist; \
+                         falling back to curated set only"
+                    );
+                }
             }
         }
-
-        return HttpClient::new(allowlists)
-            .map_err(|e| anyhow::anyhow!("building production HTTP client: {e}"));
-    }
-
-    let mut owned: Vec<(String, String)> = Vec::new();
-    // When DOIGET_ARXIV_BASE is set use it; otherwise fall back to
-    // DOIGET_ARXIV_SRC_BASE (they share the "arxiv" HTTP source key).
-    let arxiv_entry = arxiv.as_deref().or(arxiv_src.as_deref());
-    // Tier-3 test bases. A wiremock e2e could not reach the TDM-fetched
-    // route at all before this: the override branch built its allowlist
-    // from a fixed table of Tier-1/2 keys, so `tdm-aps` was simply not in
-    // the client's map and every attempt died as
-    // `no allowlist registered for source tdm-aps`. That was read as
-    // "#454's shape, reachable again" and filed as a possible production
-    // regression -- the production branch above extends with
-    // `tier_3_allowlists()` and was correct all along. The defect was
-    // here, in the harness, which is why only a route assertion found it.
-    //
-    // Not added to the production-branch test above on purpose: setting
-    // only `DOIGET_APS_BASE` (which `tdm_ieee.rs` documents as a way to
-    // replay a recorded fixture) must NOT drop the process into the
-    // allow-http test client.
-    for (source, base) in [
-        ("arxiv", arxiv_entry),
-        #[cfg(feature = "tdm-aps")]
-        ("tdm-aps", tdm_aps.as_deref()),
-        #[cfg(feature = "tdm-elsevier")]
-        ("tdm-elsevier", tdm_elsevier.as_deref()),
-        #[cfg(feature = "tdm-springer")]
-        ("tdm-springer", tdm_springer.as_deref()),
-        #[cfg(feature = "tdm-ieee")]
-        ("tdm-ieee", tdm_ieee.as_deref()),
-        ("crossref", crossref.as_deref()),
-        ("unpaywall", unpaywall.as_deref()),
-        ("oa-publisher", oa_publisher.as_deref()),
-        ("openalex", openalex_base.as_deref()),
-        ("ar5iv", ar5iv_base.as_deref()),
-    ] {
-        if let Some(b) = base {
-            let url = url::Url::parse(b)
-                .map_err(|e| anyhow::anyhow!("DOIGET_*_BASE for {source} not a URL: {b}: {e}"))?;
-            let host = url
-                .host_str()
-                .ok_or_else(|| anyhow::anyhow!("base URL has no host: {b}"))?;
-            owned.push((source.to_string(), host.to_string()));
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                "config dir unresolvable; \
+                 user-extension allowlist disabled (curated set only)"
+            );
         }
     }
-    let entries: Vec<(&str, &str)> = owned
-        .iter()
-        .map(|(s, h)| (s.as_str(), h.as_str()))
-        .collect();
-    Ok(HttpClient::new_for_tests_allow_http_multi(&entries))
+
+    HttpClient::new(allowlists).map_err(|e| anyhow::anyhow!("building production HTTP client: {e}"))
 }
 
 /// Best-effort config-dir resolution. Honors `XDG_CONFIG_HOME` first
@@ -4360,11 +4521,11 @@ fn resolve_log_path() -> anyhow::Result<Utf8PathBuf> {
 // capability-aware `instructions`.
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Server {
-    fn get_info(&self) -> ServerInfo {
-        // Both `ServerInfo` and `Implementation` are `#[non_exhaustive]`
+    fn get_info(&self) -> ServerConfig {
+        // Both `ServerConfig` and `Implementation` are `#[non_exhaustive]`
         // (since rmcp 1.6, still so in 3.x), so we go through the public
         // builders rather than struct-literal construction.
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_server_info(Implementation::new("doiget", VERSION))
             .with_instructions(format!(
@@ -4534,16 +4695,27 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
 
     // `metadata_sources` (spec §7) == the enabled Tier-2 metadata
     // sources. Order is deterministic (declaration order).
-    let mut metadata_sources: Vec<&str> = Vec::new();
-    if profile.metadata.openalex {
-        metadata_sources.push("openalex");
-    }
-    if profile.metadata.semantic_scholar {
-        metadata_sources.push("semantic_scholar");
-    }
-    if profile.metadata.doaj {
-        metadata_sources.push("doaj");
-    }
+    //
+    // Every opt-in flag, named as `doiget sources` names it. It listed three
+    // of them, so an agent that enabled DataCite, HAL, OpenAIRE, CORE,
+    // Europe PMC or bioRxiv (#640) was told they were off.
+    let m = &profile.metadata;
+    let metadata_sources: Vec<&str> = [
+        ("openalex", m.openalex),
+        ("semantic_scholar", m.semantic_scholar),
+        ("doaj", m.doaj),
+        ("biorxiv", m.biorxiv),
+        ("inspire", m.inspire),
+        ("ads", m.ads),
+        ("datacite", m.datacite),
+        ("hal", m.hal),
+        ("openaire", m.openaire),
+        ("core", m.core),
+        ("europe-pmc", m.europe_pmc),
+    ]
+    .into_iter()
+    .filter_map(|(name, on)| on.then_some(name))
+    .collect();
     // Additive alias kept for back-compat with pre-#141 consumers.
     let tier_2 = metadata_sources.clone();
 
@@ -4905,6 +5077,23 @@ mod tests {
         assert_eq!(v["tier_1"], json!(["arxiv", "crossref", "unpaywall"]));
     }
 
+    /// #641 review: every enabled opt-in source is reported, not the first
+    /// three -- bioRxiv (#640) and DataCite among them.
+    #[cfg(feature = "citation")]
+    #[test]
+    #[serial_test::serial]
+    fn capability_profile_lists_every_enabled_opt_in_source() {
+        std::env::set_var("DOIGET_ENABLE_BIORXIV", "1");
+        std::env::set_var("DOIGET_ENABLE_DATACITE", "1");
+        let profile = CapabilityProfile::from_env().expect("profile");
+        std::env::remove_var("DOIGET_ENABLE_BIORXIV");
+        std::env::remove_var("DOIGET_ENABLE_DATACITE");
+        let v = capability_profile_to_json(&profile);
+        let sources = v["metadata_sources"].as_array().expect("array");
+        assert!(sources.contains(&json!("biorxiv")), "{v}");
+        assert!(sources.contains(&json!("datacite")), "{v}");
+    }
+
     // ---- ADR-0030 D6: doiget_batch_from_bibliography helpers ------
 
     #[test]
@@ -4981,7 +5170,10 @@ mod tests {
         assert!(!store_root_env_is_usable("${HOME}/papers"));
     }
 
+    // Serial: it reads the store-root env and config.toml, which the serial
+    // config-rung tests below point at `/from/config` while they run.
     #[test]
+    #[serial_test::serial]
     fn resolve_store_root_returns_some_on_normal_host() {
         // The default is `<cwd>/papers` (ADR-0036): either branch yields a
         // root on a normal host — `DOIGET_STORE_ROOT` when set, else the cwd
@@ -5018,6 +5210,28 @@ mod tests {
     /// `oa_publisher_allowlist_hosts` — the same helper the CLI test
     /// uses (review pass M3). The function exposes the merged host
     /// list without leaking client internals.
+    /// #587 (review of #621): the MCP twin of the CLI proxy-case test,
+    /// through `build_http_client_for_fetch` itself.
+    #[test]
+    #[serial_test::serial]
+    fn a_proxy_base_alone_keeps_the_production_client() {
+        let _g: Vec<EnvGuard> = doiget_core::base_override::BASE_OVERRIDES
+            .iter()
+            .map(|o| EnvGuard::unset(o.env))
+            .collect();
+        let _aps = EnvGuard::set("DOIGET_APS_BASE", "https://proxy.example.edu");
+        let _dc = EnvGuard::set("DOIGET_DATACITE_BASE", "https://proxy.example.edu");
+        let client = build_http_client_for_fetch().expect("production client");
+        assert!(client
+            .source_allowlist("crossref")
+            .is_some_and(|a| a.redirect_hosts.iter().any(|h| h == "api.crossref.org")));
+
+        let _cr = EnvGuard::set("DOIGET_CROSSREF_BASE", "http://127.0.0.1:9");
+        let client = build_http_client_for_fetch().expect("test client");
+        assert!(client.source_allowlist("datacite").is_some());
+        assert!(client.source_allowlist("unpaywall").is_none());
+    }
+
     #[test]
     #[serial_test::serial]
     fn build_http_client_for_fetch_merges_user_extension_hosts() {
@@ -5437,5 +5651,35 @@ mod tests {
 
         let got = resolve_store_root().expect("resolves");
         assert_eq!(got.as_str(), "/from/env");
+    }
+
+    /// #590: no MCP handler calls a `Store` method except through
+    /// `doiget_core::store::blocking_section`, so a lock poll or an fsync on
+    /// a synced folder cannot hold a tokio worker.
+    #[test]
+    fn every_store_call_in_a_handler_goes_through_blocking_section() {
+        let src = include_str!("lib.rs");
+        let body = src.split("\nmod tests {").next().expect("non-test part");
+        // Whitespace stripped: neither rustfmt nor a method chain split
+        // across lines (`store\n    .read(`) can hide a call (review of #620).
+        let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        for m in [
+            "read",
+            "write",
+            "write_user_authored",
+            "list_recent",
+            "search",
+            "search_by_tag",
+        ] {
+            let calls = flat.match_indices(&*format!("store.{m}(")).count();
+            let wrapped = flat
+                .match_indices(&*format!("blocking_section(||store.{m}("))
+                .count()
+                + flat
+                    .match_indices(&*format!("blocking_section(||{{store.{m}("))
+                    .count();
+            assert_eq!(calls, wrapped, "store.{m} called outside blocking_section");
+        }
+        assert_eq!(flat.matches("blocking_section(||").count(), 9);
     }
 }

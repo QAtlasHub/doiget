@@ -41,6 +41,13 @@ pub struct ResolvedConfig {
     /// the cwd default, and the two coincide whenever the user happens to
     /// run from the directory they configured.
     pub store_root_source: String,
+    /// The `DOIGET_STORE_ROOT` value when it is set but ignored because it
+    /// is empty, whitespace or an unexpanded `${...}` placeholder (#613).
+    /// Without it, `config show --mode json` reads the same for "exported
+    /// an empty value" as for "never set", and a script cannot tell its
+    /// export was dropped. Omitted when the variable is unset or usable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store_root_env_ignored: Option<String>,
     /// Directory holding doiget's append-only logs. Derived from
     /// `log_path`'s parent so it always agrees with the writer.
     pub log_dir: Utf8PathBuf,
@@ -206,6 +213,7 @@ impl ResolvedConfig {
         Ok(Self {
             store_root,
             store_root_source: store_root_source.label().to_string(),
+            store_root_env_ignored: super::ignored_store_root_env(),
             log_dir,
             log_path,
             config_dir,
@@ -325,6 +333,15 @@ pub async fn run(
             // distinguish "your setting worked" from "your setting was
             // ignored and you happen to be standing in it".
             eprintln!("       from: {}", cfg.store_root_source);
+            if let Some(raw) = &cfg.store_root_env_ignored {
+                // #613: set-but-unusable reads exactly like unset in the line
+                // above, and a script that exported an empty value expects
+                // it to have taken effect.
+                eprintln!(
+                    "       note: DOIGET_STORE_ROOT is set to {raw:?}, which is empty or an \
+                     unexpanded placeholder, so it was ignored"
+                );
+            }
             if cfg.store_root_source == super::StoreRootSource::CwdDefault.label() {
                 eprintln!(
                     "       note: relative to the current directory (ADR-0036). Set DOIGET_STORE_ROOT"
@@ -635,6 +652,18 @@ pub(crate) fn config_template() -> &'static str {
 # color = "auto"     # auto | always | never
 # progress = false
 # emoji = false
+
+[cite]
+# Citation keys for `doiget cite` and `doiget bib`. Unset, every key is the
+# safekey (`doi_10.1007_BF01340294`), which never collides. A template gives
+# human keys instead -- {author} {year} {title_word} {safekey}, lower-cased
+# and ASCII-folded -- and `bib` suffixes a collision `a`, `b`, ...
+# --key-template and --key override this.
+# key_template = "{author}{year}{title_word}"   # fock1930naherungsmethode
+#
+# Add `file = {...}` pointing at the local PDF, when that path exists
+# (--file-field-always adds it regardless). Relative to where you run it.
+# file_field = "refs/{key}.pdf"
 "#
 }
 
@@ -967,6 +996,28 @@ mod tests {
             .iter()
             .map(|v| EnvGuard::set(v, dir))
             .collect()
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn an_empty_store_root_env_falls_through_and_is_reported_as_ignored() {
+        // #613: `export DOIGET_STORE_ROOT=${DOIGET_STORE_ROOT:-}` exports "".
+        let _g = unset_all_doiget_config_env();
+        for raw in ["", "   ", "${user_config.store_root}"] {
+            let _root = EnvGuard::set("DOIGET_STORE_ROOT", raw);
+            let cfg = ResolvedConfig::from_env().expect("config resolves on test host");
+            assert_ne!(cfg.store_root.as_str(), raw.trim());
+            assert_ne!(cfg.store_root_source, "DOIGET_STORE_ROOT", "{raw:?}");
+            assert_eq!(cfg.store_root_env_ignored.as_deref(), Some(raw));
+            let json = serde_json::to_value(&cfg).expect("serialises");
+            assert_eq!(json["store_root_env_ignored"], raw, "{raw:?}");
+        }
+        let _root = EnvGuard::set("DOIGET_STORE_ROOT", "/srv/papers");
+        let cfg = ResolvedConfig::from_env().expect("config resolves on test host");
+        assert_eq!(cfg.store_root_source, "DOIGET_STORE_ROOT");
+        assert_eq!(cfg.store_root_env_ignored, None);
+        let json = serde_json::to_value(&cfg).expect("serialises");
+        assert!(json.get("store_root_env_ignored").is_none());
     }
 
     #[test]

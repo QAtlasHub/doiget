@@ -6,15 +6,16 @@ weight = 180
 
 # safekey algorithm
 
-> **Status: NORMATIVE (shared spec).** Binding for both doiget and BiblioFetch.jl.
-> Any change requires a coordinated ADR and an update to the reference test vectors at
-> `tests/fixtures/safekey/vectors.json`.
+> **Status: NORMATIVE.** Binding for doiget. Any change requires a doiget ADR and an
+> update to the reference test vectors at `tests/fixtures/safekey/vectors.json`. Until
+> 0.9.0 this was shared with BiblioFetch.jl (ADR-0004, retired by ADR-0060); the
+> algorithm did not change.
 
 ## 1. Goal
 
 Map any DOI or arXiv id to a deterministic, cross-platform, bit-identical filesystem-safe
 key. The same input must produce the same `safekey` output on Linux, macOS, and Windows,
-and across both Rust and Julia implementations.
+for every input the reference vectors cover.
 
 ## 2. Constraints
 
@@ -181,7 +182,6 @@ proptest! {
 
 ## 7. Backwards compatibility note
 
-Older BiblioFetch.jl versions used a slightly different algorithm (the H2 issue). When
-this NORMATIVE spec is adopted, BiblioFetch.jl will publish a migration tool that
-re-keys existing entries to the new spec. doiget will only ever read or write entries
-produced by the spec defined in this document.
+Older BiblioFetch.jl versions used a slightly different algorithm (the H2 issue). doiget
+only ever reads or writes entries produced by the spec defined in this document; a
+store keyed by the older algorithm needs re-keying before doiget can find its entries.

@@ -10,12 +10,18 @@
 # Keep the table sorted; prefer fixing the typo over adding an exception.
 # `flate`: substring of the gzip crate name `flate2` (provenance §6
 # rotation, #140) — a real crate identifier, not a misspelling of "flat".
+# `ein` / `sur`: German / French stop words the citekey template skips
+# (store/citekey.rs, #610) -- words in their own languages, not typos.
+ein = "ein"
 flate = "flate"
+# Creative Commons licence tokens: `cc-by-nc-nd` ("NoDerivatives").
+nd = "nd"
 # `rquest`: actively-maintained reqwest fork
 # (https://crates.io/crates/rquest); referenced in ADR-0028 (D3)
 # as one of the impersonation libraries explicitly out-of-scope.
 # Not a misspelling of "request" or "quest".
 rquest = "rquest"
+sur = "sur"
 
 [files]
 # Generated / vendored / fixture files where typo enforcement is not useful.

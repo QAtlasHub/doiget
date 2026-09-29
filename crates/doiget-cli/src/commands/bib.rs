@@ -18,12 +18,14 @@ use anyhow::{bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 
 use doiget_core::refs::{self, Format};
-use doiget_core::store::{render, FsStore, Metadata, Store};
+use doiget_core::store::{FsStore, Metadata, Store};
 use doiget_core::Safekey;
 
 use super::fetch::CliExit;
 use super::output::print_err;
 use super::resolve_store_root;
+use super::KeyOptions;
+use std::collections::HashSet;
 
 /// Run the `bib` subcommand against the configured store.
 ///
@@ -36,6 +38,7 @@ pub fn run(
     ref_: Option<String>,
     all: bool,
     from_file: Option<Utf8PathBuf>,
+    keys: KeyOptions,
     _mode: super::output::OutputMode,
 ) -> Result<()> {
     // Exactly-one-of selector validation (clap leaves all three optional).
@@ -50,11 +53,15 @@ pub fn run(
 
     let store = FsStore::new(resolve_store_root()?)?;
 
+    if keys.key.is_some() && ref_.is_none() {
+        bail!("`--key` names one entry; use `--key-template` with `--all` / `--from-file`");
+    }
+    let keys = keys.with_config_defaults()?;
     if all {
-        return run_all(&store);
+        return run_all(&store, &keys);
     }
     if let Some(path) = from_file {
-        return run_from_file(&store, &path);
+        return run_from_file(&store, &path, &keys);
     }
 
     // Single ref (the original behavior). Selector validation above
@@ -67,7 +74,11 @@ pub fn run(
     let ref_ = super::parse_ref_or_exit(&input)?;
     let safekey = ref_.safekey();
     match store.read(&safekey)? {
-        Some(m) => write_all(&render::to_bibtex(safekey.as_str(), &m)),
+        Some(m) => {
+            let bib = keys.bibtex(&m, safekey.as_str(), &mut HashSet::new())?;
+            keys.report();
+            write_all(&bib)
+        }
         None => bail!("no entry for {input}"),
     }
 }
@@ -75,7 +86,7 @@ pub fn run(
 /// `--all`: render every store entry, deduplicated by citation key, as one
 /// `.bib`. An empty store is not a failure — it exits 0 with a stderr note,
 /// since "nothing to export" is a valid outcome (no ref was requested).
-fn run_all(store: &FsStore) -> Result<()> {
+fn run_all(store: &FsStore, keys: &KeyOptions) -> Result<()> {
     // `usize::MAX` ⇒ every entry; `list_recent` already orders by recency.
     let entries = store
         .list_recent(usize::MAX)
@@ -90,12 +101,21 @@ fn run_all(store: &FsStore) -> Result<()> {
 
     let mut out = String::new();
     let mut seen: Vec<String> = Vec::new();
+    let mut used: HashSet<String> = HashSet::new();
     let mut rendered = 0usize;
     for e in &entries {
         // An entry listed but unreadable (deleted/raced) is skipped loudly
         // rather than aborting the whole export.
         match store.read(&e.safekey) {
-            Ok(Some(m)) => push_entry(&mut out, &mut seen, &e.safekey, &m, &mut rendered),
+            Ok(Some(m)) => push_entry(
+                &mut out,
+                &mut seen,
+                &mut used,
+                keys,
+                &e.safekey,
+                &m,
+                &mut rendered,
+            )?,
             Ok(None) => {}
             Err(err) => print_err(format_args!(
                 "bib --all: skipping {} (read failed: {err})",
@@ -105,6 +125,7 @@ fn run_all(store: &FsStore) -> Result<()> {
     }
 
     write_all(&out)?;
+    keys.report();
     print_err(format_args!("bib --all: exported {rendered} entries"));
     Ok(())
 }
@@ -114,7 +135,7 @@ fn run_all(store: &FsStore) -> Result<()> {
 /// non-zero (failure count, capped at 255 — same convention as `batch`)
 /// when any requested ref could not be rendered, so a script can tell a
 /// complete export from a partial one.
-fn run_from_file(store: &FsStore, path: &Utf8Path) -> Result<()> {
+fn run_from_file(store: &FsStore, path: &Utf8Path, keys: &KeyOptions) -> Result<()> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("reading --from-file list: {path}"))?;
     // Same bibliography adapter `batch` uses: plain refs / CSL-JSON /
@@ -123,6 +144,7 @@ fn run_from_file(store: &FsStore, path: &Utf8Path) -> Result<()> {
 
     let mut out = String::new();
     let mut seen: Vec<String> = Vec::new();
+    let mut used: HashSet<String> = HashSet::new();
     let mut rendered = 0usize;
     let mut missing = 0usize;
     for entry in parsed {
@@ -141,7 +163,15 @@ fn run_from_file(store: &FsStore, path: &Utf8Path) -> Result<()> {
         // `run_all` — it must NOT abort the whole export and lose every
         // remaining ref (review #318).
         match store.read(&safekey) {
-            Ok(Some(m)) => push_entry(&mut out, &mut seen, &safekey, &m, &mut rendered),
+            Ok(Some(m)) => push_entry(
+                &mut out,
+                &mut seen,
+                &mut used,
+                keys,
+                &safekey,
+                &m,
+                &mut rendered,
+            )?,
             Ok(None) => {
                 missing += 1;
                 print_err(format_args!(
@@ -160,6 +190,7 @@ fn run_from_file(store: &FsStore, path: &Utf8Path) -> Result<()> {
     }
 
     write_all(&out)?;
+    keys.report();
     print_err(format_args!(
         "bib --from-file: exported {rendered} entries, {missing} missing"
     ));
@@ -177,13 +208,18 @@ fn run_from_file(store: &FsStore, path: &Utf8Path) -> Result<()> {
 fn push_entry(
     out: &mut String,
     seen: &mut Vec<String>,
+    used: &mut HashSet<String>,
+    keys: &KeyOptions,
     safekey: &Safekey,
     m: &Metadata,
     rendered: &mut usize,
-) {
+) -> Result<()> {
+    // Deduplicated by safekey (one entry per paper); the citation key it is
+    // rendered under is disambiguated separately, since two papers can
+    // share `{author}{year}` (#610).
     let key = safekey.as_str();
     if seen.iter().any(|k| k == key) {
-        return;
+        return Ok(());
     }
     seen.push(key.to_string());
     if !out.is_empty() {
@@ -191,8 +227,9 @@ fn push_entry(
         // with `}\n`.
         out.push('\n');
     }
-    out.push_str(&render::to_bibtex(key, m));
+    out.push_str(&keys.bibtex(m, key, used)?);
     *rendered += 1;
+    Ok(())
 }
 
 /// Write the rendered BibTeX to stdout. Workspace lints deny

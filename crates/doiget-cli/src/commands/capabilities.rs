@@ -45,6 +45,9 @@ use serde::Serialize;
 pub struct Capabilities {
     /// `CARGO_PKG_VERSION` for this build.
     pub version: &'static str,
+    /// Release channel, running binary, install method and the command that
+    /// updates it (#594). No network: see `doiget_core::install_info`.
+    pub build: doiget_core::install_info::InstallInfo,
     /// Cargo features compiled into this binary. Contains `"oa-only"`
     /// in stock release builds (the default feature). Empty only when
     /// the crate was built with `--no-default-features` and **no
@@ -591,6 +594,7 @@ pub fn build_capabilities(cli: &clap::Command) -> Capabilities {
         .collect::<Vec<_>>();
     Capabilities {
         version: env!("CARGO_PKG_VERSION"),
+        build: doiget_core::install_info::install_info(),
         features: compile_time_features(),
         modes: MODES,
         global_flags,

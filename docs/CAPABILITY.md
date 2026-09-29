@@ -194,6 +194,9 @@ the agreement, so rule 3 now also fires for a file-supplied key.
 | `DOIGET_ENABLE_OPENALEX` | presence | Enables OpenAlex (metadata only). |
 | `DOIGET_ENABLE_S2` | presence | Enables Semantic Scholar. |
 | `DOIGET_ENABLE_DOAJ` | presence | Enables DOAJ. |
+| `DOIGET_ADS_TOKEN` | string | Your own NASA ADS API token; enables ADS as a preprint finder (#644, ADR-0065). Sent only as `Authorization: Bearer`; never logged. |
+| `DOIGET_ENABLE_INSPIRE` | presence | Enables INSPIRE-HEP as a preprint finder: a closed DOI's arXiv id (#642, ADR-0064). |
+| `DOIGET_ENABLE_BIORXIV` | presence | Enables bioRxiv / medRxiv `pubs`: a closed DOI's preprint (#640, ADR-0063). |
 | `DOIGET_ENABLE_DATACITE` | presence | Enables DataCite DOI **resolution** (Zenodo / figshare / Dryad / OSF). Unlike its siblings this is not enrichment: without it those DOIs report `NOT_FOUND` even when the record is live and open (#414). |
 | `DOIGET_ENABLE_HAL` | presence | Enables HAL, the French national OA repository. OA deposits only: a record whose `openAccess_bool` is not `true` is rejected rather than returned (#418). |
 | `DOIGET_ENABLE_OPENAIRE` | presence | Enables OpenAIRE (European repository aggregation, Graph API v1). Mixed access rights: only a COAR `c_abf2` (OPEN) `bestAccessRight` is accepted; EMBARGO / RESTRICTED / CLOSED / absent are refused (#416). |

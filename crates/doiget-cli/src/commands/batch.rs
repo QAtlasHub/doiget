@@ -42,6 +42,7 @@ use camino::Utf8Path;
 
 use doiget_core::orchestrator::{FetchPaperOutcome, PdfLegStatus};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, RowInput};
+use doiget_core::pubmed;
 use doiget_core::refs::{self, Format, ParseError};
 use doiget_core::source::FetchError;
 use doiget_core::{DenialContext, ErrorCode, RateLimits, Ref, MCP_BATCH_MAX_SIZE};
@@ -142,8 +143,33 @@ pub async fn run_with_options(
     // error rather than a silently-empty batch.
     let path_utf8 = Utf8Path::new(&path);
     let parsed = refs::parse_input(&raw, Format::Auto, Some(path_utf8));
-    let mut inputs: Vec<BatchEntry> = Vec::with_capacity(parsed.len());
-    for entry in parsed {
+    // #500 / ADR-0061: a PMID / PMCID entry becomes the DOI PubMed lists
+    // for it -- one NCBI lookup each, so not under --dry-run, which promises
+    // no request.
+    let resolved = if dry_run {
+        parsed.into_iter().map(pubmed::Resolved::Entry).collect()
+    } else {
+        let ctx = super::fetch::build_resolve_context()?;
+        pubmed::resolve_entries_in_session(parsed, &ctx)
+            .await
+            .map_err(|e| anyhow!("provenance log error while resolving PubMed ids: {e}"))?
+    };
+    let mut inputs: Vec<BatchEntry> = Vec::with_capacity(resolved.len());
+    for resolved in resolved {
+        let entry = match resolved {
+            pubmed::Resolved::Entry(entry) => entry,
+            pubmed::Resolved::Unresolved(u) => {
+                inputs.push(BatchEntry::Rejected {
+                    display: match &u.entry_key {
+                        Some(k) => format!("{}:{k}", u.id.display()),
+                        None => u.id.display(),
+                    },
+                    code: u.code,
+                    message: u.reason,
+                });
+                continue;
+            }
+        };
         match entry {
             Ok(p) => inputs.push(BatchEntry::Ref(p.ref_.as_input_str().to_string())),
             // The raw identifier verbatim, so the downstream `Ref::parse`
@@ -197,6 +223,19 @@ pub async fn run_with_options(
                 inputs.push(BatchEntry::Rejected {
                     display,
                     code: ErrorCode::InvalidRef,
+                    message,
+                });
+            }
+            // #614: software, not a paper. There is nothing to fetch; the
+            // message names the command that cites it.
+            Err(err @ ParseError::SoftwareUrl { .. }) => {
+                let message = err.to_string();
+                let ParseError::SoftwareUrl { url, .. } = err else {
+                    unreachable!("guarded by the pattern above")
+                };
+                inputs.push(BatchEntry::Rejected {
+                    display: url,
+                    code: ErrorCode::NotImplemented,
                     message,
                 });
             }
@@ -308,6 +347,11 @@ pub async fn run_with_options(
     // this semaphore is purely the spawn-side cap on simultaneous tasks.
     let max_concurrent = RateLimits::HARD_CODED.max_concurrent_fetches() as usize;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+    // #649 review: repeat suppression observes an answer only once it has
+    // landed, so two tasks for the same ref could both pass `check` and both
+    // fetch. One lock per ref makes a duplicate wait for the first answer,
+    // which the index then replays -- as the sequential MCP batch does.
+    let ref_locks = RefLocks::default();
 
     // Step 7: dispatch in bounded windows. The ENTIRE input is processed —
     // no ref is ever dropped (issue #304) — but at most `MCP_BATCH_MAX_SIZE`
@@ -421,6 +465,7 @@ pub async fn run_with_options(
 
             let harness_task = Arc::clone(&harness);
             let sem_task = Arc::clone(&semaphore);
+            let ref_lock = ref_locks.get(ref_.as_input_str());
             if let Some(d) = delay {
                 if is_first_spawn {
                     is_first_spawn = false;
@@ -431,6 +476,9 @@ pub async fn run_with_options(
                 is_first_spawn = false;
             }
             joins.spawn(async move {
+                // Taken before the permit, so a waiting duplicate does not
+                // hold one of the five slots.
+                let _same_ref = ref_lock.lock_owned().await;
                 // `Semaphore::acquire_owned` only errors when the semaphore
                 // is closed; we never close it. The fallback maps that
                 // structurally-unreachable arm to a fetch failure rather
@@ -450,6 +498,17 @@ pub async fn run_with_options(
                     }
                 };
                 let result = harness_task.fetch_one(&ref_).await;
+                // #507: this run's bookend covers the whole batch, so each
+                // entry's answer is recorded as it lands -- a DOI listed twice
+                // is then replayed, not fetched twice. A replay itself is
+                // skipped by the index, so it cannot restart a wait.
+                harness_task.log.repeat().observe(
+                    ref_.as_input_str(),
+                    match &result {
+                        Ok(o) => o.reported_error_code(),
+                        Err(e) => Some(doiget_core::ErrorCode::from(e)),
+                    },
+                );
                 TaskOutcome { input, result }
             });
         }
@@ -837,6 +896,23 @@ fn emit_jsonl_already_fetched(ref_input: &str) {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/// One async lock per ref in a batch run (#649 review), so entries naming
+/// the same work run one after another.
+#[derive(Default)]
+struct RefLocks(std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>);
+
+impl RefLocks {
+    fn get(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        // A poisoned map only means another insert panicked; the map
+        // itself is still whole.
+        let mut map = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(map.entry(key.to_string()).or_default())
+    }
+}
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]

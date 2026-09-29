@@ -15,9 +15,9 @@ exclude = [
 ]
 
 [workspace.package]
-version       = "0.8.13"
+version       = "0.9.0"
 edition       = "2021"
-rust-version  = "1.86"
+rust-version  = "1.88"
 license       = "MIT"
 repository    = "https://github.com/QAtlasHub/doiget"
 homepage      = "https://github.com/QAtlasHub/doiget"
@@ -41,9 +41,9 @@ features-doc-link = "docs/SOURCES.md"
 
 [workspace.dependencies]
 # Core
-doiget-core = { path = "crates/doiget-core", version = "0.8.13" }
-doiget-cli  = { path = "crates/doiget-cli", version = "0.8.13" }
-doiget-mcp  = { path = "crates/doiget-mcp", version = "0.8.13" }
+doiget-core = { path = "crates/doiget-core", version = "0.9.0" }
+doiget-cli  = { path = "crates/doiget-cli", version = "0.9.0" }
+doiget-mcp  = { path = "crates/doiget-mcp", version = "0.9.0" }
 
 # Async runtime — features are deliberately limited (avoid `full`).
 tokio = { version = "1", default-features = false, features = [
@@ -147,6 +147,9 @@ ulid = { version = "3", features = ["serde"] }
 
 # URL parsing — required, see docs/SECURITY.md §1.4
 url = "2"
+# Citekey ASCII folding (#610): NFD, then drop combining marks. Already in
+# the tree through `biblatex`.
+unicode-normalization = "0.1"
 
 # XML parsing for arXiv Atom feed
 # (`https://export.arxiv.org/api/query?id_list=...`). `quick-xml` is the
@@ -201,7 +204,7 @@ petgraph = "0.6"
 # `deny.toml` bans `axum` / `hyper::Server` / `openssl` / `native-tls`.
 # A `cargo tree -p doiget-mcp` after the edit must NOT show any of those
 # crates; `cargo deny check` enforces this in CI.
-rmcp = { version = "3.1", default-features = false, features = [
+rmcp = { version = "3.4", default-features = false, features = [
     "server", "macros", "transport-io", "schemars",
 ] }
 

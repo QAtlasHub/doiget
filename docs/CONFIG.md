@@ -90,6 +90,15 @@ color = "auto"          # auto | always | never
 progress = false
 emoji = false
 
+[cite]                   # consumed by `doiget cite` and `doiget bib` (#610)
+# Default key template; --key-template / --key override it. Placeholders:
+# {author} {year} {title_word} {safekey}, lower-cased and ASCII-folded.
+# Unset = the safekey (doi_10.1007_BF01340294), which is collision-free.
+key_template = "{author}{year}{title_word}"   # -> fock1930naherungsmethode
+# Add `file = {...}` when this path exists ({key}, {safekey}); relative paths
+# resolve against the directory the command runs in.
+file_field = "refs/{key}.pdf"
+
 [verify]                 # consumed by `doiget verify`
 on_missing_id = "warn"   # warn | error | skip — policy for id-less entries
 strict = false           # also fail on unreachable (transient) ids; absent (404/410) ids fail regardless
@@ -155,11 +164,16 @@ trust_academic_repos = true
 ```
 scielo.org    *.scielo.org    *.scielo.br
 zenodo.org    *.zenodo.org    osf.io        *.osf.io
-hal.science   *.hal.science   core.ac.uk
+hal.science   *.hal.science   core.ac.uk    www.jstage.jst.go.jp
 ```
 
-Every entry is a registry or repository whose *purpose* is open distribution, never a
-publisher platform — turning this on must not become a way to reach paywalled content.
+Every entry is a registry or repository whose *purpose* is open distribution, or a
+national open-access platform whose default is free access (J-STAGE, ADR-0066) — never a
+commercial publisher platform. Turning this on must not become a way to reach paywalled
+content: only a location Unpaywall reports as open is followed, and a restricted J-STAGE
+article answers an HTML login page, which the `%PDF-` check refuses. J-STAGE's terms
+permit private use and prohibit "downloading a large amount of the Registered Data using
+mechanical or equivalent means" — a `batch` over many J-STAGE DOIs is yours to keep small.
 Note that both the apex and the wildcard are listed where the apex serves content: a
 single-suffix wildcard does **not** match the apex.
 

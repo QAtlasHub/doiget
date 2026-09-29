@@ -21,8 +21,13 @@ weight = 200
 | Unpaywall | 1 (OA) | 1 | email (polite pool) | <https://unpaywall.org/products/api> | always-on |
 | arXiv | 1 (OA) | 1 | none | <https://info.arxiv.org/help/api/index.html> | always-on |
 | ar5iv (full text) | 1 (OA) | 4 (PR4) | none | <https://ar5iv.labs.arxiv.org/> | always-on |
+| NCBI E-utilities (PubMed id → DOI) | 1 (metadata) | 0.9 | none (3 requests/second without a key; doiget sends none) | <https://www.ncbi.nlm.nih.gov/books/NBK25497/> | always-on, asked only for a PMID / PMCID the caller names (ADR-0061) |
+| GitHub (software citations) | 1 (metadata) | 0.9 | none (60 requests/hour unauthenticated) | <https://docs.github.com/en/site-policy/github-terms/github-terms-of-service> | always-on, asked only by `cite` / `verify` on a GitHub URL (ADR-0058) |
 | OpenAlex | 2 (metadata) | 4 | none | <https://help.openalex.org/how-to/> | `--features metadata` + `DOIGET_ENABLE_OPENALEX` |
 | Semantic Scholar | 2 (metadata) | 4 | API key (optional) | <https://www.semanticscholar.org/product/api> | `--features metadata` + `DOIGET_ENABLE_S2` |
+| NASA ADS | 2 (preprint of a published DOI) | 0.9 | the user's own token (`DOIGET_ADS_TOKEN`); 5,000/day | <https://github.com/adsabs/adsabs-dev-api> | `--features metadata` + `DOIGET_ADS_TOKEN` (#644, ADR-0065) |
+| INSPIRE-HEP | 2 (preprint of a published DOI) | 0.9 | none (15 requests / 5 s) | <https://github.com/inspirehep/rest-api-doc> | `--features metadata` + `DOIGET_ENABLE_INSPIRE` (#642, ADR-0064) |
+| bioRxiv / medRxiv `pubs` | 2 (preprint of a published DOI) | 0.9 | none (no published rate limit; paced at 1/s) | <https://www.biorxiv.org/about-biorxiv> | `--features metadata` + `DOIGET_ENABLE_BIORXIV` (#640, ADR-0063) |
 | DOAJ | 2 (metadata) | 4 | none | <https://doaj.org/terms/> | `--features metadata` + `DOIGET_ENABLE_DOAJ` |
 | DataCite | 2 (resolution) | 4 | none | <https://datacite.org/terms-and-conditions/> | `--features metadata` + `DOIGET_ENABLE_DATACITE` |
 | HAL | 2 (metadata) | 4 | none | <https://api.archives-ouvertes.fr/docs> | `--features metadata` + `DOIGET_ENABLE_HAL` |
@@ -275,6 +280,17 @@ asked" and from "wrong publisher".
 `DOIGET_SPRINGER_BASE` and `DOIGET_IEEE_BASE` override the API base, mirroring `DOIGET_CROSSREF_BASE`.
 Intended for tests and for institutional proxies.
 
+Every `DOIGET_*_BASE` is listed once, in `doiget_core::base_override::BASE_OVERRIDES` (#587).
+Two kinds behave differently:
+
+- **The Tier-1 bases switch to test mode.** These are `ARXIV`, `ARXIV_SRC`, `CROSSREF`,
+  `UNPAYWALL`, `OA_PUBLISHER`, `OPENALEX` and `AR5IV`. Setting any one of them rebuilds the HTTP
+  client as the allow-http test client, containing only the overridden sources. A source you did
+  not mock is absent, so a test that reaches it fails offline instead of calling the real API.
+- **The Tier-2 and Tier-3 bases do not.** They are honoured inside test mode. On their own they
+  keep the production client, which is `https_only` and applies its allowlists to redirects.
+  `DOIGET_APS_BASE=https://proxy.example.edu` therefore works with every other source intact.
+
 ### When the publisher refuses the content
 
 The OA chain already tries every location Unpaywall returned, advancing past
@@ -283,9 +299,11 @@ look beyond that list: when Crossref resolved the DOI, the optional sources
 were skipped entirely, so a rate limit on the single publisher URL ended a run
 with other indexes switched on (#445).
 
-If the content leg is still blocked after the arXiv preprint fallback
-(#325), doiget now asks the **enabled** optional sources whether anyone else
-holds a copy, and tries the document URL they report. Three of them publish
+If the content leg still has no PDF after the arXiv preprint fallback
+(#325) -- whether a location refused it (blocked) or Unpaywall had no OA
+location at all (`closed`, #547) -- doiget asks the **enabled** optional
+sources whether anyone else holds a copy, and tries the document URL they
+report. Three of them publish
 one: CORE (`downloadUrl`), HAL (`fileMain_s`, gated on `openAccess_bool`) and
 Europe PMC (`fullTextUrlList`). OpenAIRE and DataCite report a DOI resolver or
 a landing page rather than a file, so they contribute no URL — their outcome
@@ -293,6 +311,14 @@ still appears in the attempt trace.
 
 The fetch itself stays on the `oa-publisher` leg, with its allowlist and its
 ADR-0023 denial context, exactly as each source's own docs describe.
+
+OpenAlex lists every location it knows, including ones it cannot point at a
+file. When a named location's landing page is a listing (an EPrints
+`/view/author/` page) or a malformed URL, the attempt trace names the
+location and says so, e.g. *"Strathprints ... URL .../view/author/70486.html>
+is malformed ... a listing page rather than an item; search that repository
+for the title"*. That points the reader at the repository rather than at
+giving up. Following the repository's own search is not done (#547 part 2).
 
 This costs a request only when the content leg has **already** failed and the
 user has switched a source on. With no flags set, behaviour is unchanged.

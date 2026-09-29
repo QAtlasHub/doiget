@@ -77,6 +77,9 @@ fn fixture(type_: Option<&str>) -> Metadata {
             tags: Vec::new(),
             collections: Vec::new(),
             annotation: None,
+            repaired_fields: Default::default(),
+            short_venue: None,
+            origin: None,
         }),
         other: BTreeMap::new(),
     }
@@ -292,4 +295,291 @@ fn cite_auto_falls_back_to_store_when_live_resolve_fails() {
         .success()
         .stdout(predicate::str::contains("@article{doi_10.1234_example,"))
         .stderr(predicate::str::contains("note: live resolve failed"));
+}
+
+/// Two papers by the same first author in the same year, plus a store the
+/// `--file-field` pattern half-matches.
+fn seeded_store_for_keys() -> (TempDir, Utf8PathBuf) {
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8_path(&dir).join("papers");
+    let store = FsStore::new(root.clone()).expect("FsStore::new");
+    for (doi, title) in [
+        (
+            "10.1017/S0305004100011919",
+            "The Wave Mechanics of an Atom with a Non-Coulomb Central Field",
+        ),
+        (
+            "10.1017/S0305004100011920",
+            "The Wave Mechanics of an Atom, Part II",
+        ),
+    ] {
+        let mut m = fixture(Some("journal-article"));
+        m.doi = Some(Doi::parse(doi).expect("doi"));
+        m.title = title.to_string();
+        m.authors = vec!["Hartree, D. R.".to_string()];
+        m.year = Some(1928);
+        let ref_ = Ref::Doi(Doi::parse(doi).expect("doi"));
+        store.write(&ref_.safekey(), &m, None).expect("seed");
+    }
+    (dir, root)
+}
+
+/// #610: a template keys every entry, a collision gets the biblatex `a`
+/// suffix, and `file` appears only where the pattern names an existing file.
+#[test]
+fn bib_all_with_a_key_template_disambiguates_and_adds_existing_files() {
+    let (dir, root) = seeded_store_for_keys();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(work.join("refs")).expect("mkdir");
+    std::fs::write(work.join("refs/hartree1928wave.pdf"), b"%PDF-1.4\n").expect("pdf");
+    let out = doiget(&root)
+        .current_dir(&work)
+        .args([
+            "bib",
+            "--all",
+            "--key-template",
+            "{author}{year}{title_word}",
+        ])
+        .args(["--file-field", "refs/{key}.pdf"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8(out).expect("utf-8");
+    assert!(out.contains("{hartree1928wave,"), "{out}");
+    assert!(out.contains("{hartree1928wavea,"), "{out}");
+    assert_eq!(
+        out.matches("file       = {refs/hartree1928wave.pdf}")
+            .count(),
+        1,
+        "{out}"
+    );
+    assert!(!out.contains("hartree1928wavea.pdf"), "{out}");
+}
+
+#[test]
+fn bib_config_key_template_is_the_default_and_the_flag_overrides_it() {
+    let (dir, root) = seeded_store_for_keys();
+    let cfg = dir.path().join("cfg");
+    std::fs::create_dir_all(cfg.join("doiget")).expect("mkdir");
+    std::fs::write(
+        cfg.join("doiget/config.toml"),
+        "[cite]\nkey_template = \"{author}{year}\"\n",
+    )
+    .expect("config");
+    let run = |extra: &[&str]| {
+        let out = doiget(&root)
+            .env("XDG_CONFIG_HOME", &cfg)
+            .env("APPDATA", &cfg)
+            .args(["bib", "10.1017/S0305004100011919"])
+            .args(extra)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(out).expect("utf-8")
+    };
+    assert!(run(&[]).starts_with("@article{hartree1928,"));
+    assert!(run(&["--key", "h28"]).starts_with("@article{h28,"));
+    assert!(run(&["--key-template", "{safekey}"])
+        .starts_with("@article{doi_10.1017_S0305004100011919,"));
+}
+
+#[test]
+fn bib_key_template_errors_are_named_and_key_is_single_ref_only() {
+    let (_dir, root) = seeded_store_for_keys();
+    doiget(&root)
+        .args(["bib", "--all", "--key", "x"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("`--key` names one entry"));
+    doiget(&root)
+        .args(["bib", "--all", "--key-template", "{author}{yr}"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown placeholder {yr}"));
+}
+
+#[test]
+fn bib_default_key_is_still_the_safekey() {
+    let (_dir, root) = seeded_store_for_keys();
+    doiget(&root)
+        .args(["bib", "10.1017/S0305004100011919"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(
+            "@article{doi_10.1017_S0305004100011919,",
+        ))
+        .stdout(predicate::str::contains("file ").not());
+}
+
+/// Review of #622: `cite`, not only `bib`, honours the key options -- here
+/// on its --offline store path.
+#[test]
+fn cite_offline_with_a_key_template_and_a_file_field() {
+    let (dir, root) = seeded_store_for_keys();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(work.join("refs")).expect("mkdir");
+    std::fs::write(work.join("refs/hartree1928wave.pdf"), b"%PDF-1.4\n").expect("pdf");
+    doiget(&root)
+        .current_dir(&work)
+        .args(["cite", "--offline", "10.1017/S0305004100011919"])
+        .args(["--key-template", "{author}{year}{title_word}"])
+        .args(["--file-field", "refs/{key}.pdf"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("@article{hartree1928wave,"))
+        .stdout(predicate::str::contains(
+            "file       = {refs/hartree1928wave.pdf}",
+        ));
+    doiget(&root)
+        .args([
+            "cite",
+            "--offline",
+            "10.1017/S0305004100011919",
+            "--key",
+            "h28",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("@article{h28,"));
+}
+
+/// Review of #622: an explicit key BibTeX cannot carry is refused, not
+/// emitted as `@article{smith, 2020,`.
+#[test]
+fn an_explicit_key_bibtex_cannot_carry_is_refused() {
+    let (_dir, root) = seeded_store_for_keys();
+    doiget(&root)
+        .args([
+            "cite",
+            "--offline",
+            "10.1017/S0305004100011919",
+            "--key",
+            "smith, 2020",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be a BibTeX key"));
+}
+
+/// Review of #622: `[cite] file_field` is the default, and a config that
+/// does not parse is reported instead of silently dropping `[cite]`.
+#[test]
+fn bib_config_file_field_is_the_default_and_a_broken_config_is_named() {
+    let (dir, root) = seeded_store_for_keys();
+    let cfg = dir.path().join("cfg");
+    std::fs::create_dir_all(cfg.join("doiget")).expect("mkdir");
+    std::fs::write(
+        cfg.join("doiget/config.toml"),
+        "[cite]\nfile_field = \"refs/{safekey}.pdf\"\n",
+    )
+    .expect("config");
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(work.join("refs")).expect("mkdir");
+    std::fs::write(
+        work.join("refs/doi_10.1017_S0305004100011919.pdf"),
+        b"%PDF-1.4\n",
+    )
+    .expect("pdf");
+    let run = |dir: &std::path::Path| {
+        doiget(&root)
+            .current_dir(dir)
+            .env("XDG_CONFIG_HOME", &cfg)
+            .env("APPDATA", &cfg)
+            .args(["bib", "10.1017/S0305004100011919"])
+            .assert()
+            .success()
+    };
+    run(&work).stdout(predicate::str::contains(
+        "file       = {refs/doi_10.1017_S0305004100011919.pdf}",
+    ));
+
+    std::fs::write(cfg.join("doiget/config.toml"), "[cite\nbroken").expect("config");
+    run(&work)
+        .stdout(predicate::str::contains("file ").not())
+        .stderr(predicate::str::contains("could not be read"));
+}
+
+/// #611: the stored abbreviation becomes biblatex `shortjournal` on request,
+/// alongside the full `journal`; a venue without one is named, not guessed.
+#[test]
+fn bib_journal_abbrev_adds_shortjournal_from_the_record_only() {
+    let dir = TempDir::new().expect("tempdir");
+    let root = utf8_path(&dir).join("papers");
+    let store = FsStore::new(root.clone()).expect("FsStore::new");
+    let mut with = fixture(Some("journal-article"));
+    with.venue = Some("Physical Review B".into());
+    with.doiget.as_mut().expect("ext").short_venue = Some("Phys. Rev. B".into());
+    let with_ref = Ref::Doi(Doi::parse("10.1103/PhysRevB.48.10345").expect("doi"));
+    with.doi = Some(Doi::parse("10.1103/PhysRevB.48.10345").expect("doi"));
+    store.write(&with_ref.safekey(), &with, None).expect("seed");
+    let mut without = fixture(Some("journal-article"));
+    without.venue = Some("The Journal of Chemical Physics".into());
+    let without_ref = Ref::Doi(Doi::parse("10.1063/1.1672392").expect("doi"));
+    without.doi = Some(Doi::parse("10.1063/1.1672392").expect("doi"));
+    store
+        .write(&without_ref.safekey(), &without, None)
+        .expect("seed");
+
+    doiget(&root)
+        .args([
+            "bib",
+            "10.1103/PhysRevB.48.10345",
+            "--journal-abbrev",
+            "iso4",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "journal    = {Physical Review B},",
+        ))
+        .stdout(predicate::str::contains("shortjournal = {Phys. Rev. B},"));
+    doiget(&root)
+        .args(["bib", "10.1063/1.1672392", "--journal-abbrev", "iso4"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("shortjournal").not())
+        .stderr(predicate::str::contains(
+            "no abbreviation for \"The Journal of Chemical Physics\"",
+        ));
+    doiget(&root)
+        .args(["bib", "10.1103/PhysRevB.48.10345"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("shortjournal").not());
+    doiget(&root)
+        .args([
+            "csl",
+            "10.1103/PhysRevB.48.10345",
+            "--journal-abbrev",
+            "iso4",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"container-title-short\": \"Phys. Rev. B\"",
+        ));
+}
+
+/// Review of #623: `bib --all --journal-abbrev` reports the entries with
+/// no abbreviation on record ONCE, not one line per entry.
+#[test]
+fn bib_all_journal_abbrev_summarises_what_it_could_not_abbreviate() {
+    let (_dir, root) = seeded_store_for_keys();
+    let out = doiget(&root)
+        .args(["bib", "--all", "--journal-abbrev", "iso4"])
+        .assert()
+        .success()
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(out).expect("utf-8");
+    assert_eq!(err.matches("note:").count(), 1, "{err}");
+    assert!(
+        err.contains("2 entries have no abbreviation on record"),
+        "{err}"
+    );
 }

@@ -1,10 +1,8 @@
 # doiget
 
 `doiget` is a single-binary, stdio CLI that fetches academic papers via official Open
-Access APIs (Crossref, Unpaywall, arXiv by default). It is the agent-facing companion to
-[BiblioFetch.jl](https://github.com/sotashimozono/BiblioFetch.jl) and shares the same
-on-disk paper store, so a Julia REPL session and an MCP-driven agent can operate over the
-same library without coordination.
+Access APIs (Crossref, Unpaywall, arXiv by default), into a local paper store that
+agents (over MCP) and scripts share.
 
 ## Install
 

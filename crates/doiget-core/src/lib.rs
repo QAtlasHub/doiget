@@ -2,7 +2,7 @@
 //!
 //! Core library for [doiget](https://github.com/QAtlasHub/doiget): an Open Access
 //! first paper-fetcher with strict capability gating, fail-closed provenance logging,
-//! and a BiblioFetch.jl-compatible store layout.
+//! and a documented on-disk store layout (`docs/STORE.md`).
 //!
 //! Phase 0 ships only this skeleton. Real implementations land in Phase 1.
 //! See `docs/PUBLIC_API.md` for the semver-locked surface and `docs/ARCHITECTURE.md`
@@ -15,23 +15,33 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 // --- Modules ---
+pub mod base_override;
 pub mod canonical;
 pub mod credentials;
 pub mod discovery;
 pub mod dry_run;
 pub mod http;
+pub mod install_info;
+pub mod markup;
+pub mod metadata_quality;
 pub mod orchestrator;
 pub mod paper_tex_source;
 pub mod paper_text;
+pub mod preprint;
 pub mod provenance;
+pub mod pubmed;
 pub mod rate_limiter;
 pub mod refs;
 pub mod remediation;
+pub mod repeat;
 pub mod resolver_cache;
+pub mod software;
 pub mod source;
+pub mod source_catalog;
 pub mod sources;
 pub mod store;
 pub mod user_extension;
+pub mod user_pdf;
 pub mod verify_config;
 
 // Phase 4 citation graph (ADR-0010). Compile-gated by the `citation`
@@ -839,6 +849,32 @@ impl ErrorCode {
 }
 
 impl ErrorCode {
+    /// Every code, for [`ErrorCode::from_wire`].
+    pub const ALL: &'static [ErrorCode] = &[
+        ErrorCode::InvalidRef,
+        ErrorCode::NoOaAvailable,
+        ErrorCode::RateLimited,
+        ErrorCode::NetworkError,
+        ErrorCode::NotFound,
+        ErrorCode::Ambiguous,
+        ErrorCode::StoreError,
+        ErrorCode::LogError,
+        ErrorCode::CapabilityDenied,
+        ErrorCode::FetchTimeout,
+        ErrorCode::SchemaTooNew,
+        ErrorCode::LockTimeout,
+        ErrorCode::InternalError,
+        ErrorCode::NotImplemented,
+        ErrorCode::TextUnavailable,
+    ];
+
+    /// The code whose [`ErrorCode::as_wire`] is `s`, e.g. read back from the
+    /// provenance log's `error_code` column (#507).
+    #[must_use]
+    pub fn from_wire(s: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|c| c.as_wire() == s)
+    }
+
     /// The `SCREAMING_SNAKE_CASE` wire token for this code, as a
     /// `&'static str`. Identical to the serde representation but
     /// allocation-free and usable where a borrowed string with a
@@ -1135,6 +1171,15 @@ pub struct MetadataAccess {
     pub semantic_scholar: bool,
     /// Phase 4+; enabled by `DOIGET_ENABLE_DOAJ`.
     pub doaj: bool,
+    /// bioRxiv / medRxiv `pubs`: a closed DOI's preprint (#640); enabled by
+    /// `DOIGET_ENABLE_BIORXIV`.
+    pub biorxiv: bool,
+    /// INSPIRE-HEP: a closed DOI's arXiv id (#642); enabled by
+    /// `DOIGET_ENABLE_INSPIRE`.
+    pub inspire: bool,
+    /// NASA ADS: a closed DOI's arXiv id (#644); enabled by the user's own
+    /// ADS token in `DOIGET_ADS_TOKEN`.
+    pub ads: bool,
     /// DOI **resolution** for DataCite-registered DOIs (Zenodo / figshare /
     /// Dryad / OSF / most institutional repositories); enabled by
     /// `DOIGET_ENABLE_DATACITE`.
@@ -1258,16 +1303,57 @@ pub struct SourceRate {
 /// only ever tighten.
 ///
 /// Keys are [`crate::source::Source::name`] values.
-pub const SOURCE_RATE_OVERRIDES: &[(&str, SourceRate)] = &[(
-    // <https://info.arxiv.org/help/api/tou.html>, read 2026-08-25. The
-    // limit is collective across every machine under the caller's control,
-    // and circumventing it may have access blocked.
-    "arxiv",
-    SourceRate {
-        min_interval_ms: 3_000,
-        max_concurrent: 1,
-    },
-)];
+pub const SOURCE_RATE_OVERRIDES: &[(&str, SourceRate)] = &[
+    (
+        // <https://info.arxiv.org/help/api/tou.html>, read 2026-08-25. The
+        // limit is collective across every machine under the caller's
+        // control, and circumventing it may have access blocked.
+        "arxiv",
+        SourceRate {
+            min_interval_ms: 3_000,
+            max_concurrent: 1,
+        },
+    ),
+    (
+        // bioRxiv / medRxiv `pubs` (#640): no published rate limit
+        // (api.biorxiv.org, read 2026-09-29), so one request a second, one
+        // at a time -- well inside the global cap.
+        "biorxiv",
+        SourceRate {
+            min_interval_ms: 1_000,
+            max_concurrent: 1,
+        },
+    ),
+    (
+        // NASA ADS (#644): 5,000 queries a day per token, reset at midnight
+        // UTC (github.com/adsabs/adsabs-dev-api, read 2026-09-29); no
+        // per-second figure, so one a second, one at a time.
+        "ads",
+        SourceRate {
+            min_interval_ms: 1_000,
+            max_concurrent: 1,
+        },
+    ),
+    (
+        // INSPIRE-HEP (#642): "every IP address is allowed 15 requests in a
+        // 5s window" (github.com/inspirehep/rest-api-doc, read 2026-09-29).
+        "inspire",
+        SourceRate {
+            min_interval_ms: 334,
+            max_concurrent: 1,
+        },
+    ),
+    (
+        // NCBI E-utilities (#500): "no more than three requests per second"
+        // without an API key (NBK25497, verified for #500; doiget sends no
+        // key). 334 ms apart, one at a time, keeps under it.
+        crate::pubmed::NCBI,
+        SourceRate {
+            min_interval_ms: 334,
+            max_concurrent: 1,
+        },
+    ),
+];
 
 /// The override for `source`, if any.
 #[must_use]
@@ -1552,6 +1638,21 @@ impl CapabilityProfile {
                 "metadata",
                 cfg!(feature = "metadata"),
             ),
+            biorxiv: resolve_metadata_flag(
+                "DOIGET_ENABLE_BIORXIV",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            inspire: resolve_metadata_flag(
+                "DOIGET_ENABLE_INSPIRE",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            // The token IS the opt-in (#644): the user's own ADS key, never
+            // shipped. A blank value is no token.
+            ads: cfg!(feature = "metadata")
+                && std::env::var(crate::preprint::ADS_TOKEN_ENV)
+                    .is_ok_and(|v| !v.trim().is_empty()),
         };
 
         // -- Tier 3 TDM grants ----------------------------------------------
@@ -1816,6 +1917,43 @@ fn build_tdm_grant(agree_var: &str, key: String) -> TdmGrant {
 mod tests {
     use super::*;
 
+    /// #507: suppression reads codes back from the log's `error_code`
+    /// column, so every code must survive the trip -- and ALL must hold every
+    /// variant, which the exhaustive match below makes a compile error to
+    /// forget.
+    #[test]
+    fn every_error_code_round_trips_through_its_wire_token() {
+        const fn listed(c: ErrorCode) {
+            match c {
+                ErrorCode::InvalidRef
+                | ErrorCode::NoOaAvailable
+                | ErrorCode::RateLimited
+                | ErrorCode::NetworkError
+                | ErrorCode::NotFound
+                | ErrorCode::Ambiguous
+                | ErrorCode::StoreError
+                | ErrorCode::LogError
+                | ErrorCode::CapabilityDenied
+                | ErrorCode::FetchTimeout
+                | ErrorCode::SchemaTooNew
+                | ErrorCode::LockTimeout
+                | ErrorCode::InternalError
+                | ErrorCode::NotImplemented
+                | ErrorCode::TextUnavailable => {}
+            }
+        }
+        assert_eq!(ErrorCode::ALL.len(), 15, "a new variant goes in ALL too");
+        for c in ErrorCode::ALL {
+            listed(*c);
+            assert_eq!(ErrorCode::from_wire(c.as_wire()), Some(*c));
+            assert_eq!(
+                serde_json::to_value(c).expect("serialize"),
+                serde_json::json!(c.as_wire())
+            );
+        }
+        assert_eq!(ErrorCode::from_wire("NOT_A_CODE"), None);
+    }
+
     #[test]
     fn rate_limits_hard_coded_match_legal_safeguards() {
         // docs/LEGAL.md §6 safeguard 8 names these exact values.
@@ -1917,6 +2055,9 @@ mod tests {
             "DOIGET_ENABLE_OPENALEX",
             "DOIGET_ENABLE_S2",
             "DOIGET_ENABLE_DOAJ",
+            "DOIGET_ENABLE_BIORXIV",
+            "DOIGET_ENABLE_INSPIRE",
+            "DOIGET_ADS_TOKEN",
             "DOIGET_AGREE_TDM_ELSEVIER",
             "DOIGET_KEY_ELSEVIER",
             "DOIGET_AGREE_TDM_APS",
@@ -2372,10 +2513,10 @@ agreed = true
             serde_json::from_str(raw).expect("vectors.json is valid JSON matching schema");
 
         // Phase 0 final ships the full NORMATIVE 100-entry set
-        // (docs/SAFEKEY.md §5). The fixture is the binding cross-tool
-        // contract with BiblioFetch.jl; tightening the count guard to
-        // `== 100` ensures the set cannot silently grow or shrink without
-        // a coordinated ADR bump (per docs/SAFEKEY.md status block).
+        // (docs/SAFEKEY.md §5). The fixture is doiget's own binding
+        // contract (ADR-0060 retired its sharing with BiblioFetch.jl);
+        // the `== 100` guard keeps the set from silently growing or
+        // shrinking without a doiget ADR (per docs/SAFEKEY.md status block).
         assert_eq!(
             parsed.vectors.len(),
             100,

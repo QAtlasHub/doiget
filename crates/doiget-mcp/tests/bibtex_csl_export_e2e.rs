@@ -93,6 +93,9 @@ fn seed_store() -> (tempfile::TempDir, camino::Utf8PathBuf) {
             tags: Vec::new(),
             collections: Vec::new(),
             annotation: None,
+            repaired_fields: Default::default(),
+            short_venue: None,
+            origin: None,
         }),
         other: BTreeMap::new(),
     };

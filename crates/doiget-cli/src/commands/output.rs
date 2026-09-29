@@ -182,7 +182,17 @@ pub struct ResolvedOutput {
 pub fn is_artifact_command(name: &str) -> bool {
     matches!(
         name,
-        "bib" | "csl" | "capabilities" | "info" | "list-recent" | "search" | "link" | "text"
+        "bib"
+            | "csl"
+            | "capabilities"
+            | "info"
+            | "list-recent"
+            | "missing"
+            | "coverage"
+            | "sources"
+            | "search"
+            | "link"
+            | "text"
     )
 }
 
@@ -433,6 +443,7 @@ mod tests {
         // Quiet must NOT erase it.
         assert!(is_artifact_command("info"));
         assert!(is_artifact_command("list-recent"));
+        assert!(is_artifact_command("missing"));
         assert!(is_artifact_command("search"));
         assert!(is_artifact_command("link"));
         // `text` extracts paper prose to stdout — almost always piped, so

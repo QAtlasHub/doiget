@@ -1,8 +1,8 @@
 # Store layout
 
-> **Status: NORMATIVE (shared spec).** This document is binding for both doiget and
-> BiblioFetch.jl. Implementations on either side MUST conform. Changes require an ADR
-> coordinated across both projects.
+> **Status: NORMATIVE.** Binding for doiget. Changes require a doiget ADR. Until
+> 0.9.0 this was a spec shared with BiblioFetch.jl (ADR-0004); ADR-0060 retired that
+> contract without changing the format, so stores BiblioFetch.jl wrote stay readable.
 
 ## 1. Layout
 
@@ -59,6 +59,9 @@ oa_status   = "gold"                  # optional: gold/green/hybrid/bronze/close
                                       #   or "green" (arXiv); omitted when not determined (#281)
 size_bytes  = 1234567
 mcp_call_id = "01JCKZ7Q..."           # optional, ULID, present if fetched via MCP
+repaired_fields = { title = "semantic_scholar" }  # optional (#608): fields whose resolver
+                                      #   value carried U+FFFD, replaced by a character-for-
+                                      #   character match from another enabled source
 ```
 
 ### Reserved top-level field list
@@ -196,6 +199,30 @@ To make `bib` / `csl` / TOML output diff-stable across implementations:
 A reference normalizer is provided by `doiget-core::store::normalize_toml(&Metadata)
 -> String`. CI uses it to detect drift.
 
+### 7a. Calling convention: the trait is synchronous and may block
+
+Every `Store` method does blocking filesystem I/O. `write` can poll the
+advisory lock for up to 5 s (§4) and then `fsync`s (§5), which on a store
+root in a synced or network folder (Dropbox, OneDrive, SMB) costs hundreds
+of milliseconds even uncontended. The trait stays synchronous — an async
+trait would be a `docs/PUBLIC_API.md` §2 break and would still leave the
+`fsync` blocking — so the convention is carried by the caller:
+
+- **From async code, call a `Store` method through
+  `doiget_core::store::blocking_section(|| store.write(..))`.** On a
+  multi-thread tokio runtime (`doiget serve`, the CLI) it runs the call under
+  `tokio::task::block_in_place`, handing the worker's other tasks — the rate
+  limiter's timers, other in-flight tool calls — to another thread first.
+  Elsewhere it runs inline.
+- Synchronous callers (`doiget bib`, `csl`, `tag`, …) call the store
+  directly.
+
+doiget's own async call sites -- the orchestrator's store write, every MCP
+handler, and every CLI command file that contains async code -- are pinned to
+this by source-scan tests (#590). The CLI scan walks `src/commands/` at test
+time, so a new command file is covered without being listed. The scans match
+calls on a receiver named `store`; the call sites keep that name.
+
 ## 8. Reading
 
 Both implementations MUST tolerate:
@@ -224,17 +251,12 @@ Both implementations MUST refuse:
 
 ## 9. Round-trip CI test
 
-A CI workflow (`cross-tool-compat.yml`) exercises this every PR:
+A BiblioFetch.jl round-trip workflow was planned here and never built;
+ADR-0060 dropped it. Preservation of other tools' tables is pinned by the
+in-crate round-trip tests (`bibliofetch_typed_table_and_unknown_scalar_survive_roundtrip`).
 
-```text
-1. Julia: BiblioFetch fetch DOI X            (creates <safekey>.toml + .pdf)
-2. doiget info X                             (reads, asserts metadata matches expected)
-3. doiget bib X | diff - expected_bibtex     (asserts bib output is bit-identical)
-4. doiget fetch DOI Y                        (writes a different entry)
-5. Julia: BiblioFetch info Y                 (reads doiget output, must succeed)
-```
-
-This guarantees real round-trip compatibility, not just spec conformance.
+They pin doiget's own preservation of tables it does not own; there is no
+cross-tool round-trip check.
 
 ## 10. Migration story
 

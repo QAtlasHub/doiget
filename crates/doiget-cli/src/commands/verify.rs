@@ -22,6 +22,11 @@
 //! - **unverifiable** — the entry carried no DOI / arXiv id at all.
 //!   Warning by default; fails under `--strict` / `on_missing_id="error"`.
 //!
+//! A **valid** record also carries `metadata_quality` (e.g.
+//! `["replacement_char:venue"]`) when the resolved metadata has lost
+//! characters to U+FFFD (#608). Informational: the reference is real, so it
+//! never counts toward the exit code; `doiget cite` can try a repair.
+//!
 //! The split between **absent** and **unreachable** is the load-bearing
 //! distinction: it lets the default mode catch a genuinely dead DOI while
 //! still passing when the network merely hiccuped on a real id.
@@ -66,7 +71,7 @@ fn load_verify_config() -> verify_config::VerifyConfig {
 }
 
 /// Map the `--format` flag token to a [`Format`].
-fn parse_format(s: &str) -> Result<Format> {
+pub(crate) fn parse_format(s: &str) -> Result<Format> {
     match s {
         "auto" => Ok(Format::Auto),
         "refs" => Ok(Format::Refs),
@@ -144,6 +149,48 @@ impl VerifyStatus {
     }
 }
 
+/// The verdict for a software entry identified by a GitHub URL (#614):
+/// valid while the repository and the tag it names resolve, absent once
+/// GitHub says 404, unreachable for anything else (a rate limit included).
+async fn verify_software(
+    url: &str,
+    entry_key: Option<String>,
+    ctx: &doiget_core::source::FetchContext,
+) -> Result<(VerifyStatus, serde_json::Value)> {
+    let Some(g) = doiget_core::software::GithubRef::parse(url) else {
+        bail!("internal error: {url} was classified as a GitHub URL and does not parse as one");
+    };
+    let (status, error) = match doiget_core::software::github_resolves(&g, ctx).await {
+        Ok(true) => (VerifyStatus::Valid, None),
+        Ok(false) => (
+            VerifyStatus::Absent,
+            Some((ErrorCode::NotFound, format!("GitHub has no {url}"))),
+        ),
+        Err(e) => {
+            let code: ErrorCode = (&e).into();
+            if code == ErrorCode::LogError {
+                bail!("provenance log error during verify (aborting): {e}");
+            }
+            let message = match doiget_core::software::explain(&e) {
+                Some(why) => format!("{e}: {why}"),
+                None => e.to_string(),
+            };
+            (VerifyStatus::Unreachable, Some((code, message)))
+        }
+    };
+    let mut record = serde_json::json!({
+        "ok": error.is_none(),
+        "ref": url,
+        "kind": "software",
+        "status": status.as_wire(),
+        "entry_key": entry_key,
+    });
+    if let Some((code, message)) = error {
+        record["error"] = serde_json::json!({ "code": code.as_wire(), "message": message });
+    }
+    Ok((status, record))
+}
+
 /// Entry point for `doiget verify <path> [--format] [--strict]`.
 pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMode) -> Result<()> {
     let fmt = parse_format(&format)?;
@@ -191,7 +238,36 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
     // One counter per VerifyStatus, indexed by `VerifyStatus::index`.
     let mut counts = [0u32; VerifyStatus::ALL.len()];
 
-    for entry in entries {
+    // #500 / ADR-0061: a PMID / PMCID entry is verified through the DOI
+    // PubMed lists for it. One with no DOI is a real record doiget cannot
+    // check further (unverifiable); one PubMed has no record of is absent.
+    let resolved = doiget_core::pubmed::resolve_entries(entries, &ctx)
+        .await
+        .map_err(|e| anyhow::anyhow!("provenance log error during verify (aborting): {e}"))?;
+    for item in resolved {
+        let entry = match item {
+            doiget_core::pubmed::Resolved::Entry(entry) => entry,
+            doiget_core::pubmed::Resolved::Unresolved(u) => {
+                let status = match u.code {
+                    ErrorCode::NotFound => VerifyStatus::Absent,
+                    ErrorCode::NotImplemented => VerifyStatus::Unverifiable,
+                    _ => VerifyStatus::Unreachable,
+                };
+                let record = serde_json::json!({
+                    "ok": false,
+                    "ref": u.id.display(),
+                    "status": status.as_wire(),
+                    "entry_key": u.entry_key,
+                    "error": { "code": u.code.as_wire(), "message": u.reason },
+                });
+                counts[status.index()] += 1;
+                #[allow(clippy::print_stdout)]
+                {
+                    println!("{record}");
+                }
+                continue;
+            }
+        };
         // `on_missing_id = "skip"` drops id-less entries entirely —
         // before they are counted or emitted.
         if matches!(&entry, Err(ParseError::NoIdentifier { .. })) && on_missing == OnMissingId::Skip
@@ -203,15 +279,28 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                 let ref_ = parsed.ref_;
                 let entry_key = parsed.entry_key;
                 match resolve_only(&ref_, &profile, &ctx).await {
-                    Ok(_) => (
-                        VerifyStatus::Valid,
-                        serde_json::json!({
+                    Ok(outcome) => {
+                        // #608: the id resolves, but the record it resolves
+                        // to may have lost characters to U+FFFD. Reported,
+                        // not repaired -- verify reads, it does not rewrite
+                        // -- and not a failure: the reference is real.
+                        let resolved = doiget_core::orchestrator::cite_metadata(&ref_, &outcome);
+                        let quality: Vec<String> =
+                            doiget_core::metadata_quality::replacement_char_fields(&resolved)
+                                .iter()
+                                .map(|f| format!("replacement_char:{f}"))
+                                .collect();
+                        let mut record = serde_json::json!({
                             "ok": true,
                             "ref": ref_.as_input_str(),
                             "status": VerifyStatus::Valid.as_wire(),
                             "entry_key": entry_key,
-                        }),
-                    ),
+                        });
+                        if !quality.is_empty() {
+                            record["metadata_quality"] = serde_json::json!(quality);
+                        }
+                        (VerifyStatus::Valid, record)
+                    }
                     Err(e) => {
                         let code: doiget_core::ErrorCode = (&e).into();
                         // A provenance-log write failure is fail-closed
@@ -299,6 +388,11 @@ pub async fn run(path: String, format: String, cli_strict: bool, mode: OutputMod
                     "error": { "code": ErrorCode::InvalidRef.as_wire(), "message": "entry has no DOI / arXiv id" },
                 }),
             ),
+            // #614: software on GitHub. Real if the repository -- and the
+            // release or tag the URL names -- is still there.
+            Err(ParseError::SoftwareUrl { url, entry_key }) => {
+                verify_software(&url, entry_key, &ctx).await?
+            }
             Err(ParseError::Decode { format, message }) => (
                 VerifyStatus::Illegal,
                 serde_json::json!({

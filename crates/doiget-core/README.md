@@ -2,8 +2,7 @@
 
 Foundation library for [doiget](https://github.com/QAtlasHub/doiget): an
 Open Access first paper-fetcher with strict capability gating, fail-closed
-provenance logging, and a [BiblioFetch.jl](https://github.com/sotashimozono/BiblioFetch.jl)-compatible
-store layout. `doiget-core` defines the semver-locked types (`Ref`, `Doi`,
+provenance logging, and a documented on-disk store layout. `doiget-core` defines the semver-locked types (`Ref`, `Doi`,
 `ArxivId`, `Safekey`, `ErrorCode`), the hard-coded constants (rate caps, size
 caps, schema version), and the `CapabilityProfile` resolver that gates which
 sources may be invoked at runtime. It performs no I/O, owns no async runtime,

@@ -52,9 +52,7 @@ use doiget_core::http::{
     discovery_allowlist, fulltext_allowlist, oa_publisher_allowlist, tier_1_allowlist,
     tier_3_allowlists, HttpClient,
 };
-use doiget_core::orchestrator::{
-    fetch_paper as core_fetch_paper, FetchPaperOutcome, PdfLegStatus, SourceAttempt,
-};
+use doiget_core::orchestrator::{FetchPaperOutcome, PdfLegStatus, SourceAttempt};
 use doiget_core::provenance::{Capability, LogEvent, LogResult, ProvenanceLog, RowInput};
 use doiget_core::rate_limiter::RateLimiter;
 use doiget_core::source::{FetchContext, FetchError};
@@ -219,179 +217,118 @@ pub(crate) fn build_resolve_context() -> Result<FetchContext> {
 /// under `tests/fetch_doi_oa_pdf_e2e.rs` exercise the full PDF leg without
 /// touching the real network.
 pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> {
-    let arxiv = std::env::var("DOIGET_ARXIV_BASE").ok();
-    let crossref = std::env::var("DOIGET_CROSSREF_BASE").ok();
-    let unpaywall = std::env::var("DOIGET_UNPAYWALL_BASE").ok();
-    let oa_publisher = std::env::var("DOIGET_OA_PUBLISHER_BASE").ok();
-    // Slice 16: `DOIGET_OPENALEX_BASE` selects a wiremock host for the
-    // citation-graph BFS. Only meaningful with `--features citation`,
-    // but reading the env unconditionally keeps the branch logic
-    // simple and is harmless for default builds.
-    let openalex_base = std::env::var("DOIGET_OPENALEX_BASE").ok();
-    // ADR-0032: `DOIGET_AR5IV_BASE` selects a wiremock host for the
-    // full-text extraction path (`doiget text`). Test-only override,
-    // mirroring `DOIGET_ARXIV_BASE`.
-    let ar5iv_base = std::env::var("DOIGET_AR5IV_BASE").ok();
-
-    #[cfg(feature = "tdm-aps")]
-    let tdm_aps = std::env::var("DOIGET_APS_BASE").ok();
-    #[cfg(feature = "tdm-elsevier")]
-    let tdm_elsevier = std::env::var("DOIGET_ELSEVIER_BASE").ok();
-    #[cfg(feature = "tdm-springer")]
-    let tdm_springer = std::env::var("DOIGET_SPRINGER_BASE").ok();
-    #[cfg(feature = "tdm-ieee")]
-    let tdm_ieee = std::env::var("DOIGET_IEEE_BASE").ok();
-    if arxiv.is_none()
-        && crossref.is_none()
-        && unpaywall.is_none()
-        && oa_publisher.is_none()
-        && openalex_base.is_none()
-        && ar5iv_base.is_none()
+    // #587: one table in doiget-core decides test mode and what the test
+    // client registers, for this builder and its twin alike.
+    if let Some(client) = doiget_core::base_override::test_client_from_env()
+        .context("building the DOIGET_*_BASE test client")?
     {
-        let mut allowlists = tier_1_allowlist();
-        allowlists.extend(oa_publisher_allowlist());
-        // ADR-0031: discovery search (`doiget search`) is Tier-1 OA
-        // metadata, always-on, and ships in the default `oa-only` binary.
-        // Register `api.openalex.org` under the `"openalex"` source key
-        // UNCONDITIONALLY so `discovery::paper_search` can reach the
-        // `/works?search=` endpoint without `--features citation`. In
-        // citation builds the Tier-2 extend below re-registers the same
-        // host under the same key (idempotent HashMap overwrite).
-        allowlists.extend(discovery_allowlist());
-        // ADR-0032: full-text extraction (`doiget text`) is Tier-1 OA
-        // metadata, always-on. Register `ar5iv.labs.arxiv.org` under the
-        // `"ar5iv"` source key unconditionally so `paper_text::paper_text`
-        // can reach ar5iv in `oa-only` builds.
-        allowlists.extend(fulltext_allowlist());
-        // The Tier-2 transport gate. The sources it serves — OpenAlex,
-        // Semantic Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE and
-        // Europe PMC — are compiled under `metadata`, and
-        // `resolve_optional_chain` is `#[cfg(feature = "metadata")]`,
-        // so this extend MUST be gated on `metadata` too. It was gated
-        // on `citation` for six releases: in a `--features metadata`
-        // build (which CI's clippy matrix builds explicitly) the chain
-        // ran, `can_serve` passed, and the request died at
-        // `UnknownSource` because no allowlist entry existed for the
-        // key (#516). CapabilityProfile.metadata.* is the runtime gate;
-        // this is the transport gate, and the two must agree.
-        #[cfg(feature = "metadata")]
-        allowlists.extend(tier_2_allowlist());
-        // #454: the Tier-3 transport gate. #444 made the orchestrator
-        // reach these sources; without this line the fetch it then issues
-        // under `tdm-aps` / `tdm-elsevier` / `tdm-springer` dies at
-        // `UnknownSource`. Empty in a default build (ADR-0002 — no Tier-3
-        // feature is compiled into published binaries), so this is a
-        // no-op for the shipped surface.
-        allowlists.extend(tier_3_allowlists());
+        return Ok(client);
+    }
+    let mut allowlists = tier_1_allowlist();
+    allowlists.extend(oa_publisher_allowlist());
+    // ADR-0031: discovery search (`doiget search`) is Tier-1 OA
+    // metadata, always-on, and ships in the default `oa-only` binary.
+    // Register `api.openalex.org` under the `"openalex"` source key
+    // UNCONDITIONALLY so `discovery::paper_search` can reach the
+    // `/works?search=` endpoint without `--features citation`. In
+    // citation builds the Tier-2 extend below re-registers the same
+    // host under the same key (idempotent HashMap overwrite).
+    allowlists.extend(discovery_allowlist());
+    // ADR-0032: full-text extraction (`doiget text`) is Tier-1 OA
+    // metadata, always-on. Register `ar5iv.labs.arxiv.org` under the
+    // `"ar5iv"` source key unconditionally so `paper_text::paper_text`
+    // can reach ar5iv in `oa-only` builds.
+    allowlists.extend(fulltext_allowlist());
+    // ADR-0058: `cite` / `verify` on a GitHub URL. Not a fetch source, so it
+    // is not part of tier 1 and never appears in a fetch plan.
+    allowlists.extend(doiget_core::http::software_allowlist());
+    // ADR-0061: PMID / PMCID -> DOI. Answers which DOI, never with content.
+    allowlists.extend(doiget_core::http::pubmed_allowlist());
+    // #640: bioRxiv / medRxiv `pubs`, gated at runtime on DOIGET_ENABLE_BIORXIV.
+    allowlists.extend(doiget_core::http::preprint_allowlist());
+    // The Tier-2 transport gate. The sources it serves — OpenAlex,
+    // Semantic Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE and
+    // Europe PMC — are compiled under `metadata`, and
+    // `resolve_optional_chain` is `#[cfg(feature = "metadata")]`,
+    // so this extend MUST be gated on `metadata` too. It was gated
+    // on `citation` for six releases: in a `--features metadata`
+    // build (which CI's clippy matrix builds explicitly) the chain
+    // ran, `can_serve` passed, and the request died at
+    // `UnknownSource` because no allowlist entry existed for the
+    // key (#516). CapabilityProfile.metadata.* is the runtime gate;
+    // this is the transport gate, and the two must agree.
+    #[cfg(feature = "metadata")]
+    allowlists.extend(tier_2_allowlist());
+    // #454: the Tier-3 transport gate. #444 made the orchestrator
+    // reach these sources; without this line the fetch it then issues
+    // under `tdm-aps` / `tdm-elsevier` / `tdm-springer` dies at
+    // `UnknownSource`. Empty in a default build (ADR-0002 — no Tier-3
+    // feature is compiled into published binaries), so this is a
+    // no-op for the shipped surface.
+    allowlists.extend(tier_3_allowlists());
 
-        // ADR-0028 D2: merge user-extension hosts from
-        // `<config_dir>/doiget/config.toml`. See
-        // `doiget_core::user_extension` for the wire contract and
-        // the (deferred) S3b provenance / doctor / capabilities
-        // surfaces.
-        //
-        // Failure handling is opt-in-convenience: a missing config
-        // is silent (Ok-empty), a malformed config emits
-        // `tracing::warn!` and continues with the curated allowlist,
-        // and an unresolvable config dir emits `tracing::debug!`
-        // (only happens in stripped envs with no HOME / XDG /
-        // APPDATA — review pass I3 / A1).
-        match config_dir_utf8() {
-            Ok(cfg_dir) => {
-                let path = cfg_dir.join("doiget").join("config.toml");
-                match doiget_core::user_extension::load(&path) {
-                    Ok(cfg) => {
-                        let mut hosts = cfg.additional_hosts;
-                        if cfg.trust_academic_repos {
-                            hosts.extend(doiget_core::user_extension::academic_repo_hosts());
-                        }
-                        // Issue #405: the Gold-OA counterpart. Separate flag
-                        // because the trust argument is different — see
-                        // `oa_registry_hosts`.
-                        if cfg.trust_oa_registries {
-                            hosts.extend(doiget_core::user_extension::oa_registry_hosts());
-                        }
-                        if !hosts.is_empty() {
-                            tracing::info!(
-                                count = hosts.len(),
-                                trust_academic_repos = cfg.trust_academic_repos,
-                                trust_oa_registries = cfg.trust_oa_registries,
-                                path = %path,
-                                "merging user-extension allowlist hosts (ADR-0028 D2)"
-                            );
-                            doiget_core::user_extension::merge_into_allowlists(
-                                &mut allowlists,
-                                &hosts,
-                            );
-                        }
+    // ADR-0028 D2: merge user-extension hosts from
+    // `<config_dir>/doiget/config.toml`. See
+    // `doiget_core::user_extension` for the wire contract and
+    // the (deferred) S3b provenance / doctor / capabilities
+    // surfaces.
+    //
+    // Failure handling is opt-in-convenience: a missing config
+    // is silent (Ok-empty), a malformed config emits
+    // `tracing::warn!` and continues with the curated allowlist,
+    // and an unresolvable config dir emits `tracing::debug!`
+    // (only happens in stripped envs with no HOME / XDG /
+    // APPDATA — review pass I3 / A1).
+    match config_dir_utf8() {
+        Ok(cfg_dir) => {
+            let path = cfg_dir.join("doiget").join("config.toml");
+            match doiget_core::user_extension::load(&path) {
+                Ok(cfg) => {
+                    let mut hosts = cfg.additional_hosts;
+                    if cfg.trust_academic_repos {
+                        hosts.extend(doiget_core::user_extension::academic_repo_hosts());
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
+                    // Issue #405: the Gold-OA counterpart. Separate flag
+                    // because the trust argument is different — see
+                    // `oa_registry_hosts`.
+                    if cfg.trust_oa_registries {
+                        hosts.extend(doiget_core::user_extension::oa_registry_hosts());
+                    }
+                    if !hosts.is_empty() {
+                        tracing::info!(
+                            count = hosts.len(),
+                            trust_academic_repos = cfg.trust_academic_repos,
+                            trust_oa_registries = cfg.trust_oa_registries,
                             path = %path,
-                            "failed to load user-extension allowlist; \
-                             falling back to curated set only"
+                            "merging user-extension allowlist hosts (ADR-0028 D2)"
                         );
+                        doiget_core::user_extension::merge_into_allowlists(&mut allowlists, &hosts);
                     }
                 }
-            }
-            Err(e) => {
-                tracing::debug!(
-                    error = %e,
-                    "config dir unresolvable; \
-                     user-extension allowlist disabled (curated set only)"
-                );
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %path,
+                        "failed to load user-extension allowlist; \
+                         falling back to curated set only"
+                    );
+                }
             }
         }
-
-        return match user_agent {
-            Some(ua) => HttpClient::new_with_user_agent(allowlists, ua),
-            None => HttpClient::new(allowlists),
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                "config dir unresolvable; \
+                 user-extension allowlist disabled (curated set only)"
+            );
         }
-        .context("building HTTP client");
     }
 
-    // Test-base mode: build a relaxed client per overridden source.
-    let mut owned: Vec<(String, String)> = Vec::new();
-    // Tier-3 test bases, mirroring the MCP builder. Without these a wiremock
-    // e2e cannot reach the TDM-fetched route on this surface either: the
-    // override branch's table held only Tier-1/2 keys, so `tdm-aps` was absent
-    // from the client's map and the attempt died as `no allowlist registered
-    // for source tdm-aps` -- a harness gap that read like #454 coming back.
-    //
-    // Deliberately NOT part of the production-branch test above: setting only
-    // `DOIGET_APS_BASE` to replay a recorded fixture must not silently switch
-    // the process to the allow-http test client.
-    for (source, base) in [
-        ("arxiv", arxiv.as_deref()),
-        #[cfg(feature = "tdm-aps")]
-        ("tdm-aps", tdm_aps.as_deref()),
-        #[cfg(feature = "tdm-elsevier")]
-        ("tdm-elsevier", tdm_elsevier.as_deref()),
-        #[cfg(feature = "tdm-springer")]
-        ("tdm-springer", tdm_springer.as_deref()),
-        #[cfg(feature = "tdm-ieee")]
-        ("tdm-ieee", tdm_ieee.as_deref()),
-        ("crossref", crossref.as_deref()),
-        ("unpaywall", unpaywall.as_deref()),
-        ("oa-publisher", oa_publisher.as_deref()),
-        ("openalex", openalex_base.as_deref()),
-        ("ar5iv", ar5iv_base.as_deref()),
-    ] {
-        if let Some(b) = base {
-            let url = url::Url::parse(b)
-                .with_context(|| format!("DOIGET_*_BASE for {source} is not a URL: {b}"))?;
-            let host = url
-                .host_str()
-                .ok_or_else(|| anyhow!("base URL has no host: {b}"))?;
-            owned.push((source.to_string(), host.to_string()));
-        }
+    match user_agent {
+        Some(ua) => HttpClient::new_with_user_agent(allowlists, ua),
+        None => HttpClient::new(allowlists),
     }
-    let entries: Vec<(&str, &str)> = owned
-        .iter()
-        .map(|(s, h)| (s.as_str(), h.as_str()))
-        .collect();
-    Ok(HttpClient::new_for_tests_allow_http_multi(&entries))
+    .context("building HTTP client")
 }
 
 // Slice 2: the per-source env-aware constructors that used to live here
@@ -451,6 +388,17 @@ impl OrchestratorConfig {
 /// orchestration runs through [`FetchHarness::fetch_one`]; bookend rows go
 /// via [`FetchHarness::log_session_start`] / [`FetchHarness::log_session_end`]
 /// so the orchestrator can frame either one fetch or many.
+/// `--refetch` for this CLI invocation (#507): ask even where this session
+/// already has an answer repeat suppression would replay. A process flag,
+/// not a parameter, because one invocation is one request and every command
+/// that fetches builds its harness through [`FetchHarness::from_env`].
+static REFETCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Set `--refetch` for the rest of this process (`main` does, from the flag).
+pub fn set_refetch(on: bool) {
+    REFETCH.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
 pub(crate) struct FetchHarness {
     pub(crate) http: Arc<HttpClient>,
     pub(crate) rate_limiter: Arc<RateLimiter>,
@@ -464,6 +412,8 @@ pub(crate) struct FetchHarness {
     /// re-reads contact email from env directly).
     #[allow(dead_code)]
     pub(crate) cfg: OrchestratorConfig,
+    /// `--refetch` (#507), captured when the harness is built.
+    pub(crate) force: bool,
 }
 
 impl FetchHarness {
@@ -503,6 +453,7 @@ impl FetchHarness {
             profile,
             session_id,
             cfg,
+            force: REFETCH.load(std::sync::atomic::Ordering::SeqCst),
         })
     }
 
@@ -593,7 +544,15 @@ impl FetchHarness {
         // was unreachable through the previous `Result<()>`
         // signature).
         let ctx = self.fetch_context();
-        core_fetch_paper(ref_, &self.profile, &ctx, &self.store, self.store.root()).await
+        doiget_core::orchestrator::fetch_paper_with(
+            ref_,
+            &self.profile,
+            &ctx,
+            &self.store,
+            self.store.root(),
+            doiget_core::orchestrator::FetchOptions::default().with_force(self.force),
+        )
+        .await
     }
 }
 
@@ -642,10 +601,33 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
             }
         }
         // Issue #325: publisher PDF was blocked, arXiv preprint auto-fetched.
-        PdfLegStatus::PreprintFallback { arxiv_id, .. } => {
+        PdfLegStatus::PreprintFallback {
+            arxiv_id, found_by, ..
+        } => {
             print_success(format_args!(
-                "fetched {} ({} bytes) via arXiv preprint arxiv:{} -> {}",
-                label, outcome.size_bytes, arxiv_id, outcome.path
+                "fetched {} ({} bytes) via arXiv preprint arxiv:{} (found by {}) -> {}",
+                label,
+                outcome.size_bytes,
+                arxiv_id,
+                found_by.as_str().replace('_', " "),
+                outcome.path
+            ));
+        }
+        // #640: a non-arXiv preprint, fetched through its own DOI.
+        PdfLegStatus::PreprintDoiFallback {
+            preprint_doi,
+            platform,
+            found_by,
+            ..
+        } => {
+            print_success(format_args!(
+                "fetched {} ({} bytes) via {} preprint doi:{} (found by {}) -> {}",
+                label,
+                outcome.size_bytes,
+                platform.as_deref().unwrap_or("its"),
+                preprint_doi.as_str(),
+                found_by.as_str().replace('_', " "),
+                outcome.path
             ));
         }
         // #458: the publisher served its own copy under the user's TDM
@@ -709,6 +691,16 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
     // a success).
     if outcome.is_clean_success() {
         emit_identity_line(outcome);
+    }
+    let repair_enabled = CapabilityProfile::from_env()
+        .map(|p| p.metadata.semantic_scholar || p.metadata.openalex)
+        .unwrap_or(false);
+    for line in super::metadata_quality_lines(
+        &outcome.repaired_fields,
+        &outcome.metadata_quality,
+        repair_enabled,
+    ) {
+        print_err(format_args!("     {line}"));
     }
 }
 
@@ -775,7 +767,9 @@ pub async fn run_with_options(
     // `{:?}` dump. Through the shared helper (#492) so a change to the
     // wording or the code reaches every command at once — this and `graph`
     // were the last two hand-inlined copies of its body.
-    let ref_ = super::parse_ref_or_exit(&input)?;
+    // #500: a PubMed id is looked up (never under --dry-run) and fetched
+    // under its DOI.
+    let ref_ = super::parse_ref_or_pubmed(&input, !dry_run).await?;
 
     // Dry-run branch: build the plan and emit it. NO harness, NO network,
     // NO store write, NO provenance row. Posture-lint ADR-0022 §5 will
@@ -816,12 +810,11 @@ pub async fn run_with_options(
     // an unclean session, and the leg carries the closed-set code -- recording
     // `None` there would log the one outcome an agent is most likely to retry
     // as having no reason at all.
+    // The EFFECTIVE code (a policy refusal is CAPABILITY_DENIED), the same
+    // one this command prints and repeat suppression reads back.
     let session_err = match &result {
         Err(e) => Some(doiget_core::ErrorCode::from(e).as_wire()),
-        Ok(o) => match &o.pdf_leg {
-            PdfLegStatus::Blocked { code, .. } => Some(code.as_wire()),
-            _ => None,
-        },
+        Ok(o) => o.reported_error_code().map(|c| c.as_wire()),
     };
     harness.log_session_end(session_ok, Some(ref_.as_input_str()), session_err);
 
@@ -882,6 +875,7 @@ fn emit_link_result(ref_: &Ref, outcome: &FetchPaperOutcome, dir: &Utf8Path) {
         outcome.pdf_leg,
         PdfLegStatus::Fetched
             | PdfLegStatus::PreprintFallback { .. }
+            | PdfLegStatus::PreprintDoiFallback { .. }
             | PdfLegStatus::TdmFetched { .. }
     ) {
         print_success(format_args!(
@@ -1650,6 +1644,53 @@ mod tests {
                 "the production client has no allowlist for `{key}`; \n                 `resolve_optional_chain` reaches this source in a \n                 `metadata` build and the fetch would die at \n                 UnknownSource (#516)"
             );
         }
+    }
+
+    /// #587 (review of #621), the proxy case through the real builder: a
+    /// Tier-2 / Tier-3 base alone keeps the production client, so Crossref
+    /// and every other source keep their curated allowlists. Setting a
+    /// Tier-1 base as well switches to the test client, which then holds
+    /// exactly the overridden keys -- the Tier-2 one included.
+    #[test]
+    #[serial]
+    fn a_proxy_base_alone_keeps_the_production_client() {
+        let _g: Vec<EnvGuard> = doiget_core::base_override::BASE_OVERRIDES
+            .iter()
+            .map(|o| {
+                let g = EnvGuard::save(o.env);
+                std::env::remove_var(o.env);
+                g
+            })
+            .collect();
+        std::env::set_var("DOIGET_APS_BASE", "https://proxy.example.edu");
+        std::env::set_var("DOIGET_DATACITE_BASE", "https://proxy.example.edu");
+
+        let client = build_http_client(None).expect("production client builds");
+        let crossref = client
+            .source_allowlist("crossref")
+            .expect("production registers crossref");
+        assert!(
+            crossref
+                .redirect_hosts
+                .iter()
+                .any(|h| h == "api.crossref.org"),
+            "a proxy base must not swap in the test client: {:?}",
+            crossref.redirect_hosts
+        );
+
+        std::env::set_var("DOIGET_CROSSREF_BASE", "http://127.0.0.1:9");
+        let client = build_http_client(None).expect("test client builds");
+        assert!(client
+            .source_allowlist("crossref")
+            .is_some_and(|a| a.redirect_hosts.iter().any(|h| h == "127.0.0.1")));
+        assert!(
+            client.source_allowlist("datacite").is_some(),
+            "in test mode the Tier-2 override is registered, not dropped"
+        );
+        assert!(
+            client.source_allowlist("unpaywall").is_none(),
+            "and a source nobody overrode is absent, so a test cannot reach it"
+        );
     }
 
     #[test]

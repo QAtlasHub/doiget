@@ -38,6 +38,14 @@ its use of these APIs polite.
 - **OpenAlex** — literature discovery, identity resolution, and citation graph
   (the search / frontier / link / citation tools).
   <https://docs.openalex.org/how-to-use-the-api/api-overview>
+- **NCBI E-utilities** (`eutils.ncbi.nlm.nih.gov`) -- only for a PMID / PMCID
+  you name or your bibliography carries: the id is sent to learn its DOI, with
+  `tool=doiget` and your contact email if you configured one (ADR-0061).
+  <https://www.ncbi.nlm.nih.gov/home/about/policies/>
+- **GitHub** (`api.github.com`, `raw.githubusercontent.com`) -- only when you
+  run `doiget cite` or `doiget verify` on a GitHub repository or release URL:
+  the repository, the release, and its `CITATION.cff` (ADR-0058). No token is
+  sent. <https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement>
 
 **Opt-in only — compile-time feature flag + your own configuration:**
 
@@ -47,6 +55,15 @@ its use of these APIs polite.
   `DOIGET_ENABLE_<NAME>`, so compiling the feature in contacts nobody by itself.
   DataCite is queried by exact DOI only — never used as a search surface — and
   needs no key or account.
+- `--features metadata`: **NASA ADS** (<https://api.adsabs.harvard.edu>) -- only with your
+  own `DOIGET_ADS_TOKEN`, and only for a DOI whose own copy is closed: the DOI is sent,
+  with your token, to learn its arXiv id (#644).
+- `--features metadata`: **INSPIRE-HEP** (<https://inspirehep.net>) -- only with
+  `DOIGET_ENABLE_INSPIRE`, and only for a DOI whose own copy is closed: the DOI is sent
+  to learn its arXiv id (#642).
+- `--features metadata`: **bioRxiv / medRxiv** (<https://api.biorxiv.org>) -- only with
+  `DOIGET_ENABLE_BIORXIV`, and only for a DOI whose own copy is closed: the DOI is sent
+  to learn whether a bioRxiv / medRxiv preprint of it exists (#640).
 - `--features metadata`: **HAL** (<https://api.archives-ouvertes.fr>, the French
   national OA repository). Same shape: inert until `DOIGET_ENABLE_HAL` is set,
   queried by exact DOI through the `doiId_s` field only, no key or account.

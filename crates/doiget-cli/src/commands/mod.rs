@@ -47,11 +47,74 @@
 pub fn parse_ref_or_exit(input: &str) -> anyhow::Result<doiget_core::Ref> {
     match doiget_core::Ref::parse(input) {
         Ok(r) => Ok(r),
+        // #500: a PubMed id is not a malformed DOI. Say which commands take
+        // one, rather than calling it invalid.
+        Err(_) if doiget_core::pubmed::PubmedId::parse(input).is_some() => {
+            output::print_err(format_args!(
+                "error[INVALID_REF]: {input} is a PubMed id; `doiget fetch` and `doiget cite` \
+                 resolve it to its DOI -- this command takes the DOI itself"
+            ));
+            Err(anyhow::Error::new(fetch::CliExit(fetch::cli_exit_code(
+                doiget_core::ErrorCode::InvalidRef,
+            ))))
+        }
         Err(e) => {
             render_ref_parse_error(&e);
             Err(anyhow::Error::new(fetch::CliExit(fetch::cli_exit_code(
                 doiget_core::ErrorCode::InvalidRef,
             ))))
+        }
+    }
+}
+
+/// [`parse_ref_or_exit`] that also takes a PubMed id (#500, ADR-0061),
+/// turning it into the DOI PubMed lists for it with one E-utilities lookup.
+/// `network: false` (a dry run) refuses the lookup and says so, rather than
+/// making a request the caller was promised would not happen.
+pub async fn parse_ref_or_pubmed(input: &str, network: bool) -> anyhow::Result<doiget_core::Ref> {
+    use doiget_core::pubmed::{Lookup, PubmedId};
+    let Some(id) = PubmedId::parse(input) else {
+        return parse_ref_or_exit(input);
+    };
+    let fail = |code: doiget_core::ErrorCode, why: &str| {
+        output::print_err(format_args!("error[{}]: {why}", code.as_wire()));
+        Err(anyhow::Error::new(fetch::CliExit(fetch::cli_exit_code(
+            code,
+        ))))
+    };
+    if !network {
+        return fail(
+            doiget_core::ErrorCode::InvalidRef,
+            &format!(
+                "{} becomes a DOI through one NCBI lookup, and --dry-run makes no request; pass the DOI",
+                id.display()
+            ),
+        );
+    }
+    let ctx = fetch::build_resolve_context()?;
+    match doiget_core::pubmed::lookup_in_session(&id, &ctx).await {
+        Ok(Lookup::Doi(doi)) => {
+            output::print_err(format_args!(
+                "note: {} is DOI {}",
+                id.display(),
+                doi.as_str()
+            ));
+            Ok(doiget_core::Ref::Doi(doi))
+        }
+        Ok(found @ Lookup::NoRecord) => fail(
+            doiget_core::ErrorCode::NotFound,
+            &found.reason(&id).unwrap_or_default(),
+        ),
+        Ok(found) => fail(
+            doiget_core::ErrorCode::NotImplemented,
+            &found.reason(&id).unwrap_or_default(),
+        ),
+        Err(e) => {
+            let code = doiget_core::ErrorCode::from(&e);
+            fail(
+                code,
+                &format!("looking up {} at NCBI failed: {e}", id.display()),
+            )
         }
     }
 }
@@ -75,12 +138,14 @@ pub fn render_ref_parse_error(e: &doiget_core::RefParseError) {
     ));
 }
 
+pub mod add;
 pub mod audit_log;
 pub mod batch;
 pub mod bib;
 pub mod capabilities;
 pub mod cite;
 pub mod config;
+pub mod coverage;
 pub mod csl;
 pub mod fetch;
 pub mod frontier;
@@ -88,6 +153,7 @@ pub mod info;
 pub mod link;
 pub mod lint;
 pub mod list_recent;
+pub mod missing;
 pub mod output;
 pub mod provenance;
 pub mod resolve_citation;
@@ -184,12 +250,8 @@ pub(crate) fn resolve_store_root() -> Result<Utf8PathBuf> {
 /// [`resolve_store_root`] plus which rung answered.
 pub(crate) fn resolve_store_root_with_source() -> Result<(Utf8PathBuf, StoreRootSource)> {
     if let Ok(s) = std::env::var("DOIGET_STORE_ROOT") {
-        // Ignore an empty value or an unexpanded "${...}" placeholder — a
-        // Desktop-Extension config left blank can pass the literal
-        // "${user_config.store_root}", which must not become a path (#369).
-        let s = s.trim();
-        if !s.is_empty() && !s.contains("${") {
-            return Ok((Utf8PathBuf::from(s), StoreRootSource::Env));
+        if let Some(root) = usable_store_root_env(&s) {
+            return Ok((Utf8PathBuf::from(root), StoreRootSource::Env));
         }
     }
     if let Some(root) = store_root_from_config() {
@@ -202,6 +264,25 @@ pub(crate) fn resolve_store_root_with_source() -> Result<(Utf8PathBuf, StoreRoot
     Utf8PathBuf::from_path_buf(cwd)
         .map(|d| (d.join("papers"), StoreRootSource::CwdDefault))
         .map_err(|p| anyhow::anyhow!("current directory path is not UTF-8: {}", p.display()))
+}
+
+/// The path a `DOIGET_STORE_ROOT` value names, or `None` when the value must
+/// be treated as unset: empty, whitespace, or an unexpanded `${...}`
+/// placeholder. A Desktop-Extension config left blank can pass the literal
+/// `${user_config.store_root}` (#369), and `export DOIGET_STORE_ROOT=${X:-}`
+/// in a script exports an empty string (#613); neither may become a path.
+fn usable_store_root_env(raw: &str) -> Option<&str> {
+    let s = raw.trim();
+    (!s.is_empty() && !s.contains("${")).then_some(s)
+}
+
+/// `DOIGET_STORE_ROOT` when it is set but ignored by
+/// [`resolve_store_root_with_source`], so `config doctor` can say so instead
+/// of reporting the fallback as though nothing had been set (#613).
+pub(crate) fn ignored_store_root_env() -> Option<String> {
+    std::env::var("DOIGET_STORE_ROOT")
+        .ok()
+        .filter(|raw| usable_store_root_env(raw).is_none())
 }
 
 /// `[store] root` from the user's `config.toml`, if any.
@@ -238,4 +319,318 @@ fn store_root_from_config() -> Option<Utf8PathBuf> {
     };
     let raw = cfg.store_root?;
     Some(doiget_core::user_extension::expand_store_root(&raw))
+}
+
+/// How `cite` / `bib` key an entry and which extra fields they add (#610).
+///
+/// Every field is opt-in; the default is the safekey and no `file`, as
+/// before. Unset options fall back to `[cite] key_template` /
+/// `[cite] file_field` in `config.toml`.
+#[derive(Debug, Clone, Default)]
+pub struct KeyOptions {
+    /// `--key`: an explicit key, single-ref only.
+    pub key: Option<String>,
+    /// `--key-template`, e.g. `{author}{year}{title_word}`.
+    pub template: Option<String>,
+    /// `--file-field`, e.g. `refs/{key}.pdf`: a `file = {...}` field.
+    pub file_field: Option<String>,
+    /// `--file-field-always`: add `file` even when the path does not exist.
+    pub file_field_always: bool,
+    /// `--journal-abbrev iso4`: add biblatex `shortjournal` from the
+    /// record's own abbreviation (#611). `journal` keeps the full title.
+    pub journal_abbrev: bool,
+    /// Entries that got no `shortjournal`, reported once by
+    /// [`KeyOptions::report`].
+    pub missing_abbrev: MissingAbbrev,
+}
+
+impl KeyOptions {
+    /// Fill unset options from `[cite]` in `config.toml` and validate the
+    /// template, so a typo fails before any network work.
+    ///
+    /// # Errors
+    ///
+    /// A template with an unknown placeholder or an unclosed `{`, naming
+    /// where it came from.
+    pub fn with_config_defaults(mut self) -> Result<Self> {
+        if let Some(k) = &self.key {
+            if !doiget_core::store::citekey::is_valid_key(k) {
+                anyhow::bail!(
+                    "--key {k:?} cannot be a BibTeX key: use only letters, digits and - _ : . + /"
+                );
+            }
+        }
+        if self.template.is_none() || self.file_field.is_none() {
+            if let Some(path) = user_config_path() {
+                // A config that does not parse must not make `[cite]` vanish
+                // silently -- TOML fails the whole document, so a typo under
+                // `[network]` would otherwise drop the key template with no
+                // word said (the #468 lesson, review of #622).
+                match doiget_core::user_extension::load(&path) {
+                    Ok(cfg) => {
+                        if self.template.is_none() && self.key.is_none() {
+                            self.template = cfg.cite_key_template;
+                        }
+                        if self.file_field.is_none() {
+                            self.file_field = cfg.cite_file_field;
+                        }
+                    }
+                    Err(e) => output::print_err(format_args!(
+                        "warning: {path} could not be read ({e}); its [cite] defaults are not \
+                         applied. Run `doiget config doctor`."
+                    )),
+                }
+            }
+        }
+        if let Some(t) = &self.template {
+            doiget_core::store::citekey::validate_template(t).with_context(|| {
+                format!("key template {t:?} (--key-template or [cite] key_template)")
+            })?;
+        }
+        Ok(self)
+    }
+
+    /// Report, once, what the render could not do (entries without an
+    /// abbreviation on record). Call after the last entry.
+    pub fn report(&self) {
+        report_missing_abbrev(&self.missing_abbrev);
+    }
+
+    /// Render `m` as BibTeX under the chosen key, recording it in `used` and
+    /// suffixing it `a`, `b`, ... on a collision.
+    ///
+    /// # Errors
+    ///
+    /// Only an invalid template, which [`KeyOptions::with_config_defaults`]
+    /// already refused.
+    pub fn bibtex(
+        &self,
+        m: &doiget_core::store::Metadata,
+        safekey: &str,
+        used: &mut std::collections::HashSet<String>,
+    ) -> Result<String> {
+        use doiget_core::store::citekey;
+        let key = match (&self.key, &self.template) {
+            (Some(k), _) => k.clone(),
+            (None, Some(t)) => citekey::render_key(t, m, safekey)?,
+            (None, None) => safekey.to_string(),
+        };
+        let key = citekey::disambiguate(key, used);
+        let file = self.file_field.as_ref().and_then(|pattern| {
+            let path = pattern.replace("{key}", &key).replace("{safekey}", safekey);
+            (self.file_field_always || camino::Utf8Path::new(&path).exists()).then_some(path)
+        });
+        let short = if self.journal_abbrev {
+            short_journal(m, &key, &self.missing_abbrev)
+        } else {
+            None
+        };
+        let extra: Vec<(&str, &str)> = short
+            .iter()
+            .map(|s| ("shortjournal", s.as_str()))
+            .chain(file.iter().map(|f| ("file", f.as_str())))
+            .collect();
+        Ok(doiget_core::store::render::to_bibtex_with_fields(
+            &key, m, &extra,
+        ))
+    }
+}
+
+/// Entries rendered with `--journal-abbrev` whose record carries no
+/// abbreviation: `(key, venue, source)`. Collected so a multi-entry export
+/// reports them once rather than one line per entry (review of #623).
+pub type MissingAbbrev = std::cell::RefCell<Vec<(String, String, String)>>;
+
+/// The ISO 4 abbreviation for `m`'s venue as its record gave it, or `None`
+/// -- recorded in `missing` when the entry has a venue -- never a guessed
+/// abbreviation (#611).
+pub(crate) fn short_journal(
+    m: &doiget_core::store::Metadata,
+    key: &str,
+    missing: &MissingAbbrev,
+) -> Option<String> {
+    let short = m.doiget.as_ref().and_then(|d| d.short_venue.clone());
+    if short.is_none() {
+        if let Some(venue) = m.venue.as_deref().filter(|v| !v.is_empty()) {
+            let source = m
+                .doiget
+                .as_ref()
+                .map_or("its", |d| d.source.as_str())
+                .to_string();
+            missing
+                .borrow_mut()
+                .push((key.to_string(), venue.to_string(), source));
+        }
+    }
+    short
+}
+
+/// Say, once, which entries got no `shortjournal` and why.
+pub(crate) fn report_missing_abbrev(missing: &MissingAbbrev) {
+    let list = missing.borrow();
+    let why = "an abbreviation is only what the record itself carries (Crossref \
+               short-container-title), never a guess; an entry stored before 0.9 has none \
+               recorded until it is re-fetched";
+    match list.as_slice() {
+        [] => {}
+        [(key, venue, source)] => output::print_err(format_args!(
+            "note: {key}: no abbreviation for {venue:?} in its {source} record, so no \
+             shortjournal; {why}"
+        )),
+        many => {
+            let shown: Vec<String> = many
+                .iter()
+                .take(5)
+                .map(|(k, v, _)| format!("{k} ({v:?})"))
+                .collect();
+            let more = many.len().saturating_sub(shown.len());
+            output::print_err(format_args!(
+                "note: {} entries have no abbreviation on record, so no shortjournal: {}{}; {why}",
+                many.len(),
+                shown.join(", "),
+                if more > 0 {
+                    format!(", and {more} more")
+                } else {
+                    String::new()
+                }
+            ));
+        }
+    }
+}
+
+/// The stderr lines for a #608 metadata-quality result: one `note:` per
+/// field repaired from another source, and one `warning:` naming the fields
+/// that still carry a U+FFFD. `repair_enabled` says whether any repair
+/// source was enabled, so the warning either explains that none matched or
+/// names the switch that would let doiget try.
+pub(crate) fn metadata_quality_lines(
+    repaired: &std::collections::BTreeMap<String, String>,
+    remaining: &[String],
+    repair_enabled: bool,
+) -> Vec<String> {
+    let mut lines: Vec<String> = repaired
+        .iter()
+        .map(|(field, source)| {
+            format!(
+                "note: repaired {field} from {source}: the Crossref record carries U+FFFD where \
+                 the publisher's deposit lost a character"
+            )
+        })
+        .collect();
+    let fields: Vec<&str> = remaining
+        .iter()
+        .filter_map(|f| f.strip_prefix("replacement_char:"))
+        .collect();
+    if !fields.is_empty() {
+        let hint = if repair_enabled {
+            "no enabled source had a copy that matches it character for character"
+        } else {
+            "set DOIGET_ENABLE_S2=1 to try a repair from Semantic Scholar"
+        };
+        lines.push(format!(
+            "warning: {} still carr{} U+FFFD where the publisher's deposit lost a character; {hint}",
+            fields.join(", "),
+            if fields.len() == 1 { "ies" } else { "y" },
+        ));
+    }
+    lines
+}
+
+/// The publisher's page for a work: Crossref's `resource.primary.URL`, else
+/// the DOI resolver (ADR-0053: a DOI link is an address, not a fetch).
+/// Shared by `missing` and `coverage`.
+pub(super) fn landing_url(ref_: &doiget_core::Ref, crossref: &serde_json::Value) -> Option<String> {
+    match ref_ {
+        doiget_core::Ref::Doi(doi) => Some(
+            crossref
+                .pointer("/resource/primary/URL")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("https://doi.org/{}", doi.as_str())),
+        ),
+        doiget_core::Ref::Arxiv(id) => Some(format!("https://arxiv.org/abs/{}", id.as_str())),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::usable_store_root_env;
+
+    /// #590 (review of #620): every command file with async code calls the
+    /// store only through `blocking_section`. Walks the directory at test
+    /// time, so a new command file is covered without being listed; files
+    /// with no `async fn` are synchronous and exempt.
+    #[test]
+    fn async_command_files_call_the_store_only_through_blocking_section() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands");
+        let mut offenders = Vec::new();
+        let mut scanned = 0;
+        for entry in std::fs::read_dir(&dir).expect("commands dir") {
+            let path = entry.expect("entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).expect("read");
+            let body = src.split("\nmod tests {").next().unwrap_or(&src);
+            if !body.contains("async fn") {
+                continue;
+            }
+            scanned += 1;
+            let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+            for m in [
+                "read",
+                "write",
+                "write_user_authored",
+                "list_recent",
+                "search",
+                "search_by_tag",
+            ] {
+                let calls = flat.match_indices(&*format!("store.{m}(")).count();
+                let wrapped = flat
+                    .match_indices(&*format!("blocking_section(||store.{m}("))
+                    .count()
+                    + flat
+                        .match_indices(&*format!("blocking_section(||{{store.{m}("))
+                        .count();
+                if calls != wrapped {
+                    offenders.push(format!("{}: store.{m}", path.display()));
+                }
+            }
+        }
+        assert!(scanned >= 10, "scanned only {scanned} async command files");
+        assert!(
+            offenders.is_empty(),
+            "store calls outside blocking_section: {offenders:#?}"
+        );
+    }
+
+    #[test]
+    fn metadata_quality_lines_name_the_repair_and_what_is_left() {
+        let repaired = std::collections::BTreeMap::from([(
+            "title".to_string(),
+            "semantic_scholar".to_string(),
+        )]);
+        let lines = super::metadata_quality_lines(
+            &repaired,
+            &["replacement_char:venue".to_string()],
+            false,
+        );
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("note: repaired title from semantic_scholar"));
+        assert!(lines[1].starts_with("warning: venue still carries U+FFFD"));
+        assert!(lines[1].ends_with("set DOIGET_ENABLE_S2=1 to try a repair from Semantic Scholar"));
+        assert!(super::metadata_quality_lines(&Default::default(), &[], true).is_empty());
+    }
+
+    /// #613: an exported-but-empty `DOIGET_STORE_ROOT` (e.g. from
+    /// `export DOIGET_STORE_ROOT=${DOIGET_STORE_ROOT:-}`) is unset, not the
+    /// store root `""`.
+    #[test]
+    fn empty_or_placeholder_store_root_env_is_treated_as_unset() {
+        assert_eq!(usable_store_root_env(""), None);
+        assert_eq!(usable_store_root_env("   "), None);
+        assert_eq!(usable_store_root_env("${user_config.store_root}"), None);
+        assert_eq!(usable_store_root_env(" /srv/papers "), Some("/srv/papers"));
+    }
 }

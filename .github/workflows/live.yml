@@ -1,0 +1,39 @@
+# The live use-case suite (#462): the real binary against the real services,
+# one ref per route, asserting which route produced each outcome.
+#
+# Off the PR path on purpose. The default suite is hermetic (network-purity),
+# and an upstream change should surface as a failing nightly run to triage,
+# not as a blocked PR. Tests run one at a time, with a contact address and the
+# built-in rate limiter; the ref list is small and fixed
+# (crates/doiget-cli/tests/live_routes.rs).
+name: live
+
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: live routes
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: stable
+      - name: run the live suite
+        env:
+          # A real address in the repository's settings, when one is set;
+          # otherwise the suite's placeholder. Crossref, Unpaywall and NCBI
+          # all ask for one.
+          DOIGET_CONTACT_EMAIL: ${{ vars.DOIGET_LIVE_CONTACT_EMAIL || 'doiget-live@example.org' }}
+        run: cargo test -p doiget-cli --features live-tests --test live_routes -- --ignored --test-threads=1

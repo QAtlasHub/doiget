@@ -20,9 +20,9 @@ speaks **stdio only** ([ADR-0001](DECISIONS/), [`SCOPE.md`](SCOPE.md) §non-goal
 | `doiget_paper_text` | Extract an **arXiv** paper's full text from ar5iv as sectioned plain text (`ref`, optional `max_chars`). Tier-1 OA, always-on; **never opens the PDF blob** (ADR-0032). A DOI → `NOT_IMPLEMENTED` (terminal: the tool is arXiv-only and DOI→arXiv linking is #281 item 5, not a config knob). |
 | `doiget_link` | Resolve a **DOI** to its arXiv preprint + identity cluster (`{ doi, arxiv, openalex_id, title }`) over OpenAlex, for reading or dedup (#281 item 5). Tier-1 OA, always-on; **never fetches a PDF**. arXiv → DOI is a follow-up; a non-DOI ref → `INVALID_REF`. |
 | `doiget_list_recent` | Last N fetched entries. |
-| `doiget_paper_pdf_path` | Return the local path of a cached PDF. **Does not read, parse, or transmit content.** |
+| `doiget_paper_pdf_path` | Return the local path of a cached PDF, with its `origin` (`user-supplied` for a PDF added with `doiget add`, else null) and stored `license`. **Does not read, parse, or transmit content.** |
 | `doiget_capability_profile` | Report which sources this instance is allowed to use. |
-| `doiget_health` | Operational sanity (store writable, version, schema). `store_writable` is a best-effort probe of the nearest **existing** ancestor of the store root — it creates nothing, so calling this tool never materialises `papers/` (#406). |
+| `doiget_health` | Operational sanity (store writable, version, schema). `store_writable` is a best-effort probe of the nearest **existing** ancestor of the store root — it creates nothing, so calling this tool never materialises `papers/` (#406). `build` (#594) says which binary is answering -- `binary` is its absolute path, which includes the home directory, as the MCP config naming it does -- its `channel` (`stable` / `beta`), install `method` and the `update` command, with no network call. |
 
 Additional tools:
 
@@ -107,6 +107,14 @@ type FetchResult =
       schema_version: string,
       // Issue #118 / #243: PDF leg status. Always present on ok:true responses.
       pdf: PdfLeg,
+      // #608: fields of the stored metadata that still carry U+FFFD (a
+      // character the publisher's deposit lost), as "replacement_char:<field>".
+      // [] for clean metadata. Always present.
+      metadata_quality: string[],
+      // #608: fields replaced by a matching value from another *enabled*
+      // source (DOIGET_ENABLE_S2 / DOIGET_ENABLE_OPENALEX), field -> source
+      // key, e.g. { title: "semantic_scholar" }. {} when nothing was repaired.
+      repaired_fields: { [field: string]: string },
     }
   | { ok: true, dry_run: true, ref: RefShape, plan: FetchPlan,
       rate_limit_budget: { global_per_sec: number, per_source_min_gap_ms: number } }
@@ -275,6 +283,47 @@ Tools where `dry_run` does not apply (`doiget_info`, `doiget_search_local`,
 `INVALID_REF`-class — i.e. surface as
 `{ok:false, error:{code:"INVALID_REF", ...}}`.
 
+## 10a. Repeat suppression and `force` (NORMATIVE; ADR-0057)
+
+`doiget_fetch_paper`, `doiget_batch_fetch` and `doiget_batch_from_bibliography`
+accept an optional `force: boolean`, defaulting to `false`.
+
+Within one server session, a ref already answered with something a retry cannot
+change yet is not asked again (#507):
+
+- a `terminal` or `needs_config` answer is replayed for 10 minutes;
+- a `retry_after` answer is refused for 30 s from when it was given.
+
+The replay is an ordinary failure envelope. Its `error.code` is the original
+answer's, or `RATE_LIMITED` while a `retry_after` wait runs, and it adds:
+
+```typescript
+error: {
+  code, message, disposition,
+  replayed: true,          // the answer was not fetched again
+  retry_after_ms?: number, // while a retry_after wait runs: time left
+}
+```
+
+This holds even when the first call was `ok: true` with a blocked PDF leg: the
+repeat did nothing, so it is `ok: false`. A change to `config.toml` lifts the
+replay. `force: true` sends the request anyway, and the provenance log records
+a `repeat_forced` row. There is no setting that disables suppression.
+`doiget_resolve_paper` and `doiget_metadata_only` are not suppressed: they
+make metadata requests only, bounded by the rate cap.
+
+## 10b. PubMed ids (NORMATIVE; ADR-0061, #638)
+
+`doiget_fetch_paper`, `doiget_resolve_paper`, `doiget_metadata_only` and
+`doiget_batch_fetch` accept a PubMed id as `ref`: `pmid:N`, `pmcid:PMCN` or
+`PMCN`, or a PubMed / PMC article URL. It is looked up once through NCBI
+E-utilities and then handled under the DOI PubMed lists for it. A record with no
+DOI answers `NOT_IMPLEMENTED`; an id PubMed has no record of answers `NOT_FOUND`.
+`dry_run: true` makes no lookup and answers `INVALID_REF`, saying so. The
+local-only tools (`doiget_info`, `doiget_paper_pdf_path`, `doiget_tag`,
+`doiget_annotate`, `doiget_expand_citation_graph`) keep `INVALID_REF` for a
+PubMed id, with a message naming the tools that resolve one.
+
 ## 11. `doiget_metadata_only` (NORMATIVE)
 
 `doiget_metadata_only` resolves a `ref` through the configured metadata
@@ -363,7 +412,14 @@ type MetadataOnlyResult =
       oa_url: string | null,
       // gold / green / hybrid / bronze / closed, or null when not determined.
       oa_status: string | null,
+      // The resolver's payload as received -- NOT the stored entry.
       metadata: object,
+      // #608: the stored entry's fields that still carry U+FFFD, as
+      // "replacement_char:<field>", and the fields repaired from another
+      // enabled source before the write (field -> source key). The two are
+      // how a caller learns the stored entry differs from `metadata`.
+      metadata_quality: string[],
+      repaired_fields: { [field: string]: string },
       schema_version: string,
     }
   | { ok: true, dry_run: true, ref: RefShape, plan: FetchPlan,

@@ -16,7 +16,7 @@ this harness exists to catch regressions early.
 
 `libfuzzer-sys` requires nightly Rust. The main `doiget` workspace pins
 stable (see [`rust-toolchain.toml`](../../../rust-toolchain.toml) /
-`Cargo.toml` `rust-version = "1.86"`), so this fuzz crate is
+`Cargo.toml` `rust-version = "1.88"`), so this fuzz crate is
 **deliberately excluded** from the main workspace via the root
 `[workspace] exclude = [...]` entry. It is its own one-crate workspace
 that you only ever invoke through `cargo +nightly fuzz`.

@@ -87,6 +87,74 @@ fn parse_utf8_path(raw: &str) -> Result<Utf8PathBuf, String> {
     Ok(Utf8PathBuf::from(raw))
 }
 
+/// `--store-root`: [`parse_utf8_path`], plus the two values the store-root
+/// resolver treats as unset — whitespace only, or an unexpanded `${...}`
+/// placeholder (#369 / #613). A flag the user typed must not be silently
+/// dropped for the cwd default, and rejecting it here also means a store
+/// root that `config doctor` reports as ignored can only have come from the
+/// environment, which is what its note says.
+fn parse_store_root(raw: &str) -> Result<Utf8PathBuf, String> {
+    if !raw.is_empty() && raw.trim().is_empty() {
+        return Err("path must not be only whitespace".to_string());
+    }
+    if raw.contains("${") {
+        return Err(format!(
+            "{raw:?} contains an unexpanded `${{...}}` placeholder; pass the expanded path"
+        ));
+    }
+    parse_utf8_path(raw)
+}
+
+/// Citation-key and `file`-field options shared by `cite` and `bib` (#610).
+/// The default is unchanged: the safekey, and no `file` field.
+#[derive(clap::Args, Debug, Default)]
+struct KeyArgs {
+    /// Use KEY as the citation key (a single ref only).
+    #[arg(long, value_name = "KEY", conflicts_with = "key_template")]
+    key: Option<String>,
+    /// Build the key from a template: {author} (first author's family name),
+    /// {year}, {title_word} (first significant title word) and {safekey},
+    /// lower-cased and ASCII-folded, e.g. '{author}{year}{title_word}'.
+    /// Default: `[cite] key_template` in config.toml, else the safekey.
+    #[arg(long, value_name = "TEMPLATE")]
+    key_template: Option<String>,
+    /// Add `file = {...}` from PATTERN ({key}, {safekey}), e.g.
+    /// 'refs/{key}.pdf' -- only when that path exists, unless
+    /// --file-field-always. Default: `[cite] file_field` in config.toml.
+    #[arg(long, value_name = "PATTERN")]
+    file_field: Option<String>,
+    /// With --file-field, add the field even when the file does not exist.
+    #[arg(long)]
+    file_field_always: bool,
+    /// Add `shortjournal` with the ISO 4 abbreviation from the record's own
+    /// Crossref `short-container-title` (e.g. `Phys. Rev. B`); `journal`
+    /// keeps the full title. Never guessed: a venue with no abbreviation
+    /// on record is named on stderr instead.
+    #[arg(long, value_name = "STYLE", value_enum)]
+    journal_abbrev: Option<JournalAbbrev>,
+}
+
+/// `--journal-abbrev` styles. ISO 4 is the only one; the argument is a value
+/// rather than a switch so another style does not need a new flag.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum JournalAbbrev {
+    /// ISO 4, as Crossref's `short-container-title` records it.
+    Iso4,
+}
+
+impl From<KeyArgs> for doiget_cli::commands::KeyOptions {
+    fn from(a: KeyArgs) -> Self {
+        Self {
+            key: a.key,
+            template: a.key_template,
+            file_field: a.file_field,
+            file_field_always: a.file_field_always,
+            journal_abbrev: a.journal_abbrev.is_some(),
+            ..Self::default()
+        }
+    }
+}
+
 /// `doiget provenance ...` action selector. Ships only the v1→v2
 /// migration in Slice 4 (ADR-0024); further actions (e.g. `compact`,
 /// `rotate`) land in later slices.
@@ -161,10 +229,10 @@ struct Cli {
     /// Precedence: this flag > `DOIGET_STORE_ROOT` env > default
     /// (`./papers` — `papers/` under the current working directory; ADR-0036).
     /// Wins by overwriting `DOIGET_STORE_ROOT` for the lifetime of
-    /// this process before any command resolver reads it. Empty
-    /// strings and NUL bytes are rejected at parse time by
-    /// `parse_utf8_path`.
-    #[arg(long, global = true, value_name = "PATH", value_parser = parse_utf8_path)]
+    /// this process before any command resolver reads it. Empty,
+    /// whitespace-only and `${...}`-placeholder values and NUL bytes are
+    /// rejected at parse time by `parse_store_root`.
+    #[arg(long, global = true, value_name = "PATH", value_parser = parse_store_root)]
     store_root: Option<Utf8PathBuf>,
 
     /// Override the provenance-log file path. CONFIG.md §5 / #211.
@@ -251,6 +319,11 @@ enum Command {
         /// metadata is absent. Metadata-only fetches (no PDF) are skipped. (#344)
         #[arg(long, value_name = "DIR", value_parser = parse_utf8_path)]
         link: Option<Utf8PathBuf>,
+        /// Ask again even if this run already has an answer a retry cannot
+        /// change yet (#507). Without it such a repeat reports the earlier
+        /// answer, marked as a replay, without a network request.
+        #[arg(long)]
+        refetch: bool,
     },
     /// Fetch many refs from a newline-separated text file.
     ///
@@ -268,6 +341,9 @@ enum Command {
         /// exit so a malformed batch is visible.
         #[arg(long)]
         dry_run: bool,
+        /// Ask again for entries this run already has an answer for (#507).
+        #[arg(long)]
+        refetch: bool,
         /// Skip refs that already have a PDF in the store
         /// (`<store>/<safekey>.pdf` exists). Metadata-only entries are
         /// NOT skipped — they may now succeed via the preprint fallback
@@ -378,17 +454,28 @@ enum Command {
         /// skipped (and counted toward the exit code).
         #[arg(long, value_name = "FILE", value_parser = parse_utf8_path)]
         from_file: Option<camino::Utf8PathBuf>,
+        #[command(flatten)]
+        keys: KeyArgs,
     },
     /// Resolve a ref live and print a clean BibTeX entry (doi2bib-style).
     /// Falls back to the local store when the live resolve fails, so an
     /// already-fetched ref always cites (#305).
     Cite {
-        /// DOI or arXiv id.
+        /// DOI, arXiv id, or a GitHub repository / release URL
+        /// (`https://github.com/OWNER/REPO/releases/tag/TAG`), which is cited
+        /// as `@software` from the release and the repository's
+        /// CITATION.cff (#614).
         ref_: String,
         /// Skip the live resolve and render from the local store only
         /// (errors if the ref was never fetched).
         #[arg(long)]
         offline: bool,
+        /// For a Zenodo version DOI, cite that version rather than the
+        /// concept DOI that names every version (the default, #614).
+        #[arg(long)]
+        zenodo_version: bool,
+        #[command(flatten)]
+        keys: KeyArgs,
     },
     /// Export stored entries as CSL JSON. A single ref, the whole store
     /// (`--all`), or a ref list (`--from-file`) — all rendered offline
@@ -404,6 +491,10 @@ enum Command {
         /// skipped (and counted toward the exit code).
         #[arg(long, value_name = "FILE", value_parser = parse_utf8_path)]
         from_file: Option<camino::Utf8PathBuf>,
+        /// Add CSL `container-title-short` from the record's own Crossref
+        /// `short-container-title` (#611); never guessed.
+        #[arg(long, value_name = "STYLE", value_enum)]
+        journal_abbrev: Option<JournalAbbrev>,
     },
     /// Extract a paper's full text from ar5iv as sectioned plain text
     /// (the #281 "read" step; ADR-0032). Takes an arXiv id; the PDF blob
@@ -509,6 +600,68 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
+    /// Add a PDF you downloaded yourself to the store (#606): `add <ref>
+    /// <file.pdf>`, or `add --from-dir DIR` to match a downloads folder by the
+    /// id in each file name. Recorded as user-supplied with no licence claim;
+    /// the PDF's content is never read (ADR-0003). The file is copied.
+    Add {
+        /// DOI or arXiv id the file is the PDF of.
+        ref_: Option<String>,
+        /// The PDF.
+        #[arg(value_parser = parse_utf8_path)]
+        file: Option<camino::Utf8PathBuf>,
+        /// Match every PDF in DIR to an entry still missing one, by the id
+        /// in its file name (`BF01340294.pdf` -> `10.1007/BF01340294`).
+        #[arg(long, value_name = "DIR", value_parser = parse_utf8_path, conflicts_with_all = ["ref_", "file"])]
+        from_dir: Option<camino::Utf8PathBuf>,
+        /// With --from-dir: match against this bibliography's entries instead
+        /// of the store's entries without a PDF.
+        #[arg(long, value_name = "FILE", value_parser = parse_utf8_path, requires = "from_dir")]
+        refs: Option<camino::Utf8PathBuf>,
+        /// With --from-dir: add the matches (without it, only the plan is printed).
+        #[arg(long, requires = "from_dir")]
+        apply: bool,
+        /// Replace a PDF already in the store, and accept a file whose name
+        /// is another work's id.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Which source, if any, can deliver a DOI's PDF -- before fetching (#605).
+    /// Reports the publisher, the OA status Unpaywall records, and for every
+    /// source whether this doiget can ask it (ready / not built / not
+    /// enabled / publisher not covered) with the switch that changes it.
+    /// Read-only: two metadata requests, no publisher contact, no store write.
+    Coverage {
+        /// DOI or arXiv id.
+        ref_: String,
+    },
+    /// List every source doiget knows -- built into this binary or not -- with
+    /// what it covers and what enables it (#605).
+    Sources {
+        /// Only sources relevant to this publisher: a DOI prefix (10.1103)
+        /// or part of its name (springer).
+        #[arg(long, value_name = "NAME|PREFIX")]
+        publisher: Option<String>,
+    },
+    /// Which works a bibliography cites still have no local PDF, and where
+    /// to get each: the OA copy to fetch, or the publisher's landing page and
+    /// the path to save a hand download under (#607). Read-only; never
+    /// fetches a PDF. Exit code = entries still missing (capped at 255).
+    Missing {
+        /// The bibliography: BibTeX, CSL-JSON, or one ref per line.
+        path: String,
+        /// Input format; auto-detected from extension / content by default.
+        #[arg(long, default_value = "auto")]
+        format: String,
+        /// Where each PDF is expected locally, e.g. 'refs/{key}.pdf'
+        /// ({key} = the entry key, {safekey}). An existing file counts as
+        /// present; for a missing one it is the path to save the download as.
+        #[arg(long, value_name = "PATTERN")]
+        path_pattern: Option<String>,
+        /// Check the store and local files only; no metadata or OA lookup.
+        #[arg(long)]
+        offline: bool,
+    },
     /// Structurally validate a BibTeX bibliography (duplicate keys,
     /// missing fields, blank entries, `$$` title math) WITHOUT resolving
     /// DOIs or touching the network. Read-only; emits one JSON-Lines
@@ -613,8 +766,27 @@ enum Command {
     },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// Stack for the thread that runs the CLI. Windows gives the main thread
+/// 1 MiB, and an unoptimised build's `Cli::parse` plus the dispatch future
+/// outgrew it (#611's flags tipped `capabilities` over on windows-latest);
+/// Linux and macOS give 8 MiB, which this matches everywhere.
+const MAIN_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+fn main() -> anyhow::Result<()> {
+    std::thread::Builder::new()
+        .name("doiget-main".into())
+        .stack_size(MAIN_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?
+                .block_on(real_main())
+        })?
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+async fn real_main() -> anyhow::Result<()> {
     // Logging — strictly to stderr. See docs/SECURITY.md §3 / ADR-0001.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -697,7 +869,7 @@ fn forced_implicit_for(command: &Option<Command>) -> Option<OutputMode> {
 /// follow-up.
 ///
 /// We invoke this from `run_dispatch` (see call site below) before
-/// any `.await` in the function. The `#[tokio::main]` runtime has
+/// any `.await` in the function. The runtime `main` builds has
 /// already constructed its multi-thread worker pool by that point,
 /// but the workers are parked on the work queue and do not read
 /// `environ`; the active thread is the binary's startup thread. The
@@ -705,7 +877,7 @@ fn forced_implicit_for(command: &Option<Command>) -> Option<OutputMode> {
 /// If a future change introduces an async background task that reads
 /// `DOIGET_STORE_ROOT` (or any other key this function writes), the
 /// application of overrides must move ahead of the runtime
-/// construction (i.e. above the `#[tokio::main]` boundary).
+/// construction (i.e. above the runtime `main` builds).
 ///
 /// The function intentionally has no error path: each flag value has
 /// already passed `parse_utf8_path` (empty and NUL rejected) or
@@ -826,6 +998,36 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
                 .await
         }
         Some(Command::Version { check }) => doiget_cli::commands::version::run(check, mode).await,
+        Some(Command::Add {
+            ref_,
+            file,
+            from_dir,
+            refs,
+            apply,
+            force,
+        }) => doiget_cli::commands::add::run(ref_, file, from_dir, refs, force, apply).await,
+        Some(Command::Coverage { ref_ }) => {
+            doiget_cli::commands::coverage::run_coverage(ref_, mode, out.quiet_was_explicit).await
+        }
+        Some(Command::Sources { publisher }) => {
+            doiget_cli::commands::coverage::run_sources(publisher, mode, out.quiet_was_explicit)
+        }
+        Some(Command::Missing {
+            path,
+            format,
+            path_pattern,
+            offline,
+        }) => {
+            doiget_cli::commands::missing::run(
+                path,
+                format,
+                path_pattern,
+                offline,
+                mode,
+                out.quiet_was_explicit,
+            )
+            .await
+        }
         Some(Command::Verify {
             path,
             format,
@@ -862,14 +1064,20 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             ref_,
             dry_run,
             link,
-        }) => doiget_cli::commands::fetch::run_with_options(ref_, dry_run, link, mode).await,
+            refetch,
+        }) => {
+            doiget_cli::commands::fetch::set_refetch(refetch);
+            doiget_cli::commands::fetch::run_with_options(ref_, dry_run, link, mode).await
+        }
         Some(Command::Batch {
             path,
             dry_run,
             only_failed,
             delay,
             user_agent,
+            refetch,
         }) => {
+            doiget_cli::commands::fetch::set_refetch(refetch);
             doiget_cli::commands::batch::run_with_options(
                 path,
                 dry_run,
@@ -884,15 +1092,22 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
             ref_,
             all,
             from_file,
-        }) => doiget_cli::commands::bib::run(ref_, all, from_file, mode),
-        Some(Command::Cite { ref_, offline }) => {
-            doiget_cli::commands::cite::run(ref_, offline, mode).await
+            keys,
+        }) => doiget_cli::commands::bib::run(ref_, all, from_file, keys.into(), mode),
+        Some(Command::Cite {
+            ref_,
+            offline,
+            zenodo_version,
+            keys,
+        }) => {
+            doiget_cli::commands::cite::run(ref_, offline, zenodo_version, keys.into(), mode).await
         }
         Some(Command::Csl {
             ref_,
             all,
             from_file,
-        }) => doiget_cli::commands::csl::run(ref_, all, from_file, mode),
+            journal_abbrev,
+        }) => doiget_cli::commands::csl::run(ref_, all, from_file, journal_abbrev.is_some(), mode),
         Some(Command::Text {
             ref_,
             max_chars,
