@@ -79,9 +79,23 @@ pub fn install_info() -> InstallInfo {
         .as_ref()
         .and_then(|b| b.parent().map(|d| d.join(MANIFEST_NAME)))
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str::<InstallManifest>(&s).ok());
+        .and_then(|s| parse_manifest(&s));
     describe(crate::VERSION, binary, manifest)
 }
+
+/// The manifest's text as an [`InstallManifest`], or `None` when it is not
+/// one: an unreadable manifest is reported as no manifest, and the method is
+/// read from the path instead. A leading BOM is allowed -- Windows
+/// PowerShell 5.1 writes one with `-Encoding UTF8`, and older `install.ps1`
+/// runs did.
+#[must_use]
+pub fn parse_manifest(text: &str) -> Option<InstallManifest> {
+    serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()
+}
+
+/// What an installer records when the new binary would not report its
+/// version: it names no version, so it is compared with none.
+pub const UNKNOWN_VERSION: &str = "unknown";
 
 /// [`install_info`] from its inputs, for tests.
 #[must_use]
@@ -97,7 +111,10 @@ pub fn describe(
             .as_ref()
             .map_or("unknown", |b| method_from_path(b.as_str())),
     };
-    let manifest_matches = manifest.as_ref().map(|m| m.version == version);
+    let manifest_matches = manifest
+        .as_ref()
+        .filter(|m| m.version != UNKNOWN_VERSION)
+        .map(|m| m.version == version);
     InstallInfo {
         version,
         channel: if version.contains('-') {
@@ -172,6 +189,31 @@ mod tests {
     fn the_channel_follows_the_version() {
         assert_eq!(describe("0.9.0", None, None).channel, "stable");
         assert_eq!(describe("0.9.0-beta.3", None, None).channel, "beta");
+        // Any pre-release is off the stable channel, not only -beta.N.
+        assert_eq!(describe("0.9.0-rc.1", None, None).channel, "beta");
+    }
+
+    #[test]
+    fn a_manifest_with_a_bom_parses_and_a_malformed_one_is_no_manifest() {
+        let json = r#"{"installer":"install.ps1","version":"0.9.0"}"#;
+        let with_bom = format!("\u{feff}{json}");
+        assert_eq!(
+            parse_manifest(&with_bom).map(|m| m.installer),
+            Some("install.ps1".to_string())
+        );
+        assert_eq!(parse_manifest("{not json"), None);
+        assert_eq!(
+            parse_manifest(r#"{"version":"0.9.0"}"#),
+            None,
+            "no installer"
+        );
+    }
+
+    #[test]
+    fn an_unknown_manifest_version_is_not_called_a_replacement() {
+        let info = describe("0.9.0", None, Some(m("install.sh", UNKNOWN_VERSION)));
+        assert_eq!(info.method, "install.sh");
+        assert_eq!(info.manifest_matches, None);
     }
 
     /// The #594 case: the binary an MCP config names, installed by

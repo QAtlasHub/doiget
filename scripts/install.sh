@@ -113,7 +113,7 @@ info "installed doiget ${new_version:-$VERSION} to $INSTALL_DIR/doiget"
 cat > "$INSTALL_DIR/doiget.install.json" <<EOF_MANIFEST
 {
   "installer": "install.sh",
-  "version": "${new_version:-$VERSION}",
+  "version": "${new_version:-unknown}",
   "asset": "$asset",
   "sha256": "$actual",
   "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

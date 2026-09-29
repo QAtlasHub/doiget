@@ -74,12 +74,18 @@ try {
     # The manifest doiget_health / doiget capabilities read (#594).
     $manifest = [ordered]@{
         installer    = 'install.ps1'
-        version      = $(if ($newVersion) { $newVersion } else { $version })
+        # `unknown`, never the requested tag ('latest'): a manifest version
+        # the binary cannot match would read as a hand-replaced binary.
+        version      = $(if ($newVersion) { $newVersion } else { 'unknown' })
         asset        = $asset
         sha256       = $actual
         installed_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     }
-    $manifest | ConvertTo-Json | Set-Content -Encoding UTF8 -Path (Join-Path $installDir 'doiget.install.json')
+    # UTF-8 without a BOM: PowerShell 5.1's `-Encoding UTF8` writes one.
+    [System.IO.File]::WriteAllText(
+        (Join-Path $installDir 'doiget.install.json'),
+        ($manifest | ConvertTo-Json),
+        (New-Object System.Text.UTF8Encoding($false)))
 
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if (-not $userPath -or ($userPath -split ';') -notcontains $installDir) {
