@@ -62,7 +62,7 @@ identifiers.
 | Vector | Mitigation |
 |---|---|
 | Path traversal in safekey | `safekey` algorithm replaces every character outside `[A-Za-z0-9._\-_]` with `_`. Reference test vectors in [`SAFEKEY.md`](SAFEKEY.md). |
-| Concurrent writers (BiblioFetch.jl + doiget) | `flock` on `<safekey>.toml.lock`, 5s timeout. ([`STORE.md`](STORE.md) §Contract 2) |
+| Concurrent writers (two doiget processes, or another tool on the same store) | `flock` on `<safekey>.toml.lock`, 5s timeout. ([`STORE.md`](STORE.md) §Contract 2) |
 | Partial write on crash | Write to `<safekey>.toml.tmp` → `fsync` → `rename` → `fsync` parent. ([`STORE.md`](STORE.md) §Contract 3) |
 | Log file tampering | SHA-256 hash chain; `chattr +a` attempted on Linux; `doiget audit-log --verify` recomputes the chain. |
 | Disk-full DoS via large PDFs | Per-fetch size cap; on disk-full the fetch errors and the partial temp file is cleaned up. |
@@ -139,7 +139,6 @@ The following controls are established:
 - `cargo-vet` baseline.
 - `posture-lint.yml` denying telemetry / HTTP server / self-update crate imports.
 - `safekey-vectors.yml` validating 100 reference vectors against the algorithm.
-- `cross-tool-compat.yml` round-tripping a sample DOI through BiblioFetch.jl + doiget.
 - Branch protection on `main`: required PR review, status checks must pass, signed
   commits.
 - Author 2FA mandatory.

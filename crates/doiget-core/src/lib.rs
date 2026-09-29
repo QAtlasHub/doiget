@@ -2,7 +2,7 @@
 //!
 //! Core library for [doiget](https://github.com/QAtlasHub/doiget): an Open Access
 //! first paper-fetcher with strict capability gating, fail-closed provenance logging,
-//! and a BiblioFetch.jl-compatible store layout.
+//! and a documented on-disk store layout (`docs/STORE.md`).
 //!
 //! Phase 0 ships only this skeleton. Real implementations land in Phase 1.
 //! See `docs/PUBLIC_API.md` for the semver-locked surface and `docs/ARCHITECTURE.md`
@@ -2443,10 +2443,10 @@ agreed = true
             serde_json::from_str(raw).expect("vectors.json is valid JSON matching schema");
 
         // Phase 0 final ships the full NORMATIVE 100-entry set
-        // (docs/SAFEKEY.md §5). The fixture is the binding cross-tool
-        // contract with BiblioFetch.jl; tightening the count guard to
-        // `== 100` ensures the set cannot silently grow or shrink without
-        // a coordinated ADR bump (per docs/SAFEKEY.md status block).
+        // (docs/SAFEKEY.md §5). The fixture is doiget's own binding
+        // contract (ADR-0060 retired its sharing with BiblioFetch.jl);
+        // the `== 100` guard keeps the set from silently growing or
+        // shrinking without a doiget ADR (per docs/SAFEKEY.md status block).
         assert_eq!(
             parsed.vectors.len(),
             100,

@@ -7,12 +7,8 @@ name: safekey-vectors
 # `safekey_matches_reference_vectors` unit test
 # (`crates/doiget-core/src/lib.rs::tests`).
 #
-# The cross-tool parity check against the Julia reference implementation
-# (BiblioFetch.jl) remains DEFERRED to Phase 2, gated on the
-# BiblioFetch.jl pre-flight item under `docs/PHASES.md` §2 ("Pre-flight
-# items"). Phase 2 will add a separate job that diffs the Julia output
-# against the same fixture; the Rust side does not change when that
-# lands.
+# The planned parity check against a Julia implementation (BiblioFetch.jl)
+# was dropped with the shared contract (ADR-0060); the vectors bind doiget.
 
 on:
   pull_request:

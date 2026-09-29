@@ -6,9 +6,9 @@ weight = 210
 
 # Store layout
 
-> **Status: NORMATIVE (shared spec).** This document is binding for both doiget and
-> BiblioFetch.jl. Implementations on either side MUST conform. Changes require an ADR
-> coordinated across both projects.
+> **Status: NORMATIVE.** Binding for doiget. Changes require a doiget ADR. Until
+> 0.9.0 this was a spec shared with BiblioFetch.jl (ADR-0004); ADR-0060 retired that
+> contract without changing the format, so stores BiblioFetch.jl wrote stay readable.
 
 ## 1. Layout
 
@@ -257,17 +257,12 @@ Both implementations MUST refuse:
 
 ## 9. Round-trip CI test
 
-A CI workflow (`cross-tool-compat.yml`) exercises this every PR:
+A BiblioFetch.jl round-trip workflow was planned here and never built;
+ADR-0060 dropped it. Preservation of other tools' tables is pinned by the
+in-crate round-trip tests (`bibliofetch_typed_table_and_unknown_scalar_survive_roundtrip`).
 
-```text
-1. Julia: BiblioFetch fetch DOI X            (creates <safekey>.toml + .pdf)
-2. doiget info X                             (reads, asserts metadata matches expected)
-3. doiget bib X | diff - expected_bibtex     (asserts bib output is bit-identical)
-4. doiget fetch DOI Y                        (writes a different entry)
-5. Julia: BiblioFetch info Y                 (reads doiget output, must succeed)
-```
-
-This guarantees real round-trip compatibility, not just spec conformance.
+They pin doiget's own preservation of tables it does not own; there is no
+cross-tool round-trip check.
 
 ## 10. Migration story
 
