@@ -27,6 +27,7 @@ pub mod metadata_quality;
 pub mod orchestrator;
 pub mod paper_tex_source;
 pub mod paper_text;
+pub mod preprint;
 pub mod provenance;
 pub mod pubmed;
 pub mod rate_limiter;

@@ -185,18 +185,27 @@ fn a_repository_copy_off_the_allowlist_is_blocked_and_named() {
     );
 }
 
-/// Bronze OA on a publisher that stays off `oa-publisher` (ADR-0039).
+/// Bronze OA on a publisher that stays off `oa-publisher` (ADR-0039): the
+/// AMS copy is refused -- and the author's own arXiv posting of the same
+/// paper (2301.07880, journal_ref "Mathematics of Computation, 74(2004)")
+/// is found by ADR-0062's title search and fetched instead. Both halves of
+/// the route are asserted: where it was blocked, and what answered.
 #[test]
 #[ignore = "live network; run by .github/workflows/live.yml"]
-fn a_bronze_copy_on_an_unlisted_publisher_is_blocked_at_that_publisher() {
+fn a_bronze_copy_blocked_at_its_publisher_falls_back_to_the_authors_arxiv_posting() {
     let td = TempDir::new().unwrap();
     let v = Mcp::start(&td).fetch("10.1090/s0025-5718-04-01692-8");
     assert_eq!(v["oa_status"], "bronze", "{v}");
-    assert_eq!(v["pdf"]["status"], "blocked", "{v}");
-    assert_eq!(
-        v["pdf"]["denial_context"]["attempted"], "www.ams.org",
-        "{v}"
+    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert!(
+        v["pdf"]["original_block"]
+            .as_str()
+            .unwrap_or("")
+            .contains("www.ams.org"),
+        "the publisher block is still named: {v}"
     );
+    assert_eq!(v["pdf"]["arxiv_id"], "2301.07880", "{v}");
+    assert_eq!(v["pdf"]["found_by"], "arxiv_title_search", "{v}");
 }
 
 /// A closed DOI: metadata, no PDF, and still `ok` -- the outcome ADR-0052
@@ -213,19 +222,19 @@ fn a_closed_doi_is_metadata_only_and_ok() {
 
 /// The maintainer's own paper (Shimozono & Hotta, PRB 2026). Its DOI is
 /// closed at APS and Unpaywall knows no copy -- but arXiv holds the preprint
-/// (2512.07923), which the DOI route does not reach: the #325 fallback
-/// follows only an arXiv copy Unpaywall names. Pinned as the route it is
-/// today; when the DOI starts reaching the preprint, this is the test to
-/// update.
+/// (2512.07923). ADR-0062's arXiv title search finds it, and the DOI yields
+/// the preprint; the arXiv id reaches it directly too.
 #[test]
 #[ignore = "live network; run by .github/workflows/live.yml"]
-fn the_maintainers_paper_is_closed_by_doi_and_fetched_by_arxiv_id() {
+fn the_maintainers_paper_reaches_its_preprint_by_doi_and_by_arxiv_id() {
     let td = TempDir::new().unwrap();
     let mut mcp = Mcp::start(&td);
     let by_doi = mcp.fetch("10.1103/bbnt-brjz");
     assert_eq!(by_doi["ok"], true, "{by_doi}");
     assert_eq!(by_doi["oa_status"], "closed", "{by_doi}");
-    assert_eq!(by_doi["pdf"]["status"], "no_oa_url", "{by_doi}");
+    assert_eq!(by_doi["pdf"]["status"], "preprint_fallback", "{by_doi}");
+    assert_eq!(by_doi["pdf"]["arxiv_id"], "2512.07923", "{by_doi}");
+    assert_eq!(by_doi["pdf"]["found_by"], "arxiv_title_search", "{by_doi}");
     let by_arxiv = mcp.fetch("arxiv:2512.07923");
     assert_eq!(by_arxiv["pdf"]["status"], "fetched", "{by_arxiv}");
     assert_eq!(by_arxiv["source"], "arxiv", "{by_arxiv}");

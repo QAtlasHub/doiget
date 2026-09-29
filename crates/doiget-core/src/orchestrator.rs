@@ -1123,6 +1123,10 @@ pub enum PdfLegStatus {
         /// The OA-publisher error that triggered the fallback (for logs
         /// and audit trail context).
         original_block: String,
+        /// Who named the preprint: `unpaywall` (#325), or one of
+        /// [`crate::preprint::FoundBy`]'s tokens when Unpaywall named none
+        /// (ADR-0062).
+        found_by: String,
     },
     /// The OA chain was blocked and a Tier-3 TDM source served the
     /// publisher's own copy under the user's TDM agreement (#458).
@@ -1916,8 +1920,19 @@ async fn fetch_paper_doi(
     // Issue #325: auto preprint fallback. If the OA chain was blocked but
     // Unpaywall hinted at an arXiv preprint, attempt that fetch and store
     // it under the DOI safekey instead of returning Blocked.
+    // ADR-0062: when Unpaywall named no preprint and nothing was fetched,
+    // look for one -- Crossref's relation, OpenAlex if enabled, then arXiv's
+    // own search by title and first author.
+    let discovered = match &pdf_leg {
+        PdfLegStatus::NoOaUrl
+        | PdfLegStatus::Blocked {
+            suggested_arxiv_id: None,
+            ..
+        } => crate::preprint::find(doi, &crossref_meta, profile.metadata.openalex, ctx).await?,
+        _ => None,
+    };
     let (pdf_leg, pdf_bytes, arxiv_id_for_metadata, fallback_license) =
-        try_arxiv_preprint_fallback(doi, pdf_leg, pdf_bytes, profile, ctx).await;
+        try_arxiv_preprint_fallback(doi, pdf_leg, pdf_bytes, discovered, profile, ctx).await;
 
     // #445: and if that did not help either, ask whoever else is switched
     // on. Additive by construction — see the fn docs.
@@ -2502,6 +2517,7 @@ async fn try_arxiv_preprint_fallback(
     doi: &Doi,
     pdf_leg: PdfLegStatus,
     oa_pdf_bytes: Option<Vec<u8>>,
+    discovered: Option<crate::preprint::Found>,
     profile: &CapabilityProfile,
     ctx: &FetchContext,
 ) -> (
@@ -2510,12 +2526,25 @@ async fn try_arxiv_preprint_fallback(
     Option<ArxivId>,
     Option<String>,
 ) {
-    let (arxiv_id_str, original_block) = match &pdf_leg {
-        PdfLegStatus::Blocked {
-            suggested_arxiv_id: Some(s),
-            message,
-            ..
-        } => (s.clone(), message.clone()),
+    let (arxiv_id_str, original_block, found_by) = match (&pdf_leg, &discovered) {
+        (
+            PdfLegStatus::Blocked {
+                suggested_arxiv_id: Some(s),
+                message,
+                ..
+            },
+            _,
+        ) => (s.clone(), message.clone(), "unpaywall".to_string()),
+        (PdfLegStatus::Blocked { message, .. }, Some(f)) => (
+            f.arxiv_id.as_str().to_string(),
+            message.clone(),
+            f.found_by.as_str().to_string(),
+        ),
+        (PdfLegStatus::NoOaUrl, Some(f)) => (
+            f.arxiv_id.as_str().to_string(),
+            "no open copy known to Unpaywall".to_string(),
+            f.found_by.as_str().to_string(),
+        ),
         _ => return (pdf_leg, oa_pdf_bytes, None, None),
     };
 
@@ -2554,6 +2583,7 @@ async fn try_arxiv_preprint_fallback(
                     PdfLegStatus::PreprintFallback {
                         arxiv_id: arxiv_id.as_str().to_string(),
                         original_block,
+                        found_by,
                     },
                     Some(bytes.to_vec()),
                     Some(arxiv_id),

@@ -96,6 +96,19 @@ behind its own `DOIGET_ENABLE_*` flag.
 *Enforced by:* `orchestrator::optional_source_oa_url`, which dispatches to one
 per-source extractor and returns `None` for any other source name.
 
+**(a-ii) The arXiv preprint of the requested DOI, as a source named it.** When the
+content leg found nothing -- no OA URL, or a blocked one -- an arXiv id reported for
+*that* DOI is fetched at arXiv's documented `/pdf/<id>` (kind (b)'s endpoint, for an id
+a source reported rather than one the user typed). The sources that may name it:
+Unpaywall's `oa_locations` (#325); Crossref's `relation.has-preprint`, from the record
+the fetch already holds; OpenAlex `locations[]`, only when `DOIGET_ENABLE_OPENALEX` is
+set; and arXiv's own API search, accepted only for a hit with the record's title
+(letters and digits, case-folded), the first author among its authors, and no
+different published DOI (ADR-0062). A default fetch contacts no host it did not before
+-- Crossref and arXiv are Tier 1 -- and the envelope names which source found it
+(`found_by`).
+*Enforced by:* `preprint::find` and `orchestrator::try_arxiv_preprint_fallback`.
+
 **(a-i) Crossref `link[]` is NOT one of them, and this was measured.** #517 asked
 whether the fetch path should carry the publisher link Crossref reports, so that a
 user on a subscribing network reaches the publisher instead of exiting 0 in silence.
@@ -162,8 +175,11 @@ was this document updated to say so:
 - **#445 / ADR-0029** — when the OA chain and the arXiv preprint fallback are both
   exhausted, the enabled optional sources are asked whether anyone else holds a copy,
   and the URL they report is tried.
+- **ADR-0062** — when Unpaywall names no arXiv preprint, Crossref's relation, an enabled
+  OpenAlex, or an exact-title arXiv search may; the preprint is then fetched as #325
+  already did. Recorded as (a-ii) above.
 
-Neither is improper. But the argument for them is **not** "we never exceed Unpaywall" —
+None is improper. But the argument for them is **not** "we never exceed Unpaywall" —
 that argument is simply false now. The real argument is the one written above: every
 leg is a publisher-sanctioned API or an index the user switched on, reached at a host
 on the allowlist, under the user's own credential where one is required, with the
