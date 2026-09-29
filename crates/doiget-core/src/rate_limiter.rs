@@ -413,6 +413,26 @@ mod tests {
         );
     }
 
+    /// #500: NCBI's keyless 3 requests a second. Four acquires span at
+    /// least a second, and two are not the arXiv 3 s apart.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn ncbi_requests_stay_under_three_a_second() {
+        let rl = RateLimiter::new(RateLimits::HARD_CODED);
+        let t0 = Instant::now();
+        for _ in 0..4 {
+            drop(rl.acquire(crate::pubmed::NCBI).await);
+        }
+        let elapsed = Instant::now() - t0;
+        assert!(
+            elapsed >= Duration::from_millis(1_000),
+            "four NCBI requests inside a second: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(1_500),
+            "tighter than asked: {elapsed:?}"
+        );
+    }
+
     /// The table only ever tightens. A source with no entry keeps the
     /// global 200 ms floor, so the fix cannot have slowed everything else
     /// down by accident.

@@ -72,7 +72,7 @@ pub fn parse_ref_or_exit(input: &str) -> anyhow::Result<doiget_core::Ref> {
 /// `network: false` (a dry run) refuses the lookup and says so, rather than
 /// making a request the caller was promised would not happen.
 pub async fn parse_ref_or_pubmed(input: &str, network: bool) -> anyhow::Result<doiget_core::Ref> {
-    use doiget_core::pubmed::{lookup, Lookup, PubmedId};
+    use doiget_core::pubmed::{Lookup, PubmedId};
     let Some(id) = PubmedId::parse(input) else {
         return parse_ref_or_exit(input);
     };
@@ -92,7 +92,7 @@ pub async fn parse_ref_or_pubmed(input: &str, network: bool) -> anyhow::Result<d
         );
     }
     let ctx = fetch::build_resolve_context()?;
-    match lookup(&id, &ctx).await {
+    match doiget_core::pubmed::lookup_in_session(&id, &ctx).await {
         Ok(Lookup::Doi(doi)) => {
             output::print_err(format_args!(
                 "note: {} is DOI {}",

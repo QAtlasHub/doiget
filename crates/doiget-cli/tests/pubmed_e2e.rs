@@ -4,7 +4,7 @@
 
 use assert_cmd::Command;
 use tempfile::TempDir;
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const DOI: &str = "10.1176/ajp.155.7.895";
@@ -39,6 +39,7 @@ async fn ncbi_and_crossref() -> MockServer {
         .and(query_param("db", "pubmed"))
         .and(query_param("id", "9659853"))
         .and(query_param("tool", "doiget"))
+        .and(query_param("email", "test@example.org"))
         .respond_with(esummary(
             "9659853",
             serde_json::json!({"articleids": [
@@ -200,4 +201,102 @@ async fn verify_resolves_a_pmid_and_calls_an_unknown_pmcid_absent() {
     assert_eq!(row("coryell")["ref"], DOI, "{rows:?}");
     assert_eq!(row("ghost")["status"], "absent", "{rows:?}");
     assert_eq!(row("ghost")["ref"], "PMCID PMC42", "{rows:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cite_offline_refuses_a_pubmed_id_without_asking() {
+    let server = MockServer::start().await;
+    let td = TempDir::new().unwrap();
+    let mut cmd = doiget(&td, &server);
+    cmd.args(["cite", "pmid:9659853", "--offline"]);
+    let out = run(cmd).await;
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("makes no request"),
+        "{out:?}"
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+/// No contact email configured: none is sent (NCBI asks for one; doiget
+/// never invents one).
+#[tokio::test(flavor = "multi_thread")]
+async fn without_a_contact_email_none_is_sent() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/esummary.fcgi"))
+        .and(query_param_is_missing("email"))
+        .respond_with(esummary(
+            "9659853",
+            serde_json::json!({"articleids": [{"idtype": "pubmed", "value": "9659853"}]}),
+        ))
+        .mount(&server)
+        .await;
+    let td = TempDir::new().unwrap();
+    let mut cmd = doiget(&td, &server);
+    cmd.env_remove("DOIGET_CONTACT_EMAIL")
+        .args(["cite", "pmid:9659853"]);
+    let out = run(cmd).await;
+    // The record lists no DOI -- which proves the email-less mock answered.
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("lists no DOI"),
+        "{out:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn missing_resolves_a_pmid_online_and_leaves_it_offline() {
+    let server = ncbi_and_crossref().await;
+    let td = TempDir::new().unwrap();
+    std::fs::write(
+        td.path().join("refs.bib"),
+        "@article{coryell, title = {Lithium}, pmid = {9659853}}\n",
+    )
+    .unwrap();
+    let mut online = doiget(&td, &server);
+    online.args(["--mode", "json", "missing", "refs.bib"]);
+    let mut offline = doiget(&td, &server);
+    offline.args(["--mode", "json", "missing", "refs.bib", "--offline"]);
+    let online = run(online).await;
+    let before = server.received_requests().await.unwrap().len();
+    let offline = run(offline).await;
+    let row = |o: &std::process::Output| -> serde_json::Value {
+        String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .find_map(|l| serde_json::from_str(l).ok())
+            .unwrap_or_else(|| panic!("{o:?}"))
+    };
+    assert_eq!(row(&online)["ref"], DOI, "{online:?}");
+    assert_eq!(row(&offline)["status"], "unsupported", "{offline:?}");
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        before,
+        "--offline asks nothing"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn verify_reports_an_ncbi_failure_as_unreachable_and_reads_csl_json() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/esummary.fcgi"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let td = TempDir::new().unwrap();
+    std::fs::write(
+        td.path().join("refs.json"),
+        r#"[{"id": "coryell", "type": "article-journal", "title": "Lithium", "PMID": "9659853"}]"#,
+    )
+    .unwrap();
+    let mut cmd = doiget(&td, &server);
+    cmd.args(["--mode", "json", "verify", "refs.json"]);
+    let out = run(cmd).await;
+    let row: serde_json::Value = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| serde_json::from_str(l).ok())
+        .unwrap_or_else(|| panic!("{out:?}"));
+    assert_eq!(row["entry_key"], "coryell", "{row}");
+    assert_eq!(row["status"], "unreachable", "{row}");
+    assert_eq!(row["ref"], "PMID 9659853", "{row}");
 }

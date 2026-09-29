@@ -150,7 +150,7 @@ pub async fn run_with_options(
         parsed.into_iter().map(pubmed::Resolved::Entry).collect()
     } else {
         let ctx = super::fetch::build_resolve_context()?;
-        pubmed::resolve_entries(parsed, &ctx)
+        pubmed::resolve_entries_in_session(parsed, &ctx)
             .await
             .map_err(|e| anyhow!("provenance log error while resolving PubMed ids: {e}"))?
     };

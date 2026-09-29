@@ -1083,7 +1083,7 @@ impl Server {
                     )));
                 }
             };
-            match doiget_core::pubmed::resolve_entries(parsed, &lookup_ctx).await {
+            match doiget_core::pubmed::resolve_entries_in_session(parsed, &lookup_ctx).await {
                 Ok(r) => r,
                 Err(e) => {
                     return Ok(CallToolResult::structured(batch_fetch_error_envelope(

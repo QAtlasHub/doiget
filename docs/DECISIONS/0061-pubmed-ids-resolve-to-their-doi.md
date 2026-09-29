@@ -3,7 +3,7 @@
 - **Date:** 2026-09-29
 - **Status:** Accepted
 - **Supersedes:** -
-- **Amends:** [`docs/LEGAL.md`](../LEGAL.md) §2 (the hosts a default build can contact), per [0014](0014-docs-class-system.md); [`docs/REDIRECT_ALLOWLIST.md`](../REDIRECT_ALLOWLIST.md) §3
+- **Amends:** [`docs/LEGAL.md`](../LEGAL.md) §2 (the hosts a default build can contact), per [0014](0014-docs-class-system.md); [`docs/REDIRECT_ALLOWLIST.md`](../REDIRECT_ALLOWLIST.md) §3; [`docs/PROVENANCE_LOG.md`](../PROVENANCE_LOG.md) (the `ref` of an `ncbi` `resolve` row)
 - **Builds on:** [0030](0030-bibliography-input-adapters.md) D3 (identifier priority `doi` > `arxiv` > `pmid`), [0046](0046-vendor-claims-are-normative-links-are-pointers.md) (vendor claims verified against the vendor), [0060](0060-retire-bibliofetch-coexistence.md) (safekey is doiget's own)
 - **Source:** #500 (and #576, its reporting half)
 
@@ -58,7 +58,9 @@ itself and are cited from there.
 has its own allowlist (`pubmed_allowlist`, source key `ncbi`), registered by the
 CLI and the MCP server and kept out of the Tier 1 list a fetch plan is read
 from: it answers which DOI, never with content. Each lookup is a `resolve`
-row in the provenance log with the PubMed id as its `ref`.
+row in the provenance log with the PubMed id as its `ref`; where the lookup
+has a context of its own (`fetch` / `cite` / `batch`, the MCP bibliography
+tool), it is bracketed by its own `session_start` / `session_end`.
 
 ## Consequences
 

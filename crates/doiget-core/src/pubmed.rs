@@ -216,7 +216,9 @@ fn classify(v: &Value, uid: &str) -> Lookup {
                 .find(|i| i.get("idtype").and_then(Value::as_str) == Some("doi"))
         })
         .and_then(|i| i.get("value").and_then(Value::as_str))
-        .and_then(|d| Doi::parse(d).ok())
+        // Trimmed: `Doi::parse` refuses whitespace, and a DOI PubMed lists
+        // with a stray space must not read as "no DOI".
+        .and_then(|d| Doi::parse(d.trim()).ok())
         .map_or(Lookup::NoDoi, Lookup::Doi)
 }
 
@@ -302,6 +304,69 @@ pub async fn resolve_entries(
     Ok(out)
 }
 
+/// [`lookup`] as its own logged session: `session_start` before and
+/// `session_end` after, for a caller whose context exists only for the
+/// lookup -- so its `resolve` row is bracketed like every other call's.
+///
+/// # Errors
+///
+/// As [`lookup`], plus a provenance-log failure on either bookend.
+pub async fn lookup_in_session(id: &PubmedId, ctx: &FetchContext) -> Result<Lookup, FetchError> {
+    bookend(ctx, LogEvent::SessionStart, LogResult::Ok)?;
+    let found = lookup(id, ctx).await;
+    bookend(
+        ctx,
+        LogEvent::SessionEnd,
+        if found.is_ok() {
+            LogResult::Ok
+        } else {
+            LogResult::Err
+        },
+    )?;
+    found
+}
+
+/// [`resolve_entries`] as its own logged session (see [`lookup_in_session`]).
+///
+/// # Errors
+///
+/// As [`resolve_entries`], plus a provenance-log failure on either bookend.
+pub async fn resolve_entries_in_session(
+    entries: Vec<Result<ParsedEntry, ParseError>>,
+    ctx: &FetchContext,
+) -> Result<Vec<Resolved>, FetchError> {
+    bookend(ctx, LogEvent::SessionStart, LogResult::Ok)?;
+    let resolved = resolve_entries(entries, ctx).await;
+    bookend(
+        ctx,
+        LogEvent::SessionEnd,
+        if resolved.is_ok() {
+            LogResult::Ok
+        } else {
+            LogResult::Err
+        },
+    )?;
+    resolved
+}
+
+fn bookend(ctx: &FetchContext, event: LogEvent, result: LogResult) -> Result<(), FetchError> {
+    ctx.log.append(RowInput {
+        event,
+        result,
+        capability: Capability::Metadata,
+        // No ref: a lookup session is not an answer about a paper, so its
+        // `session_end` must not feed repeat suppression (ADR-0057).
+        ref_: None,
+        source: Some(NCBI),
+        error_code: None,
+        size_bytes: None,
+        license: None,
+        store_path: None,
+        canonical_digest: None,
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
@@ -363,5 +428,11 @@ mod tests {
         let missing = serde_json::json!({"result": {"uids": ["99"], "99": {
             "uid": "99", "error": "cannot get document summary"}}});
         assert_eq!(classify(&missing, "99"), Lookup::NoRecord);
+        let spaced = serde_json::json!({"result": {"uids": ["2"], "2": {
+            "articleids": [{"idtype": "doi", "value": " 10.1176/ajp.155.7.895 "}]}}});
+        assert!(
+            matches!(classify(&spaced, "2"), Lookup::Doi(_)),
+            "a spaced DOI is a DOI"
+        );
     }
 }
