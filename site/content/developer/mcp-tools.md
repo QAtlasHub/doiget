@@ -318,6 +318,18 @@ a `repeat_forced` row. There is no setting that disables suppression.
 `doiget_resolve_paper` and `doiget_metadata_only` are not suppressed: they
 make metadata requests only, bounded by the rate cap.
 
+## 10b. PubMed ids (NORMATIVE; ADR-0061, #638)
+
+`doiget_fetch_paper`, `doiget_resolve_paper`, `doiget_metadata_only` and
+`doiget_batch_fetch` accept a PubMed id as `ref`: `pmid:N`, `pmcid:PMCN` or
+`PMCN`, or a PubMed / PMC article URL. It is looked up once through NCBI
+E-utilities and then handled under the DOI PubMed lists for it. A record with no
+DOI answers `NOT_IMPLEMENTED`; an id PubMed has no record of answers `NOT_FOUND`.
+`dry_run: true` makes no lookup and answers `INVALID_REF`, saying so. The
+local-only tools (`doiget_info`, `doiget_paper_pdf_path`, `doiget_tag`,
+`doiget_annotate`, `doiget_expand_citation_graph`) keep `INVALID_REF` for a
+PubMed id, with a message naming the tools that resolve one.
+
 ## 11. `doiget_metadata_only` (NORMATIVE)
 
 `doiget_metadata_only` resolves a `ref` through the configured metadata

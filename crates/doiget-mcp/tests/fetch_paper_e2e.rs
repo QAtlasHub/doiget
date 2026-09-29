@@ -1564,3 +1564,158 @@ async fn a_blocked_copy_with_no_arxiv_hint_also_looks_for_the_preprint() -> anyh
     assert_eq!(searches.len(), 1, "{searches:?}");
     Ok(())
 }
+
+/// #638: the MCP single-ref tools take a PubMed id the way the CLI does --
+/// resolved to its DOI by the network tools, named (not called malformed)
+/// by the local ones, and never looked up under dry_run.
+#[tokio::test]
+#[serial_test::serial]
+async fn single_ref_tools_take_a_pubmed_id_638() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let esummary = |uid: &str, body: serde_json::Value| {
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"result": {"uids": [uid], uid: body}}))
+    };
+    Mock::given(method("GET"))
+        .and(path("/esummary.fcgi"))
+        .and(query_param("id", "9659853"))
+        .respond_with(esummary(
+            "9659853",
+            serde_json::json!({"articleids": [{"idtype": "doi", "value": "10.1176/ajp.155.7.895"}]}),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/esummary.fcgi"))
+        .and(query_param("id", "1"))
+        .respond_with(esummary(
+            "1",
+            serde_json::json!({"articleids": [{"idtype": "pubmed", "value": "1"}]}),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/esummary.fcgi"))
+        .and(query_param("id", "42"))
+        .respond_with(esummary(
+            "42",
+            serde_json::json!({"error": "cannot get document summary"}),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/works/10.1176/ajp.155.7.895"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "ok",
+            "message": {"title": ["Lithium discontinuation"], "type": "journal-article",
+                        "author": [{"family": "Coryell", "given": "W"}]}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let root = camino::Utf8Path::from_path(td.path())
+        .expect("utf-8")
+        .to_path_buf();
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", root.join("papers").as_str());
+    env.set("DOIGET_LOG_PATH", root.join("log.jsonl").as_str());
+    env.set("DOIGET_NCBI_BASE", &server.uri());
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", server.uri()));
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+    let call = |tool: &'static str, args: serde_json::Value| {
+        let args = args.as_object().cloned().unwrap_or_default();
+        client
+            .peer()
+            .call_tool(CallToolRequestParams::new(tool).with_arguments(args))
+    };
+    let ncbi_requests = || async {
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|r| r.url.path() == "/esummary.fcgi")
+            .count()
+    };
+
+    // A dry run makes no lookup.
+    let dry = call(
+        "doiget_fetch_paper",
+        serde_json::json!({"ref": "pmid:9659853", "dry_run": true}),
+    )
+    .await?
+    .structured_content
+    .expect("structured");
+    assert_eq!(dry["error"]["code"], "INVALID_REF", "{dry}");
+    assert!(
+        dry["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("dry_run makes no request"),
+        "{dry}"
+    );
+    assert_eq!(ncbi_requests().await, 0, "dry_run asked NCBI");
+
+    // The network tools resolve it.
+    let meta = call(
+        "doiget_resolve_paper",
+        serde_json::json!({"ref": "pmid:9659853"}),
+    )
+    .await?
+    .structured_content
+    .expect("structured");
+    assert_ne!(meta["error"]["code"], "INVALID_REF", "{meta}");
+    assert_eq!(ncbi_requests().await, 1);
+
+    let unknown = call("doiget_resolve_paper", serde_json::json!({"ref": "PMC42"}))
+        .await?
+        .structured_content
+        .expect("structured");
+    assert_eq!(unknown["error"]["code"], "NOT_FOUND", "{unknown}");
+
+    let batch = call(
+        "doiget_batch_fetch",
+        serde_json::json!({"refs": ["pmid:1"]}),
+    )
+    .await?
+    .structured_content
+    .expect("structured");
+    assert_eq!(batch["error"]["code"], "NOT_IMPLEMENTED", "{batch}");
+    assert!(
+        batch["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("lists no DOI"),
+        "{batch}"
+    );
+
+    // A local-only tool names it rather than calling it malformed.
+    let info = call("doiget_info", serde_json::json!({"ref": "pmid:9659853"}))
+        .await?
+        .structured_content
+        .expect("structured");
+    assert_eq!(info["error"]["code"], "INVALID_REF", "{info}");
+    assert!(
+        info["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("is a PubMed id"),
+        "{info}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}

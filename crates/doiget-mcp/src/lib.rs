@@ -166,6 +166,49 @@ impl Server {
     /// every tool call. See the field docs on [`Server`] for what that cost:
     /// no rate pacing between MCP calls, and a provenance hash chain that
     /// two overlapping calls could break.
+    /// `raw` as a [`Ref`], a PubMed id first resolved to the DOI PubMed
+    /// lists for it through NCBI E-utilities (#638, ADR-0061). `network:
+    /// false` (a dry run) refuses the lookup and says so, rather than make a
+    /// request the caller was promised would not happen.
+    ///
+    /// The error is the code and message the tool's envelope carries.
+    async fn ref_or_pubmed(&self, raw: &str, network: bool) -> Result<Ref, (ErrorCode, String)> {
+        use doiget_core::pubmed::{lookup_in_session, Lookup, PubmedId};
+        let Some(id) = PubmedId::parse(raw) else {
+            return Ref::parse(raw)
+                .map_err(|e| (ErrorCode::InvalidRef, format!("invalid ref: {e}")));
+        };
+        if !network {
+            return Err((
+                ErrorCode::InvalidRef,
+                format!(
+                    "{} becomes a DOI through one NCBI lookup, and dry_run makes no request; pass the DOI",
+                    id.display()
+                ),
+            ));
+        }
+        let ctx = self.fetch_context().map_err(|e| {
+            (
+                ErrorCode::InternalError,
+                format!("context init failed: {e}"),
+            )
+        })?;
+        match lookup_in_session(&id, &ctx).await {
+            Ok(Lookup::Doi(doi)) => Ok(Ref::Doi(doi)),
+            Ok(found @ Lookup::NoRecord) => {
+                Err((ErrorCode::NotFound, found.reason(&id).unwrap_or_default()))
+            }
+            Ok(found) => Err((
+                ErrorCode::NotImplemented,
+                found.reason(&id).unwrap_or_default(),
+            )),
+            Err(e) => Err((
+                ErrorCode::from(&e),
+                format!("looking up {} at NCBI failed: {e}", id.display()),
+            )),
+        }
+    }
+
     fn fetch_context(&self) -> anyhow::Result<FetchContext> {
         let log = match self.log.get() {
             Some(l) => Arc::clone(l),
@@ -332,13 +375,14 @@ impl Server {
     ) -> Result<CallToolResult, ErrorData> {
         // Step 1: parse the ref. Failures collapse to INVALID_REF per
         // docs/ERRORS.md §2 / docs/PUBLIC_API.md §4.
-        let ref_ = match Ref::parse(&input.ref_) {
+        // #638: a PubMed id is resolved to its DOI (never under dry_run).
+        let ref_ = match self.ref_or_pubmed(&input.ref_, !input.dry_run).await {
             Ok(r) => r,
-            Err(e) => {
+            Err((code, message)) => {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
                     Some(&input.ref_),
-                    ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    code,
+                    &message,
                 )));
             }
         };
@@ -525,13 +569,14 @@ impl Server {
     ) -> Result<CallToolResult, ErrorData> {
         // Step 1: parse the ref. Failures collapse to INVALID_REF per
         // docs/ERRORS.md §2 / docs/PUBLIC_API.md §4.
-        let ref_ = match Ref::parse(&input.ref_) {
+        // #638: a PubMed id is resolved to its DOI.
+        let ref_ = match self.ref_or_pubmed(&input.ref_, true).await {
             Ok(r) => r,
-            Err(e) => {
+            Err((code, message)) => {
                 return Ok(CallToolResult::structured(metadata_only_error_envelope(
                     Some(&input.ref_),
-                    ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    code,
+                    &message,
                 )));
             }
         };
@@ -646,13 +691,14 @@ impl Server {
         Parameters(input): Parameters<FetchPaperInput>,
     ) -> Result<CallToolResult, ErrorData> {
         // Step 1: parse the ref. Failures collapse to INVALID_REF.
-        let ref_ = match Ref::parse(&input.ref_) {
+        // #638: a PubMed id is resolved to its DOI (never under dry_run).
+        let ref_ = match self.ref_or_pubmed(&input.ref_, !input.dry_run).await {
             Ok(r) => r,
-            Err(e) => {
+            Err((code, message)) => {
                 return Ok(CallToolResult::structured(fetch_paper_error_envelope(
                     Some(&input.ref_),
-                    ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    code,
+                    &message,
                 )));
             }
         };
@@ -837,12 +883,13 @@ impl Server {
         // all-or-nothing).
         let mut parsed: Vec<Ref> = Vec::with_capacity(input.refs.len());
         for raw in &input.refs {
-            match Ref::parse(raw) {
+            // #638: a PubMed id is resolved to its DOI (never under dry_run).
+            match self.ref_or_pubmed(raw, !input.dry_run).await {
                 Ok(r) => parsed.push(r),
-                Err(e) => {
+                Err((code, message)) => {
                     return Ok(CallToolResult::structured(batch_fetch_error_envelope(
-                        ErrorCode::InvalidRef,
-                        &format!("invalid ref {raw:?}: {e}"),
+                        code,
+                        &format!("{raw:?}: {message}"),
                     )));
                 }
             }
@@ -1365,7 +1412,7 @@ impl Server {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    &invalid_ref_message(&input.ref_, &e),
                 )));
             }
         };
@@ -2142,7 +2189,7 @@ impl Server {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    &invalid_ref_message(&input.ref_, &e),
                 )));
             }
         };
@@ -2258,7 +2305,7 @@ impl Server {
                     return Ok(CallToolResult::structured(read_path_error_envelope(
                         Some(&input.ref_),
                         ErrorCode::InvalidRef,
-                        &format!("invalid ref: {e}"),
+                        &invalid_ref_message(&input.ref_, &e),
                     )));
                 }
             };
@@ -2603,7 +2650,7 @@ impl Server {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    &invalid_ref_message(&input.ref_, &e),
                 )));
             }
         };
@@ -2748,7 +2795,7 @@ impl Server {
                 return Ok(CallToolResult::structured(read_path_error_envelope(
                     Some(&input.ref_),
                     ErrorCode::InvalidRef,
-                    &format!("invalid ref: {e}"),
+                    &invalid_ref_message(&input.ref_, &e),
                 )));
             }
         };
@@ -3383,7 +3430,7 @@ impl Server {
                 Err(e) => {
                     entries.push(json!({
                         "ref": r,
-                        "error": error_object(ErrorCode::InvalidRef, format!("invalid ref: {e}")),
+                        "error": error_object(ErrorCode::InvalidRef, invalid_ref_message(r, &e)),
                     }));
                     continue;
                 }
@@ -4290,6 +4337,21 @@ fn crossref_source_from_env() -> Result<CrossrefSource, String> {
             Ok(CrossrefSource::with_base(base, contact_email))
         }
         None => Ok(CrossrefSource::new(contact_email)),
+    }
+}
+
+/// The `INVALID_REF` message for a tool that takes a DOI or arXiv id only.
+/// A PubMed id is valid input for the network tools, so it is named as one
+/// rather than called malformed (#638).
+fn invalid_ref_message(raw: &str, e: &doiget_core::RefParseError) -> String {
+    if doiget_core::pubmed::PubmedId::parse(raw).is_some() {
+        format!(
+            "{raw} is a PubMed id; doiget_fetch_paper, doiget_resolve_paper, \
+             doiget_metadata_only and doiget_batch_fetch resolve it to its DOI -- \
+             this tool takes the DOI itself"
+        )
+    } else {
+        format!("invalid ref: {e}")
     }
 }
 
