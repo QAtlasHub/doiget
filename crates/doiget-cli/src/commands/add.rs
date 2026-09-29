@@ -16,7 +16,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use doiget_core::refs::parse_input;
 use doiget_core::store::{blocking_section, FsStore, Store};
 use doiget_core::user_pdf::{add_user_pdf, file_stem, match_file, AddError};
-use doiget_core::{CapabilityProfile, Ref};
+use doiget_core::{CapabilityProfile, Ref, Safekey};
 
 use super::fetch::CliExit;
 use super::output::print_err;
@@ -119,17 +119,31 @@ async fn run_from_dir(
                 .into_iter()
                 .filter_map(Result::ok)
                 .map(|p| p.ref_)
-                .filter(|r| !has_pdf(store_root, r))
+                .filter(|r| !has_pdf(store_root, &r.safekey()))
                 .collect::<Vec<_>>()
         }
         None => missing_in_store(store, store_root)?,
     };
-    let mut files: Vec<Utf8PathBuf> = std::fs::read_dir(dir)
-        .with_context(|| format!("reading {dir}"))?
-        .filter_map(|e| e.ok())
-        .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
-        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf")))
-        .collect();
+    let mut files: Vec<Utf8PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {dir}"))? {
+        // A file the scan could not see would otherwise read as "not there"
+        // in the plan (#649 review), so each one is named.
+        let path = match entry {
+            Ok(e) => e.path(),
+            Err(err) => {
+                print_err(format_args!("warning: skipping an entry of {dir}: {err}"));
+                continue;
+            }
+        };
+        match Utf8PathBuf::from_path_buf(path) {
+            Ok(p) if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf")) => files.push(p),
+            Ok(_) => {}
+            Err(p) => print_err(format_args!(
+                "warning: skipping {} (the name is not UTF-8)",
+                p.display()
+            )),
+        }
+    }
     files.sort();
     if files.is_empty() {
         bail!("no .pdf files in {dir}");
@@ -192,10 +206,8 @@ async fn run_from_dir(
     Ok(())
 }
 
-fn has_pdf(store_root: &Utf8Path, r: &Ref) -> bool {
-    store_root
-        .join(format!("{}.pdf", r.safekey().as_str()))
-        .exists()
+fn has_pdf(store_root: &Utf8Path, key: &Safekey) -> bool {
+    store_root.join(format!("{}.pdf", key.as_str())).exists()
 }
 
 /// Store entries with metadata but no PDF, as refs.
@@ -203,10 +215,7 @@ fn missing_in_store(store: &FsStore, store_root: &Utf8Path) -> Result<Vec<Ref>> 
     let entries = blocking_section(|| store.list_recent(usize::MAX))?;
     let mut out = Vec::new();
     for e in entries {
-        if store_root
-            .join(format!("{}.pdf", e.safekey.as_str()))
-            .exists()
-        {
+        if has_pdf(store_root, &e.safekey) {
             continue;
         }
         let m = match blocking_section(|| store.read(&e.safekey)) {

@@ -536,6 +536,22 @@ pub(crate) fn metadata_quality_lines(
     lines
 }
 
+/// The publisher's page for a work: Crossref's `resource.primary.URL`, else
+/// the DOI resolver (ADR-0053: a DOI link is an address, not a fetch).
+/// Shared by `missing` and `coverage`.
+pub(super) fn landing_url(ref_: &doiget_core::Ref, crossref: &serde_json::Value) -> Option<String> {
+    match ref_ {
+        doiget_core::Ref::Doi(doi) => Some(
+            crossref
+                .pointer("/resource/primary/URL")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("https://doi.org/{}", doi.as_str())),
+        ),
+        doiget_core::Ref::Arxiv(id) => Some(format!("https://arxiv.org/abs/{}", id.as_str())),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {

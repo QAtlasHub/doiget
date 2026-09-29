@@ -1330,6 +1330,24 @@ host = "*.uj.edu.pl"
         }
     }
 
+    /// `trust_oa_registries` alone lets a J-STAGE PDF through (ADR-0066),
+    /// offline: the default list does not, and the flag's hosts do, without
+    /// `trust_academic_repos` (#649 review: only the live suite checked it).
+    #[test]
+    fn trust_oa_registries_alone_admits_jstage() {
+        const JSTAGE: &str = "www.jstage.jst.go.jp";
+        let oa = |a: &Vec<SourceAllowlist>| {
+            a.iter()
+                .find(|x| x.source == "oa-publisher")
+                .expect("oa-publisher allowlist")
+                .matches(JSTAGE)
+        };
+        let mut allowlists = crate::http::oa_publisher_allowlist();
+        assert!(!oa(&allowlists), "J-STAGE is not a default host");
+        merge_into_allowlists(&mut allowlists, &oa_registry_hosts());
+        assert!(oa(&allowlists), "the flag's own hosts admit J-STAGE");
+    }
+
     /// The two curated sets must stay disjoint: an entry in both would make
     /// one flag silently widen what the other advertises.
     #[test]

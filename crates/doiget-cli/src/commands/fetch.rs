@@ -625,7 +625,7 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
                 label,
                 outcome.size_bytes,
                 platform.as_deref().unwrap_or("its"),
-                preprint_doi,
+                preprint_doi.as_str(),
                 found_by.as_str().replace('_', " "),
                 outcome.path
             ));

@@ -2267,6 +2267,32 @@ async fn inspire_names_the_arxiv_preprint_end_to_end_642() -> anyhow::Result<()>
     Ok(())
 }
 
+/// With INSPIRE and ADS both on, INSPIRE is asked first and its answer
+/// ends the search: ADS, which would name a different preprint, is never
+/// asked (#649 review: the order was untested with both on).
+#[cfg(feature = "citation")]
+#[tokio::test]
+#[serial_test::serial]
+async fn inspire_is_asked_before_ads_when_both_are_on() -> anyhow::Result<()> {
+    let (v, paths) = nonarxiv_case(NonArxivCase {
+        relation: serde_json::json!({}),
+        journal_pdf: None,
+        preprint_has_location: false,
+        biorxiv_pubs: false,
+        arxiv_hit: false,
+        inspire: true,
+        ads: true,
+    })
+    .await?;
+    assert_eq!(v["pdf"]["found_by"], "inspire", "{v}");
+    assert_eq!(v["pdf"]["arxiv_id"], "2105.00042", "{v}");
+    assert!(
+        !paths.iter().any(|p| p == "/v1/search/query"),
+        "ADS is not asked once INSPIRE answered: {paths:?}"
+    );
+    Ok(())
+}
+
 /// #644 end to end: the user's own ADS token is sent as a Bearer header
 /// (the mock answers only with it), and ADS's `arXiv:` identifier is the
 /// preprint fetched.

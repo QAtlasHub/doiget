@@ -77,7 +77,13 @@ pub enum Verdict {
 #[derive(Debug, Default)]
 pub struct RepeatIndex {
     entries: Mutex<HashMap<String, Entry>>,
+    /// The map's size after the last sweep; the next one waits until it has
+    /// doubled, so sweeping stays amortised O(1) per insert.
+    swept_len: std::sync::atomic::AtomicUsize,
 }
+
+/// Below this many entries the map is never swept.
+const SWEEP_FLOOR: usize = 64;
 
 impl RepeatIndex {
     /// Record what a call told its caller about `ref_input`: an error code,
@@ -125,7 +131,14 @@ impl RepeatIndex {
                     // more (#649 review): nothing replays or waits past
                     // REPLAY_WINDOW, and a `doiget serve` session otherwise
                     // kept one entry per refused ref for its whole life.
-                    map.retain(|_, e| now.saturating_duration_since(e.at) < REPLAY_WINDOW);
+                    // Only once the map has doubled since the last sweep, so
+                    // a stream of new refusals is not a scan each.
+                    use std::sync::atomic::Ordering;
+                    let due = SWEEP_FLOOR.max(2 * self.swept_len.load(Ordering::Relaxed));
+                    if map.len() >= due {
+                        map.retain(|_, e| now.saturating_duration_since(e.at) < REPLAY_WINDOW);
+                        self.swept_len.store(map.len(), Ordering::Relaxed);
+                    }
                     map.insert(
                         key,
                         Entry {
@@ -218,7 +231,10 @@ mod tests {
         let idx = RepeatIndex::default();
         let t0 = Instant::now();
         idx.observe_at(R, Some(ErrorCode::NotFound), t0, 7);
-        idx.observe_at("10.1/b", Some(ErrorCode::RateLimited), t0, 7);
+        for i in 1..SWEEP_FLOOR {
+            idx.observe_at(&format!("10.1/b{i}"), Some(ErrorCode::RateLimited), t0, 7);
+        }
+        assert_eq!(idx.lock().len(), SWEEP_FLOOR, "no sweep below the floor");
         let later = t0 + REPLAY_WINDOW + Duration::from_secs(1);
         idx.observe_at("10.1/c", Some(ErrorCode::NotFound), later, 7);
         assert_eq!(idx.lock().len(), 1, "only the new entry is left");
