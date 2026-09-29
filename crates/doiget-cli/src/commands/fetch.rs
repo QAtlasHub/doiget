@@ -239,6 +239,9 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
     // `"ar5iv"` source key unconditionally so `paper_text::paper_text`
     // can reach ar5iv in `oa-only` builds.
     allowlists.extend(fulltext_allowlist());
+    // ADR-0058: `cite` / `verify` on a GitHub URL. Not a fetch source, so it
+    // is not part of tier 1 and never appears in a fetch plan.
+    allowlists.extend(doiget_core::http::software_allowlist());
     // The Tier-2 transport gate. The sources it serves — OpenAlex,
     // Semantic Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE and
     // Europe PMC — are compiled under `metadata`, and

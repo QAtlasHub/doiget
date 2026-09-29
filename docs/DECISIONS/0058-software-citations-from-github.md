@@ -31,9 +31,10 @@ store entry, so no store, safekey or fetch path changes.
 `api.github.com`, for the repository, the release (`/releases/tags/{tag}`, or
 `/releases/latest` for a bare repository URL) and a tag's commit date when the
 tag has no release; and `raw.githubusercontent.com`, for `CITATION.cff` at that
-tag. They are Tier 1 allowlist entries under the source keys `github` and
-`github-raw`, behind the rate limiter and the provenance log like every other
-request. Neither is contacted by `fetch`, `batch`, search or any MCP tool.
+tag. They have their own allowlist (`software_allowlist`, source keys `github`
+and `github-raw`), registered by the CLI only and kept out of the Tier 1 list
+a fetch plan is read from, behind the rate limiter and the provenance log like
+every other request. Neither is contacted by `fetch`, `batch`, search or any MCP tool.
 Requests are unauthenticated: GitHub allows 60 an hour per address, and
 doiget sends no GitHub token. A 429 is reported as `retry_after`. A 403 stays
 `CAPABILITY_DENIED` (`needs_config`): GitHub sends it both for the spent limit

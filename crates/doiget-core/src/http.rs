@@ -300,8 +300,16 @@ pub fn tier_1_allowlist() -> Vec<SourceAllowlist> {
                 "*.arxiv.org".to_string(),
             ],
         ),
-        // §3.4 GitHub, for `cite <github release URL>` only (#614, ADR-0058):
-        // asked when the caller names a GitHub URL, never during a fetch.
+    ]
+}
+
+/// Always-compiled allowlist for **software citations** (#614, ADR-0058):
+/// `doiget cite` / `verify` on a GitHub repository or release URL. Kept out
+/// of [`tier_1_allowlist`] because it is not a fetch source -- a fetch
+/// plan's source list is read from that one, and GitHub must never appear
+/// in it. Only the CLI registers it; no MCP tool cites a URL.
+pub fn software_allowlist() -> Vec<SourceAllowlist> {
+    vec![
         SourceAllowlist::new(
             crate::software::GITHUB_API,
             vec!["api.github.com".to_string()],
