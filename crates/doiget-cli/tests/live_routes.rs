@@ -243,6 +243,24 @@ fn the_maintainers_paper_reaches_its_preprint_by_doi_and_by_arxiv_id() {
     assert_eq!(by_arxiv["source"], "arxiv", "{by_arxiv}");
 }
 
+/// #646: a J-STAGE gold article, fetched once the user trusts the OA
+/// registries (J-STAGE joined that opt-in set, ADR-0066).
+#[test]
+#[ignore = "live network; run by .github/workflows/live.yml"]
+fn a_jstage_article_fetches_with_trust_oa_registries() {
+    let td = TempDir::new().unwrap();
+    let cfg = td.path().join("doiget");
+    std::fs::create_dir_all(&cfg).unwrap();
+    std::fs::write(
+        cfg.join("config.toml"),
+        "[network]\ntrust_oa_registries = true\n",
+    )
+    .unwrap();
+    let v = Mcp::start(&td).fetch("10.3327/jaesjb.66.4_185");
+    assert_eq!(v["pdf"]["status"], "fetched", "{v}");
+    assert!(v["size_bytes"].as_u64().unwrap_or(0) > 1_000, "{v}");
+}
+
 /// The same paper cited: the Crossref record, rendered.
 #[test]
 #[ignore = "live network; run by .github/workflows/live.yml"]
