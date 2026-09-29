@@ -4693,16 +4693,25 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
 
     // `metadata_sources` (spec §7) == the enabled Tier-2 metadata
     // sources. Order is deterministic (declaration order).
-    let mut metadata_sources: Vec<&str> = Vec::new();
-    if profile.metadata.openalex {
-        metadata_sources.push("openalex");
-    }
-    if profile.metadata.semantic_scholar {
-        metadata_sources.push("semantic_scholar");
-    }
-    if profile.metadata.doaj {
-        metadata_sources.push("doaj");
-    }
+    //
+    // Every opt-in flag, named as `doiget sources` names it. It listed three
+    // of them, so an agent that enabled DataCite, HAL, OpenAIRE, CORE,
+    // Europe PMC or bioRxiv (#640) was told they were off.
+    let m = &profile.metadata;
+    let metadata_sources: Vec<&str> = [
+        ("openalex", m.openalex),
+        ("semantic_scholar", m.semantic_scholar),
+        ("doaj", m.doaj),
+        ("biorxiv", m.biorxiv),
+        ("datacite", m.datacite),
+        ("hal", m.hal),
+        ("openaire", m.openaire),
+        ("core", m.core),
+        ("europe-pmc", m.europe_pmc),
+    ]
+    .into_iter()
+    .filter_map(|(name, on)| on.then_some(name))
+    .collect();
     // Additive alias kept for back-compat with pre-#141 consumers.
     let tier_2 = metadata_sources.clone();
 
@@ -5062,6 +5071,23 @@ mod tests {
         // Additive back-compat fields.
         assert_eq!(v["ok"], true);
         assert_eq!(v["tier_1"], json!(["arxiv", "crossref", "unpaywall"]));
+    }
+
+    /// #641 review: every enabled opt-in source is reported, not the first
+    /// three -- bioRxiv (#640) and DataCite among them.
+    #[cfg(feature = "citation")]
+    #[test]
+    #[serial_test::serial]
+    fn capability_profile_lists_every_enabled_opt_in_source() {
+        std::env::set_var("DOIGET_ENABLE_BIORXIV", "1");
+        std::env::set_var("DOIGET_ENABLE_DATACITE", "1");
+        let profile = CapabilityProfile::from_env().expect("profile");
+        std::env::remove_var("DOIGET_ENABLE_BIORXIV");
+        std::env::remove_var("DOIGET_ENABLE_DATACITE");
+        let v = capability_profile_to_json(&profile);
+        let sources = v["metadata_sources"].as_array().expect("array");
+        assert!(sources.contains(&json!("biorxiv")), "{v}");
+        assert!(sources.contains(&json!("datacite")), "{v}");
     }
 
     // ---- ADR-0030 D6: doiget_batch_from_bibliography helpers ------

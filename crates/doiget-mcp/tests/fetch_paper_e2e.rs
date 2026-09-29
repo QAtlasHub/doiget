@@ -54,6 +54,8 @@ const ENV_KEYS: &[&str] = &[
     "DOIGET_OA_PUBLISHER_BASE",
     "DOIGET_CONTACT_EMAIL",
     "DOIGET_NCBI_BASE",
+    "DOIGET_BIORXIV_BASE",
+    "DOIGET_ENABLE_BIORXIV",
     "DOIGET_UNPAYWALL_EMAIL",
     // #462: the Tier-3 route. Cleared for every test so an APS grant can
     // never leak from one into another.
@@ -1863,5 +1865,229 @@ async fn a_crossref_named_medrxiv_preprint_is_fetched_through_its_own_doi_640() 
     server_handle.await??;
     drop(env);
     drop(td);
+    Ok(())
+}
+
+/// Options for the #640 non-arXiv preprint cases.
+struct NonArxivCase {
+    relation: serde_json::Value,
+    /// An off-allowlist publisher PDF, so the leg is Blocked, not NoOaUrl.
+    journal_pdf: Option<&'static str>,
+    /// Whether Unpaywall reports an OA location for the preprint DOI.
+    preprint_has_location: bool,
+    /// Serve a bioRxiv `pubs` answer and enable it.
+    biorxiv_pubs: bool,
+    /// An arXiv search hit for the title.
+    arxiv_hit: bool,
+}
+
+async fn nonarxiv_case(c: NonArxivCase) -> anyhow::Result<(serde_json::Value, Vec<String>)> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    const TITLE: &str =
+        "Original antigenic sin responses to heterologous Betacoronavirus spike proteins";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works/10.1371/journal.pone.0256482"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "ok",
+            "message": {"title": [TITLE], "author": [{"family": "Lapp", "given": "S. A."}],
+                        "type": "journal-article", "relation": c.relation}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v2/10.1371%2Fjournal.pone.0256482"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(match c.journal_pdf {
+                None => serde_json::json!({"doi": "10.1371/journal.pone.0256482", "is_oa": false,
+                "oa_status": "closed", "best_oa_location": null, "oa_locations": []}),
+                Some(pdf) => {
+                    serde_json::json!({"doi": "10.1371/journal.pone.0256482", "is_oa": true,
+                "oa_status": "bronze", "best_oa_location": {"url_for_pdf": pdf, "url": pdf},
+                "oa_locations": [{"url_for_pdf": pdf, "url": pdf}]})
+                }
+            }),
+        )
+        .mount(&server)
+        .await;
+    let preprint_pdf = format!(
+        "{}/content/10.1101/2021.04.29.21256344v1.full.pdf",
+        server.uri()
+    );
+    let locations = if c.preprint_has_location {
+        serde_json::json!([{"url_for_pdf": preprint_pdf, "url": preprint_pdf, "license": "cc-by"}])
+    } else {
+        serde_json::json!([])
+    };
+    Mock::given(method("GET"))
+        .and(path("/v2/10.1101%2F2021.04.29.21256344"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "doi": "10.1101/2021.04.29.21256344", "is_oa": c.preprint_has_location,
+            "oa_status": if c.preprint_has_location { "green" } else { "closed" },
+            "best_oa_location": locations.get(0), "oa_locations": locations
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/content/10.1101/2021.04.29.21256344v1.full.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(SAMPLE_PDF_BODY.to_vec()))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/pubs/biorxiv/10.1371/journal.pone.0256482/na/json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "collection": [{"preprint_doi": "10.1101/2021.04.29.21256344", "preprint_platform": "bioRxiv"}]
+        })))
+        .mount(&server)
+        .await;
+    let arxiv = MockServer::start().await;
+    let feed = if c.arxiv_hit {
+        format!(
+            "<feed><entry><id>http://arxiv.org/abs/2105.00001v1</id><title>{TITLE}</title>\
+             <author><name>S. A. Lapp</name></author></entry></feed>"
+        )
+    } else {
+        "<feed></feed>".to_string()
+    };
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(feed))
+        .mount(&arxiv)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(SAMPLE_PDF_BODY.to_vec()))
+        .mount(&arxiv)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let root = camino::Utf8Path::from_path(td.path())
+        .expect("utf-8")
+        .to_path_buf();
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", root.join("papers").as_str());
+    env.set("DOIGET_LOG_PATH", root.join("log.jsonl").as_str());
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", server.uri()));
+    env.set("DOIGET_OA_PUBLISHER_BASE", &server.uri());
+    env.set("DOIGET_ARXIV_BASE", &arxiv.uri());
+    if c.biorxiv_pubs {
+        env.set("DOIGET_BIORXIV_BASE", &server.uri());
+        env.set("DOIGET_ENABLE_BIORXIV", "1");
+    }
+    let (client, server_handle) = boot_in_memory_server().await?;
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "ref".into(),
+        serde_json::json!("10.1371/journal.pone.0256482"),
+    );
+    let v = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_fetch_paper").with_arguments(args))
+        .await?
+        .structured_content
+        .expect("structured");
+    let paths = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|r| r.url.path().to_string())
+        .collect();
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok((v, paths))
+}
+
+const MEDRXIV_RELATION: &str =
+    r#"{"has-preprint": [{"id-type": "doi", "id": "10.1101/2021.04.29.21256344"}]}"#;
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_preprint_doi_with_no_open_location_leaves_the_leg_as_it_was_640() -> anyhow::Result<()> {
+    let (v, _) = nonarxiv_case(NonArxivCase {
+        relation: serde_json::from_str(MEDRXIV_RELATION)?,
+        journal_pdf: None,
+        preprint_has_location: false,
+        biorxiv_pubs: false,
+        arxiv_hit: false,
+    })
+    .await?;
+    assert_eq!(v["ok"], true, "not an error: {v}");
+    assert_eq!(v["pdf"]["status"], "no_oa_url", "{v}");
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn an_arxiv_preprint_wins_over_a_sibling_non_arxiv_one_640() -> anyhow::Result<()> {
+    let (v, paths) = nonarxiv_case(NonArxivCase {
+        relation: serde_json::from_str(MEDRXIV_RELATION)?,
+        journal_pdf: None,
+        preprint_has_location: true,
+        biorxiv_pubs: false,
+        arxiv_hit: true,
+    })
+    .await?;
+    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(v["pdf"]["arxiv_id"], "2105.00001", "{v}");
+    assert!(
+        !paths
+            .iter()
+            .any(|p| p == "/v2/10.1101%2F2021.04.29.21256344"),
+        "the non-arXiv route was not needed: {paths:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_blocked_copy_also_follows_a_non_arxiv_preprint_640() -> anyhow::Result<()> {
+    let (v, _) = nonarxiv_case(NonArxivCase {
+        relation: serde_json::from_str(MEDRXIV_RELATION)?,
+        journal_pdf: Some("https://journals.example-publisher.org/paper.pdf"),
+        preprint_has_location: true,
+        biorxiv_pubs: false,
+        arxiv_hit: false,
+    })
+    .await?;
+    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(
+        v["pdf"]["preprint_doi"], "10.1101/2021.04.29.21256344",
+        "{v}"
+    );
+    assert!(
+        v["pdf"]["original_block"]
+            .as_str()
+            .unwrap_or("")
+            .contains("journals.example-publisher.org"),
+        "{v}"
+    );
+    Ok(())
+}
+
+/// The opt-in half: no Crossref relation, bioRxiv `pubs` enabled and
+/// answering. Needs `metadata` (the flag is compiled only there).
+#[cfg(feature = "citation")]
+#[tokio::test]
+#[serial_test::serial]
+async fn biorxiv_pubs_names_the_preprint_end_to_end_640() -> anyhow::Result<()> {
+    let (v, paths) = nonarxiv_case(NonArxivCase {
+        relation: serde_json::json!({}),
+        journal_pdf: None,
+        preprint_has_location: true,
+        biorxiv_pubs: true,
+        arxiv_hit: false,
+    })
+    .await?;
+    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(v["pdf"]["found_by"], "biorxiv_pubs", "{v}");
+    assert_eq!(v["pdf"]["platform"], "bioRxiv", "{v}");
+    assert!(
+        paths.iter().any(|p| p.starts_with("/pubs/biorxiv/")),
+        "{paths:?}"
+    );
     Ok(())
 }
