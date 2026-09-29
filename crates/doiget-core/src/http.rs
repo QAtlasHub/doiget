@@ -303,6 +303,24 @@ pub fn tier_1_allowlist() -> Vec<SourceAllowlist> {
     ]
 }
 
+/// Always-compiled allowlist for **software citations** (#614, ADR-0058):
+/// `doiget cite` / `verify` on a GitHub repository or release URL. Kept out
+/// of [`tier_1_allowlist`] because it is not a fetch source -- a fetch
+/// plan's source list is read from that one, and GitHub must never appear
+/// in it. Only the CLI registers it; no MCP tool cites a URL.
+pub fn software_allowlist() -> Vec<SourceAllowlist> {
+    vec![
+        SourceAllowlist::new(
+            crate::software::GITHUB_API,
+            vec!["api.github.com".to_string()],
+        ),
+        SourceAllowlist::new(
+            crate::software::GITHUB_RAW,
+            vec!["raw.githubusercontent.com".to_string()],
+        ),
+    ]
+}
+
 /// Hard-coded Phase 4 allowlist for Tier 2 metadata sources (OpenAlex,
 /// Semantic Scholar, DOAJ). Sourced from `docs/SOURCES.md` §1 (the Tier 2
 /// table) and `docs/REDIRECT_ALLOWLIST.md` §3 (same redirect-allowlist

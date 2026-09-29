@@ -41,6 +41,7 @@ This is enforced structurally rather than only by documentation:
   | `oa_publisher_allowlist` | ~20 publisher and repository patterns (`*.springer.com`, `*.nature.com`, `*.wiley.com`, `*.elsevier.com`, `*.sciencedirect.com`, `*.plos.org`, `*.mdpi.com`, `*.frontiersin.org`, `*.biorxiv.org`, `*.medrxiv.org`, `europepmc.org`, `*.nih.gov`, `*.aps.org`, `scipost.org`, …) | following the OA PDF URL an index reported; the host is wherever the OA copy lives (ADR-0027) |
   | `discovery_allowlist` | `api.openalex.org` | `doiget search` discovery (ADR-0031 D4), **always-on, no env gate** |
   | `fulltext_allowlist` | `ar5iv.labs.arxiv.org` | `doiget text` structured full text (ADR-0032), **always-on** |
+  | `software_allowlist` (`github`, `github-raw`) | `api.github.com`, `raw.githubusercontent.com` | `doiget cite` / `verify` on a GitHub repository or release URL the caller names -- the release and its `CITATION.cff`, never a fetch (ADR-0058) |
 
   This list read "Crossref, Unpaywall, arXiv" until #494. **OpenAlex was absent
   entirely** — a third-party service, not an arXiv subdomain, reached by the shipped

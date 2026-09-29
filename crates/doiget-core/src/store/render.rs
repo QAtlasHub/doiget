@@ -90,6 +90,16 @@ pub fn to_bibtex_with_fields(citation_key: &str, m: &Metadata, extra: &[(&str, &
             push_field(&mut out, "issn", issn);
         }
     }
+    // Software (#614): the version cited and where it lives. A release has
+    // no journal to find it by, so the URL is the locator.
+    if entry_type == "software" {
+        if let Some(v) = m.other.get("version").and_then(toml::Value::as_str) {
+            push_field(&mut out, "version", v);
+        }
+        if let Some(u) = m.url.as_deref().filter(|u| !u.is_empty()) {
+            push_field(&mut out, "url", u);
+        }
+    }
 
     // arXiv preprint identity (issue #303): emit `eprint` + `archivePrefix`
     // (+ `primaryClass` when known) for any entry carrying an arXiv id, so
@@ -137,6 +147,10 @@ fn arxiv_primary_class(m: &Metadata) -> Option<String> {
 fn bibtex_entry_type(type_: Option<&str>) -> &'static str {
     match type_ {
         Some("journal-article") => "article",
+        // Our own GitHub record, and DataCite's resourceTypeGeneral (#614).
+        // biblatex has `@software`; classic BibTeX styles treat an unknown
+        // type as `@misc`, so nothing is lost there.
+        Some("software" | "Software") => "software",
         _ => "misc",
     }
 }
@@ -243,6 +257,12 @@ struct CslItem<'a> {
     publisher: Option<&'a str>,
     #[serde(rename = "ISSN", skip_serializing_if = "Option::is_none")]
     issn: Option<&'a str>,
+    /// Software only (#614).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<&'a str>,
+    /// Software only (#614): the release is found by its URL.
+    #[serde(rename = "URL", skip_serializing_if = "Option::is_none")]
+    url: Option<&'a str>,
 }
 
 /// CSL name-variable shape. Empty halves are omitted so a single-token
@@ -264,10 +284,13 @@ struct CslIssued {
 }
 
 fn build_csl_item<'a>(citation_key: &'a str, m: &'a Metadata) -> CslItem<'a> {
+    let software = matches!(m.type_.as_deref(), Some("software" | "Software"));
     CslItem {
         id: citation_key,
         type_: match m.type_.as_deref() {
             Some("journal-article") => "article-journal",
+            // CSL 1.0.2 `software` (#614).
+            _ if software => "software",
             _ => "manuscript",
         },
         title: crate::markup::plain_title(&m.title),
@@ -283,6 +306,12 @@ fn build_csl_item<'a>(citation_key: &'a str, m: &'a Metadata) -> CslItem<'a> {
         page: m.pages.as_deref(),
         publisher: m.publisher.as_deref(),
         issn: m.issn.as_deref(),
+        version: m
+            .other
+            .get("version")
+            .and_then(toml::Value::as_str)
+            .filter(|_| software),
+        url: m.url.as_deref().filter(|_| software),
     }
 }
 

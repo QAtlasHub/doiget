@@ -88,6 +88,16 @@ pub enum ParseError {
         /// The source bibliography's citation key, when known.
         entry_key: Option<String>,
     },
+    /// The entry has no DOI or arXiv id but is software on GitHub: its
+    /// `url` is a repository or release (#614). `verify` checks it still
+    /// resolves, and `doiget cite <url>` renders it as `@software`.
+    #[error("entry {entry_key:?} is software at {url}, with no DOI / arXiv id; `doiget cite {url}` cites it")]
+    SoftwareUrl {
+        /// The GitHub URL as written in the entry.
+        url: String,
+        /// The source bibliography's citation key, when known.
+        entry_key: Option<String>,
+    },
     /// The identifier was present but `Ref::parse` rejected it
     /// (malformed DOI suffix, invalid arXiv id shape, etc.).
     #[error(
@@ -394,6 +404,16 @@ fn parse_csl_entry(
             entry_key,
         });
     }
+    if let Some(url) = entry
+        .get("URL")
+        .and_then(|v| v.as_str())
+        .filter(|u| crate::software::GithubRef::parse(u).is_some())
+    {
+        return Err(ParseError::SoftwareUrl {
+            url: url.trim().to_string(),
+            entry_key,
+        });
+    }
     Err(ParseError::NoIdentifier { entry_key })
 }
 
@@ -524,6 +544,13 @@ fn parse_bibtex_entry(
             value,
             entry_key,
         });
+    }
+    if let Some(url) = entry
+        .get("url")
+        .map(|v| v.format_verbatim().trim().to_string())
+        .filter(|u| crate::software::GithubRef::parse(u).is_some())
+    {
+        return Err(ParseError::SoftwareUrl { url, entry_key });
     }
     Err(ParseError::NoIdentifier { entry_key })
 }
@@ -1147,5 +1174,30 @@ doi:10.1234/foo
         // The `entry_key` prefix belongs to `Display`, not here -- callers
         // carry it in a field of its own and would say it twice.
         assert!(!msg.starts_with("entry {"), "no entry_key prefix: {msg}");
+    }
+
+    /// #614: an entry with no DOI or arXiv id whose url is a GitHub
+    /// repository or release is software, in both formats; any other URL
+    /// leaves the entry id-less.
+    #[test]
+    fn a_github_url_makes_an_id_less_entry_software() {
+        let bib = parse_bibtex(
+            "@software{hf, title={HFDMRG}, url={https://github.com/srwhite59/HFDMRG.jl/releases/tag/v0.1.0}}\n\
+             @misc{web, title={A page}, url={https://example.org/page}}\n",
+        );
+        assert_eq!(
+            bib[0],
+            Err(ParseError::SoftwareUrl {
+                url: "https://github.com/srwhite59/HFDMRG.jl/releases/tag/v0.1.0".into(),
+                entry_key: Some("hf".into()),
+            })
+        );
+        assert!(matches!(bib[1], Err(ParseError::NoIdentifier { .. })));
+        let csl = parse_csl_json(
+            r#"[{"id":"hf","type":"software","title":"HFDMRG","URL":"https://github.com/srwhite59/HFDMRG.jl"}]"#,
+        );
+        assert!(
+            matches!(&csl[0], Err(ParseError::SoftwareUrl { url, .. }) if url.ends_with("HFDMRG.jl"))
+        );
     }
 }

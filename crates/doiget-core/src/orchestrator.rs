@@ -558,6 +558,8 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
             .and_then(|a| a.first())
             .and_then(Value::as_str)
             .map(str::to_string);
+    } else if outcome.source == "datacite" {
+        cite_datacite(&mut m, &outcome.metadata);
     } else if outcome.source == "arxiv" {
         // arXiv Atom overlay (issue #303). The baseline already pulled
         // title/authors; add the publication year (from the Atom
@@ -575,6 +577,35 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
     }
     m
 }
+
+/// DataCite overlay for `cite` (#614): the creators, year, publisher and
+/// resourceTypeGeneral the baseline leaves out, plus, for software, the
+/// version and landing URL a release is cited by. Without `metadata` the
+/// DataCite source is not compiled in, so nothing reaches here.
+#[cfg(feature = "metadata")]
+fn cite_datacite(m: &mut Metadata, attributes: &Value) {
+    let f = extract_datacite_fields(attributes);
+    if let Some(title) = f.title {
+        m.title = title;
+    }
+    if !f.authors.is_empty() {
+        m.authors = f.authors;
+    }
+    m.year = f.year.or(m.year);
+    m.publisher = f.venue;
+    m.type_ = f.type_;
+    if let Some(v) = attributes.get("version").and_then(Value::as_str) {
+        m.other
+            .insert("version".into(), toml::Value::String(v.to_string()));
+    }
+    m.url = attributes
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+}
+
+#[cfg(not(feature = "metadata"))]
+fn cite_datacite(_: &mut Metadata, _: &Value) {}
 
 /// Extract the four-digit year from an RFC3339 timestamp — the arXiv Atom
 /// `published` field, e.g. `"2004-03-24T00:00:00Z"`. Returns `None` if the
@@ -7134,6 +7165,38 @@ mod oa_fallthrough_tests {
             "the run should have recovered; got {:?}",
             outcome.pdf_leg
         );
+    }
+
+    /// #614: a DataCite Software record cites as `@software`, with the
+    /// creators, year, version and URL the baseline used to drop.
+    #[cfg(feature = "metadata")]
+    #[test]
+    fn a_datacite_software_record_cites_as_software_614() {
+        let outcome: MetadataOnlyOutcome = serde_json::from_value(serde_json::json!({
+            "source": "datacite", "resolver_profile": "test", "license": null, "oa_url": null,
+            "metadata": {
+                "titles": [{"title": "HFDMRG.jl"}],
+                "creators": [{"name": "White, Steven R."}],
+                "publicationYear": 2023,
+                "publisher": "Zenodo",
+                "types": {"resourceTypeGeneral": "Software"},
+                "version": "v0.1.0",
+                "url": "https://zenodo.org/records/200"
+            }
+        }))
+        .expect("outcome");
+        let ref_ = Ref::Doi(Doi::parse("10.5281/zenodo.200").expect("doi"));
+        let m = cite_metadata(&ref_, &outcome);
+        let bib = crate::store::render::to_bibtex("hf", &m);
+        assert!(bib.starts_with("@software{hf,"), "{bib}");
+        assert!(bib.contains("author     = {White, Steven R.}"), "{bib}");
+        assert!(bib.contains("year       = {2023}"), "{bib}");
+        assert!(bib.contains("version    = {v0.1.0}"), "{bib}");
+        assert!(
+            bib.contains("url        = {https://zenodo.org/records/200}"),
+            "{bib}"
+        );
+        assert!(bib.contains("publisher  = {Zenodo}"), "{bib}");
     }
 
     /// #547, the reported shape: Unpaywall calls the work closed (no OA URL

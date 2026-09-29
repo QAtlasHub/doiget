@@ -1116,6 +1116,25 @@ impl Server {
                         "error": error_object(ErrorCode::NotImplemented, msg),
                     }));
                 }
+                // #614: software on GitHub -- no paper to fetch.
+                Err(err @ doiget_core::refs::ParseError::SoftwareUrl { .. }) => {
+                    let msg = err.to_string();
+                    let doiget_core::refs::ParseError::SoftwareUrl { url, entry_key } = err else {
+                        unreachable!("guarded by the pattern above")
+                    };
+                    if input.strict {
+                        return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                            ErrorCode::NotImplemented,
+                            &format!("{msg} (strict mode aborts)"),
+                        )));
+                    }
+                    parse_errors.push(json!({
+                        "entry_key": entry_key,
+                        "ref":       url,
+                        "ok":        false,
+                        "error": error_object(ErrorCode::NotImplemented, msg.as_str()),
+                    }));
+                }
                 Err(doiget_core::refs::ParseError::NoIdentifier { entry_key }) => {
                     if input.strict {
                         return Ok(CallToolResult::structured(batch_fetch_error_envelope(
