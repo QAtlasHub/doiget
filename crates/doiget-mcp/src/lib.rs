@@ -3816,9 +3816,8 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             "status": "preprint_fallback",
             "arxiv_id": arxiv_id,
             "original_block": original_block,
-            // ADR-0062: who named the preprint -- `unpaywall`,
-            // `crossref_relation`, `openalex_location` or `arxiv_title_search`.
-            "found_by": found_by,
+            // ADR-0062: who named the preprint, as a `FoundBy` token.
+            "found_by": found_by.as_str(),
         }),
         // #640: a non-arXiv preprint, fetched through its own DOI.
         PdfLegStatus::PreprintDoiFallback {
@@ -3834,7 +3833,7 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             "preprint_doi": preprint_doi,
             "platform": platform,
             "original_block": original_block,
-            "found_by": found_by,
+            "found_by": found_by.as_str(),
         }),
         // `PdfLegStatus` is `#[non_exhaustive]`; a future variant
         // surfaces as a forward-compatible neutral status rather than

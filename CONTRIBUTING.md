@@ -6,7 +6,7 @@ and this document describes both **how** to contribute and **what changes are ou
 ## Local dev setup
 
 doiget targets **Rust stable**. The active toolchain is pinned via
-`rust-toolchain.toml` (`channel = "stable"`); the declared MSRV is **1.86**
+`rust-toolchain.toml` (`channel = "stable"`); the declared MSRV is **1.88**
 (see [`docs/PUBLIC_API.md`](docs/PUBLIC_API.md) §7).
 
 ```sh

@@ -191,3 +191,58 @@ fn add_from_dir_with_refs_matches_only_the_bibliographys_entries() {
         "not in the bibliography, so not a candidate"
     );
 }
+
+#[test]
+fn add_with_neither_a_ref_and_file_nor_a_folder_is_misuse() {
+    let (_td, base) = setup();
+    doiget(&base)
+        .arg("add")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--from-dir"));
+}
+
+#[test]
+fn an_unreadable_store_entry_is_refused_not_overwritten() {
+    let (_td, base) = setup();
+    let meta = base.join("papers/.metadata/doi_10.1007_BF01340294.toml");
+    std::fs::write(&meta, "this is = not [valid toml").unwrap();
+    doiget(&base)
+        .args(["add", DOI, "dl/BF01340294.pdf"])
+        .assert()
+        .code(4)
+        .stderr(predicate::str::contains("could not be read"));
+    assert_eq!(
+        std::fs::read_to_string(&meta).unwrap(),
+        "this is = not [valid toml",
+        "the entry is left for the user to fix"
+    );
+    assert!(!base.join("papers/doi_10.1007_BF01340294.pdf").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_ref_that_does_not_resolve_exits_as_fetch_would() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let (_td, base) = setup();
+    let mut cmd = doiget(&base);
+    cmd.env("DOIGET_CROSSREF_BASE", server.uri())
+        .env("DOIGET_UNPAYWALL_BASE", format!("{}/v2", server.uri()))
+        .args(["add", "10.1234/nowhere", "dl/notes.pdf"]);
+    let out = tokio::task::spawn_blocking(move || cmd.output().unwrap())
+        .await
+        .unwrap();
+    // NOT_FOUND is exit 1 (docs/ERRORS.md §4), as `doiget fetch` gives it;
+    // 4 is kept for the store's own I/O failures.
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("resolving 10.1234/nowhere"),
+        "{out:?}"
+    );
+    assert!(!base.join("papers/doi_10.1234_nowhere.pdf").exists());
+}

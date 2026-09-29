@@ -16,9 +16,9 @@
         overlays = [ (import rust-overlay) ];
         pkgs     = import nixpkgs { inherit system overlays; };
 
-        # Latest stable, as rust-toolchain.toml does. Pinning the declared
-        # MSRV (1.86) could not build the tree: dependencies such as rmcp 3.x
-        # declare rust-version 1.88, and cargo refuses them (#501).
+        # Latest stable, as rust-toolchain.toml does. The flake used to pin
+        # 1.86, below the 1.88 that rmcp 3.x requires, so it could not build
+        # the tree (#501); the declared MSRV is now 1.88.
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" "rust-analyzer" ];
         };

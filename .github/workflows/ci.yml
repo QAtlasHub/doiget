@@ -172,9 +172,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
-          toolchain: "1.86"
+          toolchain: "1.88"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      # rust-toolchain.toml (`stable`) overrides the default the action
+      # sets, so without this the job built on stable and never tested the
+      # floor: rmcp 3.x needs 1.88 while 1.86 was declared, unnoticed.
       - run: cargo build --workspace --no-default-features --features oa-only
+        env:
+          RUSTUP_TOOLCHAIN: "1.88"
 
   docs:
     name: rustdoc

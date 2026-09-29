@@ -1,13 +1,13 @@
 name: msrv-drift
 
 # Detects the round-3 scenario: a transitive crate bumps its required
-# Rust version above doiget's declared MSRV (1.86 at HEAD).
+# Rust version above doiget's declared MSRV (1.88 at HEAD).
 #
 # How it works:
-#   - Use the MSRV toolchain (1.86).
+#   - Use the MSRV toolchain (1.88).
 #   - Build with NO committed Cargo.lock, forcing fresh resolution
 #     against the current registry. If a transitive crate has moved its
-#     `rust-version` past 1.86 since the last successful run, the build
+#     `rust-version` past 1.88 since the last successful run, the build
 #     fails here and we open a tracking issue.
 #
 # Distinct from ci.yml's `msrv` job (which builds against whatever lock
@@ -30,15 +30,17 @@ permissions:
 
 jobs:
   drift-check:
-    name: MSRV drift (1.86 against latest deps)
+    name: MSRV drift (1.88 against latest deps)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
-          toolchain: "1.86"
+          toolchain: "1.88"
 
       - name: Sanity — print toolchain and resolve hint
+        env:
+          RUSTUP_TOOLCHAIN: "1.88"
         run: |
           rustc --version
           cargo --version
@@ -46,11 +48,15 @@ jobs:
 
       - name: Build at MSRV against latest registry
         # default features = ["oa-only"] is the published surface; if this
-        # fails, end-users with stable >= 1.86 will hit the same failure
+        # fails, end-users with stable >= 1.88 will hit the same failure
         # once their lock file refreshes. Open an issue so the maintainer
         # can decide whether to bump MSRV or pin the offending transitive
         # crate via deny.toml / Cargo.toml workspace deps.
+        # RUSTUP_TOOLCHAIN beats rust-toolchain.toml (`stable`), which
+        # would otherwise override the toolchain installed above.
         run: cargo build --workspace --no-default-features --features oa-only
+        env:
+          RUSTUP_TOOLCHAIN: "1.88"
 
   notify-cron-failure:
     name: notify (cron failure)
@@ -69,7 +75,7 @@ jobs:
           gh issue create \
             --title "msrv-drift: weekly check failed ($(date -u +%Y-%m-%d))" \
             --label "ci,msrv,automated" \
-            --body "The scheduled \`msrv-drift\` check failed: a transitive crate moved its required Rust version above the declared MSRV (1.86), or another build error occurred.
+            --body "The scheduled \`msrv-drift\` check failed: a transitive crate moved its required Rust version above the declared MSRV (1.88), or another build error occurred.
 
           See ${RUN_URL} for the failing build.
 

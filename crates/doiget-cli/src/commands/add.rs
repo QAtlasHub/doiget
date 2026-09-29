@@ -90,9 +90,12 @@ pub async fn run(
 
 fn fail(e: &AddError) -> Result<()> {
     print_err(format_args!("error: {e}"));
+    // docs/ERRORS.md §4: a resolve failure exits as `fetch` would for its
+    // code, and 4 is the store's I/O failure (#649 review: these were
+    // swapped, 4 for a resolve and 1 for the store).
     let code = match e {
-        AddError::Resolve { .. } => 4,
-        AddError::Store(_) => 1,
+        AddError::Resolve { source, .. } => super::fetch::cli_exit_code(source.into()),
+        AddError::Store(_) | AddError::UnreadableEntry { .. } => 4,
         _ => 2,
     };
     Err(anyhow::Error::new(CliExit(code)))
@@ -206,8 +209,16 @@ fn missing_in_store(store: &FsStore, store_root: &Utf8Path) -> Result<Vec<Ref>> 
         {
             continue;
         }
-        let Some(m) = blocking_section(|| store.read(&e.safekey)).ok().flatten() else {
-            continue;
+        let m = match blocking_section(|| store.read(&e.safekey)) {
+            Ok(Some(m)) => m,
+            Ok(None) => continue,
+            Err(err) => {
+                print_err(format_args!(
+                    "warning: skipping {} (its store entry could not be read: {err})",
+                    e.safekey.as_str()
+                ));
+                continue;
+            }
         };
         if let Some(d) = m.doi {
             out.push(Ref::Doi(d));

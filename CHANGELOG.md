@@ -61,6 +61,9 @@ minor bump. Every item links its issue; the ADRs named are in `docs/DECISIONS/`.
   from an enabled source (#608).
 - **[mcp]** `doiget_capability_profile`'s `metadata_sources` lists every enabled opt-in
   source, not three of them (#641 review).
+- **[msrv]** The declared MSRV rises from 1.86 to **1.88**, which rmcp 3.x already
+  required. The `msrv` CI job never noticed, because `rust-toolchain.toml` overrode
+  its pinned toolchain with stable; it now pins with `RUSTUP_TOOLCHAIN` (#649 review).
 
 ### Fixed
 
@@ -68,6 +71,13 @@ minor bump. Every item links its issue; the ADRs named are in `docs/DECISIONS/`.
   for every test client (#587); an empty or unexpanded `--store-root` is refused (#613).
 - **[cli]** Windows' 1 MiB main-thread stack overflowed in debug builds; the CLI runs on
   an 8 MiB thread (#611).
+- **[add]** `doiget add` no longer takes an unreadable store entry for "no entry" and
+  writes over it; it stops and names the entry. Its exit codes follow `docs/ERRORS.md`
+  §4: a failed resolve exits as `fetch` would, and 4 is the store's I/O failure. They
+  had been swapped (#649 review).
+- **[cite]** A GitHub tag with `..`, `%`, `?`, `#` or whitespace is refused, whether it
+  came from the URL or from GitHub's latest-release answer, so it cannot leave the
+  `repos/{owner}/{repo}` API path (#649 review).
 
 ### Docs / decisions
 

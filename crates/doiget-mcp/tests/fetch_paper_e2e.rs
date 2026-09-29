@@ -801,6 +801,112 @@ async fn fetch_paper_doi_falls_back_to_the_arxiv_preprint() -> anyhow::Result<()
     Ok(())
 }
 
+/// A failed arXiv fallback keeps the original block: the leg stays
+/// `blocked`, with the suggestion and the reason it was blocked, rather than
+/// losing either (#649 review). `answer` is what the arXiv host returns.
+async fn failed_arxiv_fallback_keeps_the_block(
+    answer: wiremock::ResponseTemplate,
+) -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works/10.1234/suggest-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "ok",
+            "message": {
+                "title": ["Suggestion Test Paper"],
+                "author": [{"family": "Doe", "given": "Jane"}],
+                "issued": {"date-parts": [[2024, 1, 1]]}
+            }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v2/10.1234%2Fsuggest-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "doi": "10.1234/suggest-test",
+            "is_oa": true,
+            "oa_status": "green",
+            "best_oa_location": {
+                "url_for_pdf": "https://arxiv.org/pdf/2401.99999v2.pdf",
+                "url": "https://arxiv.org/abs/2401.99999v2"
+            },
+            "oa_locations": [{"url_for_pdf": "https://arxiv.org/pdf/2401.99999v2.pdf"}]
+        })))
+        .mount(&server)
+        .await;
+    let arxiv = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(answer)
+        .mount(&arxiv)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let temp_root = camino::Utf8Path::from_path(td.path())
+        .expect("tempdir is utf-8")
+        .to_path_buf();
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", temp_root.join("papers").as_str());
+    env.set("DOIGET_LOG_PATH", temp_root.join("log.jsonl").as_str());
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", server.uri()));
+    env.set("DOIGET_OA_PUBLISHER_BASE", &server.uri());
+    env.set("DOIGET_ARXIV_BASE", &arxiv.uri());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/suggest-test"));
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_fetch_paper").with_arguments(args))
+        .await?;
+    let v = result
+        .structured_content
+        .as_ref()
+        .expect("doiget_fetch_paper uses CallToolResult::structured");
+
+    assert_eq!(v["ok"], serde_json::json!(true), "{v:?}");
+    assert_eq!(v["pdf"]["status"], serde_json::json!("blocked"), "{v:?}");
+    assert_eq!(
+        v["pdf"]["suggested_arxiv_id"],
+        serde_json::json!("2401.99999"),
+        "the suggestion survives the failed fallback: {v:?}"
+    );
+    assert!(
+        v["pdf"]["message"].as_str().is_some_and(|m| !m.is_empty()),
+        "the original block's reason survives: {v:?}"
+    );
+    assert!(
+        !temp_root
+            .join("papers/doi_10.1234_suggest-test.pdf")
+            .exists(),
+        "nothing was written for a fallback that failed"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn an_arxiv_fallback_that_404s_keeps_the_original_block() -> anyhow::Result<()> {
+    failed_arxiv_fallback_keeps_the_block(wiremock::ResponseTemplate::new(404)).await
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn an_arxiv_fallback_that_is_not_a_pdf_keeps_the_original_block() -> anyhow::Result<()> {
+    failed_arxiv_fallback_keeps_the_block(
+        wiremock::ResponseTemplate::new(200).set_body_string("<html>not a pdf</html>"),
+    )
+    .await
+}
+
 #[tokio::test]
 #[serial_test::serial]
 async fn fetch_paper_doi_with_no_oa_anywhere_reports_the_no_oa_url_route() -> anyhow::Result<()> {

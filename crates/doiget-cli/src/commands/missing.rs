@@ -188,11 +188,13 @@ pub async fn run(
             ref_: Some(ref_.as_input_str().to_string()),
             ..Row::default()
         };
-        if let Some(m) = doiget_core::store::blocking_section(|| store.read(&safekey))
-            .ok()
-            .flatten()
-        {
-            fill_identity(&mut row, &m);
+        match doiget_core::store::blocking_section(|| store.read(&safekey)) {
+            Ok(Some(m)) => fill_identity(&mut row, &m),
+            Ok(None) => {}
+            Err(err) => print_err(format_args!(
+                "warning: the store entry for {} could not be read: {err}",
+                safekey.as_str()
+            )),
         }
         let key = parsed.entry_key.as_deref().unwrap_or(safekey.as_str());
         row.expected_path = path_pattern.as_ref().map(|p| {
