@@ -388,6 +388,18 @@ pub async fn find(
             }
             Ok(None) => {}
             Err(FetchError::Log(e)) => return Err(FetchError::Log(e)),
+            // A refused token is the user's to fix, so it is said louder than
+            // "did not answer" (#645 review).
+            Err(
+                e @ FetchError::Http(crate::http::HttpError::HttpStatus {
+                    status: 401 | 403, ..
+                }),
+            ) => {
+                tracing::warn!(
+                    error = %e,
+                    "preprint lookup: ADS refused DOIGET_ADS_TOKEN -- check or regenerate the token"
+                );
+            }
             Err(e) => tracing::info!(error = %e, "preprint lookup: ADS did not answer"),
         }
     }
