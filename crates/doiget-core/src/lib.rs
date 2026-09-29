@@ -2,7 +2,7 @@
 //!
 //! Core library for [doiget](https://github.com/QAtlasHub/doiget): an Open Access
 //! first paper-fetcher with strict capability gating, fail-closed provenance logging,
-//! and a BiblioFetch.jl-compatible store layout.
+//! and a documented on-disk store layout (`docs/STORE.md`).
 //!
 //! Phase 0 ships only this skeleton. Real implementations land in Phase 1.
 //! See `docs/PUBLIC_API.md` for the semver-locked surface and `docs/ARCHITECTURE.md`

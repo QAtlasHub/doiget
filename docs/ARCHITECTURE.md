@@ -193,15 +193,16 @@ Tier 2 sources, the citation graph, and feature-gated Tier 3 TDM are shipped.
 The optional `doiget-obsidian` crate is the remaining per-feature work. The
 historical phase breakdown is in [`PHASES.md`](PHASES.md).
 
-## 9. Cross-tool relationship with BiblioFetch.jl
+## 9. Store contracts
 
-doiget shares the on-disk store format with [BiblioFetch.jl](https://github.com/sotashimozono/BiblioFetch.jl).
-The boundary contracts are documented as part of [`STORE.md`](STORE.md):
+The store format began as a contract shared with [BiblioFetch.jl](https://github.com/sotashimozono/BiblioFetch.jl)
+(ADR-0004); since ADR-0060 it is doiget's own, unchanged. The contracts are documented in
+[`STORE.md`](STORE.md):
 
 - TOML schema versioning (`schema_version = "1.0"`).
 - Concurrent access via `flock` on `<safekey>.toml.lock`.
 - Atomic write protocol (`tmp` → `fsync` → `rename` → `fsync` parent).
-- A shared `safekey` algorithm with 100 reference test vectors in
+- The `safekey` algorithm with 100 reference test vectors in
   [`SAFEKEY.md`](SAFEKEY.md).
 
 ## 10. Where to start as a new contributor

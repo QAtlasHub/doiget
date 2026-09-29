@@ -12,12 +12,11 @@
 //! - [`Metadata`] / [`DoigetExtension`] — the on-disk schema, mirrored from
 //!   `docs/STORE.md` §2.
 //!
-//! ## Cross-tool coexistence
+//! ## Other writers
 //!
-//! The store can be shared between doiget and BiblioFetch.jl when both are
-//! pointed at the same root (they no longer co-locate by default — ADR-0036).
-//! Both tools follow the lock protocol in `docs/STORE.md` §4 and the
-//! atomic-write sequence in §5. Per §6, doiget MUST NOT overwrite reserved
+//! A store may also be written by another tool -- BiblioFetch.jl stores stay
+//! readable, though the shared contract is retired (ADR-0060). Writers follow
+//! the lock protocol in `docs/STORE.md` §4 and the atomic-write sequence in §5. Per §6, doiget MUST NOT overwrite reserved
 //! top-level fields previously written by another tool — see [`FsStore::write`].
 
 pub mod citekey;

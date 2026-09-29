@@ -161,10 +161,9 @@ doiget composes with content-processing tools rather than incorporating them:
   [paper-qa](https://github.com/whitead/paper-qa),
   [marker](https://github.com/VikParuchuri/marker), or other dedicated tools. See
   `INTEGRATION/chain-with-paperqa.md`.
-- For Julia REPL workflows: use BiblioFetch.jl directly; doiget and BiblioFetch.jl share
-  the on-disk store format ([`STORE.md`](STORE.md)). The *format* is shared; since
-  ADR-0036 the default *root* differs per tool, so point both at the same root (e.g.
-  `DOIGET_STORE_ROOT=~/papers`) to co-locate one store.
+- For an existing BiblioFetch.jl store: doiget reads it unchanged
+  ([`STORE.md`](STORE.md)); point `DOIGET_STORE_ROOT` at it. The shared contract is
+  retired (ADR-0060), the format is not.
 
 ## Why these are non-goals
 

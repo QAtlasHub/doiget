@@ -1,7 +1,6 @@
 # doiget
 
 > A single-binary CLI + stdio MCP server that turns DOIs and arXiv ids into local PDFs through official, OA-first APIs.
-> Designed as the **agent-facing companion** to [BiblioFetch.jl](https://github.com/sotashimozono/BiblioFetch.jl).
 
 [![crates.io](https://img.shields.io/crates/v/doiget-core.svg)](https://crates.io/crates/doiget-core)
 [![downloads](https://img.shields.io/crates/d/doiget-core.svg)](https://crates.io/crates/doiget-core)
@@ -53,7 +52,7 @@ See [docs/LEGAL.md](docs/LEGAL.md) and [docs/SCOPE.md](docs/SCOPE.md).
 | Contributor | [CONTRIBUTING.md](CONTRIBUTING.md) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) → [docs/DECISIONS/](docs/DECISIONS/) |
 | Publisher legal team | [docs/LEGAL.md](docs/LEGAL.md) + [CONTACT.md](CONTACT.md) |
 | Security researcher | [docs/SECURITY.md](docs/SECURITY.md) + [docs/PROVENANCE_LOG.md](docs/PROVENANCE_LOG.md) + [docs/CAPABILITY.md](docs/CAPABILITY.md) |
-| BiblioFetch.jl user | [docs/MIGRATION.md](docs/MIGRATION.md) + [docs/STORE.md](docs/STORE.md) + [docs/SAFEKEY.md](docs/SAFEKEY.md) |
+| Moving a BiblioFetch.jl store | [docs/MIGRATION.md](docs/MIGRATION.md) + [docs/STORE.md](docs/STORE.md) + [docs/SAFEKEY.md](docs/SAFEKEY.md) |
 
 Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 Threat model: [docs/SECURITY.md](docs/SECURITY.md)
@@ -254,20 +253,13 @@ Institutional TDM access (Springer OA, APS Harvest, Elsevier ScienceDirect TDM) 
 the default published binary; it must be opted in at build time per publisher.
 See [docs/SOURCES.md](docs/SOURCES.md).
 
-## Coexistence with BiblioFetch.jl
+## Stores written by BiblioFetch.jl
 
-doiget and BiblioFetch.jl share the same on-disk store format (TOML metadata + PDF files
-under a configurable store root). doiget defaults to `./papers` (under the current working
-directory; ADR-0036), BiblioFetch.jl to `~/papers/`; point both at the same root (e.g.
-`DOIGET_STORE_ROOT=~/papers`) to share one store. The shared schema, locking protocol, and
-atomic write contract are
-specified in [docs/STORE.md](docs/STORE.md). Reference test vectors for the shared safekey
-algorithm are in [docs/SAFEKEY.md](docs/SAFEKEY.md).
-
-| Tool | Best for |
-|---|---|
-| BiblioFetch.jl | Julia REPL, research vault, citation graph exploration |
-| doiget | Agents / MCP hosts, batch operations, scripted pipelines, container deployments |
+doiget's store format (TOML metadata + PDF files under a configurable store root,
+[docs/STORE.md](docs/STORE.md)) began as a format shared with BiblioFetch.jl. That
+contract is retired (ADR-0060), and the format did not change: point doiget at an
+existing store (`DOIGET_STORE_ROOT=~/papers`) and it reads it, preserving the
+`[bibliofetch]` table it does not own. doiget defaults to `./papers` (ADR-0036).
 
 ## License
 

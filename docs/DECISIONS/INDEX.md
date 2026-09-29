@@ -20,7 +20,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0001 | MCP transport is stdio only | Accepted | posture-lint + Slice 9 stdout-purity | #4 |
 | 0002 | TDM sources are compile-time feature-gated | Accepted | Slices 17/18/19 | #5 |
 | 0003 | PDF content processing is permanently out of scope | Accepted (Amended by 0032: narrowed to PDF-*blob* processing; structured HTML/XML full-text is in scope) | standing policy (SCOPE.md #1 + posture-lint) | #9 |
-| 0004 | BiblioFetch.jl coexistence — shared store contract | Accepted (Amended by 0036: default root no longer `~/papers`; shared *format* contract unchanged) | Phase 1 store + #121 (`0.1.2`) | #1 / #2 |
+| 0004 | BiblioFetch.jl coexistence — shared store contract | Superseded by 0060 | Phase 1 store + #121 (`0.1.2`) | #1 / #2 |
 | 0005 | CapabilityProfile gates source invocation at the type level | Accepted | PR #64/#65 (Phase 1) | #16 / #17 |
 | 0006 | Provenance log is JSON Lines + SHA-256 hash chain (fail-closed) | Accepted | PR #61 + Slice 4 | #12 / #17 |
 | 0007 | safekey algorithm with 100 reference test vectors | Accepted | PR #39 + Slice 3 | #1 §Contract 4 / #17 |
@@ -76,6 +76,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0057 | Repeat suppression: a session is not re-asked what a retry cannot change | Accepted | `feat/507-repeat-suppression` | #507 |
 | 0058 | Software citations from GitHub, and Zenodo's concept DOI | Accepted | `feat/614-software` | #614 |
 | 0059 | Entitled-network publisher sources: the shape, decided before any source | Accepted (design only) | `docs/593-entitled-network-adr` | #517, #593, #603 |
+| 0060 | Retire BiblioFetch.jl coexistence: the store and safekey specs are doiget's own | Accepted | `docs/retire-bibliofetch` | maintainer decision, 0.9.0 cycle |
 
 ## Conventions
 
