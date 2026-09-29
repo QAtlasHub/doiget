@@ -315,6 +315,8 @@ This holds even when the first call was `ok: true` with a blocked PDF leg: the
 repeat did nothing, so it is `ok: false`. A change to `config.toml` lifts the
 replay. `force: true` sends the request anyway, and the provenance log records
 a `repeat_forced` row. There is no setting that disables suppression.
+`doiget_resolve_paper` and `doiget_metadata_only` are not suppressed: they
+make metadata requests only, bounded by the rate cap.
 
 ## 11. `doiget_metadata_only` (NORMATIVE)
 

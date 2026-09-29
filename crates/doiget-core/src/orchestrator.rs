@@ -1426,7 +1426,6 @@ pub async fn fetch_paper_with(
             })?;
         }
         crate::repeat::Verdict::Replay { code, at } => {
-            ctx.log.repeat().note_replayed(input);
             return Err(FetchError::Replayed {
                 code,
                 message: format!(
@@ -1444,7 +1443,6 @@ pub async fn fetch_paper_with(
             at,
             remaining_secs,
         } => {
-            ctx.log.repeat().note_replayed(input);
             return Err(FetchError::Replayed {
                 code: crate::ErrorCode::RateLimited,
                 message: format!(
@@ -4467,6 +4465,40 @@ mod tests {
     /// bookend says so, asking again is answered from the log without a
     /// request, `force` asks anyway and is logged, and a duplicate inside
     /// one batch is replayed too.
+    /// #507: a retry_after answer under RETRY_AFTER_GAP old is refused with
+    /// the time left, before any request, and as RATE_LIMITED -- so a caller
+    /// that honours retry_after waits instead of hammering.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_recent_retry_after_answer_is_a_timed_wait_507() {
+        let (_s, ctx, store, store_root, _td) = md139_harness_with("{}").await;
+        let profile = CapabilityProfile::from_env().expect("profile");
+        let ref_ = Ref::Doi(Doi::parse("10.1234/busy").expect("doi"));
+        ctx.log
+            .repeat()
+            .observe("10.1234/busy", Some(crate::ErrorCode::NetworkError));
+        let got = fetch_paper_with(
+            &ref_,
+            &profile,
+            &ctx,
+            &store,
+            &store_root,
+            FetchOptions::default(),
+        )
+        .await;
+        match got {
+            Err(FetchError::Replayed {
+                code,
+                retry_after_secs: Some(secs),
+                ..
+            }) => {
+                assert_eq!(code, crate::ErrorCode::RateLimited);
+                assert!((1..=30).contains(&secs), "{secs}");
+            }
+            other => panic!("expected a timed wait, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     #[serial_test::serial]
     async fn a_terminal_answer_is_replayed_and_force_asks_again_507() {

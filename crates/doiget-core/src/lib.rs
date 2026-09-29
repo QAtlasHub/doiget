@@ -1849,6 +1849,43 @@ fn build_tdm_grant(agree_var: &str, key: String) -> TdmGrant {
 mod tests {
     use super::*;
 
+    /// #507: suppression reads codes back from the log's `error_code`
+    /// column, so every code must survive the trip -- and ALL must hold every
+    /// variant, which the exhaustive match below makes a compile error to
+    /// forget.
+    #[test]
+    fn every_error_code_round_trips_through_its_wire_token() {
+        const fn listed(c: ErrorCode) {
+            match c {
+                ErrorCode::InvalidRef
+                | ErrorCode::NoOaAvailable
+                | ErrorCode::RateLimited
+                | ErrorCode::NetworkError
+                | ErrorCode::NotFound
+                | ErrorCode::Ambiguous
+                | ErrorCode::StoreError
+                | ErrorCode::LogError
+                | ErrorCode::CapabilityDenied
+                | ErrorCode::FetchTimeout
+                | ErrorCode::SchemaTooNew
+                | ErrorCode::LockTimeout
+                | ErrorCode::InternalError
+                | ErrorCode::NotImplemented
+                | ErrorCode::TextUnavailable => {}
+            }
+        }
+        assert_eq!(ErrorCode::ALL.len(), 15, "a new variant goes in ALL too");
+        for c in ErrorCode::ALL {
+            listed(*c);
+            assert_eq!(ErrorCode::from_wire(c.as_wire()), Some(*c));
+            assert_eq!(
+                serde_json::to_value(c).expect("serialize"),
+                serde_json::json!(c.as_wire())
+            );
+        }
+        assert_eq!(ErrorCode::from_wire("NOT_A_CODE"), None);
+    }
+
     #[test]
     fn rate_limits_hard_coded_match_legal_safeguards() {
         // docs/LEGAL.md §6 safeguard 8 names these exact values.

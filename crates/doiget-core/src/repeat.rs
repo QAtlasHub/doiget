@@ -77,19 +77,20 @@ pub enum Verdict {
 #[derive(Debug, Default)]
 pub struct RepeatIndex {
     entries: Mutex<HashMap<String, Entry>>,
-    /// Refs whose last request was answered by a replay. That request's own
-    /// bookend is not a new answer -- a `Wait` replays as `RATE_LIMITED`,
-    /// which would otherwise restart the clock it is enforcing.
-    replayed: Mutex<std::collections::HashSet<String>>,
 }
 
 impl RepeatIndex {
     /// Record what a call told its caller about `ref_input`: an error code,
     /// or `None` for a clean success (which clears the ref).
     ///
-    /// A repeat of the same code under the same configuration keeps the
-    /// FIRST time: a caller looping on a refusal must not slide the window
-    /// forward with every replay.
+    /// An answer with the same disposition under the same configuration
+    /// keeps the FIRST time: a caller looping on a refusal must not slide
+    /// the window forward. That rule is also what makes a replay's own
+    /// bookend harmless -- it repeats the disposition it replayed (a `Wait`
+    /// reports `RATE_LIMITED`, which is `retry_after` like what it waits on)
+    /// -- without marking requests, so a real answer arriving concurrently
+    /// is never mistaken for one. A different disposition, or a success,
+    /// replaces the entry.
     pub fn observe(&self, ref_input: &str, code: Option<ErrorCode>) {
         self.observe_at(ref_input, code, Instant::now(), config_fingerprint());
     }
@@ -103,26 +104,23 @@ impl RepeatIndex {
         fingerprint: u64,
     ) {
         let key = key(ref_input);
-        if self
-            .replayed
-            .lock()
-            .map(|mut r| r.remove(&key))
-            .unwrap_or(false)
-        {
-            return;
-        }
-        let Ok(mut map) = self.entries.lock() else {
-            return;
-        };
+        let mut map = self.lock();
         match code {
             None => {
                 map.remove(&key);
             }
             Some(code) => {
-                let keep = map
-                    .get(&key)
-                    .is_some_and(|e| e.code == code && e.fingerprint == fingerprint);
-                if !keep {
+                let same = |e: &Entry| {
+                    e.fingerprint == fingerprint && e.code.disposition() == code.disposition()
+                };
+                if let Some(e) = map.get_mut(&key).filter(|e| same(e)) {
+                    // Keep the time. A terminal answer takes the newer code
+                    // (what the caller was last told); a wait keeps the code
+                    // it is waiting on, since its replay reports RATE_LIMITED.
+                    if code.disposition() != Disposition::RetryAfter {
+                        e.code = code;
+                    }
+                } else {
                     map.insert(
                         key,
                         Entry {
@@ -137,12 +135,14 @@ impl RepeatIndex {
         }
     }
 
-    /// Note that the request for `ref_input` was answered by a replay, so
-    /// its bookend does not count as a new answer.
-    pub fn note_replayed(&self, ref_input: &str) {
-        if let Ok(mut r) = self.replayed.lock() {
-            r.insert(key(ref_input));
-        }
+    /// The map, recovered from a poisoned lock: a panic elsewhere must not
+    /// silently switch suppression off for the rest of the session, which
+    /// would be the configuration-free off switch ADR-0057 rules out. Every
+    /// write leaves the map consistent, so the data is still sound.
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Entry>> {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// What a request for `ref_input` should do now.
@@ -154,9 +154,7 @@ impl RepeatIndex {
     /// [`RepeatIndex::check`] with an explicit clock and fingerprint.
     #[must_use]
     pub fn check_at(&self, ref_input: &str, now: Instant, fingerprint: u64) -> Verdict {
-        let Ok(map) = self.entries.lock() else {
-            return Verdict::Proceed;
-        };
+        let map = self.lock();
         let Some(e) = map.get(&key(ref_input)) else {
             return Verdict::Proceed;
         };
@@ -276,7 +274,6 @@ mod tests {
             Verdict::Wait { .. }
         ));
         // The replay reports RATE_LIMITED; its bookend must not reset `at`.
-        idx.note_replayed(R);
         idx.observe_at(
             R,
             Some(ErrorCode::RateLimited),
@@ -294,5 +291,55 @@ mod tests {
         // The replayed call's own bookend records the same code again.
         idx.observe_at(R, Some(ErrorCode::NotFound), t0 + REPLAY_WINDOW / 2, 7);
         assert_eq!(idx.check_at(R, t0 + REPLAY_WINDOW, 7), Verdict::Proceed);
+    }
+
+    #[test]
+    fn a_different_answer_replaces_the_entry_and_a_terminal_code_is_updated() {
+        let idx = RepeatIndex::default();
+        let t0 = Instant::now();
+        idx.observe_at(R, Some(ErrorCode::RateLimited), t0, 7);
+        // A concurrent real request comes back NOT_FOUND: a new answer.
+        idx.observe_at(R, Some(ErrorCode::NotFound), t0 + Duration::from_secs(1), 7);
+        assert!(matches!(
+            idx.check_at(R, t0 + Duration::from_secs(40), 7),
+            Verdict::Replay {
+                code: ErrorCode::NotFound,
+                ..
+            }
+        ));
+        // Another code of the same disposition keeps the clock but reports
+        // the newer code.
+        let other = ErrorCode::ALL
+            .iter()
+            .copied()
+            .find(|c| {
+                *c != ErrorCode::NotFound && c.disposition() == ErrorCode::NotFound.disposition()
+            })
+            .expect("a second terminal code");
+        idx.observe_at(R, Some(other), t0 + Duration::from_secs(50), 7);
+        match idx.check_at(R, t0 + Duration::from_secs(60), 7) {
+            Verdict::Replay { code, .. } => assert_eq!(code, other),
+            v => panic!("expected Replay, got {v:?}"),
+        }
+        assert_eq!(
+            idx.check_at(R, t0 + Duration::from_secs(1) + REPLAY_WINDOW, 7),
+            Verdict::Proceed,
+            "the window runs from the first terminal answer"
+        );
+    }
+
+    #[test]
+    fn a_poisoned_lock_does_not_switch_suppression_off() {
+        let idx = std::sync::Arc::new(RepeatIndex::default());
+        let t0 = Instant::now();
+        idx.observe_at(R, Some(ErrorCode::NotFound), t0, 7);
+        let poisoner = std::sync::Arc::clone(&idx);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.entries.lock().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+        assert!(idx.entries.is_poisoned());
+        assert!(matches!(idx.check_at(R, t0, 7), Verdict::Replay { .. }));
     }
 }

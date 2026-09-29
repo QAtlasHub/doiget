@@ -637,6 +637,29 @@ async fn fetch_paper_doi_blocked_pdf_includes_suggested_arxiv_id() -> anyhow::Re
         "oa_status must surface on the DOI fetch envelope; got: {structured:?}"
     );
 
+    // #507 / ADR-0057 D4: the repeat is a replay, and it is ok:false -- the
+    // first call wrote metadata, the repeat does nothing at all.
+    let sent = server.received_requests().await.unwrap_or_default().len();
+    let mut args = serde_json::Map::new();
+    args.insert("ref".to_string(), serde_json::json!("10.1234/suggest-test"));
+    let again = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_fetch_paper").with_arguments(args))
+        .await?;
+    let again = again.structured_content.expect("structured");
+    assert_eq!(again["ok"], serde_json::json!(false), "{again:?}");
+    assert_eq!(
+        again["error"]["replayed"],
+        serde_json::json!(true),
+        "{again:?}"
+    );
+    assert!(again["error"]["code"].is_string(), "{again:?}");
+    assert_eq!(
+        server.received_requests().await.unwrap_or_default().len(),
+        sent,
+        "a replay must not reach the network"
+    );
+
     client.cancel().await?;
     server_handle.await??;
     drop(env);
@@ -1246,6 +1269,39 @@ async fn a_repeated_terminal_answer_is_a_replay_until_forced() -> anyhow::Result
     let forced = forced.structured_content.expect("structured");
     assert!(forced["error"].get("replayed").is_none(), "{forced:?}");
     assert!(requests().await > sent, "force asks again");
+
+    // The batch tools take force too; without it their entry is a replay.
+    let refs_file = root.join("refs.txt");
+    std::fs::write(&refs_file, "10.1234/nowhere\n").expect("refs file");
+    for tool in ["doiget_batch_fetch", "doiget_batch_from_bibliography"] {
+        let batch = |force: bool| {
+            let mut args = serde_json::Map::new();
+            if tool == "doiget_batch_fetch" {
+                args.insert("refs".into(), serde_json::json!(["10.1234/nowhere"]));
+            } else {
+                args.insert("path".into(), serde_json::json!(refs_file.as_str()));
+                args.insert("format".into(), serde_json::json!("refs"));
+            }
+            if force {
+                args.insert("force".into(), serde_json::json!(true));
+            }
+            client
+                .peer()
+                .call_tool(CallToolRequestParams::new(tool).with_arguments(args))
+        };
+        let before = requests().await;
+        let replayed = batch(false).await?.structured_content.expect("structured");
+        let entry = &replayed["results"][0];
+        assert_eq!(entry["error"]["replayed"], true, "{tool}: {replayed:?}");
+        assert_eq!(requests().await, before, "{tool}: a replay asks nothing");
+        let forced = batch(true).await?.structured_content.expect("structured");
+        let entry = &forced["results"][0];
+        assert!(
+            entry["error"].get("replayed").is_none(),
+            "{tool}: {forced:?}"
+        );
+        assert!(requests().await > before, "{tool}: force asks again");
+    }
 
     client.cancel().await?;
     server_handle.await??;

@@ -44,10 +44,14 @@ on a profile fingerprint was the finding of the #507 spike.
 
 **D3: The index is fed from the log.** `ProvenanceLog::append` updates it only
 after a `session_end` row is durably written. The log remains the record of
-what callers were told. A clean success clears the ref. A replay's own bookend
-does not count as a new answer, so a caller polling during a `Wait` cannot
-restart the wait. A repeat of the same code keeps the first time, so a loop
-cannot slide the window forward.
+what callers were told. A clean success clears the ref. An answer with the same disposition
+as the recorded one keeps the first time, so a loop cannot slide the window
+forward. The same rule makes a replay's own bookend harmless: a replay
+reports the disposition it replayed (a `Wait` reports `RATE_LIMITED`, which is
+`retry_after` like the answer it waits on), so polling during a `Wait` cannot
+restart it. No request is marked as a replay, so a genuine answer that lands
+concurrently is never mistaken for one; a different disposition, or a
+success, replaces the entry.
 
 **D4: It is never silent.** A replay is `ok:false` with `replayed: true`, the
 original code and disposition, the time of the original answer, and how to
@@ -72,6 +76,12 @@ requires of a safeguard.
   permanent (a paper can become OA, an embargo can lift), and a cache of
   "no" that outlives the session would be the silent staleness #507's own
   constraints ruled out.
+- Not covered: `doiget_resolve_paper`, `doiget_metadata_only` and the CLI's
+  metadata-only paths. They make one or two metadata requests per call, not a
+  content fetch, and stay bounded by the rate cap alone. Extending the index
+  to them is a separate decision.
+- An index whose lock was poisoned by a panic elsewhere is recovered, not
+  treated as empty: a poisoned lock must not become an off switch.
 - `FetchError` gains `Replayed`. It maps to the replayed code, so every
   surface's code, exit code and disposition stay those of the original
   answer.
