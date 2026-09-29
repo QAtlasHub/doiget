@@ -121,6 +121,11 @@ impl RepeatIndex {
                         e.code = code;
                     }
                 } else {
+                    // A new entry sweeps the ones no rule can act on any
+                    // more (#649 review): nothing replays or waits past
+                    // REPLAY_WINDOW, and a `doiget serve` session otherwise
+                    // kept one entry per refused ref for its whole life.
+                    map.retain(|_, e| now.saturating_duration_since(e.at) < REPLAY_WINDOW);
                     map.insert(
                         key,
                         Entry {
@@ -186,13 +191,15 @@ fn key(ref_input: &str) -> String {
 }
 
 /// A hash of `config.toml`'s bytes, or 0 when there is none. Read per call:
-/// it is the one input the HTTP client re-reads within a session.
+/// it is the one input the HTTP client re-reads within a session. The read
+/// is a [`crate::store::blocking_section`], as store reads are, since it
+/// runs inside every fetch (#649 review).
 #[must_use]
 pub fn config_fingerprint() -> u64 {
     use std::hash::{Hash, Hasher};
     let bytes = crate::user_extension::config_path()
         .ok()
-        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|p| crate::store::blocking_section(|| std::fs::read(p)).ok())
         .unwrap_or_default();
     let mut h = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut h);
@@ -205,6 +212,22 @@ mod tests {
     use super::*;
 
     const R: &str = "10.1137/0117004";
+
+    #[test]
+    fn entries_past_every_window_are_swept_when_a_new_one_lands() {
+        let idx = RepeatIndex::default();
+        let t0 = Instant::now();
+        idx.observe_at(R, Some(ErrorCode::NotFound), t0, 7);
+        idx.observe_at("10.1/b", Some(ErrorCode::RateLimited), t0, 7);
+        let later = t0 + REPLAY_WINDOW + Duration::from_secs(1);
+        idx.observe_at("10.1/c", Some(ErrorCode::NotFound), later, 7);
+        assert_eq!(idx.lock().len(), 1, "only the new entry is left");
+        assert!(matches!(
+            idx.check_at("10.1/c", later, 7),
+            Verdict::Replay { .. }
+        ));
+        assert_eq!(idx.check_at(R, later, 7), Verdict::Proceed);
+    }
 
     #[test]
     fn a_terminal_answer_is_replayed_within_the_window_and_not_after() {
