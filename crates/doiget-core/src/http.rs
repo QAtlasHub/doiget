@@ -303,6 +303,17 @@ pub fn tier_1_allowlist() -> Vec<SourceAllowlist> {
     ]
 }
 
+/// Always-compiled allowlist for **PubMed id resolution** (#500, ADR-0061):
+/// a PMID / PMCID is turned into its DOI by NCBI E-utilities. Not a fetch
+/// source either -- it answers "which DOI is this", never with content -- so
+/// it stays out of [`tier_1_allowlist`] and out of every fetch plan.
+pub fn pubmed_allowlist() -> Vec<SourceAllowlist> {
+    vec![SourceAllowlist::new(
+        crate::pubmed::NCBI,
+        vec!["eutils.ncbi.nlm.nih.gov".to_string()],
+    )]
+}
+
 /// Always-compiled allowlist for **software citations** (#614, ADR-0058):
 /// `doiget cite` / `verify` on a GitHub repository or release URL. Kept out
 /// of [`tier_1_allowlist`] because it is not a fetch source -- a fetch

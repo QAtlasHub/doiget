@@ -53,6 +53,7 @@ const ENV_KEYS: &[&str] = &[
     "DOIGET_UNPAYWALL_BASE",
     "DOIGET_OA_PUBLISHER_BASE",
     "DOIGET_CONTACT_EMAIL",
+    "DOIGET_NCBI_BASE",
     "DOIGET_UNPAYWALL_EMAIL",
     // #462: the Tier-3 route. Cleared for every test so an APS grant can
     // never leak from one into another.
@@ -1302,6 +1303,94 @@ async fn a_repeated_terminal_answer_is_a_replay_until_forced() -> anyhow::Result
         );
         assert!(requests().await > before, "{tool}: force asks again");
     }
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}
+
+/// #500 over MCP: a PMID entry is fetched under the DOI PubMed lists for it;
+/// one whose record lists no DOI is a NOT_IMPLEMENTED row, or, under
+/// `strict`, the whole call's error.
+#[tokio::test]
+#[serial_test::serial]
+async fn batch_from_bibliography_resolves_pubmed_ids_500() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/esummary.fcgi"))
+        .and(query_param("id", "9659853"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "result": {"uids": ["9659853"], "9659853": {"articleids": [
+                {"idtype": "doi", "value": "10.1176/ajp.155.7.895"}]}}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/esummary.fcgi"))
+        .and(query_param("id", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "result": {"uids": ["1"], "1": {"articleids": [{"idtype": "pubmed", "value": "1"}]}}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let root = camino::Utf8Path::from_path(td.path())
+        .expect("utf-8")
+        .to_path_buf();
+    let bib = root.join("refs.bib");
+    std::fs::write(
+        &bib,
+        "@article{coryell, title={Lithium}, pmid={9659853}}\n@article{nodoi, title={Old}, pmid={1}}\n",
+    )?;
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", root.join("papers").as_str());
+    env.set("DOIGET_LOG_PATH", root.join("log.jsonl").as_str());
+    env.set("DOIGET_NCBI_BASE", &server.uri());
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", server.uri()));
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+    let call = |strict: bool| {
+        let mut args = serde_json::Map::new();
+        args.insert("path".into(), serde_json::json!(bib.as_str()));
+        args.insert("format".into(), serde_json::json!("bibtex"));
+        args.insert("strict".into(), serde_json::json!(strict));
+        client.peer().call_tool(
+            CallToolRequestParams::new("doiget_batch_from_bibliography").with_arguments(args),
+        )
+    };
+    let lenient = call(false).await?.structured_content.expect("structured");
+    let results = lenient["results"].as_array().expect("results");
+    let by_key = |k: &str| {
+        results
+            .iter()
+            .find(|r| r["entry_key"] == k)
+            .unwrap_or_else(|| panic!("{k}: {lenient}"))
+    };
+    assert_eq!(
+        by_key("coryell")["ref"],
+        "10.1176/ajp.155.7.895",
+        "{lenient}"
+    );
+    assert_eq!(
+        by_key("nodoi")["error"]["code"],
+        "NOT_IMPLEMENTED",
+        "{lenient}"
+    );
+    assert_eq!(by_key("nodoi")["ref"], "PMID 1", "{lenient}");
+
+    let strict = call(true).await?.structured_content.expect("structured");
+    assert_eq!(strict["ok"], false, "{strict}");
+    assert_eq!(strict["error"]["code"], "NOT_IMPLEMENTED", "{strict}");
 
     client.cancel().await?;
     server_handle.await??;

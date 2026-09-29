@@ -72,7 +72,8 @@ pub async fn run(
     if let Some(g) = GithubRef::parse(&input) {
         return cite_github(&g, offline, keys).await;
     }
-    let ref_ = super::parse_ref_or_exit(&input)?;
+    // #500: a PubMed id is cited under the DOI PubMed lists for it.
+    let ref_ = super::parse_ref_or_pubmed(&input, !offline).await?;
     // Validated before any network work, so a template typo is not
     // reported after a resolve that took seconds (#610).
     let keys = keys.with_config_defaults()?;

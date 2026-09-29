@@ -1067,7 +1067,56 @@ impl Server {
         // parse failure aborts the call.
         let mut parse_errors: Vec<Value> = Vec::new();
         let mut to_fetch: Vec<(Ref, Option<String>)> = Vec::new();
-        for entry in parsed {
+        // #500 / ADR-0061: a PMID / PMCID entry becomes the DOI PubMed lists
+        // for it. The lookups get their own context (their own logged
+        // session), ahead of the fetch session below.
+        let parsed = if parsed.iter().any(|e| {
+            matches!(e, Err(doiget_core::refs::ParseError::UnsupportedIdentifier { kind, .. })
+                if matches!(*kind, "PMID" | "PMCID"))
+        }) {
+            let lookup_ctx = match self.fetch_context() {
+                Ok(c) => c,
+                Err(e) => {
+                    return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                        ErrorCode::InternalError,
+                        &format!("batch-from-bibliography context init failed: {e}"),
+                    )));
+                }
+            };
+            match doiget_core::pubmed::resolve_entries_in_session(parsed, &lookup_ctx).await {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                        ErrorCode::LogError,
+                        &format!("provenance log error while resolving PubMed ids: {e}"),
+                    )));
+                }
+            }
+        } else {
+            parsed
+                .into_iter()
+                .map(doiget_core::pubmed::Resolved::Entry)
+                .collect()
+        };
+        for item in parsed {
+            let entry = match item {
+                doiget_core::pubmed::Resolved::Entry(entry) => entry,
+                doiget_core::pubmed::Resolved::Unresolved(u) => {
+                    if input.strict {
+                        return Ok(CallToolResult::structured(batch_fetch_error_envelope(
+                            u.code,
+                            &format!("{} (strict mode aborts)", u.reason),
+                        )));
+                    }
+                    parse_errors.push(json!({
+                        "entry_key": u.entry_key,
+                        "ref":       u.id.display(),
+                        "ok":        false,
+                        "error": error_object(u.code, u.reason),
+                    }));
+                    continue;
+                }
+            };
             match entry {
                 Ok(p) => to_fetch.push((p.ref_, p.entry_key)),
                 Err(doiget_core::refs::ParseError::InvalidRef {
@@ -4255,6 +4304,8 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     }
     let mut allowlists = tier_1_allowlist();
     allowlists.extend(oa_publisher_allowlist());
+    // ADR-0061: PMID / PMCID -> DOI for `doiget_batch_from_bibliography`.
+    allowlists.extend(doiget_core::http::pubmed_allowlist());
     // Slice 15: Tier 2 allowlist is unioned in unconditionally —
     // the runtime `metadata.openalex` / `.semantic_scholar` /
     // `.doaj` capability flags gate whether the source impls

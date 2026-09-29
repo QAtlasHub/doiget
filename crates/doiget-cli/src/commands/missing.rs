@@ -15,7 +15,7 @@
 //! | `oa_unknown` | resolved, but the OA lookup did not complete | yes |
 //! | `not_in_store` | `--offline`: no PDF in the store, not looked up | yes |
 //! | `unresolved` | the id did not resolve (absent, or unreachable) | yes |
-//! | `unsupported` | no DOI / arXiv id, or one doiget cannot resolve yet | yes |
+//! | `unsupported` | no DOI / arXiv id, a PubMed id with no DOI, or software | yes |
 //!
 //! Human mode prints a table on stdout and a summary on stderr; `--mode json`
 //! prints one JSON object per entry (like `verify`). The exit code is the
@@ -130,8 +130,36 @@ pub async fn run(
         ))
     };
 
+    // #500 / ADR-0061: online, a PMID / PMCID entry is checked under the DOI
+    // PubMed lists for it. --offline makes no request, so it stays as parsed.
+    let resolved = match &online {
+        Some((ctx, _)) => doiget_core::pubmed::resolve_entries(entries, ctx)
+            .await
+            .map_err(|e| anyhow::anyhow!("provenance log error (aborting): {e}"))?,
+        None => entries
+            .into_iter()
+            .map(doiget_core::pubmed::Resolved::Entry)
+            .collect(),
+    };
     let mut rows = Vec::new();
-    for entry in entries {
+    for item in resolved {
+        let entry = match item {
+            doiget_core::pubmed::Resolved::Entry(entry) => entry,
+            doiget_core::pubmed::Resolved::Unresolved(u) => {
+                rows.push(Row {
+                    entry_key: u.entry_key,
+                    ref_: Some(u.id.display()),
+                    status: if u.code == ErrorCode::NotImplemented {
+                        "unsupported"
+                    } else {
+                        "unresolved"
+                    },
+                    detail: Some(u.reason),
+                    ..Row::default()
+                });
+                continue;
+            }
+        };
         let parsed = match entry {
             Ok(p) => p,
             Err(e) => {

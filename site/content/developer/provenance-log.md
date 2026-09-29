@@ -51,7 +51,7 @@ in all timestamps.
 | `ts` | RFC3339 UTC, millisecond precision | yes | |
 | `ts_seq` | `u64` | yes | Per-session monotonic sequence number. |
 | `event` | enum | yes | `session_start`, `capability_resolved`, `resolve`, `fetch`, `store_write`, `session_end`, `repeat_forced` (a request sent with `force` / `--refetch` that repeat suppression would otherwise have replayed; `error_code` is the answer it overrode -- #507, ADR-0057) |
-| `ref` | string | event-dependent | DOI or arXiv id (validated; no log injection). On a `fetch` row with `source` `github` / `github-raw` (a software citation, #614 / ADR-0058) it is the GitHub repository or release URL, and `canonical_digest` is `null`: the URL is not a ref and nothing is stored under it. |
+| `ref` | string | event-dependent | DOI or arXiv id (validated; no log injection). On a `fetch` row with `source` `github` / `github-raw` (a software citation, #614 / ADR-0058) it is the GitHub repository or release URL, and `canonical_digest` is `null`: the URL is not a ref and nothing is stored under it. On a `resolve` row with `source` `ncbi` (a PubMed id turned into its DOI, #500 / ADR-0061) it is the PubMed id as `PMID <digits>` or `PMCID PMC<digits>`, again with a `null` digest; the lookup's own `session_start` / `session_end` carry `source` `ncbi` and no `ref`. |
 | `source` | enum | event-dependent | `crossref`/`unpaywall`/`arxiv`/`openalex`/`s2`/`doaj`/`tdm-elsevier`/`tdm-aps`/`tdm-springer` |
 | `result` | enum | yes | `ok` / `err` / `denied` |
 | `license` | string | event=fetch ok | OA license string, or `"unknown"` |

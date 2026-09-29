@@ -28,6 +28,7 @@ pub mod orchestrator;
 pub mod paper_tex_source;
 pub mod paper_text;
 pub mod provenance;
+pub mod pubmed;
 pub mod rate_limiter;
 pub mod refs;
 pub mod remediation;
@@ -1292,16 +1293,28 @@ pub struct SourceRate {
 /// only ever tighten.
 ///
 /// Keys are [`crate::source::Source::name`] values.
-pub const SOURCE_RATE_OVERRIDES: &[(&str, SourceRate)] = &[(
-    // <https://info.arxiv.org/help/api/tou.html>, read 2026-08-25. The
-    // limit is collective across every machine under the caller's control,
-    // and circumventing it may have access blocked.
-    "arxiv",
-    SourceRate {
-        min_interval_ms: 3_000,
-        max_concurrent: 1,
-    },
-)];
+pub const SOURCE_RATE_OVERRIDES: &[(&str, SourceRate)] = &[
+    (
+        // <https://info.arxiv.org/help/api/tou.html>, read 2026-08-25. The
+        // limit is collective across every machine under the caller's
+        // control, and circumventing it may have access blocked.
+        "arxiv",
+        SourceRate {
+            min_interval_ms: 3_000,
+            max_concurrent: 1,
+        },
+    ),
+    (
+        // NCBI E-utilities (#500): "no more than three requests per second"
+        // without an API key (NBK25497, verified for #500; doiget sends no
+        // key). 334 ms apart, one at a time, keeps under it.
+        crate::pubmed::NCBI,
+        SourceRate {
+            min_interval_ms: 334,
+            max_concurrent: 1,
+        },
+    ),
+];
 
 /// The override for `source`, if any.
 #[must_use]
