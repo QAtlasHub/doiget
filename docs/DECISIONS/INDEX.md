@@ -74,6 +74,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0055 | A failure says what to do about it, in three states | Accepted | `feat/506-error-disposition` | #506 |
 | 0056 | A not-determined marker never overwrites a determination | Accepted | `fix/583-store-downgrade` | #583 |
 | 0057 | Repeat suppression: a session is not re-asked what a retry cannot change | Accepted | `feat/507-repeat-suppression` | #507 |
+| 0058 | Software citations from GitHub, and Zenodo's concept DOI | Accepted | `feat/614-software` | #614 |
 
 ## Conventions
 

@@ -168,6 +168,20 @@ Notes:
   the fetcher observes such a redirect, the response is to add the
   CDN's host suffix here via ADR — NOT to silently widen the allowlist at runtime.
 
+### 3.3a `github` and `github-raw` (#614, ADR-0058)
+
+| Field | Value |
+|---|---|
+| `source` | `github` / `github-raw` |
+| `redirect_hosts` | `api.github.com` / `raw.githubusercontent.com` |
+
+Notes:
+
+- Contacted only by `doiget cite` and `doiget verify` for a GitHub repository or
+  release URL the caller names -- never by a fetch.
+- No wildcard: GitHub serves the REST API and raw files from these two hosts, and
+  a redirect anywhere else is refused.
+
 ### 3.4 `oa-publisher`
 
 | Field | Value |

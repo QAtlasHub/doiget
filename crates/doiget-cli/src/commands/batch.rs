@@ -200,6 +200,19 @@ pub async fn run_with_options(
                     message,
                 });
             }
+            // #614: software, not a paper. There is nothing to fetch; the
+            // message names the command that cites it.
+            Err(err @ ParseError::SoftwareUrl { .. }) => {
+                let message = err.to_string();
+                let ParseError::SoftwareUrl { url, .. } = err else {
+                    unreachable!("guarded by the pattern above")
+                };
+                inputs.push(BatchEntry::Rejected {
+                    display: url,
+                    code: ErrorCode::NotImplemented,
+                    message,
+                });
+            }
             Err(ParseError::Decode { format, message }) => {
                 return Err(anyhow!("input did not deserialise as {format}: {message}"));
             }

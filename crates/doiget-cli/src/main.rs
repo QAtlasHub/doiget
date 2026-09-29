@@ -461,12 +461,19 @@ enum Command {
     /// Falls back to the local store when the live resolve fails, so an
     /// already-fetched ref always cites (#305).
     Cite {
-        /// DOI or arXiv id.
+        /// DOI, arXiv id, or a GitHub repository / release URL
+        /// (`https://github.com/OWNER/REPO/releases/tag/TAG`), which is cited
+        /// as `@software` from the release and the repository's
+        /// CITATION.cff (#614).
         ref_: String,
         /// Skip the live resolve and render from the local store only
         /// (errors if the ref was never fetched).
         #[arg(long)]
         offline: bool,
+        /// For a Zenodo version DOI, cite that version rather than the
+        /// concept DOI that names every version (the default, #614).
+        #[arg(long)]
+        zenodo_version: bool,
         #[command(flatten)]
         keys: KeyArgs,
     },
@@ -1090,8 +1097,11 @@ async fn run_dispatch(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Cite {
             ref_,
             offline,
+            zenodo_version,
             keys,
-        }) => doiget_cli::commands::cite::run(ref_, offline, keys.into(), mode).await,
+        }) => {
+            doiget_cli::commands::cite::run(ref_, offline, zenodo_version, keys.into(), mode).await
+        }
         Some(Command::Csl {
             ref_,
             all,

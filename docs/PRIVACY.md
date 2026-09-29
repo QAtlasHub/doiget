@@ -38,6 +38,10 @@ its use of these APIs polite.
 - **OpenAlex** — literature discovery, identity resolution, and citation graph
   (the search / frontier / link / citation tools).
   <https://docs.openalex.org/how-to-use-the-api/api-overview>
+- **GitHub** (`api.github.com`, `raw.githubusercontent.com`) -- only when you
+  run `doiget cite` or `doiget verify` on a GitHub repository or release URL:
+  the repository, the release, and its `CITATION.cff` (ADR-0058). No token is
+  sent. <https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement>
 
 **Opt-in only — compile-time feature flag + your own configuration:**
 

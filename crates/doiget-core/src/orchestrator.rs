@@ -558,6 +558,8 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
             .and_then(|a| a.first())
             .and_then(Value::as_str)
             .map(str::to_string);
+    } else if outcome.source == "datacite" {
+        cite_datacite(&mut m, &outcome.metadata);
     } else if outcome.source == "arxiv" {
         // arXiv Atom overlay (issue #303). The baseline already pulled
         // title/authors; add the publication year (from the Atom
@@ -575,6 +577,35 @@ pub fn cite_metadata(ref_: &Ref, outcome: &MetadataOnlyOutcome) -> Metadata {
     }
     m
 }
+
+/// DataCite overlay for `cite` (#614): the creators, year, publisher and
+/// resourceTypeGeneral the baseline leaves out, plus, for software, the
+/// version and landing URL a release is cited by. Without `metadata` the
+/// DataCite source is not compiled in, so nothing reaches here.
+#[cfg(feature = "metadata")]
+fn cite_datacite(m: &mut Metadata, attributes: &Value) {
+    let f = extract_datacite_fields(attributes);
+    if let Some(title) = f.title {
+        m.title = title;
+    }
+    if !f.authors.is_empty() {
+        m.authors = f.authors;
+    }
+    m.year = f.year.or(m.year);
+    m.publisher = f.venue;
+    m.type_ = f.type_;
+    if let Some(v) = attributes.get("version").and_then(Value::as_str) {
+        m.other
+            .insert("version".into(), toml::Value::String(v.to_string()));
+    }
+    m.url = attributes
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+}
+
+#[cfg(not(feature = "metadata"))]
+fn cite_datacite(_: &mut Metadata, _: &Value) {}
 
 /// Extract the four-digit year from an RFC3339 timestamp — the arXiv Atom
 /// `published` field, e.g. `"2004-03-24T00:00:00Z"`. Returns `None` if the

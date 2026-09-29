@@ -317,6 +317,12 @@ fn unparsed_row(e: ParseError) -> Row {
             entry_key,
             format!("{raw:?} is not a DOI / arXiv id: {source}"),
         ),
+        ParseError::SoftwareUrl { url, entry_key } => (
+            entry_key,
+            format!(
+                "software at {url}; `doiget cite {url}` cites it, and there is no PDF to fetch"
+            ),
+        ),
         other => (None, other.to_string()),
     };
     Row {

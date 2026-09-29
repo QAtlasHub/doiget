@@ -300,6 +300,16 @@ pub fn tier_1_allowlist() -> Vec<SourceAllowlist> {
                 "*.arxiv.org".to_string(),
             ],
         ),
+        // §3.4 GitHub, for `cite <github release URL>` only (#614, ADR-0058):
+        // asked when the caller names a GitHub URL, never during a fetch.
+        SourceAllowlist::new(
+            crate::software::GITHUB_API,
+            vec!["api.github.com".to_string()],
+        ),
+        SourceAllowlist::new(
+            crate::software::GITHUB_RAW,
+            vec!["raw.githubusercontent.com".to_string()],
+        ),
     ]
 }
 

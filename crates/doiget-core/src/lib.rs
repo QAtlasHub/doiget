@@ -33,6 +33,7 @@ pub mod refs;
 pub mod remediation;
 pub mod repeat;
 pub mod resolver_cache;
+pub mod software;
 pub mod source;
 pub mod source_catalog;
 pub mod sources;
