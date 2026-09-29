@@ -255,7 +255,8 @@ A BiblioFetch.jl round-trip workflow was planned here and never built;
 ADR-0060 dropped it. Preservation of other tools' tables is pinned by the
 in-crate round-trip tests (`bibliofetch_typed_table_and_unknown_scalar_survive_roundtrip`).
 
-This guarantees real round-trip compatibility, not just spec conformance.
+They pin doiget's own preservation of tables it does not own; there is no
+cross-tool round-trip check.
 
 ## 10. Migration story
 

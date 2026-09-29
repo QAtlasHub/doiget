@@ -2443,10 +2443,10 @@ agreed = true
             serde_json::from_str(raw).expect("vectors.json is valid JSON matching schema");
 
         // Phase 0 final ships the full NORMATIVE 100-entry set
-        // (docs/SAFEKEY.md §5). The fixture is the binding cross-tool
-        // contract with BiblioFetch.jl; tightening the count guard to
-        // `== 100` ensures the set cannot silently grow or shrink without
-        // a coordinated ADR bump (per docs/SAFEKEY.md status block).
+        // (docs/SAFEKEY.md §5). The fixture is doiget's own binding
+        // contract (ADR-0060 retired its sharing with BiblioFetch.jl);
+        // the `== 100` guard keeps the set from silently growing or
+        // shrinking without a doiget ADR (per docs/SAFEKEY.md status block).
         assert_eq!(
             parsed.vectors.len(),
             100,
