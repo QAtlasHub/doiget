@@ -20,13 +20,21 @@
 //! ```
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
 const IGNORE: &str = "live network; run by .github/workflows/live.yml";
+
+/// How long one tool call may take. A fetch through a slow repository has
+/// taken minutes; past this, the test fails naming the call instead of
+/// hanging until the workflow's own timeout.
+const REPLY_WITHIN: Duration = Duration::from_secs(240);
 
 fn contact() -> String {
     std::env::var("DOIGET_CONTACT_EMAIL").unwrap_or_else(|_| "doiget-live@example.org".into())
@@ -37,16 +45,18 @@ fn base(td: &TempDir) -> Command {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin("doiget"));
     cmd.current_dir(td.path())
         .env("HOME", root)
-        .env("XDG_CONFIG_HOME", root)
-        .env("DOIGET_STORE_ROOT", format!("{root}/papers"))
-        .env("DOIGET_LOG_PATH", format!("{root}/log.jsonl"))
-        .env("DOIGET_CONTACT_EMAIL", contact());
+        .env("XDG_CONFIG_HOME", root);
+    // A developer's own DOIGET_* settings -- base overrides, enabled
+    // sources, keys, agreements, mode -- must not change the routes asserted
+    // here: the suite asserts a default build's behaviour.
     for (k, _) in std::env::vars() {
-        // A developer's own overrides must not redirect the live suite.
-        if k.starts_with("DOIGET_") && k.ends_with("_BASE") {
+        if k.starts_with("DOIGET_") {
             cmd.env_remove(k);
         }
     }
+    cmd.env("DOIGET_STORE_ROOT", format!("{root}/papers"))
+        .env("DOIGET_LOG_PATH", format!("{root}/log.jsonl"))
+        .env("DOIGET_CONTACT_EMAIL", contact());
     cmd
 }
 
@@ -54,7 +64,11 @@ fn base(td: &TempDir) -> Command {
 struct Mcp {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    /// stdout lines, read on a thread so a reply can be waited for with a
+    /// deadline.
+    lines: Receiver<String>,
+    /// Everything the server wrote to stderr, shown when a test fails.
+    stderr: Arc<Mutex<String>>,
     next: u64,
 }
 
@@ -64,15 +78,34 @@ impl Mcp {
             .arg("serve")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("doiget serve");
         let stdin = child.stdin.take().unwrap();
+        let (tx, lines) = mpsc::channel();
         let stdout = BufReader::new(child.stdout.take().unwrap());
+        std::thread::spawn(move || {
+            for line in stdout.lines().map_while(Result::ok) {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let stderr = Arc::new(Mutex::new(String::new()));
+        let sink = Arc::clone(&stderr);
+        let mut err_pipe = child.stderr.take().unwrap();
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = err_pipe.read_to_string(&mut buf);
+            if let Ok(mut s) = sink.lock() {
+                s.push_str(&buf);
+            }
+        });
         let mut mcp = Self {
             child,
             stdin,
-            stdout,
+            lines,
+            stderr,
             next: 1,
         };
         mcp.request(
@@ -93,13 +126,16 @@ impl Mcp {
         let id = self.next;
         self.next += 1;
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
-        let mut line = String::new();
         loop {
-            line.clear();
-            assert!(
-                self.stdout.read_line(&mut line).unwrap() > 0,
-                "server closed stdout"
-            );
+            let line = match self.lines.recv_timeout(REPLY_WITHIN) {
+                Ok(line) => line,
+                Err(RecvTimeoutError::Timeout) => {
+                    panic!("no reply to {method} within {REPLY_WITHIN:?}")
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("doiget serve closed stdout during {method}")
+                }
+            };
             let msg: Value = serde_json::from_str(&line).expect("a JSON-RPC frame");
             if msg["id"] == id {
                 return msg;
@@ -120,6 +156,13 @@ impl Drop for Mcp {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // On a failing test, the server's own account of what happened.
+        #[allow(clippy::print_stderr)]
+        if std::thread::panicking() {
+            if let Ok(s) = self.stderr.lock() {
+                eprintln!("--- doiget serve stderr ---\n{s}");
+            }
+        }
     }
 }
 
