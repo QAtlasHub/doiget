@@ -6834,9 +6834,9 @@ mod oa_fallthrough_tests {
     /// institutional deposit with an author-listing URL. The fall-through
     /// used to run on a Blocked leg only, so OpenAlex was never asked and
     /// the run said nothing but "no OA PDF available".
-    #[tokio::test]
-    #[serial_test::serial]
-    async fn a_closed_record_still_asks_an_enabled_openalex_and_names_the_deposit() {
+    /// The #547 record: Unpaywall calls it closed; OpenAlex, if asked,
+    /// names the institutional deposit with an author-listing URL.
+    async fn fetch_closed_record(openalex_enabled: bool) -> (FetchPaperOutcome, Vec<String>) {
         let server = MockServer::start().await;
         Mock::given(path_regex("^/works/10\\.1109"))
             .respond_with(ResponseTemplate::new(200).set_body_string(
@@ -6865,13 +6865,16 @@ mod oa_fallthrough_tests {
             .mount(&server)
             .await;
         let base = server.uri();
-        let _env = EnvSet::new(&[
+        let mut env = vec![
             ("DOIGET_CROSSREF_BASE", base.clone()),
             ("DOIGET_UNPAYWALL_BASE", base.clone()),
             ("DOIGET_OPENALEX_BASE", base.clone()),
-            ("DOIGET_ENABLE_OPENALEX", "1".to_string()),
             ("DOIGET_CONTACT_EMAIL", "test@example.org".to_string()),
-        ]);
+        ];
+        if openalex_enabled {
+            env.push(("DOIGET_ENABLE_OPENALEX", "1".to_string()));
+        }
+        let _env = EnvSet::new(&env);
         let profile = CapabilityProfile::from_env().expect("profile");
         let host = server.address().to_string();
         let td = TempDir::new().expect("tempdir");
@@ -6897,6 +6900,25 @@ mod oa_fallthrough_tests {
         let outcome = fetch_paper(&ref_, &profile, &ctx, &store, &root)
             .await
             .expect("resolves");
+        let paths = server
+            .received_requests()
+            .await
+            .expect("recorded")
+            .iter()
+            .map(|r| r.url.path().to_string())
+            .collect();
+        (outcome, paths)
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_closed_record_still_asks_an_enabled_openalex_and_names_the_deposit() {
+        let (outcome, paths) = fetch_closed_record(true).await;
+        // The shape the disabled test below looks for, seen when enabled.
+        assert!(
+            paths.iter().any(|p| p.starts_with("/works/doi:")),
+            "{paths:?}"
+        );
 
         assert!(
             matches!(outcome.pdf_leg, PdfLegStatus::NoOaUrl),
@@ -6918,6 +6940,23 @@ mod oa_fallthrough_tests {
         assert!(
             detail.contains("malformed"),
             "the stray `>` is named: {detail}"
+        );
+    }
+
+    /// The #547 gate widened to NoOaUrl; with nothing enabled it must still
+    /// cost nothing.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn with_no_source_enabled_a_closed_record_asks_nothing_more() {
+        let (outcome, paths) = fetch_closed_record(false).await;
+        assert!(
+            matches!(outcome.pdf_leg, PdfLegStatus::NoOaUrl),
+            "{:?}",
+            outcome.pdf_leg
+        );
+        assert!(
+            !paths.iter().any(|p| p.starts_with("/works/doi:")),
+            "a disabled OpenAlex must cost nothing; paths were {paths:?}"
         );
     }
 

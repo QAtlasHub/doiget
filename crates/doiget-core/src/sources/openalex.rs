@@ -349,7 +349,8 @@ pub(crate) fn describe_locations(record: &serde_json::Value) -> Option<(usize, S
 
 /// Why a location's landing page cannot be followed to an item, if it
 /// visibly cannot: an EPrints / DSpace listing or search page rather than a
-/// record, or a URL OpenAlex stored with a trailing character that is not
+/// record (their `view/...`, `browse` and `cgi/search` templates only -- a
+/// bare `authors/` segment is as often an item's own path), or a URL OpenAlex stored with a trailing character that is not
 /// part of it. `None` means it looks like an item (or a DOI link).
 fn landing_page_problem(url: &str) -> Option<&'static str> {
     let trimmed = url.trim_end_matches(['>', '"', '\'', ')', ']']);
@@ -363,8 +364,6 @@ fn landing_page_problem(url: &str) -> Option<&'static str> {
         "view/divisions/",
         "browse",
         "cgi/search",
-        "people/",
-        "authors/",
     ]
     .iter()
     .any(|m| path.starts_with(m) || path.contains(&format!("/{m}")));
@@ -458,6 +457,17 @@ mod tests {
             landing_page_problem("https://eprints.example.ac.uk/cgi/search/simple?q=x").is_some()
         );
         assert!(landing_page_problem("https://strathprints.strath.ac.uk/85235/").is_none());
+        // A stray character on an item URL: malformed, but not a listing.
+        assert!(
+            landing_page_problem("https://strathprints.strath.ac.uk/85235/>").is_some_and(
+                |w| w.contains("malformed") && !w.contains("listing page rather than")
+            )
+        );
+        // An item that happens to live under an `authors/` path is an item.
+        assert!(
+            landing_page_problem("https://repo.example.edu/authors/smith/2023-paper-title")
+                .is_none()
+        );
         assert!(landing_page_problem("https://doi.org/10.1109/tsp.2023.3269664").is_none());
         assert!(landing_page_problem("https://hal.science/hal-01234567").is_none());
     }
