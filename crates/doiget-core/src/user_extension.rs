@@ -453,8 +453,10 @@ pub fn academic_repo_hosts() -> Vec<UserExtensionHost> {
 /// correct.
 ///
 /// Every entry is a registry or repository whose *purpose* is open
-/// distribution, not a publisher platform — enabling this must not become
-/// a way to reach paywalled content. Both the apex and the `*.` wildcard
+/// distribution -- or, since ADR-0066, a national open-access platform
+/// whose default is free access (J-STAGE) -- and never a commercial
+/// publisher platform: enabling this must not become a way to reach
+/// paywalled content. Both the apex and the `*.` wildcard
 /// are listed where the apex itself serves content: a single-suffix
 /// wildcard does not match the apex ([`validate_pattern`]), and the DOAJ
 /// redirect in #405 targeted the bare apex.
@@ -472,6 +474,13 @@ pub fn oa_registry_hosts() -> Vec<UserExtensionHost> {
         (
             "core.ac.uk",
             "CORE — OA aggregator (Open University / Jisc)",
+        ),
+        // #646 / ADR-0066: a national platform whose default is free access.
+        // Unpaywall reports its PDFs as gold / bronze; a restricted article
+        // answers an HTML login page, which the %PDF- check refuses.
+        (
+            "www.jstage.jst.go.jp",
+            "J-STAGE — Japan's national journal platform (JST)",
         ),
     ];
     PATTERNS
@@ -1312,6 +1321,7 @@ host = "*.uj.edu.pl"
             "osf.io",
             "hal.science",
             "core.ac.uk",
+            "www.jstage.jst.go.jp",
         ] {
             assert!(
                 patterns.contains(expected),
