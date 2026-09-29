@@ -1177,6 +1177,9 @@ pub struct MetadataAccess {
     /// INSPIRE-HEP: a closed DOI's arXiv id (#642); enabled by
     /// `DOIGET_ENABLE_INSPIRE`.
     pub inspire: bool,
+    /// NASA ADS: a closed DOI's arXiv id (#644); enabled by the user's own
+    /// ADS token in `DOIGET_ADS_TOKEN`.
+    pub ads: bool,
     /// DOI **resolution** for DataCite-registered DOIs (Zenodo / figshare /
     /// Dryad / OSF / most institutional repositories); enabled by
     /// `DOIGET_ENABLE_DATACITE`.
@@ -1316,6 +1319,16 @@ pub const SOURCE_RATE_OVERRIDES: &[(&str, SourceRate)] = &[
         // (api.biorxiv.org, read 2026-09-29), so one request a second, one
         // at a time -- well inside the global cap.
         "biorxiv",
+        SourceRate {
+            min_interval_ms: 1_000,
+            max_concurrent: 1,
+        },
+    ),
+    (
+        // NASA ADS (#644): 5,000 queries a day per token, reset at midnight
+        // UTC (github.com/adsabs/adsabs-dev-api, read 2026-09-29); no
+        // per-second figure, so one a second, one at a time.
+        "ads",
         SourceRate {
             min_interval_ms: 1_000,
             max_concurrent: 1,
@@ -1635,6 +1648,11 @@ impl CapabilityProfile {
                 "metadata",
                 cfg!(feature = "metadata"),
             ),
+            // The token IS the opt-in (#644): the user's own ADS key, never
+            // shipped. A blank value is no token.
+            ads: cfg!(feature = "metadata")
+                && std::env::var(crate::preprint::ADS_TOKEN_ENV)
+                    .is_ok_and(|v| !v.trim().is_empty()),
         };
 
         // -- Tier 3 TDM grants ----------------------------------------------
@@ -2039,6 +2057,7 @@ mod tests {
             "DOIGET_ENABLE_DOAJ",
             "DOIGET_ENABLE_BIORXIV",
             "DOIGET_ENABLE_INSPIRE",
+            "DOIGET_ADS_TOKEN",
             "DOIGET_AGREE_TDM_ELSEVIER",
             "DOIGET_KEY_ELSEVIER",
             "DOIGET_AGREE_TDM_APS",

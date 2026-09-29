@@ -4707,6 +4707,7 @@ fn capability_profile_to_json(profile: &CapabilityProfile) -> Value {
         ("doaj", m.doaj),
         ("biorxiv", m.biorxiv),
         ("inspire", m.inspire),
+        ("ads", m.ads),
         ("datacite", m.datacite),
         ("hal", m.hal),
         ("openaire", m.openaire),

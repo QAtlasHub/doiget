@@ -25,6 +25,7 @@ weight = 200
 | GitHub (software citations) | 1 (metadata) | 0.9 | none (60 requests/hour unauthenticated) | <https://docs.github.com/en/site-policy/github-terms/github-terms-of-service> | always-on, asked only by `cite` / `verify` on a GitHub URL (ADR-0058) |
 | OpenAlex | 2 (metadata) | 4 | none | <https://help.openalex.org/how-to/> | `--features metadata` + `DOIGET_ENABLE_OPENALEX` |
 | Semantic Scholar | 2 (metadata) | 4 | API key (optional) | <https://www.semanticscholar.org/product/api> | `--features metadata` + `DOIGET_ENABLE_S2` |
+| NASA ADS | 2 (preprint of a published DOI) | 0.9 | the user's own token (`DOIGET_ADS_TOKEN`); 5,000/day | <https://github.com/adsabs/adsabs-dev-api> | `--features metadata` + `DOIGET_ADS_TOKEN` (#644, ADR-0065) |
 | INSPIRE-HEP | 2 (preprint of a published DOI) | 0.9 | none (15 requests / 5 s) | <https://github.com/inspirehep/rest-api-doc> | `--features metadata` + `DOIGET_ENABLE_INSPIRE` (#642, ADR-0064) |
 | bioRxiv / medRxiv `pubs` | 2 (preprint of a published DOI) | 0.9 | none (no published rate limit; paced at 1/s) | <https://www.biorxiv.org/about-biorxiv> | `--features metadata` + `DOIGET_ENABLE_BIORXIV` (#640, ADR-0063) |
 | DOAJ | 2 (metadata) | 4 | none | <https://doaj.org/terms/> | `--features metadata` + `DOIGET_ENABLE_DOAJ` |

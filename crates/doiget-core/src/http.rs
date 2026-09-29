@@ -323,6 +323,8 @@ pub fn preprint_allowlist() -> Vec<SourceAllowlist> {
         SourceAllowlist::new("biorxiv", vec!["api.biorxiv.org".to_string()]),
         // #642: INSPIRE-HEP's record for a DOI, read for its arXiv id only.
         SourceAllowlist::new("inspire", vec!["inspirehep.net".to_string()]),
+        // #644: NASA ADS search, on the user's own token.
+        SourceAllowlist::new("ads", vec!["api.adsabs.harvard.edu".to_string()]),
     ]
 }
 

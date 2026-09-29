@@ -307,6 +307,7 @@ mod tests {
             doaj: false,
             biorxiv: false,
             inspire: false,
+            ads: false,
             datacite,
             hal: false,
             openaire: false,
