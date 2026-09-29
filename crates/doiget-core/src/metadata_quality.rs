@@ -62,17 +62,31 @@ pub fn has_replacement_char(s: &str) -> bool {
 /// (a lost UTF-8 sequence may have been one or two code points), and every
 /// other character is equal. A candidate that itself carries a U+FFFD never
 /// matches.
+///
+/// Both strings come from remote answers, so the match is bounded: longer
+/// than [`RESTORE_MAX_CHARS`] never matches, and a candidate whose length
+/// the U+FFFDs cannot account for is refused before any alignment.
 #[must_use]
 pub fn restores(damaged: &str, candidate: &str) -> bool {
     if has_replacement_char(candidate) || !has_replacement_char(damaged) {
         return false;
     }
     let c: Vec<char> = candidate.chars().collect();
+    let d_len = damaged.chars().count();
+    let lost = damaged.chars().filter(|&ch| ch == REPLACEMENT_CHAR).count();
+    if d_len > RESTORE_MAX_CHARS || c.len() > RESTORE_MAX_CHARS {
+        return false;
+    }
+    // Each U+FFFD stands for one or two characters.
+    if c.len() < d_len || c.len() > d_len + lost {
+        return false;
+    }
     // reach[j]: candidate[..j] is matched by the prefix of `damaged` read so far.
     let mut reach = vec![false; c.len() + 1];
+    let mut next = vec![false; c.len() + 1];
     reach[0] = true;
     for dc in damaged.chars() {
-        let mut next = vec![false; c.len() + 1];
+        next.fill(false);
         for j in (0..=c.len()).filter(|&j| reach[j]) {
             if dc == REPLACEMENT_CHAR {
                 for step in 1..=2 {
@@ -87,10 +101,14 @@ pub fn restores(damaged: &str, candidate: &str) -> bool {
         if !next.contains(&true) {
             return false;
         }
-        reach = next;
+        std::mem::swap(&mut reach, &mut next);
     }
     reach[c.len()]
 }
+
+/// The longest title or venue [`restores`] will align (#649 review): far
+/// past any real one, short enough that a runaway answer costs nothing.
+pub const RESTORE_MAX_CHARS: usize = 2_000;
 
 /// What [`repair_with`] did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -261,6 +279,18 @@ mod tests {
         // But never for three, nor for none.
         assert!(!restores(&n, "Nxyzherungsmethode zur Lösung"));
         assert!(!restores(&n, "Nherungsmethode zur Lösung"));
+    }
+
+    #[test]
+    fn an_oversized_answer_is_never_aligned() {
+        let long = format!("{}{F}", "a".repeat(RESTORE_MAX_CHARS));
+        assert!(!restores(
+            &long,
+            &format!("{}b", "a".repeat(RESTORE_MAX_CHARS))
+        ));
+        let short = format!("x{F}y");
+        assert!(restores(&short, "xüy"));
+        assert!(!restores(&short, &"x".repeat(50_000)));
     }
 
     #[test]

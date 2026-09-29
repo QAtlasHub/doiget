@@ -27,6 +27,18 @@ pub use crate::provenance::{ProvenanceLog, LogEvent, LogError};
 pub use crate::canonical::{CanonicalRef, SourceType};
 ```
 
+### 1a. Public but not semver-locked
+
+Some modules are `pub` because `doiget-cli` and `doiget-mcp` use them, not
+because they are a promise to other callers. Their items may change in a
+minor release. The CHANGELOG notes the change, and nothing in this file
+covers it. They include `orchestrator` (`PdfLegStatus`, `FetchPaperOutcome`),
+`preprint` (`FoundBy`, `Found`), `pubmed`, `software`, `user_pdf`, `repeat`
+and `metadata_quality`. `PdfLegStatus` is `#[non_exhaustive]` so that a new
+route is not a break for a `match`. In 0.9.0, for example, `PreprintFallback`
+and `PreprintDoiFallback` carry `found_by: FoundBy` rather than a string (#649
+review). An item moves into §1 only when it is re-exported there.
+
 ## 2. Trait surface
 
 ```rust

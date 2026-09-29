@@ -61,6 +61,10 @@ minor bump. Every item links its issue; the ADRs named are in `docs/DECISIONS/`.
   from an enabled source (#608).
 - **[mcp]** `doiget_capability_profile`'s `metadata_sources` lists every enabled opt-in
   source, not three of them (#641 review).
+- **[core]** `PdfLegStatus::{PreprintFallback, PreprintDoiFallback}.found_by` is a
+  `preprint::FoundBy` (with a new `Unpaywall` variant), not a `String`. The wire values
+  are unchanged. `docs/PUBLIC_API.md` §1a now says these orchestrator types are public
+  for the binaries and not semver-locked (#649 review).
 - **[msrv]** The declared MSRV rises from 1.86 to **1.88**, which rmcp 3.x already
   required. The `msrv` CI job never noticed, because `rust-toolchain.toml` overrode
   its pinned toolchain with stable; it now pins with `RUSTUP_TOOLCHAIN` (#649 review).
@@ -75,6 +79,11 @@ minor bump. Every item links its issue; the ADRs named are in `docs/DECISIONS/`.
   writes over it; it stops and names the entry. Its exit codes follow `docs/ERRORS.md`
   §4: a failed resolve exits as `fetch` would, and 4 is the store's I/O failure. They
   had been swapped (#649 review).
+- **[core]** Repeat suppression drops entries past every window when a new one lands,
+  so a long `doiget serve` session no longer keeps one per refused ref forever. Its
+  `config.toml` read runs as a blocking section. The U+FFFD repair match is bounded:
+  2,000 characters, and a length the losses cannot explain is refused before
+  aligning (#649 review).
 - **[batch]** A DOI listed twice in one `doiget batch` run, both copies in the same
   concurrent window, was fetched twice: repeat suppression records an answer only once
   it lands. Entries for the same ref now run one after the other, so the second is a
