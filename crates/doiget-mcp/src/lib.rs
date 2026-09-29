@@ -4989,7 +4989,10 @@ mod tests {
         assert!(!store_root_env_is_usable("${HOME}/papers"));
     }
 
+    // Serial: it reads the store-root env and config.toml, which the serial
+    // config-rung tests below point at `/from/config` while they run.
     #[test]
+    #[serial_test::serial]
     fn resolve_store_root_returns_some_on_normal_host() {
         // The default is `<cwd>/papers` (ADR-0036): either branch yields a
         // root on a normal host — `DOIGET_STORE_ROOT` when set, else the cwd
