@@ -58,6 +58,8 @@ const ENV_KEYS: &[&str] = &[
     "DOIGET_ENABLE_BIORXIV",
     "DOIGET_INSPIRE_BASE",
     "DOIGET_ENABLE_INSPIRE",
+    "DOIGET_ADS_BASE",
+    "DOIGET_ADS_TOKEN",
     "DOIGET_UNPAYWALL_EMAIL",
     // #462: the Tier-3 route. Cleared for every test so an APS grant can
     // never leak from one into another.
@@ -1883,6 +1885,8 @@ struct NonArxivCase {
     arxiv_hit: bool,
     /// Serve an INSPIRE record naming the arXiv id, and enable it (#642).
     inspire: bool,
+    /// Serve an ADS answer naming the arXiv id, and set a token (#644).
+    ads: bool,
 }
 
 async fn nonarxiv_case(c: NonArxivCase) -> anyhow::Result<(serde_json::Value, Vec<String>)> {
@@ -1939,6 +1943,18 @@ async fn nonarxiv_case(c: NonArxivCase) -> anyhow::Result<(serde_json::Value, Ve
         .mount(&server)
         .await;
     Mock::given(method("GET"))
+        .and(path("/v1/search/query"))
+        .and(wiremock::matchers::header(
+            "Authorization",
+            "Bearer test-ads-token",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "response": {"docs": [{"identifier": [
+                "10.1371/journal.pone.0256482", "arXiv:2105.00077", "2021arXiv210500077L"]}]}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
         .and(path("/api/doi/10.1371/journal.pone.0256482"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "metadata": {"arxiv_eprints": [{"value": "2105.00042", "categories": ["q-bio.PE"]}]}
@@ -1990,6 +2006,10 @@ async fn nonarxiv_case(c: NonArxivCase) -> anyhow::Result<(serde_json::Value, Ve
         env.set("DOIGET_INSPIRE_BASE", &server.uri());
         env.set("DOIGET_ENABLE_INSPIRE", "1");
     }
+    if c.ads {
+        env.set("DOIGET_ADS_BASE", &server.uri());
+        env.set("DOIGET_ADS_TOKEN", "test-ads-token");
+    }
     let (client, server_handle) = boot_in_memory_server().await?;
     let mut args = serde_json::Map::new();
     args.insert(
@@ -2029,6 +2049,7 @@ async fn a_preprint_doi_with_no_open_location_leaves_the_leg_as_it_was_640() -> 
         biorxiv_pubs: false,
         arxiv_hit: false,
         inspire: false,
+        ads: false,
     })
     .await?;
     assert_eq!(v["ok"], true, "not an error: {v}");
@@ -2046,6 +2067,7 @@ async fn an_arxiv_preprint_wins_over_a_sibling_non_arxiv_one_640() -> anyhow::Re
         biorxiv_pubs: false,
         arxiv_hit: true,
         inspire: false,
+        ads: false,
     })
     .await?;
     assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
@@ -2069,6 +2091,7 @@ async fn a_blocked_copy_also_follows_a_non_arxiv_preprint_640() -> anyhow::Resul
         biorxiv_pubs: false,
         arxiv_hit: false,
         inspire: false,
+        ads: false,
     })
     .await?;
     assert_eq!(v["pdf"]["status"], "preprint_doi_fallback", "{v}");
@@ -2099,6 +2122,7 @@ async fn biorxiv_pubs_names_the_preprint_end_to_end_640() -> anyhow::Result<()> 
         biorxiv_pubs: true,
         arxiv_hit: false,
         inspire: false,
+        ads: false,
     })
     .await?;
     assert_eq!(v["pdf"]["status"], "preprint_doi_fallback", "{v}");
@@ -2124,6 +2148,7 @@ async fn inspire_names_the_arxiv_preprint_end_to_end_642() -> anyhow::Result<()>
         biorxiv_pubs: false,
         arxiv_hit: false,
         inspire: true,
+        ads: false,
     })
     .await?;
     assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
@@ -2133,5 +2158,29 @@ async fn inspire_names_the_arxiv_preprint_end_to_end_642() -> anyhow::Result<()>
         paths.iter().any(|p| p.starts_with("/api/doi/")),
         "{paths:?}"
     );
+    Ok(())
+}
+
+/// #644 end to end: the user's own ADS token is sent as a Bearer header
+/// (the mock answers only with it), and ADS's `arXiv:` identifier is the
+/// preprint fetched.
+#[cfg(feature = "citation")]
+#[tokio::test]
+#[serial_test::serial]
+async fn ads_names_the_arxiv_preprint_on_the_users_token_644() -> anyhow::Result<()> {
+    let (v, paths) = nonarxiv_case(NonArxivCase {
+        relation: serde_json::json!({}),
+        journal_pdf: None,
+        preprint_has_location: false,
+        biorxiv_pubs: false,
+        arxiv_hit: false,
+        inspire: false,
+        ads: true,
+    })
+    .await?;
+    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(v["pdf"]["arxiv_id"], "2105.00077", "{v}");
+    assert_eq!(v["pdf"]["found_by"], "ads", "{v}");
+    assert!(paths.iter().any(|p| p == "/v1/search/query"), "{paths:?}");
     Ok(())
 }

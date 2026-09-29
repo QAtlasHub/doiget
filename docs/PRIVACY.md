@@ -55,6 +55,9 @@ its use of these APIs polite.
   `DOIGET_ENABLE_<NAME>`, so compiling the feature in contacts nobody by itself.
   DataCite is queried by exact DOI only — never used as a search surface — and
   needs no key or account.
+- `--features metadata`: **NASA ADS** (<https://api.adsabs.harvard.edu>) -- only with your
+  own `DOIGET_ADS_TOKEN`, and only for a DOI whose own copy is closed: the DOI is sent,
+  with your token, to learn its arXiv id (#644).
 - `--features metadata`: **INSPIRE-HEP** (<https://inspirehep.net>) -- only with
   `DOIGET_ENABLE_INSPIRE`, and only for a DOI whose own copy is closed: the DOI is sent
   to learn its arXiv id (#642).

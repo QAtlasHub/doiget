@@ -26,6 +26,9 @@ use serde_json::Value;
 use url::Url;
 
 use crate::source::{FetchContext, FetchError};
+
+/// The user's own NASA ADS token (#644). Never shipped, never logged.
+pub const ADS_TOKEN_ENV: &str = "DOIGET_ADS_TOKEN";
 use crate::{ArxivId, Doi};
 
 /// Which method found a preprint.
@@ -41,6 +44,8 @@ pub enum FoundBy {
     BiorxivPubs,
     /// INSPIRE-HEP's `arxiv_eprints` for the DOI (#642).
     Inspire,
+    /// NASA ADS's `identifier` for the DOI (#644).
+    Ads,
 }
 
 impl FoundBy {
@@ -53,6 +58,7 @@ impl FoundBy {
             Self::ArxivTitleSearch => "arxiv_title_search",
             Self::BiorxivPubs => "biorxiv_pubs",
             Self::Inspire => "inspire",
+            Self::Ads => "ads",
         }
     }
 }
@@ -199,6 +205,19 @@ pub fn from_inspire_record(record: &Value) -> Option<ArxivId> {
         .as_array()?
         .iter()
         .find_map(|e| e.get("value").and_then(Value::as_str).and_then(arxiv_id))
+}
+
+/// The arXiv id in an ADS search answer's first record: the
+/// `identifier` entry `arXiv:<id>` (ADS's search syntax lists arXiv ids
+/// among a record's identifiers). Nothing else is read (#644).
+#[must_use]
+pub fn from_ads_answer(answer: &Value) -> Option<ArxivId> {
+    answer
+        .pointer("/response/docs/0/identifier")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .find_map(|id| id.strip_prefix("arXiv:").and_then(arxiv_id))
 }
 
 /// One arXiv search hit.
@@ -357,6 +376,33 @@ pub async fn find(
             Err(e) => tracing::info!(error = %e, "preprint lookup: INSPIRE did not answer"),
         }
     }
+    if enabled.ads {
+        match ads_answer(doi, ctx).await {
+            Ok(Some(answer)) => {
+                if let Some(arxiv_id) = from_ads_answer(&answer) {
+                    return Ok(Some(Found {
+                        arxiv_id,
+                        found_by: FoundBy::Ads,
+                    }));
+                }
+            }
+            Ok(None) => {}
+            Err(FetchError::Log(e)) => return Err(FetchError::Log(e)),
+            // A refused token is the user's to fix, so it is said louder than
+            // "did not answer" (#645 review).
+            Err(
+                e @ FetchError::Http(crate::http::HttpError::HttpStatus {
+                    status: 401 | 403, ..
+                }),
+            ) => {
+                tracing::warn!(
+                    error = %e,
+                    "preprint lookup: ADS refused DOIGET_ADS_TOKEN -- check or regenerate the token"
+                );
+            }
+            Err(e) => tracing::info!(error = %e, "preprint lookup: ADS did not answer"),
+        }
+    }
     let title = crossref_message
         .pointer("/title/0")
         .and_then(Value::as_str)
@@ -421,6 +467,30 @@ async fn inspire_record(doi: &Doi, ctx: &FetchContext) -> Result<Option<Value>, 
         })
 }
 
+async fn ads_answer(doi: &Doi, ctx: &FetchContext) -> Result<Option<Value>, FetchError> {
+    let token = std::env::var(ADS_TOKEN_ENV).unwrap_or_default();
+    if token.trim().is_empty() {
+        return Ok(None);
+    }
+    let mut url = base("DOIGET_ADS_BASE", "https://api.adsabs.harvard.edu")?;
+    url.set_path("/v1/search/query");
+    url.query_pairs_mut()
+        .append_pair("q", &format!("doi:\"{}\"", doi.as_str()))
+        .append_pair("fl", "identifier")
+        .append_pair("rows", "1");
+    let auth = format!("Bearer {}", token.trim());
+    let Some(body) =
+        logged_get_with(doi, "ads", url, &[("Authorization", auth.as_str())], ctx).await?
+    else {
+        return Ok(None);
+    };
+    serde_json::from_slice(&body)
+        .map(Some)
+        .map_err(|e| FetchError::SourceSchema {
+            hint: format!("ADS returned non-JSON: {e}"),
+        })
+}
+
 async fn arxiv_search(
     doi: &Doi,
     title: &str,
@@ -450,6 +520,18 @@ async fn logged_get(
     url: Url,
     ctx: &FetchContext,
 ) -> Result<Option<bytes::Bytes>, FetchError> {
+    logged_get_with(doi, source, url, &[], ctx).await
+}
+
+/// [`logged_get`] with request headers -- values go on the wire only, never
+/// into the provenance row (ADS's token, #644).
+async fn logged_get_with(
+    doi: &Doi,
+    source: &'static str,
+    url: Url,
+    headers: &[(&str, &str)],
+    ctx: &FetchContext,
+) -> Result<Option<bytes::Bytes>, FetchError> {
     use crate::provenance::{Capability, LogEvent, LogResult, RowInput};
     let _permit = ctx.rate_limiter.acquire(source).await;
     let digest = crate::Ref::Doi(doi.clone())
@@ -467,7 +549,11 @@ async fn logged_get(
         store_path: None,
         canonical_digest: Some(&digest),
     };
-    match ctx.http.fetch_bytes(source, url).await {
+    match ctx
+        .http
+        .fetch_bytes_with_headers(source, url, headers)
+        .await
+    {
         Ok((body, _)) => {
             ctx.log
                 .append(row(LogResult::Ok, Some(body.len() as u64), None))?;
@@ -812,6 +898,19 @@ mod tests {
             assert!(found.is_none());
             assert!(seen.is_empty(), "{seen:?}");
         }
+    }
+
+    /// #644: an ADS search answer's `identifier` list; the `arXiv:` entry
+    /// is the id, the bibcode and DOI are not.
+    #[test]
+    fn an_ads_answer_gives_its_arxiv_identifier() {
+        let answer = serde_json::json!({"response": {"docs": [{"identifier": [
+            "2016PhRvL.116f1102A", "10.1103/PhysRevLett.116.061102", "arXiv:1602.03837"]}]}});
+        assert_eq!(from_ads_answer(&answer).unwrap().as_str(), "1602.03837");
+        let none =
+            serde_json::json!({"response": {"docs": [{"identifier": ["2016PhRvL.116f1102A"]}]}});
+        assert!(from_ads_answer(&none).is_none());
+        assert!(from_ads_answer(&serde_json::json!({"response": {"docs": []}})).is_none());
     }
 
     /// #642: the shape of a live INSPIRE record (10.1103/PhysRevLett.116.061102).

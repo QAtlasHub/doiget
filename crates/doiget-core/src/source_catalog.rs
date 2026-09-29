@@ -152,6 +152,12 @@ pub const CATALOG: &[SourceInfo] = &[
         &["DOIGET_ENABLE_S2"],
     ),
     t2(
+        "ads",
+        Role::OaLocation,
+        Covers::AnyDoi,
+        &["DOIGET_ADS_TOKEN"],
+    ),
+    t2(
         "inspire",
         Role::OaLocation,
         Covers::AnyDoi,
@@ -313,6 +319,7 @@ fn enabled(name: &str, p: &CapabilityProfile) -> bool {
         "doaj" => m.doaj,
         "biorxiv" => m.biorxiv,
         "inspire" => m.inspire,
+        "ads" => m.ads,
         "tdm-aps" => p.tdm_aps.is_some(),
         "tdm-elsevier" => p.tdm_elsevier.is_some(),
         "tdm-springer" => p.tdm_springer.is_some(),

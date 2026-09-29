@@ -81,6 +81,7 @@ Status column reconciled 2026-05-17 against `CHANGELOG.md` slices (issue #150).
 | 0062 | Find a DOI's arXiv preprint when Unpaywall does not name one | Accepted | `feat/preprint-from-doi` | #636 |
 | 0063 | Follow a closed DOI to its non-arXiv preprint through the preprint's own DOI | Accepted | `feat/640-nonarxiv-preprint` | #640, #474 |
 | 0064 | INSPIRE-HEP as a preprint finder | Accepted | `feat/642-inspire` | #642, #474 |
+| 0065 | NASA ADS as a preprint finder, on the user's own token | Accepted | `feat/644-ads` | #644, #474 |
 
 ## Conventions
 

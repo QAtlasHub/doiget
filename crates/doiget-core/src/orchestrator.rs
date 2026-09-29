@@ -5934,6 +5934,7 @@ mod chain_tests {
             doaj: false,
             biorxiv: false,
             inspire: false,
+            ads: false,
             datacite: false,
             hal: false,
             openaire: false,

@@ -71,6 +71,7 @@ pub const BASE_OVERRIDES: &[BaseOverride] = &[
     // A published DOI's bioRxiv / medRxiv preprint (#640).
     row("biorxiv", "DOIGET_BIORXIV_BASE", false),
     row("inspire", "DOIGET_INSPIRE_BASE", false),
+    row("ads", "DOIGET_ADS_BASE", false),
     // PubMed id -> DOI (#500).
     row("ncbi", "DOIGET_NCBI_BASE", true),
     // `cite <github URL>` (#614).

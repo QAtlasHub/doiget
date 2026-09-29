@@ -97,6 +97,7 @@ a source reported rather than one the user typed). The sources that may name it:
 Unpaywall's `oa_locations` (#325); Crossref's `relation.has-preprint`, from the record
 the fetch already holds; OpenAlex `locations[]`, only when `DOIGET_ENABLE_OPENALEX` is
 set; INSPIRE-HEP's `arxiv_eprints`, only when `DOIGET_ENABLE_INSPIRE` is set (ADR-0064);
+NASA ADS's `identifier`, only with the user's own `DOIGET_ADS_TOKEN` (ADR-0065);
 and arXiv's own API search, accepted only for a hit with the record's title
 (letters and digits, case-folded), the first author among its authors, and no
 different published DOI (ADR-0062). If none names an arXiv preprint, a **non-arXiv**
