@@ -37,6 +37,7 @@ use doiget_core::store::{FsStore, Metadata, Store};
 use doiget_core::{CapabilityProfile, ErrorCode, Ref};
 
 use super::fetch::CliExit;
+use super::landing_url;
 use super::output::{print_err, OutputMode};
 
 /// One entry's answer.
@@ -143,102 +144,29 @@ pub async fn run(
     };
     let mut rows = Vec::new();
     for item in resolved {
-        let entry = match item {
-            doiget_core::pubmed::Resolved::Entry(entry) => entry,
-            doiget_core::pubmed::Resolved::Unresolved(u) => {
-                rows.push(Row {
-                    entry_key: u.entry_key,
-                    ref_: Some(u.id.display()),
-                    status: if u.code == ErrorCode::NotImplemented {
-                        "unsupported"
-                    } else {
-                        "unresolved"
-                    },
-                    detail: Some(u.reason),
-                    ..Row::default()
-                });
-                continue;
+        let row = match item {
+            doiget_core::pubmed::Resolved::Unresolved(u) => unresolved_row(u),
+            doiget_core::pubmed::Resolved::Entry(Err(e)) => {
+                unparsed_row_at(e, path_pattern.as_deref())
+            }
+            doiget_core::pubmed::Resolved::Entry(Ok(parsed)) => {
+                entry_row(
+                    parsed,
+                    path_pattern.as_deref(),
+                    &store,
+                    &store_root,
+                    online.as_ref(),
+                )
+                .await?
             }
         };
-        let parsed = match entry {
-            Ok(p) => p,
-            Err(e) => {
-                let mut row = unparsed_row(e);
-                // `{key}` needs only the entry key, so a hand-saved PDF for
-                // an entry with no DOI is still found; `{safekey}` needs an
-                // identifier this entry does not have.
-                if let (Some(p), Some(k)) = (&path_pattern, row.entry_key.as_deref()) {
-                    if !p.contains("{safekey}") {
-                        let path = p.replace("{key}", k);
-                        if Utf8PathBuf::from(&path).exists() {
-                            row.status = "local_file";
-                            row.detail = None;
-                        }
-                        row.expected_path = Some(path);
-                    }
-                }
-                rows.push(row);
-                continue;
-            }
-        };
-        let ref_ = parsed.ref_;
-        let safekey = ref_.safekey();
-        let mut row = Row {
-            entry_key: parsed.entry_key.clone(),
-            ref_: Some(ref_.as_input_str().to_string()),
-            ..Row::default()
-        };
-        match doiget_core::store::blocking_section(|| store.read(&safekey)) {
-            Ok(Some(m)) => fill_identity(&mut row, &m),
-            Ok(None) => {}
-            Err(err) => print_err(format_args!(
-                "warning: the store entry for {} could not be read: {err}",
-                safekey.as_str()
-            )),
-        }
-        let key = parsed.entry_key.as_deref().unwrap_or(safekey.as_str());
-        row.expected_path = path_pattern.as_ref().map(|p| {
-            p.replace("{key}", key)
-                .replace("{safekey}", safekey.as_str())
-        });
-
-        if store_root
-            .join(format!("{}.pdf", safekey.as_str()))
-            .exists()
-        {
-            row.status = "in_store";
-        } else if row
-            .expected_path
-            .as_deref()
-            .is_some_and(|p| Utf8PathBuf::from(p).exists())
-        {
-            row.status = "local_file";
-        } else if let Some((ctx, profile)) = &online {
-            look_up(&mut row, &ref_, profile, ctx).await?;
-        } else {
-            row.status = "not_in_store";
-        }
         rows.push(row);
     }
 
     emit(&rows, mode)?;
     let missing = rows.iter().filter(|r| r.is_missing()).count();
     if mode != OutputMode::Quiet {
-        let count = |s: &str| rows.iter().filter(|r| r.status == s).count();
-        print_err(format_args!(
-            "missing: {missing} of {} entries have no local PDF (in store: {}, local file: {}, \
-             OA available: {}, no OA copy: {}, OA unknown: {}, not looked up: {}, \
-             unresolved: {}, unsupported: {})",
-            rows.len(),
-            count("in_store"),
-            count("local_file"),
-            count("oa_available"),
-            count("no_oa"),
-            count("oa_unknown"),
-            count("not_in_store"),
-            count("unresolved"),
-            count("unsupported"),
-        ));
+        print_summary(&rows, missing);
     }
     if missing > 0 {
         let code = i32::try_from(missing.min(255)).unwrap_or(255);
@@ -304,26 +232,111 @@ fn classify_oa(row: &mut Row, oa_url: Option<&str>, oa_status: Option<&str>, ref
     }
 }
 
+/// A PMID / PMCID entry PubMed gave no DOI for (#500).
+fn unresolved_row(u: doiget_core::pubmed::Unresolved) -> Row {
+    Row {
+        entry_key: u.entry_key,
+        ref_: Some(u.id.display()),
+        status: if u.code == ErrorCode::NotImplemented {
+            "unsupported"
+        } else {
+            "unresolved"
+        },
+        detail: Some(u.reason),
+        ..Row::default()
+    }
+}
+
+/// An entry with no identifier. `{key}` needs only the entry key, so a
+/// hand-saved PDF for it is still found; `{safekey}` needs an identifier
+/// this entry does not have.
+fn unparsed_row_at(e: ParseError, path_pattern: Option<&str>) -> Row {
+    let mut row = unparsed_row(e);
+    if let (Some(p), Some(k)) = (path_pattern, row.entry_key.as_deref()) {
+        if !p.contains("{safekey}") {
+            let path = p.replace("{key}", k);
+            if Utf8PathBuf::from(&path).exists() {
+                row.status = "local_file";
+                row.detail = None;
+            }
+            row.expected_path = Some(path);
+        }
+    }
+    row
+}
+
+/// The row for an entry with a ref: in the store, at its expected path,
+/// looked up online, or not looked up.
+async fn entry_row(
+    parsed: doiget_core::refs::ParsedEntry,
+    path_pattern: Option<&str>,
+    store: &FsStore,
+    store_root: &Utf8Path,
+    online: Option<&(doiget_core::source::FetchContext, CapabilityProfile)>,
+) -> Result<Row> {
+    let ref_ = parsed.ref_;
+    let safekey = ref_.safekey();
+    let mut row = Row {
+        entry_key: parsed.entry_key.clone(),
+        ref_: Some(ref_.as_input_str().to_string()),
+        ..Row::default()
+    };
+    match doiget_core::store::blocking_section(|| store.read(&safekey)) {
+        Ok(Some(m)) => fill_identity(&mut row, &m),
+        Ok(None) => {}
+        Err(err) => print_err(format_args!(
+            "warning: the store entry for {} could not be read: {err}",
+            safekey.as_str()
+        )),
+    }
+    let key = parsed.entry_key.as_deref().unwrap_or(safekey.as_str());
+    row.expected_path = path_pattern.map(|p| {
+        p.replace("{key}", key)
+            .replace("{safekey}", safekey.as_str())
+    });
+
+    if store_root
+        .join(format!("{}.pdf", safekey.as_str()))
+        .exists()
+    {
+        row.status = "in_store";
+    } else if row
+        .expected_path
+        .as_deref()
+        .is_some_and(|p| Utf8PathBuf::from(p).exists())
+    {
+        row.status = "local_file";
+    } else if let Some((ctx, profile)) = online {
+        look_up(&mut row, &ref_, profile, ctx).await?;
+    } else {
+        row.status = "not_in_store";
+    }
+    Ok(row)
+}
+
+fn print_summary(rows: &[Row], missing: usize) {
+    let count = |s: &str| rows.iter().filter(|r| r.status == s).count();
+    print_err(format_args!(
+        "missing: {missing} of {} entries have no local PDF (in store: {}, local file: {}, \
+         OA available: {}, no OA copy: {}, OA unknown: {}, not looked up: {}, \
+         unresolved: {}, unsupported: {})",
+        rows.len(),
+        count("in_store"),
+        count("local_file"),
+        count("oa_available"),
+        count("no_oa"),
+        count("oa_unknown"),
+        count("not_in_store"),
+        count("unresolved"),
+        count("unsupported"),
+    ));
+}
+
 fn fill_identity(row: &mut Row, m: &Metadata) {
     if !m.title.is_empty() {
         row.title = Some(m.title.clone());
     }
     row.year = m.year;
-}
-
-/// The publisher's page for a work: Crossref's `resource.primary.URL`, else
-/// the DOI resolver (ADR-0053: a DOI link is an address, not a fetch).
-fn landing_url(ref_: &Ref, crossref: &Value) -> Option<String> {
-    match ref_ {
-        Ref::Doi(doi) => Some(
-            crossref
-                .pointer("/resource/primary/URL")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("https://doi.org/{}", doi.as_str())),
-        ),
-        Ref::Arxiv(id) => Some(format!("https://arxiv.org/abs/{}", id.as_str())),
-    }
 }
 
 fn unparsed_row(e: ParseError) -> Row {

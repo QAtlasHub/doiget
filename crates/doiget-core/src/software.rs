@@ -56,18 +56,41 @@ fn valid_tag(t: &str) -> bool {
         })
 }
 
-/// A GitHub repository, optionally at a tag.
+/// A GitHub repository, optionally at a tag. The fields are private: only
+/// [`GithubRef::parse`] makes one from outside this module, so the owner,
+/// repository and tag always passed its checks before they are joined onto
+/// an API path (#649 review).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GithubRef {
-    /// Repository owner.
-    pub owner: String,
-    /// Repository name.
-    pub repo: String,
-    /// The release tag, when the URL named one.
-    pub tag: Option<String>,
+    owner: String,
+    repo: String,
+    tag: Option<String>,
 }
 
 impl GithubRef {
+    /// Repository owner.
+    #[must_use]
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    /// Repository name.
+    #[must_use]
+    pub fn repo(&self) -> &str {
+        &self.repo
+    }
+
+    /// The release tag, when the URL named one.
+    #[must_use]
+    pub fn tag(&self) -> Option<&str> {
+        self.tag.as_deref()
+    }
+
+    /// `repos/{owner}/{repo}`, the API path every request starts from.
+    fn repo_path(&self) -> String {
+        format!("repos/{}/{}", self.owner, self.repo)
+    }
+
     /// Parse `https://github.com/{owner}/{repo}`, optionally followed by
     /// `/releases/tag/{tag}` or `/tree/{tag}`. `None` for anything else,
     /// including other hosts and non-repository GitHub pages.
@@ -303,7 +326,7 @@ pub async fn resolve_github(
 ) -> Result<SoftwareCitation, FetchError> {
     let api = base(GITHUB_API_BASE_ENV, API_DEFAULT)?;
     let raw = base(GITHUB_RAW_BASE_ENV, RAW_DEFAULT)?;
-    let repo_path = format!("repos/{}/{}", g.owner, g.repo);
+    let repo_path = g.repo_path();
     let repo = api_json(ctx, &api, &repo_path, g)
         .await?
         .ok_or_else(|| not_found(g))?;
@@ -445,7 +468,7 @@ pub async fn resolve_github(
 /// [`FetchError`] for anything other than a clean found / not-found answer.
 pub async fn github_resolves(g: &GithubRef, ctx: &FetchContext) -> Result<bool, FetchError> {
     let api = base(GITHUB_API_BASE_ENV, API_DEFAULT)?;
-    let repo_path = format!("repos/{}/{}", g.owner, g.repo);
+    let repo_path = g.repo_path();
     if api_json(ctx, &api, &repo_path, g).await?.is_none() {
         return Ok(false);
     }

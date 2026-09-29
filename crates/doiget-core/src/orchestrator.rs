@@ -938,6 +938,14 @@ async fn metadata_only_doi(
             })
         }
         Err(crossref_err) => {
+            // #649 review: a DOI registered with DataCite (Zenodo, figshare,
+            // ...) is not in Crossref, and this path never asked DataCite, so
+            // `cite` never saw a `datacite` outcome and #614's concept-DOI
+            // choice could not run. An enabled DataCite is asked first.
+            #[cfg(feature = "metadata")]
+            if let Some(outcome) = datacite_metadata_only(ref_, profile, ctx).await? {
+                return Ok(outcome);
+            }
             // Crossref failed. Try Unpaywall as a fallback before
             // surfacing the original error.
             let unpaywall = unpaywall_source_from_env(&contact);
@@ -968,6 +976,41 @@ async fn metadata_only_doi(
                     Err(crossref_err)
                 }
             }
+        }
+    }
+}
+
+/// DataCite's record for a DOI Crossref does not know, when DataCite is
+/// enabled. `None` when it is off, cannot serve the ref, or has nothing; a
+/// provenance-log failure still aborts.
+#[cfg(feature = "metadata")]
+async fn datacite_metadata_only(
+    ref_: &Ref,
+    profile: &CapabilityProfile,
+    ctx: &FetchContext,
+) -> Result<Option<MetadataOnlyOutcome>, FetchError> {
+    let datacite = optional_base("DOIGET_DATACITE_BASE").map_or_else(
+        crate::sources::datacite::DataCiteSource::new,
+        crate::sources::datacite::DataCiteSource::with_base,
+    );
+    if !datacite.can_serve(profile, ref_) {
+        return Ok(None);
+    }
+    match datacite.fetch(ref_, profile, ctx).await {
+        Ok(res) => Ok(Some(MetadataOnlyOutcome {
+            metadata_quality: Vec::new(),
+            repaired_fields: std::collections::BTreeMap::new(),
+            source: datacite.name().to_string(),
+            resolver_profile: datacite.name().to_string(),
+            license: (res.license != "unknown").then_some(res.license),
+            oa_url: None,
+            oa_status: None,
+            metadata: res.metadata_json.unwrap_or(Value::Null),
+        })),
+        Err(e @ FetchError::Log(_)) => Err(e),
+        Err(e) => {
+            tracing::debug!(error = %e, "metadata_only: DataCite has no record either");
+            Ok(None)
         }
     }
 }
@@ -1132,7 +1175,7 @@ pub enum PdfLegStatus {
     /// fetched through the OA location its own DOI reports (#640).
     PreprintDoiFallback {
         /// The preprint's DOI.
-        preprint_doi: String,
+        preprint_doi: Doi,
         /// The platform, when the finder named one.
         platform: Option<String>,
         /// What the DOI's own content leg ended with.
@@ -2122,7 +2165,7 @@ async fn fetch_paper_doi(
     if let PdfLegStatus::PreprintDoiFallback { preprint_doi, .. } = &pdf_leg {
         metadata.other.insert(
             "preprint_doi".into(),
-            toml::Value::String(preprint_doi.clone()),
+            toml::Value::String(preprint_doi.as_str().to_string()),
         );
     }
     // #608: a Crossref record that lost characters to U+FFFD is repaired
@@ -2688,7 +2731,7 @@ async fn try_preprint_doi_fallback(
             Ok((bytes, _)) => {
                 return Ok((
                     PdfLegStatus::PreprintDoiFallback {
-                        preprint_doi: found.doi.as_str().to_string(),
+                        preprint_doi: found.doi.clone(),
                         platform: found.platform,
                         original_block,
                         found_by: found.found_by,

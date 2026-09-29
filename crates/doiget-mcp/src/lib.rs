@@ -3830,7 +3830,7 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             // a bioRxiv one are different routes, and the route registry
             // (route_coverage_e2e) holds each to its own test.
             "status": "preprint_doi_fallback",
-            "preprint_doi": preprint_doi,
+            "preprint_doi": preprint_doi.as_str(),
             "platform": platform,
             "original_block": original_block,
             "found_by": found_by.as_str(),

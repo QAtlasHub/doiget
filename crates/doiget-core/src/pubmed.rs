@@ -33,10 +33,30 @@ const NCBI_DEFAULT: &str = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/";
 /// A PubMed identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PubmedId {
-    /// A PubMed id, digits only.
-    Pmid(String),
-    /// A PubMed Central id, digits only (the `PMC` prefix removed).
-    Pmcid(String),
+    /// A PubMed id.
+    Pmid(Digits),
+    /// A PubMed Central id (the `PMC` prefix removed).
+    Pmcid(Digits),
+}
+
+/// The numeric part of a PubMed id: 1 to 12 ASCII digits. Only
+/// [`PubmedId::parse`] and [`PubmedId::from_kind`] make one, so a
+/// `PubmedId` always holds a valid id (#649 review).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Digits(String);
+
+impl Digits {
+    /// The digits.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Digits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 impl PubmedId {
@@ -98,14 +118,15 @@ impl PubmedId {
 
     fn db_and_id(&self) -> (&'static str, &str) {
         match self {
-            Self::Pmid(id) => ("pubmed", id),
-            Self::Pmcid(id) => ("pmc", id),
+            Self::Pmid(id) => ("pubmed", id.as_str()),
+            Self::Pmcid(id) => ("pmc", id.as_str()),
         }
     }
 }
 
-fn digits(s: &str) -> Option<String> {
-    (!s.is_empty() && s.len() <= 12 && s.chars().all(|c| c.is_ascii_digit())).then(|| s.to_string())
+fn digits(s: &str) -> Option<Digits> {
+    (!s.is_empty() && s.len() <= 12 && s.chars().all(|c| c.is_ascii_digit()))
+        .then(|| Digits(s.to_string()))
 }
 
 /// What PubMed says about an id.
@@ -385,21 +406,24 @@ mod tests {
     #[test]
     fn pubmed_ids_parse_in_their_written_forms_and_bare_digits_do_not() {
         for (input, want) in [
-            ("pmid:9659853", PubmedId::Pmid("9659853".into())),
-            ("PMID: 9659853", PubmedId::Pmid("9659853".into())),
-            ("pmcid:PMC3531190", PubmedId::Pmcid("3531190".into())),
-            ("PMC3531190", PubmedId::Pmcid("3531190".into())),
+            ("pmid:9659853", PubmedId::Pmid(Digits("9659853".into()))),
+            ("PMID: 9659853", PubmedId::Pmid(Digits("9659853".into()))),
+            (
+                "pmcid:PMC3531190",
+                PubmedId::Pmcid(Digits("3531190".into())),
+            ),
+            ("PMC3531190", PubmedId::Pmcid(Digits("3531190".into()))),
             (
                 "https://pubmed.ncbi.nlm.nih.gov/9659853/",
-                PubmedId::Pmid("9659853".into()),
+                PubmedId::Pmid(Digits("9659853".into())),
             ),
             (
                 "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3531190/",
-                PubmedId::Pmcid("3531190".into()),
+                PubmedId::Pmcid(Digits("3531190".into())),
             ),
             (
                 "https://pmc.ncbi.nlm.nih.gov/articles/PMC3531190/",
-                PubmedId::Pmcid("3531190".into()),
+                PubmedId::Pmcid(Digits("3531190".into())),
             ),
         ] {
             assert_eq!(PubmedId::parse(input), Some(want), "{input}");
@@ -415,7 +439,7 @@ mod tests {
         }
         assert_eq!(
             PubmedId::from_kind("PMCID", "PMC3531190"),
-            Some(PubmedId::Pmcid("3531190".into()))
+            Some(PubmedId::Pmcid(Digits("3531190".into())))
         );
         assert_eq!(PubmedId::from_kind("ISBN", "x"), None);
     }

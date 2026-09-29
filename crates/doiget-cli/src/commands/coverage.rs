@@ -24,6 +24,7 @@ use doiget_core::source_catalog::{
 };
 use doiget_core::{CapabilityProfile, ErrorCode, Ref};
 
+use super::landing_url;
 use super::output::OutputMode;
 
 /// Entry point for `doiget coverage <ref>`.
@@ -184,19 +185,6 @@ fn verdict(ref_: &Ref, oa_url: Option<&str>, rows: &[(&SourceInfo, Availability)
         "not_asked": not_asked,
         "order": "openalex first (a lookup of every location), core last (the broadest index); the rest in no particular order -- nothing here distinguishes them",
     })
-}
-
-fn landing_url(ref_: &Ref, crossref: &Value) -> Option<String> {
-    match ref_ {
-        Ref::Doi(doi) => Some(
-            crossref
-                .pointer("/resource/primary/URL")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("https://doi.org/{}", doi.as_str())),
-        ),
-        Ref::Arxiv(id) => Some(format!("https://arxiv.org/abs/{}", id.as_str())),
-    }
 }
 
 /// Artifact-class output (ADR-0017 Amendment 1): JSON in `--mode json`, the
