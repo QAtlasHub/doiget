@@ -3820,6 +3820,19 @@ fn pdf_leg_json(leg: &PdfLegStatus) -> Value {
             // `crossref_relation`, `openalex_location` or `arxiv_title_search`.
             "found_by": found_by,
         }),
+        // #640: a non-arXiv preprint, fetched through its own DOI.
+        PdfLegStatus::PreprintDoiFallback {
+            preprint_doi,
+            platform,
+            original_block,
+            found_by,
+        } => json!({
+            "status": "preprint_fallback",
+            "preprint_doi": preprint_doi,
+            "platform": platform,
+            "original_block": original_block,
+            "found_by": found_by,
+        }),
         // `PdfLegStatus` is `#[non_exhaustive]`; a future variant
         // surfaces as a forward-compatible neutral status rather than
         // failing the build in this downstream crate.
@@ -4372,6 +4385,8 @@ fn build_http_client_for_fetch() -> anyhow::Result<HttpClient> {
     allowlists.extend(oa_publisher_allowlist());
     // ADR-0061: PMID / PMCID -> DOI for `doiget_batch_from_bibliography`.
     allowlists.extend(doiget_core::http::pubmed_allowlist());
+    // #640: bioRxiv / medRxiv `pubs`, gated at runtime on DOIGET_ENABLE_BIORXIV.
+    allowlists.extend(doiget_core::http::preprint_allowlist());
     // Slice 15: Tier 2 allowlist is unioned in unconditionally —
     // the runtime `metadata.openalex` / `.semantic_scholar` /
     // `.doaj` capability flags gate whether the source impls

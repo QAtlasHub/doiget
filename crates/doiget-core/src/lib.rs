@@ -1171,6 +1171,9 @@ pub struct MetadataAccess {
     pub semantic_scholar: bool,
     /// Phase 4+; enabled by `DOIGET_ENABLE_DOAJ`.
     pub doaj: bool,
+    /// bioRxiv / medRxiv `pubs`: a closed DOI's preprint (#640); enabled by
+    /// `DOIGET_ENABLE_BIORXIV`.
+    pub biorxiv: bool,
     /// DOI **resolution** for DataCite-registered DOIs (Zenodo / figshare /
     /// Dryad / OSF / most institutional repositories); enabled by
     /// `DOIGET_ENABLE_DATACITE`.
@@ -1302,6 +1305,16 @@ pub const SOURCE_RATE_OVERRIDES: &[(&str, SourceRate)] = &[
         "arxiv",
         SourceRate {
             min_interval_ms: 3_000,
+            max_concurrent: 1,
+        },
+    ),
+    (
+        // bioRxiv / medRxiv `pubs` (#640): no published rate limit
+        // (api.biorxiv.org, read 2026-09-29), so one request a second, one
+        // at a time -- well inside the global cap.
+        "biorxiv",
+        SourceRate {
+            min_interval_ms: 1_000,
             max_concurrent: 1,
         },
     ),
@@ -1597,6 +1610,11 @@ impl CapabilityProfile {
             ),
             europe_pmc: resolve_metadata_flag(
                 "DOIGET_ENABLE_EUROPE_PMC",
+                "metadata",
+                cfg!(feature = "metadata"),
+            ),
+            biorxiv: resolve_metadata_flag(
+                "DOIGET_ENABLE_BIORXIV",
                 "metadata",
                 cfg!(feature = "metadata"),
             ),
@@ -2002,6 +2020,7 @@ mod tests {
             "DOIGET_ENABLE_OPENALEX",
             "DOIGET_ENABLE_S2",
             "DOIGET_ENABLE_DOAJ",
+            "DOIGET_ENABLE_BIORXIV",
             "DOIGET_AGREE_TDM_ELSEVIER",
             "DOIGET_KEY_ELSEVIER",
             "DOIGET_AGREE_TDM_APS",

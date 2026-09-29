@@ -98,7 +98,12 @@ Unpaywall's `oa_locations` (#325); Crossref's `relation.has-preprint`, from the 
 the fetch already holds; OpenAlex `locations[]`, only when `DOIGET_ENABLE_OPENALEX` is
 set; and arXiv's own API search, accepted only for a hit with the record's title
 (letters and digits, case-folded), the first author among its authors, and no
-different published DOI (ADR-0062). A default fetch contacts no host it did not before
+different published DOI (ADR-0062). If none names an arXiv preprint, a **non-arXiv**
+preprint DOI may be followed instead (#640, ADR-0063): one Crossref's
+`relation.has-preprint` names, or -- only with `DOIGET_ENABLE_BIORXIV` -- one
+bioRxiv / medRxiv's `pubs` endpoint names. That DOI is fetched from the location
+*Unpaywall reports for it* -- kind (a), on the ordinary allowlists, never a constructed
+URL. A default fetch contacts no host it did not before
 -- Crossref and arXiv are Tier 1 -- and the envelope names which source found it
 (`found_by`).
 *Enforced by:* `preprint::find` and `orchestrator::try_arxiv_preprint_fallback`.
@@ -172,6 +177,9 @@ was this document updated to say so:
 - **ADR-0062** — when Unpaywall names no arXiv preprint, Crossref's relation, an enabled
   OpenAlex, or an exact-title arXiv search may; the preprint is then fetched as #325
   already did. Recorded as (a-ii) above.
+- **#640 / ADR-0063** — failing an arXiv preprint, a bioRxiv / medRxiv / other preprint
+  DOI named by Crossref (or by bioRxiv's `pubs`, if enabled) is fetched through its own
+  Unpaywall-reported location. Also (a-ii).
 
 None is improper. But the argument for them is **not** "we never exceed Unpaywall" —
 that argument is simply false now. The real argument is the one written above: every

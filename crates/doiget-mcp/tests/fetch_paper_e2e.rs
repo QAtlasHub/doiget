@@ -1761,3 +1761,107 @@ async fn single_ref_tools_take_a_pubmed_id_638() -> anyhow::Result<()> {
     drop(td);
     Ok(())
 }
+
+/// #640: a closed journal DOI whose Crossref record names a bioRxiv /
+/// medRxiv preprint DOI (no arXiv one): the preprint is fetched through the
+/// OA location Unpaywall reports for *its* DOI, and the entry says so.
+#[tokio::test]
+#[serial_test::serial]
+async fn a_crossref_named_medrxiv_preprint_is_fetched_through_its_own_doi_640() -> anyhow::Result<()>
+{
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works/10.1371/journal.pone.0256482"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "ok",
+            "message": {
+                "title": ["Original antigenic sin responses"],
+                "author": [{"family": "Lapp", "given": "S. A."}],
+                "type": "journal-article",
+                "relation": {"has-preprint": [
+                    {"id-type": "doi", "id": "10.1101/2021.04.29.21256344", "asserted-by": "subject"}]}
+            }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v2/10.1371%2Fjournal.pone.0256482"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "doi": "10.1371/journal.pone.0256482", "is_oa": false, "oa_status": "closed",
+            "best_oa_location": null, "oa_locations": []
+        })))
+        .mount(&server)
+        .await;
+    let preprint_pdf = format!(
+        "{}/content/10.1101/2021.04.29.21256344v1.full.pdf",
+        server.uri()
+    );
+    Mock::given(method("GET"))
+        .and(path("/v2/10.1101%2F2021.04.29.21256344"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "doi": "10.1101/2021.04.29.21256344", "is_oa": true, "oa_status": "green",
+            "best_oa_location": {"url_for_pdf": preprint_pdf, "url": preprint_pdf, "license": "cc-by-nc-nd"},
+            "oa_locations": [{"url_for_pdf": preprint_pdf, "url": preprint_pdf, "license": "cc-by-nc-nd"}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/content/10.1101/2021.04.29.21256344v1.full.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(SAMPLE_PDF_BODY.to_vec()))
+        .mount(&server)
+        .await;
+    // arXiv search finds nothing (an empty feed), so the non-arXiv route runs.
+    let arxiv = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<feed></feed>"))
+        .mount(&arxiv)
+        .await;
+
+    let td = tempfile::TempDir::new().expect("tempdir");
+    let root = camino::Utf8Path::from_path(td.path())
+        .expect("utf-8")
+        .to_path_buf();
+    let env = EnvGuard::new(ENV_KEYS);
+    env.set("DOIGET_STORE_ROOT", root.join("papers").as_str());
+    env.set("DOIGET_LOG_PATH", root.join("log.jsonl").as_str());
+    env.set("DOIGET_CROSSREF_BASE", &server.uri());
+    env.set("DOIGET_UNPAYWALL_BASE", &format!("{}/v2", server.uri()));
+    env.set("DOIGET_OA_PUBLISHER_BASE", &server.uri());
+    env.set("DOIGET_ARXIV_BASE", &arxiv.uri());
+
+    let (client, server_handle) = boot_in_memory_server().await?;
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "ref".into(),
+        serde_json::json!("10.1371/journal.pone.0256482"),
+    );
+    let v = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("doiget_fetch_paper").with_arguments(args))
+        .await?
+        .structured_content
+        .expect("structured");
+    assert_eq!(v["pdf"]["status"], "preprint_fallback", "{v}");
+    assert_eq!(
+        v["pdf"]["preprint_doi"], "10.1101/2021.04.29.21256344",
+        "{v}"
+    );
+    assert_eq!(v["pdf"]["found_by"], "crossref_relation", "{v}");
+    assert_eq!(v["license"], "cc-by-nc-nd", "the preprint's licence: {v}");
+    let toml = std::fs::read_to_string(
+        root.join("papers/.metadata/doi_10.1371_journal.pone.0256482.toml"),
+    )?;
+    assert!(
+        toml.contains("preprint_doi = \"10.1101/2021.04.29.21256344\""),
+        "{toml}"
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    drop(env);
+    drop(td);
+    Ok(())
+}

@@ -352,6 +352,7 @@ mod tests {
             openalex: false,
             semantic_scholar: false,
             doaj: false,
+            biorxiv: false,
             datacite: false,
             hal,
             openaire: false,

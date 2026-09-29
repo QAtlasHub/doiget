@@ -275,6 +275,7 @@ Notes:
 | `openalex` | 2 | 4 | (reserved) |
 | `semantic-scholar` | 2 | 4 | (reserved) |
 | `doaj` | 2 | 4 | (reserved) |
+| `biorxiv` | 2 | 0.9 | `api.biorxiv.org` -- `pubs` only, with `DOIGET_ENABLE_BIORXIV` (#640, ADR-0063) |
 | `springer-tdm` | 3 | 5a | (reserved) |
 | `aps-tdm` | 3 | 5b | (reserved) |
 | `elsevier-tdm` | 3 | 5c | (reserved) |

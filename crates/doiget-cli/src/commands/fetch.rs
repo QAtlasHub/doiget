@@ -244,6 +244,8 @@ pub(crate) fn build_http_client(user_agent: Option<&str>) -> Result<HttpClient> 
     allowlists.extend(doiget_core::http::software_allowlist());
     // ADR-0061: PMID / PMCID -> DOI. Answers which DOI, never with content.
     allowlists.extend(doiget_core::http::pubmed_allowlist());
+    // #640: bioRxiv / medRxiv `pubs`, gated at runtime on DOIGET_ENABLE_BIORXIV.
+    allowlists.extend(doiget_core::http::preprint_allowlist());
     // The Tier-2 transport gate. The sources it serves — OpenAlex,
     // Semantic Scholar, DOAJ, DataCite, HAL, OpenAIRE, CORE and
     // Europe PMC — are compiled under `metadata`, and
@@ -611,6 +613,23 @@ fn emit_success_line(ref_: &Ref, outcome: &FetchPaperOutcome) {
                 outcome.path
             ));
         }
+        // #640: a non-arXiv preprint, fetched through its own DOI.
+        PdfLegStatus::PreprintDoiFallback {
+            preprint_doi,
+            platform,
+            found_by,
+            ..
+        } => {
+            print_success(format_args!(
+                "fetched {} ({} bytes) via {} preprint doi:{} (found by {}) -> {}",
+                label,
+                outcome.size_bytes,
+                platform.as_deref().unwrap_or("its"),
+                preprint_doi,
+                found_by.replace('_', " "),
+                outcome.path
+            ));
+        }
         // #458: the publisher served its own copy under the user's TDM
         // agreement. Named explicitly rather than left to the `_` arm
         // below, which would have printed the same line as a plain OA
@@ -856,6 +875,7 @@ fn emit_link_result(ref_: &Ref, outcome: &FetchPaperOutcome, dir: &Utf8Path) {
         outcome.pdf_leg,
         PdfLegStatus::Fetched
             | PdfLegStatus::PreprintFallback { .. }
+            | PdfLegStatus::PreprintDoiFallback { .. }
             | PdfLegStatus::TdmFetched { .. }
     ) {
         print_success(format_args!(
