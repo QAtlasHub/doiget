@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MANIFEST_NAME","UNKNOWN_VERSION"],"fn":["describe","install_info","parse_manifest"],"struct":["InstallInfo","InstallManifest"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ConfigDirError","PatternError","UserExtensionError"],"fn":["academic_repo_hosts","config_dir","config_path","expand_store_root","load","load_or_default","merge_into_allowlists","oa_registry_hosts","validate_pattern"],"struct":["HostPattern","InvalidPatternIssue","UserExtensionConfig","UserExtensionHost"]};

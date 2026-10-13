@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MAIN_STACK_BYTES"],"enum":["Command","JournalAbbrev","OutputColor","ProvenanceAction"],"fn":["apply_global_overrides","flag_input_from","forced_implicit_for","main","parse_store_root","parse_utf8_path","real_main","run_dispatch"],"struct":["Cli","KeyArgs"]};

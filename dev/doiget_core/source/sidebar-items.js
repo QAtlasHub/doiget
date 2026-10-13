@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["FetchError"],"fn":["is_replayed","retry_after_ms"],"struct":["FetchContext","FetchResult"],"trait":["Source"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["to_bibtex","to_bibtex_with_fields","to_csl_array","to_csl_array_with"]};

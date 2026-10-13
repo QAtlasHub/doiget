@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["GITHUB_API","GITHUB_API_BASE_ENV","GITHUB_RAW","GITHUB_RAW_BASE_ENV"],"enum":["ZenodoDoi"],"fn":["explain","github_resolves","parse_cff","resolve_github","zenodo_doi"],"struct":["Cff","GithubRef","SoftwareCitation"]};

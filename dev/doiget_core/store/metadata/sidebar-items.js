@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["LICENSE_UNDETERMINED","ORIGIN_USER_SUPPLIED"],"struct":["DoigetExtension","Metadata"]};

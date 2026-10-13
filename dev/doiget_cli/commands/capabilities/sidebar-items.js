@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ArgKind","FlagKind","JsonMode"],"fn":["build_capabilities","run"],"struct":["ArgSpec","Capabilities","Docs","EnvVar","FlagSpec","McpTool","SubcommandSpec"]};

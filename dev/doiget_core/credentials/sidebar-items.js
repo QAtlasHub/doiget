@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["PUBLISHERS"],"enum":["Advisory","CredentialsError"],"fn":["load","load_or_default","path"],"struct":["Credentials"]};

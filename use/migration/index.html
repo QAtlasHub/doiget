@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BiblioFetch.jl migration &middot; doiget</title>
+  <meta name="description" content="This document covers migration scenarios between doiget and">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/use/migration/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="BiblioFetch.jl migration · doiget">
+  <meta property="og:description" content="This document covers migration scenarios between doiget and">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/use/migration/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="BiblioFetch.jl migration · doiget">
+  <meta name="twitter:description" content="This document covers migration scenarios between doiget and">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>BiblioFetch.jl migration</h1>
+    <p class="lede">This document covers migration scenarios between doiget and</p>
+  </header>
+
+  <h1 id="migration">Migration</h1>
+<blockquote>
+<p><strong>Status: INFORMATIVE.</strong> The binding contract underlying these scenarios is in
+<a href="https://codes.sota-shimozono.com/doiget/use/migration/STORE.md"><code>STORE.md</code></a>.</p>
+</blockquote>
+<p>This document covers migration scenarios between doiget and
+<a rel="noopener" target="_blank" href="https://github.com/sotashimozono/BiblioFetch.jl">BiblioFetch.jl</a>, and between
+machines.</p>
+<h2 id="scenarios">Scenarios</h2>
+<h3 id="1-bibliofetch-jl-user-trying-doiget-for-the-first-time">1. BiblioFetch.jl user trying doiget for the first time</h3>
+<pre data-lang="sh" style="background-color:#fafafa;color:#61676c;" class="language-sh "><code class="language-sh" data-lang="sh"><span style="color:#f29718;">cargo</span><span> install doiget-cli
+</span><span style="color:#f29718;">doiget</span><span> info </span><span style="color:#ed9366;">&lt;</span><span>DOI of an existing entry</span><span style="color:#ed9366;">&gt;      </span><span style="font-style:italic;color:#abb0b6;"># should read what BiblioFetch wrote
+</span></code></pre>
+<p>Expected outcome: doiget reads the existing TOML metadata and PDF without modification.</p>
+<h3 id="2-doiget-user-installing-bibliofetch-jl-alongside">2. doiget user installing BiblioFetch.jl alongside</h3>
+<p>Add BiblioFetch.jl to a Julia project and point both tools at the same <code>~/papers/</code>.
+BiblioFetch.jl will see doiget's <code>[doiget]</code> extension table and ignore it.</p>
+<h3 id="3-moving-a-store-between-hosts">3. Moving a store between hosts</h3>
+<pre data-lang="sh" style="background-color:#fafafa;color:#61676c;" class="language-sh "><code class="language-sh" data-lang="sh"><span style="color:#f29718;">rsync</span><span style="color:#ff8f40;"> -av </span><span style="font-style:italic;color:#55b4d4;">~</span><span>/papers/ remote:/home/alice/papers/
+</span></code></pre>
+<p>The store layout is portable. The provenance log is <strong>not</strong> synced — it is per-host.</p>
+<h3 id="4-recovering-from-a-corrupted-lock-file">4. Recovering from a corrupted lock file</h3>
+<p>If a <code>.toml.lock</code> file persists after a crash:</p>
+<pre data-lang="sh" style="background-color:#fafafa;color:#61676c;" class="language-sh "><code class="language-sh" data-lang="sh"><span style="color:#f29718;">rm </span><span style="font-style:italic;color:#55b4d4;">~</span><span>/papers/.metadata/</span><span style="color:#ed9366;">&lt;</span><span>safekey</span><span style="color:#ed9366;">&gt;</span><span>.toml.lock
+</span></code></pre>
+<p>doiget will recreate the lock on the next operation. There is no risk of data loss
+because the lock is advisory and the entry's <code>.toml</code> itself is written atomically.</p>
+<h3 id="5-forward-migration-on-a-schema-version-major-bump">5. Forward migration on a <code>schema_version</code> major bump</h3>
+<p>A future <code>schema_version = "2.0"</code> would require both implementations to ship the new
+version before either writes <code>2.0</code> files. doiget will provide:</p>
+<pre data-lang="sh" style="background-color:#fafafa;color:#61676c;" class="language-sh "><code class="language-sh" data-lang="sh"><span style="color:#f29718;">doiget</span><span> store migrate</span><span style="color:#ff8f40;"> --to</span><span> 2.0
+</span></code></pre>
+<p>at that time. Until then, doiget never writes anything other than <code>1.x</code>.</p>
+<h3 id="6-removing-doiget-while-keeping-the-store">6. Removing doiget while keeping the store</h3>
+<p>The store is just files under <code>~/papers/</code>. Uninstalling doiget (<code>cargo uninstall doiget</code>) does not touch the store. BiblioFetch.jl can continue to read and write it.</p>
+<h2 id="related">Related</h2>
+<p>For the binding store contract these scenarios rely on, see
+<a href="https://codes.sota-shimozono.com/doiget/use/migration/STORE.md"><code>STORE.md</code></a>.</p>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/use&#x2F;migration.md">
+      site/content/use&#x2F;migration.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cache &middot; doiget</title>
+  <meta name="description" content="```">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/developer/cache/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Cache · doiget">
+  <meta property="og:description" content="```">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/developer/cache/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Cache · doiget">
+  <meta name="twitter:description" content="```">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Cache</h1>
+    <p class="lede">```</p>
+  </header>
+
+  <h1 id="cache">Cache</h1>
+<blockquote>
+<p><strong>Status: NORMATIVE.</strong> Defines local cache layout and TTLs.</p>
+</blockquote>
+<h2 id="1-layout">1. Layout</h2>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>~/.cache/doiget/
+</span><span>├── resolver/
+</span><span>│   └── &lt;safekey&gt;.toml       # Crossref / Unpaywall response cache
+</span><span>└── citations/
+</span><span>    └── &lt;safekey&gt;.toml       # citation graph expansion cache
+</span></code></pre>
+<p>Override root via <code>DOIGET_CACHE_ROOT</code> env or <code>[cache] root</code> in <code>config.toml</code>.</p>
+<h2 id="2-cache-entry-format">2. Cache entry format</h2>
+<pre data-lang="toml" style="background-color:#fafafa;color:#61676c;" class="language-toml "><code class="language-toml" data-lang="toml"><span style="color:#399ee6;">schema_version </span><span>= </span><span style="color:#86b300;">&quot;1.0&quot;
+</span><span style="color:#399ee6;">fetched_at     </span><span>= </span><span style="color:#86b300;">&quot;2026-05-05T08:30:12Z&quot;   </span><span style="font-style:italic;color:#abb0b6;"># RFC 3339 UTC
+</span><span style="color:#399ee6;">ttl_seconds    </span><span>= </span><span style="color:#ff8f40;">604800            </span><span style="font-style:italic;color:#abb0b6;"># 7 days for resolver, 30*24*3600 for citations
+</span><span style="color:#399ee6;">source         </span><span>= </span><span style="color:#86b300;">&quot;crossref&quot;
+</span><span style="font-style:italic;color:#abb0b6;"># Resolver outcome serialized as a JSON string. The metadata payload is
+</span><span style="font-style:italic;color:#abb0b6;"># arbitrary JSON that does not round-trip cleanly as a TOML table, so the
+</span><span style="font-style:italic;color:#abb0b6;"># whole MetadataOnlyOutcome (source / resolver_profile / license / oa_url /
+</span><span style="font-style:italic;color:#abb0b6;"># metadata) is stored as one JSON blob under `response`.
+</span><span style="color:#399ee6;">response       </span><span>= </span><span style="color:#86b300;">&quot;{</span><span style="color:#4cbf99;">\&quot;</span><span style="color:#86b300;">source</span><span style="color:#4cbf99;">\&quot;</span><span style="color:#86b300;">:</span><span style="color:#4cbf99;">\&quot;</span><span style="color:#86b300;">crossref</span><span style="color:#4cbf99;">\&quot;</span><span style="color:#86b300;">, ... }&quot;
+</span></code></pre>
+<p>A cache entry is invalid if <code>now() &gt; fetched_at + ttl_seconds</code>. Invalid entries are
+ignored (treated as cache miss) and replaced on the next fetch.</p>
+<h2 id="3-ttls">3. TTLs</h2>
+<table><thead><tr><th>Cache</th><th>Default TTL</th><th>Constant</th></tr></thead><tbody>
+<tr><td><code>resolver/</code></td><td>7 days</td><td><code>RESOLVER_CACHE_TTL_DAYS = 7</code></td></tr>
+<tr><td><code>citations/</code></td><td>30 days</td><td><code>CITATION_CACHE_TTL_DAYS = 30</code></td></tr>
+</tbody></table>
+<p>These are library constants, not config. A future ADR could expose them to config if
+demand arises.</p>
+<h2 id="4-atomic-writes">4. Atomic writes</h2>
+<p>Cache writes follow the same atomic write protocol as the store
+(see <a href="https://codes.sota-shimozono.com/doiget/developer/cache/STORE.md"><code>STORE.md</code></a> §5): write to <code>&lt;safekey&gt;.toml.tmp</code>, fsync, rename, fsync
+parent. No locking is required because cache entries are write-once-then-replace; a
+concurrent loser overwrites the other's identical content.</p>
+<h2 id="5-cache-disablement">5. Cache disablement</h2>
+<ul>
+<li>Per-invocation: <code>--no-cache</code> flag on relevant subcommands.</li>
+<li>Permanent: <code>[cache] disabled = true</code> in <code>config.toml</code> or <code>DOIGET_CACHE_DISABLED=1</code>.</li>
+</ul>
+<p>When disabled, doiget neither reads from nor writes to the cache. Resolver / citation
+calls go directly to the source.</p>
+<h2 id="6-cache-cleanup">6. Cache cleanup</h2>
+<pre data-lang="sh" style="background-color:#fafafa;color:#61676c;" class="language-sh "><code class="language-sh" data-lang="sh"><span style="color:#f29718;">doiget</span><span> cache prune          </span><span style="font-style:italic;color:#abb0b6;"># delete expired entries
+</span><span style="color:#f29718;">doiget</span><span> cache clear          </span><span style="font-style:italic;color:#abb0b6;"># delete all cache entries
+</span><span style="color:#f29718;">doiget</span><span> cache size           </span><span style="font-style:italic;color:#abb0b6;"># report disk usage
+</span></code></pre>
+<p>The cache is safe to delete entirely at any time; doiget will rebuild it lazily.</p>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/developer&#x2F;cache.md">
+      site/content/developer&#x2F;cache.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>

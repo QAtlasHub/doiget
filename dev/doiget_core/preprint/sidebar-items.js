@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ADS_TOKEN_ENV"],"enum":["FoundBy"],"fn":["find","find_preprint_doi","from_ads_answer","from_crossref","from_inspire_record","from_openalex_work","preprint_doi_from_crossref"],"struct":["Found","FoundDoi"]};

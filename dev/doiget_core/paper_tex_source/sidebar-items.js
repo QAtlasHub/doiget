@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ARXIV_SRC_DEFAULT_BASE"],"enum":["BundleFilter"],"fn":["paper_source_bundle","paper_tex_source","resolve_arxiv_src_base"],"struct":["PaperTexSource","SourceFile"]};

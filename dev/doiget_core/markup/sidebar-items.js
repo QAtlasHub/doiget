@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["has_inline_markup","plain_title"]};

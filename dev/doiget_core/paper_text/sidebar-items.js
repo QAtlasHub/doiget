@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["AR5IV_DEFAULT_BASE"],"enum":["TextSource"],"fn":["paper_text"],"struct":["PaperText","TextSection"]};

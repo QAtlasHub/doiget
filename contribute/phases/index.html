@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phase plan &middot; doiget</title>
+  <meta name="description" content="doiget is fully implemented and released:">
+  <link rel="canonical" href="https://codes.sota-shimozono.com/doiget/contribute/phases/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="doiget">
+  <meta property="og:title" content="Phase plan · doiget">
+  <meta property="og:description" content="doiget is fully implemented and released:">
+  <meta property="og:url" content="https://codes.sota-shimozono.com/doiget/contribute/phases/">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Phase plan · doiget">
+  <meta name="twitter:description" content="doiget is fully implemented and released:">
+  <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/187091095?v=4">
+  <link rel="stylesheet" href="https://codes.sota-shimozono.com/doiget/style.css">
+  
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://codes.sota-shimozono.com/doiget/">doiget</a>
+    <nav class="site-nav">
+      <a href="https://codes.sota-shimozono.com/doiget/use/">Use</a>
+      <a href="https://codes.sota-shimozono.com/doiget/developer/">Developer</a>
+      <a href="https://codes.sota-shimozono.com/doiget/contribute/">Contribute</a>
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget" rel="external">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    
+<article class="page-content">
+  <header class="page-head">
+    <h1>Phase plan</h1>
+    <p class="lede">doiget is fully implemented and released:</p>
+  </header>
+
+  <h1 id="project-status-remaining-scope">Project status &amp; remaining scope</h1>
+<blockquote>
+<p><strong>Status: INFORMATIVE.</strong> This file once held the full 0–7 phase
+implementation plan. That plan has been executed — doiget is shipped
+(<strong>v0.2.0</strong> on crates.io). The historical phase/slice plan and its
+deliverable checklists are preserved in git history, <a href="../CHANGELOG.md"><code>CHANGELOG.md</code></a>,
+and the ADRs (<a href="https://codes.sota-shimozono.com/doiget/contribute/phases/DECISIONS/"><code>docs/DECISIONS/</code></a>); they are not reproduced
+here. This document describes only the <strong>current state</strong> and what is
+<strong>not yet built</strong>.</p>
+</blockquote>
+<h2 id="shipped">Shipped</h2>
+<p>doiget is fully implemented and released:</p>
+<ul>
+<li><strong>Sources.</strong> Tier 1 (Crossref / Unpaywall / arXiv) and Tier 2 (OpenAlex /
+Semantic Scholar / DOAJ); feature-gated Tier 3 TDM (Springer Nature OA /
+APS Harvest / Elsevier ScienceDirect), off by default.</li>
+<li><strong>CLI.</strong> <code>fetch</code>, <code>batch</code>, <code>info</code>, <code>search</code>, <code>bib</code>, <code>csl</code>, <code>audit-log</code>,
+<code>provenance</code>, <code>graph</code>, <code>config</code>, plus the <code>serve</code> stdio MCP server.</li>
+<li><strong>MCP.</strong> stdio-only server with the tool set specified in
+<a href="https://codes.sota-shimozono.com/doiget/contribute/phases/MCP_TOOLS.md"><code>MCP_TOOLS.md</code></a>; citation-graph expansion (ADR-0010 caps).</li>
+<li><strong>Integrity &amp; posture.</strong> Hash-chained provenance log, type-gated
+capability profile, the safekey store contract (BiblioFetch.jl
+round-trip), and the documented security/legal posture.</li>
+<li><strong>Release engineering.</strong> The tag-driven pipeline
+(<a href="https://codes.sota-shimozono.com/doiget/contribute/phases/DECISIONS/0025-tag-driven-release.md">ADR-0025</a>): one signed workspace
+tag runs a mandatory version gate, publishes all three crates to
+crates.io via OIDC, sigstore-signs the binaries, emits an SBOM, and opens
+the GitHub Release.</li>
+</ul>
+<p>The current release is <strong>v0.2.0</strong> (<code>doiget-core</code>, <code>doiget-cli</code>,
+<code>doiget-mcp</code>). Per-version detail lives in <a href="../CHANGELOG.md"><code>CHANGELOG.md</code></a>;
+binding design decisions live in the ADRs.</p>
+<h2 id="remaining-planned-but-unbuilt">Remaining (planned-but-unbuilt)</h2>
+<p>One scope item is intentionally deferred and <strong>not implemented</strong>:</p>
+<ul>
+<li><strong>Optional <code>vault</code> / <code>obsidian</code> integration.</strong> The <code>doiget-obsidian</code>
+crate is <code>exclude</code>d from the Cargo workspace; the design is one-direction,
+opt-in only, governed by
+<a href="https://codes.sota-shimozono.com/doiget/contribute/phases/DECISIONS/0008-crate-decomposition.md">ADR-0008</a> and
+<a href="https://codes.sota-shimozono.com/doiget/contribute/phases/DECISIONS/0018-obsidian-one-direction.md">ADR-0018</a> (Status: <em>Proposed —
+unshipped</em>). It is optional, on no committed timeline, and may never ship.</li>
+</ul>
+<p>Everything else that was ever "planned" is shipped — see <code>CHANGELOG.md</code>.</p>
+<h2 id="branch-release-model">Branch &amp; release model</h2>
+<p>Stable releases are cut from <code>main</code> (<code>vX.Y.Z</code>); betas from <code>next</code>
+(<code>vX.Y.Z-beta.N</code>). The version gate, lane rules, and the maintainer runbook
+are normative in <a href="https://codes.sota-shimozono.com/doiget/contribute/phases/DECISIONS/0025-tag-driven-release.md">ADR-0025</a> and
+summarized in <a href="../CONTRIBUTING.md"><code>CONTRIBUTING.md</code></a> ("Release process").</p>
+
+
+  <hr>
+  <p class="meta">
+    Source:
+    <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget/blob/main/site/content/contribute&#x2F;phases.md">
+      site/content/contribute&#x2F;phases.md
+    </a>
+  </p>
+</article>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span>v0.2.0 — shipping</span>
+      &middot;
+      <a href="https:&#x2F;&#x2F;github.com&#x2F;QAtlasHub&#x2F;doiget">repo</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;doiget-core">crates.io</a>
+      &middot;
+      <a href="https:&#x2F;&#x2F;docs.rs&#x2F;doiget-core">docs.rs</a>
+      &middot;
+      <a href="https://codes.sota-shimozono.com/doiget/use/contact/">contact</a>
+    </p>
+    <p class="legal">
+      MIT (code) &middot; doiget does not bypass paywalls, host content, or
+      relicense fetched works. See
+      <a href="https://codes.sota-shimozono.com/doiget/use/posture-and-legal/">posture &amp; legal</a>.
+    </p>
+  </footer>
+</body>
+</html>
